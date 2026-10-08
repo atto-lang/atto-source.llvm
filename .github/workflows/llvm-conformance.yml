@@ -1,0 +1,40 @@
+name: LLVM conformance contract
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify TypeSpec models
+        run: npm --prefix contracts/v1 install --no-audit --no-fund && npm --prefix contracts/v1 run build
+      - name: Prepare Python schema validator
+        run: python3 -m pip install --break-system-packages 'jsonschema>=4.20,<5'
+      - name: Validate suite schema and fixture inventory
+        run: python3 contracts/v1/run.py --validate
+      - name: Install LLVM
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Compile Oreslang
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Check normative LLVM admissions
+        run: python3 contracts/v1/run.py --backend llvm --command './build/oreslang-llvmc {source}' --report build/conformance-llvm.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: llvm-conformance-report
+          path: build/conformance-llvm.json
+          if-no-files-found: ignore
