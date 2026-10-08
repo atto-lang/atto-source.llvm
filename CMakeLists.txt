@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(LLVM 14 CONFIG REQUIRED)
+find_package(LLVM CONFIG REQUIRED)
+if(LLVM_VERSION_MAJOR LESS 14)
+    message(FATAL_ERROR "Oreslang requires LLVM 14 or newer; found ${LLVM_PACKAGE_VERSION}")
+endif()
 message(STATUS "Building Oreslang LLVM against LLVM ${LLVM_PACKAGE_VERSION}")
 
 add_executable(oreslang-llvmc
