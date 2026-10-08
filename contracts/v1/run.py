@@ -71,7 +71,10 @@ def run_backend(suite, backend, command, timeout):
                                   timeout=timeout, check=False)
             exitcode = proc.returncode
             admitted = exitcode == 0
-            success = admitted == (case["admission"] == "accept")
+            # Only the compiler's normal rejection status proves a negative
+            # case. Signals, probe/setup errors (2), and launcher failures
+            # (126/127) are infrastructure failures, never semantic rejection.
+            success = exitcode == (0 if case["admission"] == "accept" else 1)
             # Rejecting LLVM must not leak partially emitted LLVM IR on stdout.
             if backend == "llvm" and not admitted and proc.stdout.strip():
                 success = False
