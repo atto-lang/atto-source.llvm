@@ -64,7 +64,19 @@ def validate_suite():
     on_disk = {"fixtures/" + f.name for f in (ROOT / "fixtures").glob("*.ores")}
     if files != on_disk:
         raise ValueError("orphan or missing fixtures: " + str(sorted(files ^ on_disk)))
-    return suite, hashlib.sha256(raw).hexdigest()
+    # Bind the suite identity to the actual programs and normative contracts.
+    # A manifest-only digest permits different backends to run different source
+    # bytes while claiming identical test inventories. Use length-delimited
+    # records so filename/content boundaries are unambiguous.
+    h = hashlib.sha256(b"oreslang-conformance-suite-v1.1\0")
+    for name in ["cases.json", "schema.json", "report.schema.json", "main.tsp", *sorted(files)]:
+        data = (ROOT / name).read_bytes()
+        encoded = name.encode("utf-8")
+        h.update(len(encoded).to_bytes(4, "big"))
+        h.update(encoded)
+        h.update(len(data).to_bytes(8, "big"))
+        h.update(data)
+    return suite, h.hexdigest()
 
 def validate_command(command):
     argv = shlex.split(command)
@@ -150,7 +162,7 @@ def main():
         results.append(result)
         print(f"{result['status'].upper()} {case['id']} ({args.backend})"
               + (f": {result.get('detail','')}" if result["status"] == "fail" else ""))
-    report = {"schema_version":"1.0.0", "backend":args.backend, "suite_sha256":checksum,
+    report = {"schema_version":"1.1.0", "backend":args.backend, "suite_sha256":checksum,
               "source_revision":args.revision, "results":results}
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
