@@ -31,12 +31,12 @@ def generate(seed, index):
     ]
     first, second = expr[index % len(expr)], expr[(index + 3) % len(expr)]
     assert first != second and 0 <= target <= 119
-    wrap = lambda e: f"pub fnc main(): int {{ return {e}; }}\\n"
+    wrap = lambda e: f"pub fnc main(): int {{ return {e}; }}\n"
     return (wrap(first), wrap(second), target)
 
 def catalog(seed, count):
     cases = [generate(seed, i) for i in range(count)]
-    hasher = hashlib.sha256(b"oreslang-metamorphic-arithmetic-v1\\0")
+    hasher = hashlib.sha256(b"oreslang-metamorphic-arithmetic-v1\0")
     for left, right, result in cases:
         for data in (left.encode(), right.encode(), str(result).encode()):
             hasher.update(len(data).to_bytes(8, "big"))
@@ -100,7 +100,7 @@ def main():
                 print(f"FAIL pair={i}: {e}", file=sys.stderr)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, indent=2) + "\\n")
+        args.report.write_text(json.dumps(report, indent=2) + "\n")
     print(f"METAMORPHIC passed={report['passed']}/{args.count} source_sha256={digest}")
     return 1 if report["failures"] else 0
 
