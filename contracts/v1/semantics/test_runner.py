@@ -46,7 +46,7 @@ class DiagnosticProof(unittest.TestCase):
                 case = original_suite["cases"][0]
                 fixture = root / case["source"]
                 before = fixture.read_bytes()
-                fixture.write_bytes(before + b" // unexpected backend divergence\\n")
+                fixture.write_bytes(before + b" // unexpected backend divergence\n")
                 _, changed_source = run.validate_suite()
                 self.assertNotEqual(original_digest, changed_source)
                 fixture.write_bytes(before)
