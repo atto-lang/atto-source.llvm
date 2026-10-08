@@ -52,7 +52,7 @@
         },
         "file": {
           "type": "string",
-          "pattern": "^fixtures/[a-z0-9][a-z0-9-]*\\\\.ores$"
+          "pattern": "^fixtures/[a-z0-9][a-z0-9-]*\\.ores$"
         },
         "admission": {
           "enum": [
