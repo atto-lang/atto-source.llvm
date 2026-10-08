@@ -1,6 +1,6 @@
-# Source-to-LLVM-IR compatibility fixtures
+# LLVM compiler contract fixtures
 
-All positive fixtures are a deliberately tiny parseable subset of the Java
-Oreslang grammar. Negative files must fail with nonzero exit.
-CTest checks both behavior and LLVM-IR fragments. Expand this to Java parity
-before admitting general expressions or actor code.
+Run `ctest --test-dir build --output-on-failure`.
+Positive tests verify generated IR and optionally compile and execute IR with Clang;
+negative tests require specific diagnostics, failure status, and no IR on stdout.
+These are bootstrap compiler contracts, not full differential parity with Java.

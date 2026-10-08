@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(oreslang_llvm VERSION 0.1.0 LANGUAGES C CXX)
+project(oreslang_llvm VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,21 +27,37 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
-    add_test(NAME emits_constant_main
-        COMMAND oreslang-llvmc
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
-    set_tests_properties(emits_constant_main PROPERTIES
-        PASS_REGULAR_EXPRESSION "ret i64 42")
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    function(oreslang_contract_test name fixture)
+        add_test(NAME ${name}
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
+                ${ARGN})
+    endfunction()
 
-    add_test(NAME emits_module_symbol
-        COMMAND oreslang-llvmc
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/module-main.ores")
-    set_tests_properties(emits_module_symbol PROPERTIES
-        PASS_REGULAR_EXPRESSION "demo.main")
+    oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
+    oreslang_contract_test(module_main module-main.ores --ir "demo.main")
+    oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
+    oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
+    oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
+    oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected fnc or routine")
+    oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
+    oreslang_contract_test(reject_duplicates duplicate-function.ores --diagnostic "duplicate function")
+    oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
+    oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
+    oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
-    add_test(NAME rejects_unsupported_actor_syntax
-        COMMAND oreslang-llvmc
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/unsupported-actor.ores")
-    set_tests_properties(rejects_unsupported_actor_syntax PROPERTIES
-        WILL_FAIL TRUE)
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
+    else()
+        message(WARNING "Clang unavailable: native executable tests are disabled")
+    endif()
 endif()

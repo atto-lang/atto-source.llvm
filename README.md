@@ -1,53 +1,45 @@
 # Oreslang LLVM backend
 
-Native source-language compiler and runtime companion to
-[oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
+Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
+Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
 
-**Status: experimental first compiler slice, NOT source-language parity.**
-Tracks [port/HPC roadmap issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
-Native/HPC rationale originates in
-[Java WIP PR #470](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/470).
+**Status: small experimental source-to-LLVM compiler, not Java language/runtime parity.**
 
-## Current functionality
+## Implemented slice (October 2026)
 
-The `oreslang-llvmc` binary parses exactly one zero-argument
-`fnc`/`routine` returning a positive signed-64-bit integer literal
-(optionally within one `define module ... as ... end`), generates LLVM IR,
-validates it using `llvm::verifyModule` and prints it.
+- Parse one file with one or more `fnc`/`routine` declarations returning `int`, with optional
+  `pub` and one optional `define module M [as] ... end` wrapper.
+- Typed `int` parameters, `return` expressions, integer literals with underscores,
+  unary `-`, parentheses, `+`, `-`, `*`, parameter references and same-module function calls.
+- Forward declarations enable calls before definitions and recursion (not bounded recursion).
+- Reject undeclared names, duplicate function/parameter names, mismatched call arities,
+  overflowed positive i64 literals, malformed syntax, and unsupported language features.
+- Lower each function to i64 LLVM IR, verify the entire LLVM module before printing IR.
+- CI covers positive/negative source-to-IR contracts and Clang compilation/execution of
+  standalone `main` functions, when Clang is present.
 
-Unsupported expressions, classes, actors, imports, async/await,
-recursive/owned objects, networking and native scheduling **fail closed**.
-This is a first testable parser-to-IR path, not a runnable language implementation.
+The `int` to `i64` mapping, wraparound arithmetic, external linkage, and calling conventions
+**are provisional** and are not a claim of Java semantic parity. In particular, this slice
+does not support `-9223372036854775808` as one literal.
 
 ## Build and test
 
-Requires LLVM development libraries 14+, CMake 3.20+, and C++17.
+Requires LLVM development libraries 14+, CMake 3.20+, C++17, Python3 and ideally Clang.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
-./build/oreslang-llvmc tests/fixtures/constant-main.ores
+./build/oreslang-llvmc tests/fixtures/forward-call-main.ores > /tmp/guest.ll
+clang -x ir /tmp/guest.ll -o /tmp/guest
+/tmp/guest
+echo $? # 42
 ```
 
-No user-facing flags are currently parsed; the sole positional argument
-is an Oreslang source file. Runtime execution and object emission are future work.
+The CLI currently prints LLVM IR; object output and versioned ABI are not implemented.
 
-## Source mapping
+Unsupported actors, async/await, channels, traits/classes, imports, tuples, recursive/owned
+objects, GC, HFT scheduling and native runtime services **fail closed**. They remain roadmap items.
 
-- `src/main/cpp/oreslang/frontend` — tiny lexical/AST front end; compare Java `parser` + `ast`.
-- `src/main/cpp/oreslang/types` — reserved for Java `types`/borrow parity.
-- `src/main/cpp/oreslang/backend` — LLVM IRBuilder+verifier in lieu of Truffle `nodes`.
-- `src/main/cpp/oreslang/runtime` — reserved for scheduler/actors/futures, stable frames and arenas.
-- `tests/fixtures` — initially source and IR smoke tests; eventually shared Java parity cases.
-
-See [source parity contract](docs/SOURCE_PARITY.md) and
-[Java managed cyclic graph PR #474](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/474)
-for the intentionally separate JVM/native ownership paths.
-
-## Safety/status boundaries
-
-Native pinned async frames, per-group GC/arena rotation, worker-core pinning,
-NIC bypass, zero-GC HOT sections, native cyclic arena ownership and other
-HPC/HFT targets are **roadmap items only**. Nothing in this repository
-currently provides those features.
+See [source parity contract](docs/SOURCE_PARITY.md), [LLVM roadmap](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1),
+and the distinct [Java cyclic graph work](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/474).
