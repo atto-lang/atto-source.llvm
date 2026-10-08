@@ -22,9 +22,15 @@ jobs:
         with:
           node-version: '22'
       - name: Verify TypeSpec models
-        run: npm --prefix contracts/v1 install --no-audit --no-fund && npm --prefix contracts/v1 run build && ./contracts/v1/node_modules/.bin/tsp compile contracts/v1/semantics
+        run: npm --prefix contracts/v1 install --no-audit --no-fund && npm --prefix contracts/v1 run build && ./contracts/v1/node_modules/.bin/tsp compile contracts/v1/semantics && ./contracts/v1/node_modules/.bin/tsp compile contracts/v1/semantics/traces
       - name: Prepare Python schema validator
         run: python3 -m pip install --break-system-packages 'jsonschema>=4.20,<5'
+      - name: Verify metamorphic generator and adversarial actor trace contracts
+        run: |
+          python3 contracts/v1/semantics/metamorphic.py --self-test --count 64
+          python3 contracts/v1/semantics/test_metamorphic.py -v
+          python3 contracts/v1/semantics/traces/validate.py --schema-only
+          python3 contracts/v1/semantics/traces/test_trace.py -v
       - name: Validate suite schema and fixture inventory
         run: |
           python3 contracts/v1/run.py --validate
@@ -40,6 +46,9 @@ jobs:
         run: python3 contracts/v1/run.py --backend llvm --command './build/oreslang-llvmc {source}' --report build/conformance-llvm.json
       - name: Check compiled native results and diagnostic semantics
         run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "${{ github.sha }}" --report build/semantics-llvm.json
+      - name: Verify seeded native metamorphic arithmetic
+        run: |
+          python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 32 --seed 20261008 --report build/metamorphic-llvm.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -47,4 +56,5 @@ jobs:
           path: |
             build/conformance-llvm.json
             build/semantics-llvm.json
+            build/metamorphic-llvm.json
           if-no-files-found: ignore
