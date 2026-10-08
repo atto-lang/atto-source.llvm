@@ -1,0 +1,22 @@
+name: LLVM bootstrap
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  llvm-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CMake and LLVM from Ubuntu packages
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake llvm-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Compile
+        run: cmake --build build --parallel 2
+      - name: Verify source-to-IR smoke tests
+        run: ctest --test-dir build --output-on-failure
