@@ -15,16 +15,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify conformance runner failure handling
-        run: python3 contracts/v1/test_runner.py -v
+        run: |
+          python3 contracts/v1/test_runner.py -v
+          python3 contracts/v1/semantics/test_runner.py -v
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Verify TypeSpec models
-        run: npm --prefix contracts/v1 install --no-audit --no-fund && npm --prefix contracts/v1 run build
+        run: npm --prefix contracts/v1 install --no-audit --no-fund && npm --prefix contracts/v1 run build && ./contracts/v1/node_modules/.bin/tsp compile contracts/v1/semantics
       - name: Prepare Python schema validator
         run: python3 -m pip install --break-system-packages 'jsonschema>=4.20,<5'
       - name: Validate suite schema and fixture inventory
-        run: python3 contracts/v1/run.py --validate
+        run: |
+          python3 contracts/v1/run.py --validate
+          python3 contracts/v1/semantics/run.py --validate
       - name: Install LLVM
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
       - name: Compile Oreslang
@@ -34,9 +38,13 @@ jobs:
           ctest --test-dir build --output-on-failure
       - name: Check normative LLVM admissions
         run: python3 contracts/v1/run.py --backend llvm --command './build/oreslang-llvmc {source}' --report build/conformance-llvm.json
+      - name: Check compiled native results and diagnostic semantics
+        run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "${{ github.sha }}" --report build/semantics-llvm.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: llvm-conformance-report
-          path: build/conformance-llvm.json
+          path: |
+            build/conformance-llvm.json
+            build/semantics-llvm.json
           if-no-files-found: ignore
