@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Verify conformance runner failure handling
+        run: python3 contracts/v1/test_runner.py -v
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
