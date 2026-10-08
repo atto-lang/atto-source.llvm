@@ -20,7 +20,7 @@ namespace Oreslang.Conformance.SemanticsV1 {
     pending_reason?: string;
   }
   model Suite {
-    schema_version: "1.0.0";
+    schema_version: "1.1.0";
     cases: SemanticCase[];
   }
   model SemanticResult {
@@ -31,7 +31,7 @@ namespace Oreslang.Conformance.SemanticsV1 {
     detail?: string;
   }
   model BackendReport {
-    schema_version: "1.0.0";
+    schema_version: "1.1.0";
     backend: "llvm" | "graal";
     suite_sha256: string;
     source_revision: string;
