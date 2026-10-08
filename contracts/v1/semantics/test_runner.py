@@ -33,6 +33,28 @@ class DiagnosticProof(unittest.TestCase):
         self.assertGreaterEqual(len(suite["cases"]), 10)
         self.assertEqual(len(digest), 64)
 
+    def test_mutating_fixture_or_schema_changes_suite_identity(self):
+        import shutil
+        import tempfile
+        original_suite, original_digest = run.validate_suite()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shutil.copytree(run.ROOT, root, dirs_exist_ok=True)
+            with patch.object(run, "ROOT", root):
+                _, untouched = run.validate_suite()
+                self.assertEqual(original_digest, untouched)
+                case = original_suite["cases"][0]
+                fixture = root / case["source"]
+                before = fixture.read_bytes()
+                fixture.write_bytes(before + b" // unexpected backend divergence\\n")
+                _, changed_source = run.validate_suite()
+                self.assertNotEqual(original_digest, changed_source)
+                fixture.write_bytes(before)
+                schema = root / "schema.json"
+                schema.write_text(schema.read_text() + " ")
+                _, changed_schema = run.validate_suite()
+                self.assertNotEqual(original_digest, changed_schema)
+
     def test_compiler_crash_never_counts_as_pass(self):
         case = {"id":"diagnostic.crash","kind":"diagnostic","source":"fixtures/unknown.ores",
                 "diagnostic_class":"unknown_name"}
