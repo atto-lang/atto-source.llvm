@@ -37,6 +37,8 @@ def check_trace(trace):
         permitted = {"seq", "kind", "actor"}
         if kind == "send":
             permitted.update(("target", "message_id"))
+        elif kind == "admit":
+            permitted.add("message_id")
         elif kind == "receive":
             permitted.add("message_id")
         elif kind in ("exclusive_acquire", "exclusive_release"):
@@ -50,7 +52,12 @@ def check_trace(trace):
             continue
         if actor not in actors:
             raise TraceViolation(f"unknown or terminated actor: {actor}")
-        if kind == "send":
+        if kind == "admit":
+            msg = e["message_id"]
+            if msg in messages:
+                raise TraceViolation(f"duplicate ingress id: {msg}")
+            messages[msg] = actor
+        elif kind == "send":
             target, msg = e["target"], e["message_id"]
             if target not in actors:
                 raise TraceViolation(f"target not live: {target}")
