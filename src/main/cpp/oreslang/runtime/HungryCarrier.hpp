@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <thread>
 
 // Experimental native continuation carrier. This is an independent C++
@@ -55,7 +56,24 @@ struct CarrierStats {
 // realtime admission. Hot-path buffers are fixed-size. This deliberately does
 // not claim that callbacks, syscalls or OS scheduling are allocation-free.
 class HungryCarrier final {
+    struct ProducerGate;
 public:
+    // Handles hold an independent shared lifetime gate. They may be copied,
+    // sent to other native producer threads and survive carrier destruction.
+    // Creation/copy can allocate or refcount; pre-create them before realtime
+    // admission. Producers never dereference freed carrier storage.
+    class ProducerHandle final {
+    public:
+        ProducerHandle() = default;
+        bool try_send(ActorMessage message) const noexcept;
+        explicit operator bool() const noexcept { return static_cast<bool>(gate_); }
+    private:
+        friend class HungryCarrier;
+        explicit ProducerHandle(std::shared_ptr<ProducerGate> gate)
+            : gate_(std::move(gate)) {}
+        std::shared_ptr<ProducerGate> gate_;
+    };
+
     static constexpr std::size_t queue_capacity = 64;
     struct Options {
         std::chrono::microseconds spin_before_park{0}; // park-only default
@@ -71,6 +89,9 @@ public:
     HungryCarrier& operator=(const HungryCarrier&) = delete;
 
     void start();
+    // Obtain before stopping/destructing the carrier; copies of returned
+    // handles remain safe independently of the actor lifetime.
+    ProducerHandle producer_handle() const noexcept;
     // True means ownership of the request transferred to the bounded queue,
     // NOT guaranteed execution after concurrent stop(). False means queue
     // pressure, no admission, or stop. Callers must cease issuing new calls
@@ -106,6 +127,7 @@ private:
     void* broker_state_;
     BrokerOperation operation_;
     Options options_;
+    std::shared_ptr<ProducerGate> producer_gate_;
     BoundedMpscQueue<ActorMessage, queue_capacity> messages_;
     BoundedMpscQueue<Job, 2> jobs_;          // one producer: carrier
     BoundedMpscQueue<Completion, 2> results_; // one producer: broker

@@ -14,11 +14,46 @@
 
 namespace oreslang::runtime {
 
+// The control block outlives the carrier whenever producer handles remain.
+// An entrant increments active before checking closed. Closing first sets
+// closed=true, then waits for every entrant with closed=false to exit.
+struct HungryCarrier::ProducerGate {
+    explicit ProducerGate(HungryCarrier* ptr) : carrier(ptr) {}
+    HungryCarrier* const carrier;
+    std::atomic<bool> closed{false};
+    std::atomic<std::uint64_t> active{0};
+};
+
+bool HungryCarrier::ProducerHandle::try_send(ActorMessage message) const noexcept {
+    auto gate = gate_; // local shared_ptr keeps control block alive
+    if (!gate) return false;
+    gate->active.fetch_add(1, std::memory_order_acq_rel);
+    struct Release {
+        std::atomic<std::uint64_t>& active;
+        ~Release() { active.fetch_sub(1, std::memory_order_release); }
+    } release{gate->active};
+    if (gate->closed.load(std::memory_order_acquire)) return false;
+    // The lifecycle owner cannot reclaim this pointer until all active
+    // handles that observed open have left. A closed handle never loads it.
+    try {
+        return gate->carrier->try_send(message);
+    } catch (...) {
+        // The lower-level sender catches errors after a successful enqueue;
+        // do not falsely claim an accepted message was never submitted.
+        std::terminate();
+    }
+}
+
+HungryCarrier::ProducerHandle HungryCarrier::producer_handle() const noexcept {
+    return ProducerHandle{producer_gate_};
+}
+
 HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
                              void* broker_state, BrokerOperation operation,
                              Options options)
     : actor_state_(actor_state), handler_(handler), broker_state_(broker_state),
-      operation_(operation), options_(options) {
+      operation_(operation), options_(options),
+      producer_gate_(std::make_shared<ProducerGate>(this)) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
     if (options_.require_exclusive_core || options_.require_strict_no_gc ||
@@ -109,12 +144,16 @@ void HungryCarrier::join() noexcept {
     if ((actor_thread_.joinable() && actor_thread_.get_id() == std::this_thread::get_id()) ||
         (broker_thread_.joinable() && broker_thread_.get_id() == std::this_thread::get_id()))
         std::terminate();
+    // Seal new handle admissions before beginning shutdown, then quiesce
+    // all already-entered handle calls before freeing the carrier's storage.
+    producer_gate_->closed.store(true, std::memory_order_release);
     request_stop();
     if (actor_thread_.joinable()) actor_thread_.join();
     if (broker_thread_.joinable()) broker_thread_.join();
     // Producers that entered before stop may still be publishing a payload
     // or notifying. Wait for them before the eventfds/queue can be destroyed.
-    while (in_flight_senders_.load(std::memory_order_acquire) != 0)
+    while (in_flight_senders_.load(std::memory_order_acquire) != 0 ||
+           producer_gate_->active.load(std::memory_order_acquire) != 0)
         std::this_thread::yield();
     const auto accepted = accepted_.load(std::memory_order_acquire);
     const auto completed = completed_.load(std::memory_order_acquire);
