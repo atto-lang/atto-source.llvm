@@ -162,3 +162,36 @@ multi-producer stop/join races with terminal `accepted = completed +
 abandoned_on_stop` accounting. Thread sanitizer, host resource
 admission, real guest actor syntax, bounded kernel I/O cancellation and
 a formal MPSC memory-order proof remain separate gates.
+
+
+## Independent producer-handle lifetime gate
+
+The C++ carrier now offers a copyable \`producer_handle()\` for producer
+threads that can outlive the carrier object. Each handle owns a
+\`shared_ptr\` to an independent control block with a **single atomic admission word** combining a closing bit and an
+in-flight lease count. The send obtains an active lease using CAS only
+while the closing bit is clear. The supervisor atomically sets the close
+bit before stopping workers and waits for all pre-close leases before
+freeing queues or eventfds. The common atomic gives a linearizable
+admission-versus-close ordering point.
+An already-copied handle can safely reject messages after destruction.
+
+The old direct \`HungryCarrier::try_send()\` method still exists for the
+internal native test harness and requires callers to maintain the raw
+carrier's lifetime. Production callers should use preissued handles.
+Creating the initial gate and copying handles involves ref-counting;
+it is not certified for strict no-GC/hard-realtime hot paths. The
+\`try_send\` operation still uses the preallocated MPSC queue after
+entering the independent gate.
+
+**Bounded progress limitation:** if an admitted producer stalls
+indefinitely inside \`try_send\`, destruction intentionally waits for its
+lease. A future supervisor needs stall detection and a bounded drain/
+leak-safe quarantine rather than freeing referenced actor storage.
+The lifetime gate prevents UAF; it cannot guarantee bounded shutdown
+under arbitrary native-thread failure.
+
+Regression tests copy handles to five producer threads and destroy
+the actor while they are sending; after destruction every handle
+must return false without touching freed memory. Verification must
+include native CTest, ASan/UBSan and TSan.

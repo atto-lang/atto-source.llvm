@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <functional>
+#include <memory>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -355,6 +356,61 @@ static void test_bounded_queue_head_readiness() {
     }
 }
 
+
+static void test_producer_handle_survives_destroy() {
+    HungryCarrier::ProducerHandle outside;
+    State st;
+    {
+        auto actor = std::make_unique<HungryCarrier>(&st, handle, nullptr, io_double,
+                                                     HungryCarrier::Options{});
+        outside = actor->producer_handle();
+        check(static_cast<bool>(outside), "missing independent producer handle");
+        actor->start();
+        check(outside.try_send({1, 7}), "valid producer handle rejected work");
+        check(until([&]{return st.completed.load() == 1;}, 1s),
+              "handle-submitted message not processed");
+        actor.reset(); // gate closes before storage is freed
+    }
+    for (int i = 0; i < 1000; ++i)
+        check(!outside.try_send({static_cast<std::uint64_t>(i), i}),
+              "closed producer handle accessed destroyed carrier");
+}
+static void test_producer_handles_concurrent_destructor() {
+    for (int round = 0; round < 12; ++round) {
+        State st;
+        auto actor = std::make_unique<HungryCarrier>(&st, handle, nullptr, io_double,
+                                                     HungryCarrier::Options{});
+        actor->start();
+        const auto admission = actor->producer_handle();
+        std::atomic<bool> go{false};
+        std::atomic<int> done{0}, accepted{0};
+        std::vector<std::thread> producers;
+        for (int p = 0; p < 5; ++p) {
+            auto copy = admission; // each thread owns an independent shared handle
+            producers.emplace_back([copy, &go, &done, &accepted, p] {
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (int i = 0; i < 3000; ++i) {
+                    if (copy.try_send({static_cast<std::uint64_t>(p * 3000 + i + 1), i}))
+                        accepted.fetch_add(1, std::memory_order_relaxed);
+                    if ((i & 15) == 0) std::this_thread::yield();
+                }
+                // This checks the control block AFTER the actor is gone.
+                done.fetch_add(1, std::memory_order_release);
+            });
+        }
+        go.store(true, std::memory_order_release);
+        std::this_thread::sleep_for(1ms);
+        actor.reset(); // producer threads can keep calling their safe handles
+        for (auto& producer : producers) producer.join();
+        check(done.load(std::memory_order_acquire) == 5, "producer did not exit");
+        check(!admission.try_send({1, 1}), "expired actor accepted message");
+        check(st.violations.load(std::memory_order_acquire) == 0,
+              "actor-local state accessed concurrently during teardown");
+    }
+    std::cout << "PASS independent producer handles across destruction\n";
+}
+
 int main() {
     try {
         test_bounded_queue_head_readiness();
@@ -369,6 +425,8 @@ int main() {
         test_stop_completion_races();
         test_join_initiates_stop();
         test_stop_while_producers_are_publishing();
+        test_producer_handle_survives_destroy();
+        test_producer_handles_concurrent_destructor();
         std::cout << "PASS hungry carrier end-to-end tests\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL hungry carrier: " << error.what() << "\n";
