@@ -1,6 +1,8 @@
 #include "oreslang/runtime/HungryCarrier.hpp"
 
 #include <functional>
+#include <exception>
+#include <thread>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
@@ -31,6 +33,11 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
 }
 
 HungryCarrier::~HungryCarrier() noexcept {
+    // A self-destructing worker would close eventfds and free queues while
+    // the thread is still accessing them. Fail closed rather than UAF.
+    if ((actor_thread_.joinable() && actor_thread_.get_id() == std::this_thread::get_id()) ||
+        (broker_thread_.joinable() && broker_thread_.get_id() == std::this_thread::get_id()))
+        std::terminate();
     request_stop();
     join();
 }
@@ -58,13 +65,29 @@ void HungryCarrier::start() {
 }
 
 bool HungryCarrier::try_send(ActorMessage message) {
+    // The counter protects *already-entered* producers during stop/join.
+    // It cannot make destruction concurrent with NEW method calls safe:
+    // the external owner must quiesce initiation of new calls first.
+    in_flight_senders_.fetch_add(1, std::memory_order_acq_rel);
+    struct SenderExit {
+        std::atomic<std::uint32_t>& count;
+        ~SenderExit() { count.fetch_sub(1, std::memory_order_release); }
+    } guard{in_flight_senders_};
+
     if (!setup_ok_.load(std::memory_order_acquire) ||
         stop_.load(std::memory_order_acquire)) return false;
     if (!messages_.try_push(message)) return false;
+    // A stop racing with successful enqueue can abandon this accepted turn.
+    // Report that explicitly through abandoned_on_stop after join.
     accepted_.fetch_add(1, std::memory_order_relaxed);
-    // The readiness predicate is published before the notification.
-    queued_.fetch_add(1, std::memory_order_release);
-    actor_signal_.notify();
+    try {
+        actor_signal_.notify();
+    } catch (...) {
+        // The enqueue already succeeded. Returning false would invite a
+        // duplicate retry of an accepted message.
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+    }
     return true;
 }
 
@@ -81,11 +104,26 @@ void HungryCarrier::request_stop() noexcept {
 }
 
 void HungryCarrier::join() noexcept {
-    // Calling join() from one of these two worker threads would self-deadlock.
-    if (actor_thread_.joinable() && actor_thread_.get_id() != std::this_thread::get_id())
-        actor_thread_.join();
-    if (broker_thread_.joinable() && broker_thread_.get_id() != std::this_thread::get_id())
-        broker_thread_.join();
+    // join() is an explicit terminal lifecycle operation, not an indefinite
+    // wait for a spontaneous stop. Only one thread may call join()/destroy.
+    if ((actor_thread_.joinable() && actor_thread_.get_id() == std::this_thread::get_id()) ||
+        (broker_thread_.joinable() && broker_thread_.get_id() == std::this_thread::get_id()))
+        std::terminate();
+    request_stop();
+    if (actor_thread_.joinable()) actor_thread_.join();
+    if (broker_thread_.joinable()) broker_thread_.join();
+    // Producers that entered before stop may still be publishing a payload
+    // or notifying. Wait for them before the eventfds/queue can be destroyed.
+    while (in_flight_senders_.load(std::memory_order_acquire) != 0)
+        std::this_thread::yield();
+    const auto accepted = accepted_.load(std::memory_order_acquire);
+    const auto completed = completed_.load(std::memory_order_acquire);
+    if (completed > accepted) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        abandoned_on_stop_.store(0, std::memory_order_release);
+    } else {
+        abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
+    }
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
@@ -96,7 +134,8 @@ CarrierStats HungryCarrier::stats() const noexcept {
             canceled_.load(std::memory_order_acquire),
             stale_.load(std::memory_order_acquire),
             failures_.load(std::memory_order_acquire),
-            thread_tag_.load(std::memory_order_acquire)};
+            thread_tag_.load(std::memory_order_acquire),
+            abandoned_on_stop_.load(std::memory_order_acquire)};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -143,7 +182,6 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
         request_stop(); // no silently lost I/O
         return;
     }
-    jobs_available_.fetch_add(1, std::memory_order_release);
     try { broker_signal_.notify(); }
     catch (...) {
         failures_.fetch_add(1, std::memory_order_relaxed);
@@ -154,8 +192,8 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
 void HungryCarrier::wait_actor() noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
     const auto ready = [this] {
-        return (queued_.load(std::memory_order_acquire) != 0 && !pending_)
-               || results_available_.load(std::memory_order_acquire) != 0
+        return (!pending_ && messages_.has_ready())
+               || (pending_ && results_.has_ready())
                || stop_.load(std::memory_order_acquire);
     };
     if (ready()) return;
@@ -189,9 +227,7 @@ void HungryCarrier::actor_loop() noexcept {
     while (!stop_.load(std::memory_order_acquire)) {
         if (pending_) {
             Completion c;
-            if (results_available_.load(std::memory_order_acquire) != 0 &&
-                results_.try_pop(c)) {
-                results_available_.fetch_sub(1, std::memory_order_acq_rel);
+            if (results_.try_pop(c)) {
                 if (c.generation != generation_ ||
                     terminal_.load(std::memory_order_acquire) != OperationTerminal::completed) {
                     stale_.fetch_add(1, std::memory_order_relaxed);
@@ -202,10 +238,9 @@ void HungryCarrier::actor_loop() noexcept {
                 run_handler(current_, true, c.value);
                 continue;
             }
-        } else if (queued_.load(std::memory_order_acquire) != 0) {
+        } else {
             ActorMessage m;
             if (messages_.try_pop(m)) {
-                queued_.fetch_sub(1, std::memory_order_acq_rel);
                 run_handler(m, false, 0);
                 continue;
             }
@@ -225,9 +260,7 @@ void HungryCarrier::actor_loop() noexcept {
 void HungryCarrier::broker_loop() noexcept {
     while (!stop_.load(std::memory_order_acquire)) {
         Job job;
-        if (jobs_available_.load(std::memory_order_acquire) &&
-            jobs_.try_pop(job)) {
-            jobs_available_.fetch_sub(1, std::memory_order_acq_rel);
+        if (jobs_.try_pop(job)) {
             // A cancellable *mock latency* transport. A real syscall/uring
             // adapter must preserve buffer lifetime and acknowledge cancel.
             try {
@@ -249,7 +282,6 @@ void HungryCarrier::broker_loop() noexcept {
                     request_stop(); // reserved 1-inflight completion may never drop
                     continue;
                 }
-                results_available_.fetch_add(1, std::memory_order_release);
                 actor_signal_.notify();
             } catch (...) {
                 failures_.fetch_add(1, std::memory_order_relaxed);
@@ -259,7 +291,7 @@ void HungryCarrier::broker_loop() noexcept {
         }
         try {
             (void)broker_signal_.wait_until(
-                [this] { return jobs_available_.load(std::memory_order_acquire) != 0; },
+                [this] { return jobs_.has_ready(); },
                 stop_, std::chrono::milliseconds::max());
         } catch (...) {
             failures_.fetch_add(1, std::memory_order_relaxed);
