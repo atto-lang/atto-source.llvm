@@ -133,3 +133,36 @@ lock-free but not wait-free; the head-of-line producer remains a
 progress dependency. Termination from the worker thread itself is
 unsafe and now fails closed; a single external supervisor must own
 `join()`/destruction.
+
+
+## Stall-resistant dedicated ingress lanes (optional native profile)
+
+In addition to the general bounded **MPSC** mailbox, the native carrier
+can register up to four **SPSC** producer lanes before starting. Each lane
+has a move-only, independently lifetime-protected \`DedicatedProducer\`
+handle, a 64-message preallocated ring and exactly one active producer
+at any instant. Concurrent use of the same handle returns false; it does
+not turn a lane into an unsafe MPSC. Registration/start use a supervisor
+mutex *outside* the actor's critical execution path.
+
+The carrier uses round-robin polling across the general MPSC queue and
+all registered SPSC lanes. If a producer stalls after writing an
+**unpublished** lane-A entry, lane B can still publish and deliver work.
+This mitigates MPSC head-of-line blocking without allowing incomplete
+payloads to be consumed or another actor's handler to run concurrently.
+The carrier still owns and executes every user handler serially, and
+a pending \`await_io\` continues blocking all other user handlers.
+
+A deterministic two-lane test stalls producer A precisely between
+write and release-publication; independent lane B must still publish and
+be consumed. End-to-end actor tests exercise 300 messages per lane,
+late-registration rejection, capacity exhaustion and a lane handle
+surviving actor destruction.
+
+**Limitations:** per-lane FIFO but no total multi-producer global order;
+slow producer A can still block *its own* lane; all producer handles
+must be registered by the supervisor before \`start()\`; maximum lanes
+and per-lane capacity are fixed. This is still a Linux C++ runtime
+experiment, **not** compiled Oreslang language actors, OS CPU pin
+reservation or verified no-GC execution. Extra control block refcounts,
+instrumented test hooks and OS wake syscalls are not strict RT-certified.

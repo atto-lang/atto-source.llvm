@@ -14,9 +14,8 @@
 
 namespace oreslang::runtime {
 
-// The control block outlives the carrier whenever producer handles remain.
-// An entrant increments active before checking closed. Closing first sets
-// closed=true, then waits for every entrant with closed=false to exit.
+// An independent shared control block outlives the carrier. One atomic
+// admission word linearizes close versus in-flight producer leases.
 struct HungryCarrier::ProducerGate {
     explicit ProducerGate(HungryCarrier* ptr) : carrier(ptr) {}
     static constexpr std::uint64_t closing_bit = std::uint64_t{1} << 63;
@@ -57,6 +56,79 @@ HungryCarrier::ProducerHandle HungryCarrier::producer_handle() const noexcept {
     return ProducerHandle{producer_gate_};
 }
 
+bool HungryCarrier::DedicatedProducer::try_send(ActorMessage message) const noexcept {
+    // Immediate rejection of concurrent use avoids converting a single-
+    // producer lane into an unsafe MPSC queue. Move only between calls.
+    if (sending_.test_and_set(std::memory_order_acquire)) return false;
+    struct SendingGuard {
+        std::atomic_flag& flag;
+        ~SendingGuard() { flag.clear(std::memory_order_release); }
+    } send_guard{sending_};
+
+    auto gate = gate_;
+    if (!gate) return false;
+    auto state = gate->leases.load(std::memory_order_acquire);
+    for (;;) {
+        if (state & ProducerGate::closing_bit) return false;
+        if ((state & ProducerGate::count_mask) == ProducerGate::count_mask)
+            return false;
+        if (gate->leases.compare_exchange_weak(state, state + 1,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire))
+            break;
+    }
+    struct LeaseGuard {
+        std::atomic<std::uint64_t>& leases;
+        ~LeaseGuard() { leases.fetch_sub(1, std::memory_order_release); }
+    } lease_guard{gate->leases};
+    return gate->carrier->try_send_spsc(index_, message);
+}
+
+HungryCarrier::DedicatedProducer HungryCarrier::register_spsc_producer() {
+    std::lock_guard<std::mutex> lock{lane_registration_mutex_};
+    if (started_.load(std::memory_order_acquire))
+        throw std::logic_error("SPSC producer registration is only allowed before start");
+    if (registered_lanes_ >= max_dedicated_lanes)
+        throw std::length_error("all bounded hungry producer lanes are reserved");
+    return DedicatedProducer{producer_gate_, registered_lanes_++};
+}
+
+bool HungryCarrier::try_send_spsc(std::size_t lane, ActorMessage message) noexcept {
+    if (lane >= registered_lanes_ ||
+        !setup_ok_.load(std::memory_order_acquire) ||
+        stop_.load(std::memory_order_acquire))
+        return false;
+    if (!lanes_[lane].try_push(message)) return false;
+    accepted_.fetch_add(1, std::memory_order_relaxed);
+    try { actor_signal_.notify(); }
+    catch (...) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+    }
+    return true;
+}
+
+bool HungryCarrier::has_input_ready() const noexcept {
+    if (messages_.has_ready()) return true;
+    for (std::size_t i = 0; i < registered_lanes_; ++i)
+        if (lanes_[i].has_ready()) return true;
+    return false;
+}
+
+bool HungryCarrier::pop_next_input(ActorMessage& message) noexcept {
+    const std::size_t sources = registered_lanes_ + 1; // lane 0 = legacy MPSC
+    for (std::size_t step = 0; step < sources; ++step) {
+        const auto index = (next_input_ + step) % sources;
+        const bool found = index == 0 ? messages_.try_pop(message)
+                                      : lanes_[index - 1].try_pop(message);
+        if (found) {
+            next_input_ = (index + 1) % sources;
+            return true;
+        }
+    }
+    return false;
+}
+
 HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
                              void* broker_state, BrokerOperation operation,
                              Options options)
@@ -87,8 +159,11 @@ HungryCarrier::~HungryCarrier() noexcept {
 }
 
 void HungryCarrier::start() {
-    if (started_.exchange(true, std::memory_order_acq_rel))
-        throw std::logic_error("carrier can only start once");
+    {
+        std::lock_guard<std::mutex> lock{lane_registration_mutex_};
+        if (started_.exchange(true, std::memory_order_acq_rel))
+            throw std::logic_error("carrier can only start once");
+    }
     try {
         broker_thread_ = std::thread([this] { broker_loop(); });
         actor_thread_ = std::thread([this] { actor_loop(); });
@@ -241,7 +316,7 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
 void HungryCarrier::wait_actor() noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
     const auto ready = [this] {
-        return (!pending_ && messages_.has_ready())
+        return (!pending_ && has_input_ready())
                || (pending_ && results_.has_ready())
                || stop_.load(std::memory_order_acquire);
     };
@@ -289,7 +364,7 @@ void HungryCarrier::actor_loop() noexcept {
             }
         } else {
             ActorMessage m;
-            if (messages_.try_pop(m)) {
+            if (pop_next_input(m)) {
                 run_handler(m, false, 0);
                 continue;
             }
