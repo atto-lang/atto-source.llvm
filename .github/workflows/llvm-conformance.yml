@@ -42,6 +42,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
+      - name: Check REAL carrier admission and handler traces
+        run: python3 contracts/v1/semantics/traces/native_probe.py --binary ./build/oreslang-actor-trace-test --repeat 12 --timeout 15
       - name: Check normative LLVM admissions
         run: python3 contracts/v1/run.py --backend llvm --command './build/oreslang-llvmc {source}' --report build/conformance-llvm.json
       - name: Check compiled native results and diagnostic semantics
