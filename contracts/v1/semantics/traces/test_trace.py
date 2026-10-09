@@ -32,6 +32,27 @@ class ActorTraceProof(unittest.TestCase):
         self.assertEqual(metrics["messages_received"], 1)
         self.assertEqual(metrics["actors"], 2)
 
+    def test_external_ingress_roundtrip(self):
+        trace = {"schema_version":"1.0.0","complete":True,
+                 "events":[
+                     {"seq":0,"kind":"spawn","actor":"receiver"},
+                     {"seq":1,"kind":"admit","actor":"receiver","message_id":"external_1"},
+                     {"seq":2,"kind":"receive","actor":"receiver","message_id":"external_1"},
+                     {"seq":3,"kind":"terminate","actor":"receiver"},
+                 ]}
+        self.assertEqual(check_trace(trace)["messages_received"], 1)
+        duplicate = copy.deepcopy(trace)
+        duplicate["events"].insert(2, dict(seq=2,kind="admit",actor="receiver",
+                                           message_id="external_1"))
+        for seq,event in enumerate(duplicate["events"]): event["seq"] = seq
+        self.assert_invalid(duplicate)
+        missing = copy.deepcopy(trace)
+        del missing["events"][1]["message_id"]
+        self.assert_invalid(missing)
+        wrong = copy.deepcopy(trace)
+        wrong["events"][1]["actor"] = "unspawned"
+        self.assert_invalid(wrong)
+
     def test_partial_trace_does_not_imply_eventual_delivery(self):
         t = good()
         t["complete"] = False
