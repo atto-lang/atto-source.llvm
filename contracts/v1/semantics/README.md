@@ -81,3 +81,24 @@ These properties test the **backend-neutral trace validator** and a
 narrow integer arithmetic subset. They do not claim that compiled
 Oreslang actors already emit production traces, or that LLVM supports
 verified borrow/no-GC or Linux hard-realtime execution.
+
+## Externally admitted actor messages
+
+The actor trace protocol now defines an `admit` event: a trusted producer
+successfully enqueues a message into a live actor's native mailbox. It carries
+`actor` (the receiver) and `message_id`, without inventing an actor identity
+for the external host thread. Subsequent `receive` must have the same ID
+and can occur at most once. All existing `send` semantics remain unchanged.
+
+LLVM's `oreslang-actor-trace-test` and `traces/native_probe.py` drive a
+real `HungryCarrier` with 24 accepted messages, wait for corresponding
+single-threaded handler callbacks, verify `CarrierStats` and lifecycle,
+then validate the complete causally reconstructed trace via JSON Schema and
+the backend-neutral state machine. The funded workflow repeats this 12 times.
+
+**Limits:** This tests the native continuation carrier, not actors compiled
+from `.ores`, not realtime isolation, and not cancellation traces or a
+production tracing API. The sequence is reconstructed after join from real
+admission and callback evidence, not a timestamped total order. Java/Graal
+shares the schema and adversarial validator but does not yet emit native
+carrier traces.
