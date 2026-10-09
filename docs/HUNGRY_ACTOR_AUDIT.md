@@ -195,3 +195,36 @@ Regression tests copy handles to five producer threads and destroy
 the actor while they are sending; after destruction every handle
 must return false without touching freed memory. Verification must
 include native CTest, ASan/UBSan and TSan.
+
+
+## Isolated SPSC producer lanes: head-of-line stall mitigation
+
+A strict low-latency actor may now use **one fixed-capacity SPSC ring
+per registered producer**, alongside the existing MPSC ingress. The actor
+polls lanes round-robin, and each producer publishes with a release tail
+store after writing the slot. Other lanes make progress independently
+if a producer is interrupted halfway through its own publication.
+No unfinished slot may be consumed.
+
+- Registration requires one supervisor before \`start\`; the mutex is never
+  taken by the carrier's message processing loop. Reject registration
+  after start and more than four lanes.
+- Each lane has a move-only shared-lifetime gated handle and rejects
+  *simultaneous* calls from multiple producers. Thread migration between
+  sequential calls requires external synchronization.
+- Fair rotation avoids always preferring the legacy MPSC lane under
+  steady MPSC pressure, but **does not** promise a fixed bounded latency:
+  OS preemption, handler execution time and wait/sleep jitter still apply.
+- SPSC messages from different lanes have no single agreed global FIFO
+  order; any stable cross-lane ordering contract would require a separate
+  sequencer, not implied by this implementation.
+- Deterministic test instrumentation interrupts lane A between slot write
+  and tail publication; lane B must publish/consume while A is stalled.
+  The normal \`try_push\` compiles with an empty inline hook.
+- Producer-handle shutdown uses the same atomic close/lease arbitration
+  already verified in PR #22. Carrier destruction remains supervisor-owned.
+
+**Remaining hard-realtime blockers:** native actor codegen and borrow
+checks, a trusted no-GC guest memory path, CPU/SMT/IRQ admission,
+completion buffer ownership, bounded callbacks, physical load isolation,
+and measured tail-latency proof.

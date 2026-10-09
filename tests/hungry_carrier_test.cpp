@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <optional>
+#include "oreslang/runtime/BoundedSpscQueue.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -411,6 +413,101 @@ static void test_producer_handles_concurrent_destructor() {
     std::cout << "PASS independent producer handles across destruction\n";
 }
 
+
+static void test_spsc_stalled_publisher_does_not_block_another_lane() {
+    BoundedSpscQueue<ActorMessage, 2> slow, fast;
+    std::atomic<bool> entered{false}, release{false}, slow_ok{false};
+    std::thread interrupted([&] {
+        const bool success = slow.try_push_instrumented({1, 11}, [&]() noexcept {
+            entered.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        });
+        slow_ok.store(success, std::memory_order_release);
+    });
+    const bool reached = until([&] {return entered.load(std::memory_order_acquire);}, 2s);
+    const bool slow_unpublished = !slow.has_ready();
+    const bool fast_published = fast.try_push({2, 22});
+    ActorMessage message{};
+    const bool fast_consumed = fast.try_pop(message);
+    const bool correct_second = message.id == 2 && message.input == 22;
+    release.store(true, std::memory_order_release);
+    interrupted.join();
+    check(reached, "slow producer did not reach prepublish barrier");
+    check(slow_unpublished, "unpublished SPSC item was consumed");
+    check(fast_published && fast_consumed && correct_second,
+          "stalled producer on lane A blocked independent lane B");
+    check(slow_ok.load(std::memory_order_acquire) && slow.try_pop(message) &&
+          message.id == 1, "lane A did not resume correctly");
+}
+static void test_dedicated_lane_registration_and_fairness() {
+    State st;
+    HungryCarrier actor(&st, handle, nullptr, io_double, {});
+    auto lane_a = actor.register_spsc_producer();
+    auto lane_b = actor.register_spsc_producer();
+    actor.start();
+    bool rejected_late = false;
+    try {
+        auto late = actor.register_spsc_producer();
+        (void)late;
+    } catch (const std::logic_error&) { rejected_late = true; }
+    check(rejected_late, "SPSC registration after actor start was accepted");
+
+    std::atomic<bool> ok_a{true}, ok_b{true};
+    std::thread producer_a([lane=std::move(lane_a), &ok_a]() mutable {
+        std::this_thread::sleep_for(35ms); // a deliberately delayed producer
+        for (int i = 0; i < 300; ++i) {
+            while (!lane.try_send({static_cast<std::uint64_t>(i+1), i})) {
+                if (i > 0 && !ok_a.load()) return;
+                std::this_thread::yield();
+            }
+        }
+    });
+    std::thread producer_b([lane=std::move(lane_b), &ok_b]() mutable {
+        for (int i = 0; i < 300; ++i) {
+            while (!lane.try_send({static_cast<std::uint64_t>(i+1001), i})) {
+                if (i > 0 && !ok_b.load()) return;
+                std::this_thread::yield();
+            }
+        }
+    });
+    const bool early_progress = until([&] {return st.completed.load() >= 100;}, 500ms);
+    producer_a.join();
+    producer_b.join();
+    const bool finished = until([&] {return st.completed.load() == 600;}, 3s);
+    const auto stats = actor.stats();
+    actor.join();
+    check(early_progress, "dedicated lane B did not progress while A delayed");
+    check(finished && stats.completed == 600 && stats.accepted == 600,
+          "SPSC ingress lost or duplicated messages");
+    check(st.violations.load() == 0 && stats.protocol_failures == 0,
+          "dedicated lanes violated single actor handler invariant");
+    std::cout << "PASS independent SPSC lanes and fair carrier polling\n";
+}
+static void test_spsc_lifetime_and_registration_limits() {
+    State st;
+    std::optional<HungryCarrier::DedicatedProducer> survived;
+    {
+        auto actor = std::make_unique<HungryCarrier>(&st, handle, nullptr, io_double,
+                                                     HungryCarrier::Options{});
+        survived.emplace(actor->register_spsc_producer());
+        auto b = actor->register_spsc_producer();
+        auto c = actor->register_spsc_producer();
+        auto d = actor->register_spsc_producer();
+        bool full = false;
+        try { auto e = actor->register_spsc_producer(); (void)e; }
+        catch (const std::length_error&) { full = true; }
+        check(full, "more than four SPSC lanes were admitted");
+        actor->start();
+        check(survived->try_send({1, 1}), "valid dedicated lane rejected request");
+        check(until([&] {return st.completed.load() == 1;}, 1s),
+              "dedicated lane message failed to execute");
+        actor.reset();
+    }
+    check(!survived->try_send({2, 2}),
+          "dedicated producer dereferenced destroyed actor");
+}
+
 int main() {
     try {
         test_bounded_queue_head_readiness();
@@ -427,6 +524,9 @@ int main() {
         test_stop_while_producers_are_publishing();
         test_producer_handle_survives_destroy();
         test_producer_handles_concurrent_destructor();
+        test_spsc_stalled_publisher_does_not_block_another_lane();
+        test_dedicated_lane_registration_and_fairness();
+        test_spsc_lifetime_and_registration_limits();
         std::cout << "PASS hungry carrier end-to-end tests\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL hungry carrier: " << error.what() << "\n";
