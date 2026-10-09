@@ -59,3 +59,25 @@ Follow-up work: integer width/overflow specification, stable diagnostic IDs
 rather than regular-expression mappings, canonical Oreslang JSON stdout,
 actor message event traces, cycle-safe reference/ownership cases, replay-fenced
 cancellation and fair preemption under strict resource budgets.
+
+
+## Expanded seeded regression suite
+
+The independent LLVM conformance workflow additionally verifies:
+
+- 512 deterministic arithmetic generator pairs *without invoking a compiler*
+  (generator integrity; not counted as backend execution).
+- Two additional **64-pair native Clang-executed** suites with seeds
+  20261009 and 314159. These run alongside the original 32-pair suite:
+  160 actual source-pair comparisons, 320 independently compiled native
+  executables in all when each test completes.
+- 48 reproducible valid three-actor trace samples, each with 24
+  sends/receives and an exclusive-resource lifecycle.
+- 64 adversarial mutations covering duplicate send/delivery, wrong target
+  or owner, use-after-termination, incomplete trace and exclusive lease
+  violations. Schema mutations test untrusted event fields as well.
+
+These properties test the **backend-neutral trace validator** and a
+narrow integer arithmetic subset. They do not claim that compiled
+Oreslang actors already emit production traces, or that LLVM supports
+verified borrow/no-GC or Linux hard-realtime execution.

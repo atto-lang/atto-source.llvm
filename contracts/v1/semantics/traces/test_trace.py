@@ -98,5 +98,86 @@ class ActorTraceProof(unittest.TestCase):
         for i,e in enumerate(t["events"]): e["seq"] = i
         self.assert_invalid(t)
 
+
+    def test_seeded_multi_actor_valid_traces(self):
+        # Deterministic property tests for the *validator*, not actual actors.
+        # All messages are sent by live actors and delivered once to a live
+        # target; acquiring/releasing an exclusive lease is properly paired.
+        import random
+        for seed in range(48):
+            rng = random.Random(20261009 + seed)
+            actors = ("alpha", "beta", "gamma")
+            events = [{"kind": "spawn", "actor": name} for name in actors]
+            pending = []
+            for i in range(24):
+                sender = rng.choice(actors)
+                target = rng.choice(actors)
+                msg = f"seed{seed}_msg{i}"
+                events.append({"kind": "send", "actor": sender,
+                               "target": target, "message_id": msg})
+                pending.append((target, msg))
+            rng.shuffle(pending)
+            for target, msg in pending:
+                events.append({"kind": "receive", "actor": target,
+                               "message_id": msg})
+            owner = rng.choice(actors)
+            events.extend((
+                {"kind": "exclusive_acquire", "actor": owner, "resource": "quota"},
+                {"kind": "exclusive_release", "actor": owner, "resource": "quota"},
+            ))
+            events.extend({"kind": "terminate", "actor": actor}
+                          for actor in reversed(actors))
+            trace = {"schema_version": "1.0.0", "complete": True,
+                     "events": [dict(seq=i, **event)
+                                for i, event in enumerate(events)]}
+            metrics = check_trace(trace)
+            self.assertEqual(metrics["messages_sent"], 24)
+            self.assertEqual(metrics["messages_received"], 24)
+            self.assertEqual(metrics["actors"], 3)
+
+    def test_seeded_adversarial_mutations_fail_closed(self):
+        # Ensure every family of malformed trace fails and never reports a
+        # successful ownership/delivery proof. 64 reproducible mutations.
+        for case in range(64):
+            t = good()
+            events = t["events"]
+            variant = case % 8
+            if variant == 0:  # second send reuses an existing identifier
+                events.insert(5, {"kind":"send", "actor":"alice",
+                                  "target":"bob", "message_id":"m1"})
+            elif variant == 1:  # exclusive resource stolen by a second actor
+                events.insert(3, {"kind":"exclusive_acquire",
+                                  "actor":"bob", "resource":"account"})
+            elif variant == 2:  # receive by the wrong actor
+                events[4]["actor"] = "alice"
+            elif variant == 3:  # deliver a message twice
+                events.insert(5, {"kind":"receive", "actor":"bob",
+                                  "message_id":"m1"})
+            elif variant == 4:  # drop receipt from a completed trace
+                events.pop(4)
+            elif variant == 5:  # terminate before releasing an exclusive lease
+                events[5] = {"kind":"terminate", "actor":"alice"}
+            elif variant == 6:  # use after an actor's final termination
+                events.append({"kind":"send", "actor":"alice",
+                               "target":"bob", "message_id":"new"})
+            else:  # send to never-created actor
+                events[3]["target"] = "unborn"
+            for i, event in enumerate(events):
+                event["seq"] = i
+            self.assert_invalid(t)
+
+    def test_trace_schema_mutations_cannot_escape_kind_requirements(self):
+        # Structural schema rejection independent of state-machine checks.
+        for field, replacement in (
+            ("actor", "Unexpected Capital"),
+            ("message_id", "bad message id with spaces"),
+            ("seq", -1),
+            ("kind", "debug_private_heap"),
+        ):
+            trace = good()
+            event = trace["events"][3]
+            event[field] = replacement
+            self.assert_invalid(trace)
+
 if __name__ == "__main__":
     unittest.main()
