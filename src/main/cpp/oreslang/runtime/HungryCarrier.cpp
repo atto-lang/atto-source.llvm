@@ -19,27 +19,36 @@ namespace oreslang::runtime {
 // closed=true, then waits for every entrant with closed=false to exit.
 struct HungryCarrier::ProducerGate {
     explicit ProducerGate(HungryCarrier* ptr) : carrier(ptr) {}
+    static constexpr std::uint64_t closing_bit = std::uint64_t{1} << 63;
+    static constexpr std::uint64_t count_mask = closing_bit - 1;
     HungryCarrier* const carrier;
-    std::atomic<bool> closed{false};
-    std::atomic<std::uint64_t> active{0};
+    // One atomic linearizes admission against shutdown. Separate closed and
+    // active atomics permit a lifecycle observer to miss an entrant.
+    std::atomic<std::uint64_t> leases{0};
 };
 
 bool HungryCarrier::ProducerHandle::try_send(ActorMessage message) const noexcept {
     auto gate = gate_; // local shared_ptr keeps control block alive
     if (!gate) return false;
-    gate->active.fetch_add(1, std::memory_order_acq_rel);
+    auto state = gate->leases.load(std::memory_order_acquire);
+    for (;;) {
+        if (state & ProducerGate::closing_bit) return false;
+        if ((state & ProducerGate::count_mask) == ProducerGate::count_mask)
+            return false; // bounded overflow; fail closed
+        if (gate->leases.compare_exchange_weak(state, state + 1,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire))
+            break;
+    }
     struct Release {
-        std::atomic<std::uint64_t>& active;
-        ~Release() { active.fetch_sub(1, std::memory_order_release); }
-    } release{gate->active};
-    if (gate->closed.load(std::memory_order_acquire)) return false;
-    // The lifecycle owner cannot reclaim this pointer until all active
-    // handles that observed open have left. A closed handle never loads it.
+        std::atomic<std::uint64_t>& leases;
+        ~Release() { leases.fetch_sub(1, std::memory_order_release); }
+    } release{gate->leases};
+    // If shutdown's fetch_or comes first, lease acquisition fails;
+    // otherwise shutdown sees this held lease and waits before free.
     try {
         return gate->carrier->try_send(message);
     } catch (...) {
-        // The lower-level sender catches errors after a successful enqueue;
-        // do not falsely claim an accepted message was never submitted.
         std::terminate();
     }
 }
@@ -146,14 +155,15 @@ void HungryCarrier::join() noexcept {
         std::terminate();
     // Seal new handle admissions before beginning shutdown, then quiesce
     // all already-entered handle calls before freeing the carrier's storage.
-    producer_gate_->closed.store(true, std::memory_order_release);
+    producer_gate_->leases.fetch_or(ProducerGate::closing_bit, std::memory_order_acq_rel);
     request_stop();
     if (actor_thread_.joinable()) actor_thread_.join();
     if (broker_thread_.joinable()) broker_thread_.join();
     // Producers that entered before stop may still be publishing a payload
     // or notifying. Wait for them before the eventfds/queue can be destroyed.
     while (in_flight_senders_.load(std::memory_order_acquire) != 0 ||
-           producer_gate_->active.load(std::memory_order_acquire) != 0)
+           (producer_gate_->leases.load(std::memory_order_acquire) &
+            ProducerGate::count_mask) != 0)
         std::this_thread::yield();
     const auto accepted = accepted_.load(std::memory_order_acquire);
     const auto completed = completed_.load(std::memory_order_acquire);

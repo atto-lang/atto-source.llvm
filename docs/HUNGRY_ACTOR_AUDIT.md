@@ -168,11 +168,12 @@ a formal MPSC memory-order proof remain separate gates.
 
 The C++ carrier now offers a copyable \`producer_handle()\` for producer
 threads that can outlive the carrier object. Each handle owns a
-\`shared_ptr\` to an independent control block with an atomic closed bit
-and an in-flight handle-call counter. A send enters the gate **before**
-checking closed, then calls into the carrier only when open. The
-supervisor closes the gate **before** stopping/joining workers, and
-waits for every entered handle call before destructing queues/eventfds.
+\`shared_ptr\` to an independent control block with a **single atomic admission word** combining a closing bit and an
+in-flight lease count. The send obtains an active lease using CAS only
+while the closing bit is clear. The supervisor atomically sets the close
+bit before stopping workers and waits for all pre-close leases before
+freeing queues or eventfds. The common atomic gives a linearizable
+admission-versus-close ordering point.
 An already-copied handle can safely reject messages after destruction.
 
 The old direct \`HungryCarrier::try_send()\` method still exists for the
