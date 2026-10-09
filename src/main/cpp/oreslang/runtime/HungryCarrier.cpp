@@ -24,7 +24,7 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
         throw std::invalid_argument("strict CPU/GC/RT profile is not certified or implemented");
     // The bounded queue's algorithm relies on lock-free atomic indexes on the
     // supported host. Reject a platform that silently implements them with locks.
-    if (!std::atomic<std::size_t>{}.is_lock_free())
+    if (!std::atomic<std::size_t>::is_always_lock_free)
         throw std::invalid_argument("lock-free atomic indexes unavailable");
     if (options_.spin_before_park.count() < 0 || options_.spin_before_park.count() > 100000)
         throw std::invalid_argument("spin window exceeds 100 ms maximum");
