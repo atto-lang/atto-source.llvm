@@ -189,6 +189,44 @@ static void test_actual_socket_io_off_carrier() {
     std::cout << "PASS bounded socket broker and parked carrier\n";
 }
 
+static void test_strict_realtime_profiles_fail_closed() {
+    State st;
+    for (int policy = 0; policy < 3; ++policy) {
+        HungryCarrier::Options options{};
+        options.require_exclusive_core = (policy == 0);
+        options.require_strict_no_gc = (policy == 1);
+        options.require_hard_realtime = (policy == 2);
+        bool rejected = false;
+        try {
+            HungryCarrier actor(&st, handle, nullptr, io_double, options);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected, "unimplemented strict profile silently admitted");
+    }
+}
+static void test_stop_completion_races() {
+    for (int i = 0; i < 60; ++i) {
+        State st;
+        st.await_io = true;
+        st.delay_ms = static_cast<std::uint32_t>(i % 4);
+        HungryCarrier actor(&st, handle, nullptr, io_double, {});
+        actor.start();
+        check(actor.try_send({1, 9}), "race test message failed");
+        check(until([&] {return st.initial.load() == 1;}, 1s),
+              "race test handler not invoked");
+        if ((i & 3) == 1) std::this_thread::yield();
+        else if ((i & 3) == 2) std::this_thread::sleep_for(1ms);
+        actor.request_stop();
+        actor.join();
+        const auto stats = actor.stats();
+        check(st.resumed.load() <= 1 && st.completed.load() <= 1,
+              "completion/cancellation resumed a handler twice");
+        check(st.violations.load() == 0 && stats.protocol_failures == 0,
+              "completion/cancellation terminal race corrupted actor state");
+        check(actor.stopped(), "stopped flag not published");
+    }
+    std::cout << "PASS 60 cancellation/completion interleavings\n";
+}
+
 int main() {
     try {
         test_fixed_arena_bounds_and_alignment();
@@ -197,6 +235,8 @@ int main() {
         test_full_mailbox_does_not_block_stop();
         for (int i = 0; i < 4; ++i) test_mpsc_producers_serial_actor();
         test_cpu_affinity_fails_closed();
+        test_strict_realtime_profiles_fail_closed();
+        test_stop_completion_races();
         std::cout << "PASS hungry carrier end-to-end tests\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL hungry carrier: " << error.what() << "\n";

@@ -94,3 +94,32 @@ remains dependent on the callback returning. Do not promote this experiment
 to a `no_gc_pauses`, `exclusive_core`, or `hard_realtime` production
 profile until independent allocation, OS topology, buffer ownership and
 latency evidence exists.
+
+## Cancellation/completion terminal-state hardening
+
+The C++ carrier now uses a single atomic `OperationTerminal` state with
+`pending -> completed` **or** `pending -> canceled` CAS resolution. There is
+only one in-flight operation for this serial actor prototype. A completion
+is delivered only when the operation generation matches and the terminal
+state is `completed`. Stop can win while the I/O worker is waiting, but
+the worker must still quiesce before any broker-owned data is destroyed.
+
+The implementation intentionally **rejects** requested production guarantees
+`require_exclusive_core`, `require_strict_no_gc` and
+`require_hard_realtime`, because physical CPU reservation, compiler-proved
+GC freedom and bounded OS scheduling have NOT been implemented. Ordinary
+logical CPU affinity remains optional and verified against the effective
+thread mask. Non-lock-free atomic index hosts are also rejected rather than
+silently implementing the supposed lock-free ring with a hidden mutex.
+
+The CI workflow now builds and executes the native actor test under
+AddressSanitizer and UndefinedBehaviorSanitizer in addition to regular CTest,
+including repeated stop/completion interleavings. Sanitizer success is not a
+formal proof of linearizability, lock-freedom, or memory isolation.
+
+Remaining: complete ownership/pinned-buffer protocol for arbitrary
+`io_uring`/epoll operations, external-callback lifetime/cancellation,
+guest-code lowering and native actor source syntax, multi-inflight completion
+ordering, no-GC deterministic drops and cyclic graphs, supervisor watchdog,
+physical core/cgroup/IRQ admission, cold-to-warm latency and tail jitter
+measurement, fault injection and long soak/TSan testing.

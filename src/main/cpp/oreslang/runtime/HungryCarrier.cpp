@@ -19,6 +19,13 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
       operation_(operation), options_(options) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
+    if (options_.require_exclusive_core || options_.require_strict_no_gc ||
+        options_.require_hard_realtime)
+        throw std::invalid_argument("strict CPU/GC/RT profile is not certified or implemented");
+    // The bounded queue's algorithm relies on lock-free atomic indexes on the
+    // supported host. Reject a platform that silently implements them with locks.
+    if (!std::atomic<std::size_t>::is_always_lock_free)
+        throw std::invalid_argument("lock-free atomic indexes unavailable");
     if (options_.spin_before_park.count() < 0 || options_.spin_before_park.count() > 100000)
         throw std::invalid_argument("spin window exceeds 100 ms maximum");
 }
@@ -63,6 +70,11 @@ bool HungryCarrier::try_send(ActorMessage message) {
 
 void HungryCarrier::request_stop() noexcept {
     stop_.store(true, std::memory_order_release);
+    auto expected = OperationTerminal::pending;
+    if (terminal_.compare_exchange_strong(expected, OperationTerminal::canceled,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_acquire))
+        canceled_.fetch_add(1, std::memory_order_relaxed);
     // Reserved control channel: independent of bounded user mailboxes.
     try { actor_signal_.notify(); } catch (...) { failures_.fetch_add(1, std::memory_order_relaxed); }
     try { broker_signal_.notify(); } catch (...) { failures_.fetch_add(1, std::memory_order_relaxed); }
@@ -124,6 +136,7 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
     // Queue memory is preallocated; no owned actor pointer crosses threads.
     pending_ = true;
     current_ = message;
+    terminal_.store(OperationTerminal::pending, std::memory_order_release);
     if (!jobs_.try_push(Job{generation_, step.value, step.delay_ms})) {
         pending_ = false;
         failures_.fetch_add(1, std::memory_order_relaxed);
@@ -179,9 +192,10 @@ void HungryCarrier::actor_loop() noexcept {
             if (results_available_.load(std::memory_order_acquire) != 0 &&
                 results_.try_pop(c)) {
                 results_available_.fetch_sub(1, std::memory_order_acq_rel);
-                if (c.generation != generation_) {
+                if (c.generation != generation_ ||
+                    terminal_.load(std::memory_order_acquire) != OperationTerminal::completed) {
                     stale_.fetch_add(1, std::memory_order_relaxed);
-                    continue; // never resume on stale operation generation
+                    continue; // never resume on stale/canceled operation
                 }
                 pending_ = false;
                 io_done_.fetch_add(1, std::memory_order_release);
@@ -198,7 +212,13 @@ void HungryCarrier::actor_loop() noexcept {
         }
         wait_actor();
     }
-    if (pending_) canceled_.fetch_add(1, std::memory_order_relaxed);
+    if (pending_) {
+        auto expected = OperationTerminal::pending;
+        if (terminal_.compare_exchange_strong(expected, OperationTerminal::canceled,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire))
+            canceled_.fetch_add(1, std::memory_order_relaxed);
+    }
     stopped_.store(true, std::memory_order_release);
 }
 
@@ -219,6 +239,11 @@ void HungryCarrier::broker_loop() noexcept {
                 if (stop_.load(std::memory_order_acquire)) continue;
                 const auto result = operation_(broker_state_, job.payload);
                 if (stop_.load(std::memory_order_acquire)) continue;
+                auto expected = OperationTerminal::pending;
+                if (!terminal_.compare_exchange_strong(expected, OperationTerminal::completed,
+                                                        std::memory_order_acq_rel,
+                                                        std::memory_order_acquire))
+                    continue;  // canceled or obsolete; never produce second terminal event
                 if (!results_.try_push(Completion{job.generation, result})) {
                     failures_.fetch_add(1, std::memory_order_relaxed);
                     request_stop(); // reserved 1-inflight completion may never drop
