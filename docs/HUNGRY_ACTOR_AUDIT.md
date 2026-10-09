@@ -59,3 +59,38 @@ Local development may compile `ParkingSignal` with `-fsanitize=address,undefined
 
 Detailed proposed semantics: [HUNGRY_ACTOR_IDLE_IO.md](HUNGRY_ACTOR_IDLE_IO.md).
 Linux references: [eventfd(2)](https://man7.org/linux/man-pages/man2/eventfd.2.html), [poll(2)](https://man7.org/linux/man-pages/man2/poll.2.html), [sched(7)](https://man7.org/linux/man-pages/man7/sched.7.html), and [kernel CPU isolation](https://www.kernel.org/doc/html/latest/admin-guide/cpu-isolation.html).
+
+## Incremental dedicated-thread carrier prototype (2026-10-08)
+
+A subsequent implementation branch adds a C++-only `HungryCarrier` with:
+- Preallocated 64-element MPSC mailbox (producers use CAS, one carrier reads),
+  explicit backpressure instead of dropping messages.
+- Strict serial handler ownership: an `await_io` step suspends the active turn,
+  and queued ordinary messages cannot reenter before that turn resumes.
+- A separate I/O broker worker and 2-slot completion channel. Exactly one
+  operation is in flight per actor continuation. Completion carries a
+  monotonically increasing generation and only resumes the matching turn.
+- Dedicated stop/cancel notification that bypasses user-mailbox saturation;
+  a canceled suspended turn cannot run its user continuation.
+- Optional logical CPU pinning with effective affinity verification,
+  rejecting unsupported/invalid requested CPUs rather than silently downgrading.
+- Bounded actor-local POD arena with explicit exhaustion (no GC).
+- Native C++ tests for a simulated 150-ms I/O wait, actual socket I/O
+  performed off the carrier, saturated user mailbox, four concurrent producers,
+  thread identity and failed CPU admission.
+
+**Still not implemented**: parsing/lowering `define actor` into the carrier
+ABI, full actor heap/borrow safety, kernel-cancelable asynchronous storage/
+network transport, lifetime-safe cancellation of arbitrary blocking FFI,
+multi-op broker dispatch, shared actors, physical core/cpuset/IRQ reservation,
+`SCHED_FIFO` admission, hard realtime certification, deterministic cycle
+reclamation or full fuzz/differential test coverage. The model allows one
+in-flight IO operation at a time and deliberately exposes the limits of
+serial non-reentrancy instead of claiming arbitrary concurrent async support.
+
+The carrier's `BrokerOperation` callback is host-trusted and *not* a
+sandbox for arbitrary untrusted source. Blocking callback cancellation
+remains dependent on the callback returning. Do not promote this experiment
+to a `no_gc_pauses`, `exclusive_core`, or `hard_realtime` production
+profile until independent allocation, OS topology, buffer ownership and
+latency evidence exists.

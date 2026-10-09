@@ -46,3 +46,56 @@ separately.
 
 Linux CTest target: `parking_signal_wake_cancel_races`.
 Implementation scope and remaining hazards: [audit](../../../../../docs/HUNGRY_ACTOR_AUDIT.md).
+
+## Experimental dedicated carrier and bounded I/O integration
+
+`HungryCarrier.hpp/.cpp`, `BoundedMpscQueue.hpp`, and `FixedArena.hpp`
+build on `ParkingSignal` as the **first executable native actor-like runtime
+slice**. Unlike the park-only signal, this slice starts a dedicated native
+carrier plus a separate broker thread. A typed POD request is delivered via
+a fixed 64-slot lock-free MPSC user mailbox. Exactly one handler executes
+at a time; `ActorStep::await_io` suspends that handler and parks the carrier.
+A broker posts the completion in its own fixed two-slot queue, and the
+same actor carrier thread resumes the continuation. Other user handlers
+wait until the first is finished, enforcing default serial non-reentrancy.
+
+A separate stop flag and eventfd wake channel remain usable when the user
+mailbox is full. One in-flight I/O operation per serial handler plus per-op
+generation IDs make the completion queue bounded; mismatched completions
+never resume a stale continuation. A separate fixed POD arena provides
+bounded allocations without tracing GC but **does not** implement general
+heap ownership, cycles, destructors, proof of no malloc by arbitrary guest
+code, or native borrow checking.
+
+**Scope limits and security conditions:**
+- The native Oreslang parser/compiler still rejects source actor constructs;
+  this is a C++ runtime test ABI, not compiled guest Oreslang continuation code.
+- Broker callbacks must own their buffers independently and must never
+  access `actor_state`. Their lifetimes, the caller's senders, and any
+  external descriptors must outlive thread shutdown; cross-actor memory
+  isolation is not yet enforced by the compiler or an OS memory boundary.
+- The example delay is cancellable; a synchronous broker callback (including
+  `recv`/native FFI) **may not be interruptible**, so shutdown can wait for
+  it. Production strict realtime profiles must reject unbounded callbacks
+  and use a proven asynchronous cancellation/acknowledgement protocol.
+- On a kernel notification error the component fails closed and requests
+  stop. It does not promise bounded cleanup/destructor time.
+- Optional logical CPU pinning is verified on the worker but **does not**
+  reserve a physical CPU, isolate SMT siblings, configure IRQ/cgroup/RT
+  policies, or prove a hard latency ceiling. Startup refuses invalid affinity.
+- No actor hot-path GC runs inside this prototype, but that is **not** proof
+  that user callbacks/OS functions cannot allocate or pause.
+- `std::atomic` lock freedom is hardware/platform dependent. The MPSC queue
+  avoids C++ mutexes but the eventfd/poll kernel wake path is not lock-free.
+- `stop` is terminal: it cancels the suspended user continuation; the broker
+  must exit and be joined before the runtime can be destroyed.
+- The actor object MUST outlive all concurrently calling producers.
+- CTest `hungry_carrier_async_bounded_cancel` covers 150 ms delayed
+  completion, actual loopback socket I/O on a broker, serial handler
+  ordering, mailbox pressure, stop/cancel, four concurrent producers,
+  fixed arena bounds and invalid CPU admission.
+
+Next: true `.ores` actor ABI lowering, safe cross-actor ownership and
+cycle reclamation, kernel async I/O cancellation with operation lifetime
+fencing, adaptive spin/park metrics, strict host core admission and realtime
+latency benchmarking. See [audit](../../../../../docs/HUNGRY_ACTOR_AUDIT.md).
