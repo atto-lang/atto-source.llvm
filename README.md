@@ -41,5 +41,7 @@ The CLI currently prints LLVM IR; object output and versioned ABI are not implem
 Unsupported actors, async/await, channels, traits/classes, imports, tuples, recursive/owned
 objects, GC, HFT scheduling and native runtime services **fail closed**. They remain roadmap items.
 
+Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
+
 See [source parity contract](docs/SOURCE_PARITY.md), [LLVM roadmap](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1),
 and the distinct [Java cyclic graph work](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/474).
