@@ -17,6 +17,14 @@ Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
 
+## Native I/O naming contract (future binding admission)
+
+All source-visible **synchronous I/O** APIs must end in `_blocking`; **asynchronous I/O** APIs may, but need not, end in `_async`. This includes filesystem metadata operations, sockets, DNS, terminal/stdio and HTTP operations that can block the caller. Pure functions and host-internal C++ methods do not acquire suffixes.
+
+The canonical contract, effect-classification rules, alias checks and negative-test matrix live in [oreslang-common-source/docs/NATIVE_IO_NAMING.md](https://github.com/ores-truffle-oreslang/oreslang-common-source/blob/main/docs/NATIVE_IO_NAMING.md). Example future APIs: `fs.read_text_blocking(path)` and `await fs.read_text_async(path)`.
+
+**Implementation gap:** The current LLVM fragment has no imported/native I/O declarations, async lowering, I/O effect metadata or runtime standard library. It must not pretend that spelling `*_blocking` alone makes a builtin supported. When an I/O binding registry is added, reject any binding classified as synchronously blocking I/O unless its source-visible name ends in `_blocking`; check methods and aliases too. Async admission requires an actual awaitable/non-carrier-blocking execution contract, with or without the optional `_async` suffix. Add valid and invalid compiler fixtures, capability-denial tests and concurrent carrier tests before declaring enforcement.
+
 ## Cross-implementation status
 
 | Java capability | LLVM status |
