@@ -1,6 +1,8 @@
 #include "oreslang/runtime/HungryCarrier.hpp"
 #include "oreslang/runtime/FixedArena.hpp"
 #include <sys/socket.h>
+#include <cerrno>
+#include <algorithm>
 #include <unistd.h>
 #include <poll.h>
 #include <array>
@@ -56,7 +58,7 @@ static ActorStep handle(void* raw, ActorMessage msg, bool resumed, std::int64_t 
     st.completed.fetch_add(1);
     return {StepKind::done, 0, 0};
 }
-static std::int64_t io_double(void*, std::int64_t value) noexcept { return value * 2; }
+static std::int64_t io_double(void*, std::int64_t value, const std::atomic<bool>&) noexcept { return value * 2; }
 static void test_150ms_await_serial_and_same_carrier() {
     State st; st.await_io = true; st.delay_ms = 150;
     HungryCarrier actor(&st, handle, nullptr, io_double, {});
@@ -152,13 +154,32 @@ static void test_fixed_arena_bounds_and_alignment() {
           "failed allocations changed arena accounting");
 }
 struct SocketState {int socket = -1;};
-static std::int64_t recv_broker(void* context, std::int64_t) noexcept {
+static std::int64_t recv_broker(void* context, std::int64_t,
+                                const std::atomic<bool>& cancel) noexcept {
     auto& state = *static_cast<SocketState*>(context);
-    pollfd descriptor{state.socket, POLLIN, 0};
-    if (::poll(&descriptor, 1, 500) <= 0) return -1;
+    const auto deadline = std::chrono::steady_clock::now() + 500ms;
     std::int64_t value = 0;
-    return ::recv(state.socket, &value, sizeof(value), MSG_WAITALL)
-               == static_cast<ssize_t>(sizeof(value)) ? value : -2;
+    std::size_t received = 0;
+    while (!cancel.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        pollfd descriptor{state.socket, POLLIN, 0};
+        const int rc = ::poll(&descriptor, 1, 10);
+        if (rc == 0 || (rc < 0 && errno == EINTR)) continue;
+        if (rc < 0 || (descriptor.revents & (POLLNVAL | POLLERR | POLLHUP)))
+            return -3;
+        if (!(descriptor.revents & POLLIN)) continue;
+        const auto size = ::recv(state.socket, reinterpret_cast<char*>(&value) + received,
+                                 sizeof(value) - received, MSG_DONTWAIT);
+        if (size > 0) {
+            received += static_cast<std::size_t>(size);
+            if (received == sizeof(value)) return value;
+        } else if (size == 0) {
+            return -4; // peer closed, no unbounded blocking
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            return -5;
+        }
+    }
+    return cancel.load(std::memory_order_acquire) ? -6 : -7;
 }
 static void test_actual_socket_io_off_carrier() {
     int fds[2]{-1, -1};
@@ -227,11 +248,34 @@ static void test_stop_completion_races() {
     std::cout << "PASS 60 cancellation/completion interleavings\n";
 }
 
+static void test_pending_socket_cancel_does_not_block_join() {
+    int sockets[2]{-1, -1};
+    check(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0,
+          "cancel socketpair failed");
+    State state; state.await_io = true;
+    SocketState broker{sockets[0]};
+    HungryCarrier actor(&state, handle, &broker, recv_broker, {});
+    actor.start();
+    check(actor.try_send({1, 5}), "cancel test IO request failed");
+    check(until([&]{return state.initial.load() == 1;}, 1s),
+          "cancel test handler never ran");
+    const auto start = std::chrono::steady_clock::now();
+    actor.request_stop(); // no remote peer ever writes; broker must observe stop
+    actor.join();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    ::close(sockets[0]); ::close(sockets[1]);
+    check(elapsed < 250ms, "broker cancellation blocked on an idle socket");
+    check(state.resumed.load() == 0 && actor.stats().protocol_failures == 0,
+          "canceled socket operation incorrectly resumed user code");
+    std::cout << "PASS cooperative socket broker cancel\n";
+}
+
 int main() {
     try {
         test_fixed_arena_bounds_and_alignment();
         test_150ms_await_serial_and_same_carrier();
         test_actual_socket_io_off_carrier();
+        test_pending_socket_cancel_does_not_block_join();
         test_full_mailbox_does_not_block_stop();
         for (int i = 0; i < 4; ++i) test_mpsc_producers_serial_actor();
         test_cpu_affinity_fails_closed();
