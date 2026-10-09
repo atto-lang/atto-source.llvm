@@ -34,8 +34,10 @@ using ActorHandler = ActorStep (*)(void* actor_state, ActorMessage message,
                                    bool resumed, std::int64_t result) noexcept;
 // The IO callback runs on a separate broker thread, with separate owned IO
 // state: it must NOT dereference the actor's private heap or use the carrier.
-// It should be bounded and cancellable by a future transport implementation.
-using BrokerOperation = std::int64_t (*)(void* broker_state, std::int64_t payload) noexcept;
+// It must periodically check the cancellation flag and use bounded/nonblocking
+// syscalls. Cooperative cancellation does not forcibly interrupt arbitrary FFI.
+using BrokerOperation = std::int64_t (*)(void* broker_state, std::int64_t payload,
+                                         const std::atomic<bool>& cancel) noexcept;
 
 struct CarrierStats {
     std::uint64_t accepted = 0;

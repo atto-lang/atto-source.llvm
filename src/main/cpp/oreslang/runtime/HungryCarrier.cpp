@@ -237,7 +237,7 @@ void HungryCarrier::broker_loop() noexcept {
                         std::chrono::milliseconds(job.delay_ms));
                 }
                 if (stop_.load(std::memory_order_acquire)) continue;
-                const auto result = operation_(broker_state_, job.payload);
+                const auto result = operation_(broker_state_, job.payload, stop_);
                 if (stop_.load(std::memory_order_acquire)) continue;
                 auto expected = OperationTerminal::pending;
                 if (!terminal_.compare_exchange_strong(expected, OperationTerminal::completed,

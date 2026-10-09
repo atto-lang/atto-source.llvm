@@ -99,3 +99,19 @@ Next: true `.ores` actor ABI lowering, safe cross-actor ownership and
 cycle reclamation, kernel async I/O cancellation with operation lifetime
 fencing, adaptive spin/park metrics, strict host core admission and realtime
 latency benchmarking. See [audit](../../../../../docs/HUNGRY_ACTOR_AUDIT.md).
+
+## Cooperative cancellation for bounded broker operations
+
+The native broker ABI now passes a read-only atomic stop token into each
+host `BrokerOperation`. Trusted callbacks must check it regularly and only
+invoke bounded/nonblocking transport syscalls. The socket example uses
+10-ms poll slices and `MSG_DONTWAIT` reads to avoid waiting 500 ms for
+a peer that never responds. When cancellation wins the atomic operation
+terminal CAS, no actor handler resumes; broker-owned memory is retained
+until the worker has returned and joined.
+
+This is **cooperative cancellation**, not forced interruption of a blocking
+kernel operation or arbitrary FFI; unbounded host callbacks must not be
+admitted to strict low-latency profiles. Kernel io_uring completion/cancel
+acknowledgement, pinned buffer leases and cross-process ownership remain
+future work.
