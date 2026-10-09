@@ -17,6 +17,10 @@ struct ActorMessage {
     std::int64_t input = 0;
 };
 enum class StepKind : std::uint8_t { done, await_io };
+// Per-operation terminal state. Only a Pending->Completed or
+// Pending->Canceled transition may win. A new operation resets the state
+// only after the previous broker result has been consumed on this carrier.
+enum class OperationTerminal : std::uint8_t { idle, pending, completed, canceled };
 struct ActorStep {
     StepKind kind = StepKind::done;
     std::int64_t value = 0;        // completion value or payload for IO
@@ -53,6 +57,9 @@ public:
     struct Options {
         std::chrono::microseconds spin_before_park{0}; // park-only default
         int pin_to_logical_cpu = -1; // optional affinity; NOT exclusive-core admission
+        bool require_exclusive_core = false;  // fail closed until OS reservation manager exists
+        bool require_strict_no_gc = false;    // fail closed until compiler/allocator proof exists
+        bool require_hard_realtime = false;   // fail closed until watchdog/OS proof exists
     };
     HungryCarrier(void* actor_state, ActorHandler handler, void* broker_state,
                   BrokerOperation operation, Options opts);
@@ -101,6 +108,7 @@ private:
     std::atomic<bool> started_{false};
     std::atomic<bool> setup_done_{false};
     std::atomic<bool> setup_ok_{false};
+    std::atomic<OperationTerminal> terminal_{OperationTerminal::idle};
     std::thread actor_thread_;
     std::thread broker_thread_;
     // Owned/exclusively accessed by carrier:

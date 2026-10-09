@@ -20,3 +20,15 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Verify parser, IR and native execution
         run: ctest --test-dir build --output-on-failure
+      - name: ASan and UBSan native actor memory and concurrency smoke
+        run: |
+          clang++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \
+            -fsanitize=address,undefined \
+            -I src/main/cpp \
+            tests/hungry_carrier_test.cpp \
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp \
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp \
+            -o build/hungry-carrier-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/hungry-carrier-sanitized
