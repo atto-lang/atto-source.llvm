@@ -48,6 +48,7 @@ struct CarrierStats {
     std::uint64_t stale_completions = 0;
     std::uint64_t protocol_failures = 0;
     std::uint64_t actor_thread_tag = 0;
+    std::uint64_t abandoned_on_stop = 0; // accepted minus finished turns; valid after join()
 };
 
 // Construction and thread start allocate and use syscalls, BEFORE any future
@@ -70,11 +71,16 @@ public:
     HungryCarrier& operator=(const HungryCarrier&) = delete;
 
     void start();
-    // False means explicit queue pressure or stopped; never silently drop.
-    // The caller must not use the carrier after destruction begins.
+    // True means ownership of the request transferred to the bounded queue,
+    // NOT guaranteed execution after concurrent stop(). False means queue
+    // pressure, no admission, or stop. Callers must cease issuing new calls
+    // before destroying the carrier; join quiesces already-active send calls.
+    // There must be one lifecycle owner calling join()/destructor.
     bool try_send(ActorMessage message);
     // Stop is an independent reserved control path (not an ordinary mailbox).
     void request_stop() noexcept;
+    // A single external lifecycle owner calls join; it also initiates stop.
+    // Joining/destroying from the actor or broker thread is fatal, not safe.
     void join() noexcept;
     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
     CarrierStats stats() const noexcept;
@@ -108,6 +114,7 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::atomic<bool> started_{false};
+    std::atomic<std::uint32_t> in_flight_senders_{0};
     std::atomic<bool> setup_done_{false};
     std::atomic<bool> setup_ok_{false};
     std::atomic<OperationTerminal> terminal_{OperationTerminal::idle};
@@ -118,8 +125,8 @@ private:
     ActorMessage current_{};
     std::uint64_t generation_ = 0;
     // Atomic telemetry allows reads without touching actor-local state.
-    std::atomic<std::uint64_t> queued_{0}, jobs_available_{0}, results_available_{0};
     std::atomic<std::uint64_t> accepted_{0}, completed_{0}, io_done_{0},
-        parked_{0}, canceled_{0}, stale_{0}, failures_{0}, thread_tag_{0};
+        parked_{0}, canceled_{0}, stale_{0}, failures_{0}, thread_tag_{0},
+        abandoned_on_stop_{0};
 };
 } // namespace oreslang::runtime

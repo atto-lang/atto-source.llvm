@@ -123,3 +123,42 @@ guest-code lowering and native actor source syntax, multi-inflight completion
 ordering, no-GC deterministic drops and cyclic graphs, supervisor watchdog,
 physical core/cgroup/IRQ admission, cold-to-warm latency and tail jitter
 measurement, fault injection and long soak/TSan testing.
+
+## Shutdown/send and ring-head readiness audit (2026-10-08)
+
+New race review found three hazards that did not have explicit regression gates:
+
+1. **In-flight `try_send` versus shutdown:** a producer can successfully
+   enqueue just before another thread requests stop. The carrier may exit
+   without executing that accepted turn; a lifecycle owner must not
+   destruct the mailbox while entered send calls can still notify it.
+   The native carrier now counts in-flight send operations; `join`
+   quiesces those already-entered calls after stopping its workers.
+   `CarrierStats.abandoned_on_stop` accounts for accepted turns not
+   completed after joining. A successful `try_send` means ownership
+   transfer, **not** execution guaranteed after concurrent stop.
+   As in any raw-pointer C++ API, the caller must prevent **new**
+   method invocations after it begins destroying the object; a counter
+   inside an already-destroyed object cannot prevent use-after-free.
+2. **Published queue count is not head readiness:** an MPSC producer can
+   reserve the head and be preempted before publishing its slot. A later
+   producer may publish its own slot. Looking only at an aggregate
+   queued-count can keep the hungry carrier spinning despite the head
+   being unreadable. The consumer now checks the **head sequence**
+   with `has_ready()` before parking/waking; no independent queued
+   counters are used for correctness. The ring remains *lock-free*,
+   **not wait-free**: a stalled producer can still hold the head and
+   delay later messages. A strict hard realtime design needs a bounded
+   producer progress contract or a different queue architecture.
+3. **Join or destruction from a worker:** skipping the self-`join`
+   previously could destroy eventfds and queue storage while that
+   same worker still used them. A self-join or self-destruction now
+   terminates rather than continuing into a use-after-free.
+   Lifecycle remains the supervisor's responsibility.
+
+Tests now cover 100,000 ring recycle operations, FIFO and full-queue
+boundaries, idle `join` without prior stop, and repeated concurrent
+multi-producer stop/join races with terminal `accepted = completed +
+abandoned_on_stop` accounting. Thread sanitizer, host resource
+admission, real guest actor syntax, bounded kernel I/O cancellation and
+a formal MPSC memory-order proof remain separate gates.

@@ -20,6 +20,8 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Verify parser, IR and native execution
         run: ctest --test-dir build --output-on-failure
+      - name: Repeat actor stress and cancellation races
+        run: ctest --test-dir build -R hungry_carrier_async_bounded_cancel --repeat until-fail:12 --output-on-failure
       - name: ASan and UBSan native actor memory and concurrency smoke
         run: |
           clang++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \

@@ -54,6 +54,14 @@ public:
             }
         }
     }
+    // Consumer-only readiness. Unlike a count of *all* published slots,
+    // checking the head sequence cannot report ready when an earlier
+    // producer reserved a slot but was preempted before publishing it.
+    // Call only from this queue's single consumer thread.
+    bool has_ready() const noexcept {
+        return slots_[read_ & (N - 1)].sequence.load(std::memory_order_acquire)
+               == read_ + 1;
+    }
     bool try_pop(T& value) noexcept {
         auto& slot = slots_[read_ & (N - 1)];
         if (slot.sequence.load(std::memory_order_acquire) != read_ + 1)

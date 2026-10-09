@@ -115,3 +115,21 @@ kernel operation or arbitrary FFI; unbounded host callbacks must not be
 admitted to strict low-latency profiles. Kernel io_uring completion/cancel
 acknowledgement, pinned buffer leases and cross-process ownership remain
 future work.
+
+## Shutdown race and ring-head hardening
+
+The lifecycle owner must prevent *new* producer calls from beginning
+once it initiates destruction; `join()` now stops the actor and waits
+for already-entered `try_send()` calls before worker/signal teardown.
+An enqueued request may be **abandoned** after concurrent stop, and
+`abandoned_on_stop` records this explicitly after `join()`.
+Do not treat `try_send() == true` as confirmation that user code ran.
+
+The MPSC consumer's `has_ready()` predicate checks that its **head
+slot** is fully published. An independent queued-item count can report
+false readiness if a producer reserves the head and stalls, potentially
+causing a realtime carrier to busy-spin instead of park. The ring is
+lock-free but not wait-free; the head-of-line producer remains a
+progress dependency. Termination from the worker thread itself is
+unsafe and now fails closed; a single external supervisor must own
+`join()`/destruction.

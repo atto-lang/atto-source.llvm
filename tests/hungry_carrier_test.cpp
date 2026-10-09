@@ -270,8 +270,94 @@ static void test_pending_socket_cancel_does_not_block_join() {
     std::cout << "PASS cooperative socket broker cancel\n";
 }
 
+
+static void test_join_initiates_stop() {
+    State state;
+    HungryCarrier actor(&state, handle, nullptr, io_double, {});
+    actor.start();
+    // An idle worker has no natural completion; explicit join must not hang.
+    const auto started = std::chrono::steady_clock::now();
+    actor.join();
+    check(actor.stopped(), "join failed to stop idle actor");
+    check(std::chrono::steady_clock::now() - started < 500ms,
+          "joining idle actor blocked");
+    check(!actor.try_send({1, 1}), "joined actor accepted new work");
+    check(actor.stats().abandoned_on_stop == 0,
+          "idle actor spuriously recorded abandoned requests");
+}
+static void test_stop_while_producers_are_publishing() {
+    // All producers start before stop, then we race them against join.
+    // The caller retains actor lifetime until producer threads are joined;
+    // no new calls may be initiated after object destruction begins.
+    for (int round = 0; round < 16; ++round) {
+        State state;
+        HungryCarrier actor(&state, handle, nullptr, io_double, {});
+        actor.start();
+        std::atomic<bool> begin{false}, stopping{false};
+        std::atomic<int> finished{0};
+        std::vector<std::thread> senders;
+        constexpr int producers = 6;
+        for (int p = 0; p < producers; ++p) {
+            senders.emplace_back([&, p] {
+                while (!begin.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (int n = 0; n < 4000; ++n) {
+                    if (stopping.load(std::memory_order_acquire)) break;
+                    (void)actor.try_send({static_cast<std::uint64_t>(p*4000+n+1), n});
+                    if ((n & 31) == 0) std::this_thread::yield();
+                }
+                finished.fetch_add(1, std::memory_order_release);
+            });
+        }
+        begin.store(true, std::memory_order_release);
+        std::this_thread::sleep_for(1ms);
+        actor.request_stop();
+        stopping.store(true, std::memory_order_release);
+        // Join races with already-entered send calls. The actor object
+        // intentionally remains alive until every producer has exited.
+        actor.join();
+        for (auto& sender : senders) sender.join();
+        const auto stats = actor.stats();
+        check(finished.load(std::memory_order_acquire) == producers,
+              "one of the producers did not finish");
+        check(actor.stopped(), "actor failed to stop during producers race");
+        check(stats.completed <= stats.accepted,
+              "completed more messages than accepted");
+        check(stats.abandoned_on_stop == stats.accepted - stats.completed,
+              "shutdown lost accounting of queued/inflight accepted messages");
+        check(stats.protocol_failures == 0, "shutdown raced into protocol fault");
+        check(!actor.try_send({1, 1}), "stopped actor took another message");
+    }
+    std::cout << "PASS producer/stop quiescence and abandoned-turn accounting\n";
+}
+
+
+static void test_bounded_queue_head_readiness() {
+    // Readiness is about the published next sequence, not producer claims.
+    BoundedMpscQueue<ActorMessage, 2> ring;
+    check(!ring.has_ready(), "fresh queue should be empty");
+    ActorMessage v{};
+    check(!ring.try_pop(v), "empty queue returned a value");
+    check(ring.try_push({1, 21}) && ring.has_ready(), "published head invisible");
+    check(ring.try_push({2, 22}), "second slot could not be published");
+    check(!ring.try_push({3, 23}), "bounded queue overflowed");
+    check(ring.try_pop(v) && v.id == 1 && v.input == 21, "head FIFO violation");
+    check(ring.has_ready(), "second published item should be ready");
+    check(ring.try_push({3, 23}), "ring slot failed to recycle");
+    check(ring.try_pop(v) && v.id == 2, "second FIFO violation");
+    check(ring.try_pop(v) && v.id == 3, "recycled FIFO violation");
+    check(!ring.has_ready() && !ring.try_pop(v), "drained queue still reports ready");
+    for (std::uint64_t i = 0; i < 100000; ++i) {
+        check(ring.try_push({i+4, static_cast<std::int64_t>(i)}),
+              "ring slot generation wrap test push failed");
+        check(ring.has_ready() && ring.try_pop(v) && v.id == i+4,
+              "ring generation after recycling is inconsistent");
+    }
+}
+
 int main() {
     try {
+        test_bounded_queue_head_readiness();
         test_fixed_arena_bounds_and_alignment();
         test_150ms_await_serial_and_same_carrier();
         test_actual_socket_io_off_carrier();
@@ -281,6 +367,8 @@ int main() {
         test_cpu_affinity_fails_closed();
         test_strict_realtime_profiles_fail_closed();
         test_stop_completion_races();
+        test_join_initiates_stop();
+        test_stop_while_producers_are_publishing();
         std::cout << "PASS hungry carrier end-to-end tests\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL hungry carrier: " << error.what() << "\n";
