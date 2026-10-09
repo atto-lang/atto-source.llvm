@@ -15,10 +15,20 @@
 #include "oreslang/runtime/BoundedSpscQueue.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <thread>
 #include <vector>
 using namespace std::chrono_literals;
 using namespace oreslang::runtime;
+
+template <typename T, typename = void>
+struct has_raw_send : std::false_type {};
+template <typename T>
+struct has_raw_send<T, std::void_t<decltype(std::declval<T&>().try_send(
+    std::declval<ActorMessage>()))>> : std::true_type {};
+static_assert(!has_raw_send<HungryCarrier>::value,
+              "public direct actor sends must not bypass the producer gate");
 
 static void check(bool value, const char* failure) {
     if (!value) throw std::runtime_error(failure);
@@ -66,11 +76,11 @@ static void test_150ms_await_serial_and_same_carrier() {
     State st; st.await_io = true; st.delay_ms = 150;
     HungryCarrier actor(&st, handle, nullptr, io_double, {});
     actor.start();
-    check(actor.try_send({1, 21}), "first message should be accepted");
+    check(actor.producer_handle().try_send({1, 21}), "first message should be accepted");
     check(until([&] { return st.initial.load() == 1; }, 1s),
           "initial handler not executed");
     // Queue another user message while the first turn is waiting for IO.
-    check(actor.try_send({2, 22}), "second message should queue");
+    check(actor.producer_handle().try_send({2, 22}), "second message should queue");
     std::this_thread::sleep_for(40ms);
     check(st.initial.load() == 1, "user handler reentered during pending IO");
     check(until([&] { return st.completed.load() == 2; }, 2s),
@@ -88,11 +98,11 @@ static void test_full_mailbox_does_not_block_stop() {
     State st; st.await_io = true; st.delay_ms = 300;
     HungryCarrier actor(&st, handle, nullptr, io_double, {});
     actor.start();
-    check(actor.try_send({1, 4}), "failed initial IO send");
+    check(actor.producer_handle().try_send({1, 4}), "failed initial IO send");
     check(until([&]{return st.initial.load() == 1;}, 1s), "IO did not start");
     int full = 0;
     for (int i = 0; i < 400; ++i)
-        if (!actor.try_send({static_cast<std::uint64_t>(i + 2), i})) ++full;
+        if (!actor.producer_handle().try_send({static_cast<std::uint64_t>(i + 2), i})) ++full;
     check(full > 0, "bounded queue did not reject excess work");
     const auto begin = std::chrono::steady_clock::now();
     actor.request_stop(); // reserved control independent of saturated queue
@@ -115,7 +125,7 @@ static void test_mpsc_producers_serial_actor() {
     for (int i = 0; i < n_producers; ++i) writers.emplace_back([&, i] {
         for (int j = 0; j < per_producer; ++j) {
             ActorMessage m{static_cast<std::uint64_t>(i * per_producer + j + 1), j};
-            while (!actor.try_send(m)) {
+            while (!actor.producer_handle().try_send(m)) {
                 rejections.fetch_add(1);
                 std::this_thread::yield();
             }
@@ -143,7 +153,7 @@ static void test_cpu_affinity_fails_closed() {
     check(rejected, "invalid CPU affinity must reject actor startup");
     actor.request_stop();
     actor.join();
-    check(!actor.try_send({1, 1}), "failed admission must not accept messages");
+    check(!actor.producer_handle().try_send({1, 1}), "failed admission must not accept messages");
 }
 static void test_fixed_arena_bounds_and_alignment() {
     FixedArena<128> arena;
@@ -191,7 +201,7 @@ static void test_actual_socket_io_off_carrier() {
     SocketState broker{fds[0]};
     HungryCarrier actor(&st, handle, &broker, recv_broker, {});
     actor.start();
-    check(actor.try_send({1, 42}), "socket IO enqueue failed");
+    check(actor.producer_handle().try_send({1, 42}), "socket IO enqueue failed");
     check(until([&]{return st.initial.load() == 1;}, 1s),
           "socket request handler did not start");
     std::thread remote([fd=fds[1]] {
@@ -234,7 +244,7 @@ static void test_stop_completion_races() {
         st.delay_ms = static_cast<std::uint32_t>(i % 4);
         HungryCarrier actor(&st, handle, nullptr, io_double, {});
         actor.start();
-        check(actor.try_send({1, 9}), "race test message failed");
+        check(actor.producer_handle().try_send({1, 9}), "race test message failed");
         check(until([&] {return st.initial.load() == 1;}, 1s),
               "race test handler not invoked");
         if ((i & 3) == 1) std::this_thread::yield();
@@ -259,7 +269,7 @@ static void test_pending_socket_cancel_does_not_block_join() {
     SocketState broker{sockets[0]};
     HungryCarrier actor(&state, handle, &broker, recv_broker, {});
     actor.start();
-    check(actor.try_send({1, 5}), "cancel test IO request failed");
+    check(actor.producer_handle().try_send({1, 5}), "cancel test IO request failed");
     check(until([&]{return state.initial.load() == 1;}, 1s),
           "cancel test handler never ran");
     const auto start = std::chrono::steady_clock::now();
@@ -284,7 +294,7 @@ static void test_join_initiates_stop() {
     check(actor.stopped(), "join failed to stop idle actor");
     check(std::chrono::steady_clock::now() - started < 500ms,
           "joining idle actor blocked");
-    check(!actor.try_send({1, 1}), "joined actor accepted new work");
+    check(!actor.producer_handle().try_send({1, 1}), "joined actor accepted new work");
     check(actor.stats().abandoned_on_stop == 0,
           "idle actor spuriously recorded abandoned requests");
 }
@@ -306,7 +316,7 @@ static void test_stop_while_producers_are_publishing() {
                     std::this_thread::yield();
                 for (int n = 0; n < 4000; ++n) {
                     if (stopping.load(std::memory_order_acquire)) break;
-                    (void)actor.try_send({static_cast<std::uint64_t>(p*4000+n+1), n});
+                    (void)actor.producer_handle().try_send({static_cast<std::uint64_t>(p*4000+n+1), n});
                     if ((n & 31) == 0) std::this_thread::yield();
                 }
                 finished.fetch_add(1, std::memory_order_release);
@@ -329,7 +339,7 @@ static void test_stop_while_producers_are_publishing() {
         check(stats.abandoned_on_stop == stats.accepted - stats.completed,
               "shutdown lost accounting of queued/inflight accepted messages");
         check(stats.protocol_failures == 0, "shutdown raced into protocol fault");
-        check(!actor.try_send({1, 1}), "stopped actor took another message");
+        check(!actor.producer_handle().try_send({1, 1}), "stopped actor took another message");
     }
     std::cout << "PASS producer/stop quiescence and abandoned-turn accounting\n";
 }

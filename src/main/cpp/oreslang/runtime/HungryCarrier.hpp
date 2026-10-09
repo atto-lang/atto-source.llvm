@@ -119,12 +119,9 @@ public:
     // handles remain safe independently of the actor lifetime.
     ProducerHandle producer_handle() const noexcept;
     DedicatedProducer register_spsc_producer(); // single supervisor, before start
-    // True means ownership of the request transferred to the bounded queue,
-    // NOT guaranteed execution after concurrent stop(). False means queue
-    // pressure, no admission, or stop. Callers must cease issuing new calls
-    // before destroying the carrier; join quiesces already-active send calls.
-    // There must be one lifecycle owner calling join()/destructor.
-    bool try_send(ActorMessage message);
+    // No raw-pointer send method: all producers must hold a lifetime-gated
+    // ProducerHandle or move-only DedicatedProducer registered before start.
+    // This prevents callers from bypassing shutdown admission checks.
     // Stop is an independent reserved control path (not an ordinary mailbox).
     void request_stop() noexcept;
     // A single external lifecycle owner calls join; it also initiates stop.
@@ -150,6 +147,7 @@ private:
     bool has_input_ready() const noexcept;
     bool pop_next_input(ActorMessage& message) noexcept;
     bool try_send_spsc(std::size_t lane, ActorMessage message) noexcept;
+    bool enqueue_mpsc(ActorMessage message) noexcept;
     bool pin_cpu() noexcept;
 
     void* actor_state_;
@@ -173,7 +171,6 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::atomic<bool> started_{false};
-    std::atomic<std::uint32_t> in_flight_senders_{0};
     std::atomic<bool> setup_done_{false};
     std::atomic<bool> setup_ok_{false};
     std::atomic<OperationTerminal> terminal_{OperationTerminal::idle};
