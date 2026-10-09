@@ -6,7 +6,7 @@ using TypeSpec.JsonSchema;
 namespace Oreslang.Conformance.ActorTraceV1 {
   model Event {
     seq: int32;
-    kind: "spawn" | "send" | "receive" | "exclusive_acquire" |
+    kind: "spawn" | "admit" | "send" | "receive" | "exclusive_acquire" |
           "exclusive_release" | "terminate";
     actor: string;
     target?: string;

@@ -39,6 +39,7 @@
         "kind": {
           "enum": [
             "spawn",
+            "admit",
             "send",
             "receive",
             "exclusive_acquire",
@@ -116,6 +117,23 @@
           "then": {
             "required": [
               "resource"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "admit"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "message_id"
             ]
           }
         }
