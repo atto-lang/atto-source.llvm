@@ -77,6 +77,14 @@ static void run(bool emit_trace) {
                 "message admission failed");
         admitted[i] = id; // record only a successful admission
         require(reached(state, i + 1), "native actor did not invoke handler");
+        // The handler publishes its observation before the carrier accounts
+        // the completed turn. Wait for both before requesting shutdown.
+        const auto deadline = std::chrono::steady_clock::now() + 2s;
+        while (actor.stats().completed < i + 1 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+        require(actor.stats().completed == i + 1,
+                "native handler did not complete its turn");
     }
     actor.join();
     const auto stats = actor.stats();
