@@ -74,5 +74,17 @@ if(BUILD_TESTING)
         target_compile_options(oreslang-parking-signal-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         add_test(NAME parking_signal_wake_cancel_races COMMAND oreslang-parking-signal-test)
         set_tests_properties(parking_signal_wake_cancel_races PROPERTIES TIMEOUT 25)
+
+        add_executable(oreslang-hungry-carrier-test
+            tests/hungry_carrier_test.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-hungry-carrier-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-hungry-carrier-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-hungry-carrier-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME hungry_carrier_async_bounded_cancel
+                 COMMAND oreslang-hungry-carrier-test)
+        set_tests_properties(hungry_carrier_async_bounded_cancel PROPERTIES TIMEOUT 30)
     endif()
 endif()
