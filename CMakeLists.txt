@@ -60,4 +60,19 @@ if(BUILD_TESTING)
     else()
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
+
+    # Linux-specific actor-neutral wake/park primitive. This does NOT
+    # implement the actor scheduler or certify lock-free mailbox delivery.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(Threads REQUIRED)
+        add_executable(oreslang-parking-signal-test
+            tests/parking_signal_test.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-parking-signal-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-parking-signal-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-parking-signal-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME parking_signal_wake_cancel_races COMMAND oreslang-parking-signal-test)
+        set_tests_properties(parking_signal_wake_cancel_races PROPERTIES TIMEOUT 25)
+    endif()
 endif()
