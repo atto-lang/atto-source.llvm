@@ -166,3 +166,17 @@ and per-lane capacity are fixed. This is still a Linux C++ runtime
 experiment, **not** compiled Oreslang language actors, OS CPU pin
 reservation or verified no-GC execution. Extra control block refcounts,
 instrumented test hooks and OS wake syscalls are not strict RT-certified.
+
+
+## Producer-facing API gate
+
+The raw \`HungryCarrier::try_send()\` interface has been removed from the
+public API. General producers must receive a copyable \`ProducerHandle\`
+from the supervisor; dedicated SPSC producers use move-only
+\`DedicatedProducer\`. Both access the mailbox ONLY after atomically
+acquiring the carrier's lifetime gate. After shutdown starts, admission
+fails, and outstanding handle leases are quiesced before any queue or
+eventfd storage can be reclaimed. The hot send still does not allocate
+its payload, but handle refcount operations and OS notification costs are
+not strict hard-realtime certified. Copyable handles can outlive the actor
+and reject sends after it is destroyed.

@@ -228,3 +228,19 @@ No unfinished slot may be consumed.
 checks, a trusted no-GC guest memory path, CPU/SMT/IRQ admission,
 completion buffer ownership, bounded callbacks, physical load isolation,
 and measured tail-latency proof.
+
+
+## Enforce producer-gated API exclusively
+
+The earlier native prototype retained a public \`HungryCarrier::try_send()\`
+escape hatch requiring raw C++ object lifetime discipline. Although the
+safe producer-handle path was tested, a caller could bypass it and race
+destruction. That escape hatch is now private (\`enqueue_mpsc\`), and
+the only public ingress paths are lifetime-gated \`ProducerHandle\` and
+\`DedicatedProducer\`. All native tests use the gated API, and a compile-
+time negative test rejects reintroduction of the raw public send method.
+
+The supervisor must still own start/join/destroy and must not
+concurrently invoke its methods while destroying the actor. Gate leases
+ensure producers that were already admitted cannot access freed queue
+storage even when producer handles outlive the carrier.

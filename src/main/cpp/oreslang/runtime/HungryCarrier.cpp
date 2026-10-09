@@ -46,7 +46,7 @@ bool HungryCarrier::ProducerHandle::try_send(ActorMessage message) const noexcep
     // If shutdown's fetch_or comes first, lease acquisition fails;
     // otherwise shutdown sees this held lease and waits before free.
     try {
-        return gate->carrier->try_send(message);
+        return gate->carrier->enqueue_mpsc(message);
     } catch (...) {
         std::terminate();
     }
@@ -183,27 +183,17 @@ void HungryCarrier::start() {
     }
 }
 
-bool HungryCarrier::try_send(ActorMessage message) {
-    // The counter protects *already-entered* producers during stop/join.
-    // It cannot make destruction concurrent with NEW method calls safe:
-    // the external owner must quiesce initiation of new calls first.
-    in_flight_senders_.fetch_add(1, std::memory_order_acq_rel);
-    struct SenderExit {
-        std::atomic<std::uint32_t>& count;
-        ~SenderExit() { count.fetch_sub(1, std::memory_order_release); }
-    } guard{in_flight_senders_};
-
+bool HungryCarrier::enqueue_mpsc(ActorMessage message) noexcept {
+    // Can only be reached while a ProducerHandle owns a pre-close gate lease.
     if (!setup_ok_.load(std::memory_order_acquire) ||
         stop_.load(std::memory_order_acquire)) return false;
     if (!messages_.try_push(message)) return false;
-    // A stop racing with successful enqueue can abandon this accepted turn.
-    // Report that explicitly through abandoned_on_stop after join.
+    // A stop racing with successful enqueue may abandon the accepted turn.
     accepted_.fetch_add(1, std::memory_order_relaxed);
-    try {
-        actor_signal_.notify();
-    } catch (...) {
-        // The enqueue already succeeded. Returning false would invite a
-        // duplicate retry of an accepted message.
+    try { actor_signal_.notify(); }
+    catch (...) {
+        // Successful enqueue is still accepted even if the wake failed:
+        // false would invite a dangerous duplicate retry.
         failures_.fetch_add(1, std::memory_order_relaxed);
         request_stop();
     }
@@ -234,10 +224,9 @@ void HungryCarrier::join() noexcept {
     request_stop();
     if (actor_thread_.joinable()) actor_thread_.join();
     if (broker_thread_.joinable()) broker_thread_.join();
-    // Producers that entered before stop may still be publishing a payload
-    // or notifying. Wait for them before the eventfds/queue can be destroyed.
-    while (in_flight_senders_.load(std::memory_order_acquire) != 0 ||
-           (producer_gate_->leases.load(std::memory_order_acquire) &
+    // Once the admission word is closed, only previously leased producer
+    // handles can still touch actor-owned queue and notification storage.
+    while ((producer_gate_->leases.load(std::memory_order_acquire) &
             ProducerGate::count_mask) != 0)
         std::this_thread::yield();
     const auto accepted = accepted_.load(std::memory_order_acquire);
