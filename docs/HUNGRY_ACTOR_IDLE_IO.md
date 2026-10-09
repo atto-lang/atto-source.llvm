@@ -189,3 +189,44 @@ Do not infer hard realtime or a no-GC-pause guarantee from the presence of an ac
 - Linux CPU isolation limitations and cpusets: https://www.kernel.org/doc/html/latest/admin-guide/cpu-isolation.html
 - [Existing LLVM native runtime scaffold](../src/main/cpp/oreslang/runtime/README.md)
 - [Java/LLVM source parity contract](../docs/SOURCE_PARITY.md)
+
+## Hardening notes and executable prototype boundary (2026-10-08)
+
+The [safety audit](HUNGRY_ACTOR_AUDIT.md) is normative for **what must be
+proven before enabling** the strict hungry-actor profile. It identifies a
+fundamental distinction: a **notification is not a completion**. Publication
+of a typed completion/control event must happen before a wake, and the waiter
+must acquire/recheck the underlying predicate after waking. A full user
+mailbox must **not** block stop/cancel or completion delivery: control and
+completion paths need reserved capacity and explicit backpressure.
+
+An experimental Linux `ParkingSignal` notification primitive is available
+under `src/main/cpp/oreslang/runtime/`. It uses nonblocking eventfd and poll
+rather than the proposed futex epoch. It demonstrates a lost-wake-safe
+check-and-park pattern and rejects a second/different waiter thread. The
+primitive is **park-only**; it is **not** the actor runtime, an async I/O
+backend, spin-then-park, lock-free queue, no-GC allocator, CPU reservation
+manager or realtime guarantee. Eventfd performs kernel syscalls and can
+internally lock. Its error path currently throws, so it is not certified for
+strict no-allocation realtime hot paths.
+
+**Serial-await deadlock rule:** a handler awaiting a response that only the
+same suspended actor can produce must not remain silently deadlocked. The
+future runtime/compiler should detect the self-request cycle, emit a typed
+deadlock/reentrancy error or apply an explicitly approved concurrent handling
+policy. This does not authorize implicit reentrancy.
+
+**CPU semantics:** Linux `SCHED_FIFO` priority remains configured across
+blocking and waking, but affinity is not physical-core reservation; the CPU
+may have kernel/IRQ/firmware interruptions, power-state transitions and
+hotplug/cpuset changes. A supervisor must verify effective policy on
+admission and after material OS changes. A parked thread continuing to
+'own' its CPU is a host resource-management promise, not a kernel guarantee
+that no other instruction can execute on that physical core.
+
+**Realtime cancellation:** strict mode cannot depend exclusively on actor
+cooperation. The out-of-band supervisor/control channel and watchdog must
+make progress even when ordinary handler queues are full, when user code is
+CPU-bound, or when an in-flight I/O buffer remains owned by the kernel.
+Generation fencing and once-only terminal transitions require implementation
+and race tests before code may reuse/release resources.

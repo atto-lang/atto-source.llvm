@@ -20,3 +20,29 @@ actor retains its thread/core reservation, and a generation-fenced completion
 wakes it. Strict no-GC hungry actors do not run arbitrary GC while idle.
 No actor, I/O, affinity, reservation, or GC behavior described by the contract
 exists yet in this C++ runtime scaffold.
+
+## Audit implementation slice: Linux ParkingSignal (experimental)
+
+`ParkingSignal.hpp/.cpp` supplies **one carrier-bound waiter with concurrent
+notifiers**, backed by nonblocking `eventfd` and a monotonic `poll(2)` deadline.
+It prevents lost notifications across the ready-check/park race, verifies the
+dedicated carrier thread identity, handles spurious notifications, and makes
+cancellation wake the carrier when the caller publishes stop + notifies.
+
+The API is **NOT** an actor, mailbox, ownership checker, continuation scheduler,
+CPU isolation manager, async I/O broker or zero-GC allocator. It does not claim
+kernel-level lock freedom; `eventfd` uses syscalls and internal kernel locking.
+It only guarantees that no *user-space actor heap mutex* is required by this
+notification primitive. A bounded lock-free data queue and separate reserved
+control/completion capacity are future work.
+
+The producer MUST publish a thread-safe ready predicate/queued completion
+before `notify()` (release/acquire); notification alone carries no payload.
+The caller MUST join its single waiter and quiesce **all** concurrent notifiers
+before destroying the signal. Error paths throw, so this prototype is **not**
+certified for no-allocation/hard realtime hot paths. Install/warm it before
+entering realtime scheduling; validate scheduling and memory resources
+separately.
+
+Linux CTest target: `parking_signal_wake_cancel_races`.
+Implementation scope and remaining hazards: [audit](../../../../../docs/HUNGRY_ACTOR_AUDIT.md).
