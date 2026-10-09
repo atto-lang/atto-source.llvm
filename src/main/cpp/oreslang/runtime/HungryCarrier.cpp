@@ -141,7 +141,7 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
 void HungryCarrier::wait_actor() noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
     const auto ready = [this] {
-        return queued_.load(std::memory_order_acquire) != 0 && !pending_
+        return (queued_.load(std::memory_order_acquire) != 0 && !pending_)
                || results_available_.load(std::memory_order_acquire) != 0
                || stop_.load(std::memory_order_acquire);
     };
