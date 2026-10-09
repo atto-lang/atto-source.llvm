@@ -86,5 +86,19 @@ if(BUILD_TESTING)
         add_test(NAME hungry_carrier_async_bounded_cancel
                  COMMAND oreslang-hungry-carrier-test)
         set_tests_properties(hungry_carrier_async_bounded_cancel PROPERTIES TIMEOUT 30)
+
+        # Real native carrier admissions and handler observations are used to
+        # produce an executable trace (not fabricated actor-model fixtures).
+        add_executable(oreslang-actor-trace-test
+            tests/actor_trace_integration.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-actor-trace-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-actor-trace-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-actor-trace-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_actor_ingress_handler_trace
+                 COMMAND oreslang-actor-trace-test)
+        set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
     endif()
 endif()
