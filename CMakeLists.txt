@@ -14,6 +14,7 @@ message(STATUS "Building Oreslang LLVM against LLVM ${LLVM_PACKAGE_VERSION}")
 add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
     src/main/cpp/oreslang/frontend/Parser.cpp
+    src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
 )
 

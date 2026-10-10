@@ -1,4 +1,5 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/OwnershipChecker.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -141,6 +142,10 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (token_.text == "actor" || token_.text == "async" ||
+            token_.text == "generator" || token_.text == "isoactor") {
+            fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
+        }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
         value.name = identifier();
         require("(");
@@ -192,6 +197,29 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (token_.text == "rt") {
+            const auto offset = token_.offset;
+            advance();
+            const auto operation = token_.text;
+            if (operation == "borrow") {
+                fail("native rt borrow requires lifetime/provenance checking and a borrowed-reference ABI; fail closed");
+            }
+            if (operation != "copy" && operation != "take" && operation != "share") {
+                fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
+            }
+            advance();
+            auto result = make_expression(
+                operation == "copy" ? Expression::Kind::Copy :
+                operation == "take" ? Expression::Kind::Take : Expression::Kind::Share,
+                offset);
+            if (accept("(")) {
+                result->left = expression();
+                require(")");
+            } else {
+                result->left = unary();
+            }
+            return result;
+        }
         if (token_.text == "-") {
             const auto offset = token_.offset;
             advance();
@@ -286,6 +314,9 @@ private:
                 return;
             }
             case Expression::Kind::Negate:
+            case Expression::Kind::Copy:
+            case Expression::Kind::Take:
+            case Expression::Kind::Share:
                 validate_expression(*expr.left, parameters, functions);
                 return;
             case Expression::Kind::Add:
@@ -322,6 +353,18 @@ private:
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
+        // Syntactic admission is a safety boundary: rejecting actor/channel
+        // keywords also means no unverified borrowed reference can enter a
+        // suspended/native execution frame or deferred callback.
+        if (token_.text == "select" || token_.text == "readch" ||
+            token_.text == "writech" || token_.text == "nb" ||
+            token_.text == "do" || token_.text == "await" ||
+            token_.text == "yield" || token_.text == "cooperate") {
+            throw std::runtime_error(
+                "native async/channel/select boundary unsupported: "
+                "suspension-aware borrow checking and cancellation/actor lowering required"
+                " at byte " + std::to_string(token_.offset));
+        }
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
@@ -332,7 +375,11 @@ private:
 } // namespace
 
 Program parse_program(std::string_view source) {
-    return Parser(source).parse();
+    Program program = Parser(source).parse();
+    // LLVM lowering is prohibited unless the native subset has passed both
+    // name/arity checking and flow-sensitive explicit ownership admission.
+    validate_i64_ownership(program);
+    return program;
 }
 
 } // namespace oreslang
