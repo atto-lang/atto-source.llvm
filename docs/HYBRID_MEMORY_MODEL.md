@@ -1,6 +1,7 @@
 # LLVM / OresVM: ownership-first memory management
 
-**Status: design contract, not a completed LLVM garbage collector or borrow checker.**
+**Status: partial native implementation with runtime and compiler regression tests.
+General source-language heap ownership and actors remain unimplemented.**
 
 The intended Oreslang model is **Rust-style deterministic ownership**, backed by
 explicit opt-in managed graph memory where necessary, with tracing GC confined
@@ -17,14 +18,51 @@ whereas compiler-generated drop glue must actually free each last-owned value.
   continuation and pinned I/O lease liveness are not yet proven.
 - `HungryCarrier` is an experimental native C++ actor-like runtime slice,
   not native lowering of Oreslang actors, borrowing, ownership, or drops.
-- `CMakeLists.txt` explicitly rejects source `rt borrow`, `rt take`,
-  and related ownership forms. The backend has **no** native object allocator,
-  owner-provenance typechecker, general drop elaboration, or cycle collector.
+- `OwnedHeap.hpp` implements native deterministic unique-ownership RAII
+  allocation with a bounded logical byte budget, checked shared/exclusive
+  borrow leases, exactly-once destruction, move-only owners, exception-safe
+  construction and rejection of actor-heap retirement while allocations live.
+  The lease control block uses reference counting, not tracing; borrow leases
+  may defer a destructor if host code violates source lifetime rules.
+- `EpochArena.hpp` implements a single-carrier, fixed-capacity typed region
+  with no malloc during `emplace`, bounded destructor slots, reverse-order
+  destruction, epoch generations and move-only pinned references. Reset and
+  close reject live leases. **It does not prove external raw pointers, FFI
+  callbacks or async I/O have quiesced:** future compiler lowering must
+  represent all such lifetimes with leases. A region with leaked leases
+  terminates on destructor rather than permitting a use-after-free.
+- The LLVM frontend/codegen now accepts a narrowly restricted class form:
+  integer fields initialized by literals, plus local `let Box x = new Box()`
+  whose only permitted use is reading integer fields in an int expression.
+  These are allocated with LLVM `alloca` and reclaimed on function return,
+  with no managed heap roots, malloc or tracing. Unknown fields, duplicate
+  field names, returned objects, borrowed objects, and unsupported moves
+  fail compilation. This **does not implement nontrivial source destructors**.
+- `CMakeLists.txt` continues to reject source `rt borrow`, `rt take`,
+  and other general ownership forms. The backend has no full
+  owner-provenance/lifetime checker, source-level heap drop elaboration, or
+  cycle collector. The native RAII allocator is currently a runtime primitive
+  and must not be misrepresented as source-level heap codegen.
 - Physical memory in the Java/Graal backend still depends on the JVM GC,
   even when source ownership is checked.
 - A managed or no-GC actor profile must **not** be inferred merely from
   `require_strict_no_gc` or from the absence of an explicit collection call
   in a test. Native callbacks, FFI, and libc can still allocate and block.
+
+## Validation introduced in this change
+
+CTest now includes `native_owned_heap_deterministic_drop`,
+`native_actor_epoch_deterministic_drop`, `owned_stack_class`,
+`native_exec_owned_stack_class`, plus rejection fixtures for class escape,
+unknown fields and duplicate fields. GCC and Clang ASan/UBSan build/run of
+the independent native primitives are performed on a credential-free
+GitHub Actions mirror. LLVM compiler tests are separately exercised against
+the source tree.
+
+**Important limitation:** Those native tests prove the specific primitives;
+they do not prove real Oreslang actor isolation, interop callback quiescence,
+drop glue across source exceptions, async continuation lifetime safety, or
+a no-GC entire production application.
 
 ## Preconditions for an actual ownership-driven zero-tracing hot path
 
