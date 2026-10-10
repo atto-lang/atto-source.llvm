@@ -91,6 +91,16 @@ if(BUILD_TESTING)
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
 
+    add_executable(oreslang-owned-native-region-test
+        tests/native_owned_region_test.c
+        src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+    target_include_directories(oreslang-owned-native-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-owned-native-region-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_region_provenance_and_drop_contract
+        COMMAND oreslang-owned-native-region-test)
+
     add_executable(oreslang-deterministic-graph-arena-test tests/deterministic_graph_arena_test.cpp)
     target_include_directories(oreslang-deterministic-graph-arena-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
