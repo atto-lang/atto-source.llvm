@@ -92,7 +92,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -174,6 +174,18 @@ private:
         require(":");
         require("int");
         require("{");
+        while (token_.text == "const" || token_.text == "val") {
+            LocalBinding binding;
+            binding.offset = token_.offset;
+            advance();
+            binding.name = identifier();
+            require(":");
+            require("int");
+            require("=");
+            binding.initializer = expression();
+            require(";");
+            value.locals.push_back(std::move(binding));
+        }
         require("return");
         value.result = expression();
         require(";");
@@ -365,6 +377,14 @@ private:
         for (const auto& fn : program.functions) {
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) params.insert(param.name);
+            for (const auto& binding : fn.locals) {
+                // Validate before publishing the name: reject self/forward reads.
+                validate_expression(*binding.initializer, params, functions);
+                if (!params.insert(binding.name).second) {
+                    throw std::runtime_error("duplicate owned local '" + binding.name
+                        + "' at byte " + std::to_string(binding.offset));
+                }
+            }
             validate_expression(*fn.result, params, functions);
         }
     }
