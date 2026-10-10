@@ -11,7 +11,14 @@
 #include <unistd.h>
 #endif
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "native actor arena failed:%d\n", __LINE__); return 1; } } while (0)
-enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET };
+enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN };
+typedef struct { OresActorArena* arena; OresArenaTurn turn; OresArenaHandle handle; } WrongCarrier;
+static int different_carrier_with_stolen_turn(void* opaque) {
+    WrongCarrier* x = (WrongCarrier*) opaque;
+    int value = 0;
+    ores_actor_arena_read(x->arena, x->turn, x->handle, 0, &value, sizeof(value));
+    return 0;
+}
 static void invalid(enum Misuse m) {
     OresActorArena* a = ores_actor_arena_open(23, 2, 2, 64, 128);
     OresArenaTurn t = ores_actor_arena_enter(a, 23, 2);
@@ -48,6 +55,15 @@ static void invalid(enum Misuse m) {
         (void) ores_actor_arena_scratch_alloc(a, t, 8, 3);
     } else if (m == OVERSIZED_ACTOR_BUDGET) {
         (void) ores_actor_arena_open(24, 4, 4096, 1024 * 1024, 128);
+    } else if (m == FOREIGN_CARRIER_TURN) {
+        WrongCarrier wrong = {a, t, h};
+        thrd_t other;
+        if (thrd_create(&other, different_carrier_with_stolen_turn, &wrong) != thrd_success)
+            abort();
+        (void) thrd_join(other, NULL);
+    } else if (m == NESTED_ACTOR_TURN) {
+        OresActorArena* other = ores_actor_arena_open(33, 2, 1, 16, 16);
+        (void) ores_actor_arena_enter(other, 33, 2);
     }
 }
 #if defined(__unix__) || defined(__APPLE__)
@@ -80,6 +96,15 @@ int main(void) {
     OresActorArena* a = ores_actor_arena_open(23, 2, 2, 64, 128);
     OresArenaTurn first = ores_actor_arena_enter(a, 23, 2);
     OresArenaHandle h = ores_actor_arena_alloc(a, first, 16);
+    /* Repeated allocations reuse a free slot without malloc or scan, and
+     * monotonic generations reject stale handles after reuse. */
+    uint64_t last_generation = 0;
+    for (int i = 0; i < 8192; ++i) {
+        OresArenaHandle temp = ores_actor_arena_alloc(a, first, 8);
+        CHECK(temp.index == 1 && temp.generation > last_generation);
+        last_generation = temp.generation;
+        ores_actor_arena_drop(a, first, temp);
+    }
     int value = 42;
     ores_actor_arena_write(a, first, h, 0, &value, sizeof(value));
     OresArenaScratch s = ores_actor_arena_scratch_alloc(a, first, 8, 8);
@@ -111,7 +136,7 @@ int main(void) {
     ores_actor_arena_leave(a, unwinding);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
 #if defined(__unix__) || defined(__APPLE__)
-    for (int n = STALE_TURN; n <= OVERSIZED_ACTOR_BUDGET; ++n) CHECK(rejects((enum Misuse) n));
+    for (int n = STALE_TURN; n <= NESTED_ACTOR_TURN; ++n) CHECK(rejects((enum Misuse) n));
 #endif
     return 0;
 }
