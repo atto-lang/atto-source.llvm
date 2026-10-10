@@ -322,9 +322,13 @@ private:
         return result;
     }
 
+    using ClassIndex = std::unordered_map<std::string, const PlainClass*>;
+    using ObjectIndex = std::unordered_map<std::string, const PlainClass*>;
+
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::size_t>& functions) {
+                                    const std::unordered_map<std::string, std::size_t>& functions,
+                                    const ObjectIndex& objects) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -333,6 +337,22 @@ private:
                                              + "' at byte " + std::to_string(expr.offset));
                 }
                 return;
+            case Expression::Kind::Field: {
+                // A stack-object value itself cannot escape; only copying one
+                // primitive int field into a return expression is supported.
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                    throw std::runtime_error("unsupported stack class receiver");
+                const auto owner = objects.find(expr.left->name);
+                if (owner == objects.end())
+                    throw std::runtime_error("unknown local owned object '"
+                                             + expr.left->name + "'");
+                const auto& fields = owner->second->fields;
+                const auto field = std::find_if(fields.begin(), fields.end(),
+                    [&](const ClassField& member) { return member.name == expr.name; });
+                if (field == fields.end())
+                    throw std::runtime_error("unknown field '" + expr.name + "'");
+                return;
+            }
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
                 if (found == functions.end() || found->second != expr.arguments.size()) {
@@ -341,42 +361,62 @@ private:
                                              + std::to_string(expr.offset));
                 }
                 for (const auto& arg : expr.arguments) {
-                    validate_expression(*arg, parameters, functions);
+                    validate_expression(*arg, parameters, functions, objects);
                 }
                 return;
             }
             case Expression::Kind::Negate:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, objects);
                 return;
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-                validate_expression(*expr.left, parameters, functions);
-                validate_expression(*expr.right, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, objects);
+                validate_expression(*expr.right, parameters, functions, objects);
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
     }
 
     static void validate(const Program& program) {
+        ClassIndex classes;
+        for (const auto& klass : program.plain_classes) {
+            if (!classes.emplace(klass.name, &klass).second)
+                throw std::runtime_error("duplicate class '" + klass.name + "'");
+            std::unordered_set<std::string> fields;
+            for (const auto& field : klass.fields) {
+                if (!fields.insert(field.name).second)
+                    throw std::runtime_error("duplicate class field '" + field.name + "'");
+            }
+        }
+
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
                 throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
                                          + std::to_string(fn.offset));
             }
-            std::unordered_set<std::string> params;
+            std::unordered_set<std::string> names;
             for (const auto& param : fn.parameters) {
-                if (!params.insert(param).second) {
+                if (!names.insert(param).second) {
                     throw std::runtime_error("duplicate parameter '" + param
                                              + "' at byte " + std::to_string(fn.offset));
                 }
+            }
+            for (const auto& object : fn.stack_objects) {
+                if (classes.count(object.type) == 0)
+                    throw std::runtime_error("unknown owned stack class '" + object.type + "'");
+                if (!names.insert(object.name).second)
+                    throw std::runtime_error("duplicate local owned object '" + object.name + "'");
             }
         }
         for (const auto& fn : program.functions) {
             const std::unordered_set<std::string> params(fn.parameters.begin(),
                                                          fn.parameters.end());
-            validate_expression(*fn.result, params, functions);
+            ObjectIndex objects;
+            for (const auto& object : fn.stack_objects)
+                objects.emplace(object.name, classes.at(object.type));
+            validate_expression(*fn.result, params, functions, objects);
         }
     }
 
