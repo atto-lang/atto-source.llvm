@@ -1,0 +1,15 @@
+// Both skipped and taken comparisons leave all lexical native owners sound.
+pub fnc choose(int x): int {
+  const a: owned int = x;
+  const b: owned int = 7;
+  if (a == 0) {
+    return 9;
+  }
+  if (a == 6) {
+    return a * b;
+  }
+  return a + b;
+}
+pub fnc main(): int {
+  return choose(6);
+}
