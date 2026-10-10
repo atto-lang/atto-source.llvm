@@ -17,8 +17,14 @@ No RT scheduler policy, zero-GC or actor isolation is currently implemented.
 prototype** owned by one authenticated actor execution identity. Nodes store
 inline bytes (no per-node `malloc` or JVM garbage collector), and non-owning
 generation-checked handles form self/mutual cycles without reference counting.
-One explicit `retire(actor, quiesced=true)` invalidates every handle and
-zeros storage; retired or stale actor generations cannot read the graph.
+Retirement now requires a non-forgeable `CarrierRetirementProof` minted only
+after `HungryCarrier::join()` drains its actor and broker threads and the
+producer ingress. The `ActorHeapBorrowGate` independently leases suspended
+frames, FFI uses and borrowed memory. Retirement seals new lease admissions
+atomically and refuses to release native storage while any lease remains.
+The compiler/scheduler MUST instrument every outstanding borrow/FFI resource
+with a lease; this runtime gate cannot detect untracked raw native pointers.
+Completed retirement zeroes storage and invalidates every stale handle.
 Deleting a node purges incoming edges and advances its generation before
 reusing its slot. Separate actors have separate fixed arrays and reject
 foreign handles.
