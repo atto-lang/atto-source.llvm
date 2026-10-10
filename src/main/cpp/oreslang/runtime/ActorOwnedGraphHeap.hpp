@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oreslang/runtime/ActorHeapRetirementProof.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -12,18 +13,6 @@
 #include <type_traits>
 
 namespace oreslang::runtime {
-
-// An authenticated actor execution identity is supplied by the supervisor
-// and scheduler. The identity is NOT a user-visible/copyable capability.
-// Native caller-side checks alone do not sandbox arbitrary hostile C++.
-struct ActorHeapIdentity final {
-    std::uint64_t runtime;
-    std::uint64_t actor;
-    std::uint64_t epoch;
-};
-inline bool operator==(ActorHeapIdentity a, ActorHeapIdentity b) noexcept {
-    return a.runtime == b.runtime && a.actor == b.actor && a.epoch == b.epoch;
-}
 
 // Fixed-capacity, strictly owner-confined native graph heap.
 //
@@ -65,6 +54,7 @@ private:
     inline static std::atomic<std::uint64_t> next_heap_id_{1};
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
+    ActorHeapBorrowGate borrow_gate_;
     std::array<Slot, NodeCapacity> slots_{};
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
@@ -74,6 +64,12 @@ private:
         if (!(requester == owner_))
             throw std::logic_error("actor graph heap belongs to a different execution domain");
         if (retired_) throw std::logic_error("actor graph heap has retired");
+    }
+
+    void require_open_access(ActorHeapIdentity requester) const {
+        require_owner(requester);
+        if (borrow_gate_.sealed())
+            throw std::logic_error("actor graph heap is retiring; new access forbidden");
     }
 
     Slot& require_node(Handle id) {
@@ -102,7 +98,8 @@ private:
 
 public:
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
-        : owner_(owner), heap_id_(next_heap_id_.fetch_add(1, std::memory_order_relaxed)) {
+        : owner_(owner), heap_id_(next_heap_id_.fetch_add(1, std::memory_order_relaxed)),
+          borrow_gate_(owner) {
         if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
             throw std::invalid_argument("invalid actor graph heap identity");
     }
@@ -115,18 +112,24 @@ public:
     std::uint64_t heap_id() const noexcept { return heap_id_; }
     ActorHeapIdentity owner() const noexcept { return owner_; }
     bool retired() const noexcept { return retired_; }
-    std::size_t live_nodes(ActorHeapIdentity actor) const {
+
+    /** Supervisor/FFI must hold a lease before any reference survives a turn. */
+    std::optional<ActorHeapBorrowGate::Lease> borrow(ActorHeapIdentity actor) {
         require_owner(actor);
+        return borrow_gate_.acquire(actor);
+    }
+    std::size_t live_nodes(ActorHeapIdentity actor) const {
+        require_open_access(actor);
         return active_nodes_;
     }
     std::size_t live_edges(ActorHeapIdentity actor) const {
-        require_owner(actor);
+        require_open_access(actor);
         return active_edges_;
     }
 
     std::optional<Handle> allocate(ActorHeapIdentity actor, const void* bytes,
                                    std::size_t length) {
-        require_owner(actor);
+        require_open_access(actor);
         if (length > NodeBytes || (length && bytes == nullptr))
             throw std::invalid_argument("invalid actor graph payload");
         for (std::size_t i = 0; i < NodeCapacity; ++i) {
@@ -147,7 +150,7 @@ public:
 
     std::size_t copy_out(ActorHeapIdentity actor, Handle id, void* destination,
                          std::size_t capacity) {
-        require_owner(actor);
+        require_open_access(actor);
         Slot& slot = require_node(id);
         if (capacity < slot.length || (slot.length && destination == nullptr))
             throw std::invalid_argument("output buffer too small");
@@ -156,7 +159,7 @@ public:
     }
 
     void write(ActorHeapIdentity actor, Handle id, const void* bytes, std::size_t length) {
-        require_owner(actor);
+        require_open_access(actor);
         Slot& slot = require_node(id);
         if (length > NodeBytes || (length && !bytes))
             throw std::invalid_argument("invalid actor graph payload");
@@ -166,7 +169,7 @@ public:
     }
 
     bool link(ActorHeapIdentity actor, Handle source, Handle target) {
-        require_owner(actor);
+        require_open_access(actor);
         Slot& from = require_node(source);
         (void)require_node(target);
         for (std::size_t i = 0; i < from.link_count; ++i) {
@@ -179,7 +182,7 @@ public:
     }
 
     bool is_linked(ActorHeapIdentity actor, Handle source, Handle target) {
-        require_owner(actor);
+        require_open_access(actor);
         Slot& from = require_node(source);
         if (target.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
         for (std::size_t i = 0; i < from.link_count; ++i) {
@@ -191,7 +194,7 @@ public:
     // Invalidating a node also purges incoming non-owning edges, to avoid
     // dangling links consuming a bounded edge budget across slot reuse.
     void remove(ActorHeapIdentity actor, Handle id) {
-        require_owner(actor);
+        require_open_access(actor);
         Slot& deleted = require_node(id);
         if (deleted.generation == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor graph node generation exhausted");
@@ -216,14 +219,18 @@ public:
     }
 
     /**
-     * The supervisor must prove no executing/suspended handler, pending IO,
-     * FFI lease, or borrowed reference can access this heap before passing
-     * quiesced=true. The flag is NOT a runtime proof; compiler/scheduler
-     * lifetime fencing is a separate integration requirement.
+     * A validated CarrierRetirementProof can be minted ONLY after the native
+     * carrier and broker joined and all mailbox producers drained. Moreover,
+     * every external borrow/FFI/continuation lease must have been released.
+     * The monotonic gate seals admissions before inspecting borrow count:
+     * no new borrow may slip between the check and memory reclamation.
      */
-    void retire(ActorHeapIdentity actor, bool quiesced) {
+    void retire(ActorHeapIdentity actor, const CarrierRetirementProof& proof) {
         require_owner(actor);
-        if (!quiesced) throw std::logic_error("actor heap retirement before quiescence");
+        if (proof.owner() != owner_)
+            throw std::logic_error("retirement proof belongs to another actor generation");
+        if (!borrow_gate_.seal_and_quiesced(actor))
+            throw std::logic_error("actor heap still has live borrow/FFI leases");
         erase_all();
     }
 };
