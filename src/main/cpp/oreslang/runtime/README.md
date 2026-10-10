@@ -196,6 +196,15 @@ entire actor region without traversing reference cycles. A new heap at the
 same address has a new identity, preventing stale-handle ABA. Handle-to-handle
 links allow data-level cyclic relationships without owning pointer cycles.
 
+When **the final live allocation is removed**, the byte cursor resets and
+the region is zeroed, permitting repeated allocate/free cycles for a
+long-lived actor without triggering GC or exhausting a nonlive bump region.
+Slot **generations are not reset**, so old handles remain invalid. Partial
+frees **do not compact or reclaim bump bytes** while other allocations
+remain; longer-lived mixed-size allocations can still fragment the region
+and exhaust its fixed byte budget. Compaction and safe point/FFI pin
+coordination would require additional runtime work.
+
 **Limits**: only trivially copyable data, no real drop hooks, object
 ownership checker, actor-scoped root map, shared region, scheduler-integrated
 heap leases, concurrent-state synchronization, physical memory protection,
@@ -209,4 +218,5 @@ collectors are therefore **not** implemented.
 
 `native_actor_owned_heap_contract` tests two distinct heaps, bidirectional
 and self-cycles through non-owning handles, stale-slot invalidation, foreign
-heap rejection, overflow/budget refusal, retirement, and address-reuse ABA.
+heap rejection, overflow/budget refusal, retirement, address-reuse ABA,
+and 1,000 full-drain reclamation cycles without stale-handle resurrection.
