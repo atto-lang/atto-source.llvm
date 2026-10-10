@@ -92,6 +92,10 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        if (source_.substr(at_, 2) == "=>") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
@@ -128,20 +132,65 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            program.functions.push_back(function());
+            if (!wrapped_module && accept("pub")) {
+                if (accept("define")) {
+                    require("contract");
+                    program.client_contracts.push_back(client_contract());
+                } else {
+                    program.functions.push_back(function(true));
+                }
+            } else if (!wrapped_module && accept("define")) {
+                require("contract");
+                program.client_contracts.push_back(client_contract());
+            } else {
+                program.functions.push_back(function());
+            }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty()) fail("expected at least one function");
+        if (program.functions.empty() && program.client_contracts.empty())
+            fail("expected function or client contract");
         validate(program);
         return program;
     }
 
 private:
-    Function function() {
+    ClientContract client_contract() {
+        ClientContract result;
+        result.name = identifier();
+        require("as");
+        std::unordered_set<std::string> methods;
+        while (token_.kind != Kind::End && token_.text != "end") {
+            require("fnc");
+            ClientContractMethod method;
+            method.name = identifier();
+            if (!methods.insert(method.name).second)
+                fail("duplicate client contract method");
+            require("(");
+            std::unordered_set<std::string> names;
+            if (!accept(")")) {
+                do {
+                    require("String");
+                    std::string name = identifier();
+                    if (!names.insert(name).second)
+                        fail("duplicate client contract parameter");
+                    method.parameters.push_back(std::move(name));
+                } while (accept(","));
+                require(")");
+            }
+            require("=>");
+            require("String");
+            require(";");
+            result.methods.push_back(std::move(method));
+        }
+        require("end");
+        return result;
+    }
+
+    Function function(bool already_exported = false) {
         Function value;
         value.offset = token_.offset;
-        value.exported = accept("pub");
+        value.exported = already_exported || accept("pub");
         if (token_.text == "gpu" || token_.text == "quantum") {
             fail("native accelerator lowering unsupported");
         }
@@ -361,6 +410,11 @@ private:
     }
 
     static void validate(const Program& program) {
+        std::unordered_set<std::string> contract_names;
+        for (const auto& contract : program.client_contracts) {
+            if (!contract_names.insert(contract.name).second)
+                throw std::runtime_error("duplicate client contract: " + contract.name);
+        }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {

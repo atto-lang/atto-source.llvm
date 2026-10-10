@@ -44,9 +44,19 @@ struct Function {
     bool exported = false;
 };
 
+// Declaration-only client contract syntax; no runtime implementation or wire validator.
+struct ClientContractMethod {
+    std::string name;
+    std::vector<std::string> parameters;
+};
+struct ClientContract {
+    std::string name;
+    std::vector<ClientContractMethod> methods;
+};
 struct Program {
     std::string module;
     std::vector<Function> functions;
+    std::vector<ClientContract> client_contracts;
 };
 
 // Parse and statically validate a strict Java-compatible subset: int functions,

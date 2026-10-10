@@ -8,13 +8,14 @@
 #include <string>
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::cerr << "usage: oreslang-llvmc <source.ores>\n"
-                  << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
+    const bool check_only = argc == 3 && std::string(argv[1]) == "--check";
+    if ((!check_only && argc != 2) || (check_only && argc != 3)) {
+        std::cerr << "usage: oreslang-llvmc [--check] <source.ores>\n"
+                  << "Codegen: native int subset only. --check also parses String client declarations.\n";
         return 2;
     }
     try {
-        std::ifstream source(argv[1], std::ios::binary);
+        std::ifstream source(argv[check_only ? 2 : 1], std::ios::binary);
         if (!source.is_open()) {
             throw std::runtime_error(std::string("cannot open Oreslang source: ") + argv[1]);
         }
@@ -22,6 +23,7 @@ int main(int argc, char** argv) {
                                std::istreambuf_iterator<char>());
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
         auto ast = oreslang::parse_program(text);
+        if (check_only) return 0; // syntax/ownership admission only; never emit IR
         std::cout << oreslang::emit_verified_llvm_ir(ast);
         return 0;
     } catch (const std::exception& error) {

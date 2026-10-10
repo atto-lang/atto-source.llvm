@@ -75,6 +75,9 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source) {
+    if (!source.client_contracts.empty()) {
+        throw std::runtime_error("Oreslang String client contract has no admitted LLVM runtime implementation; use --check only");
+    }
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);

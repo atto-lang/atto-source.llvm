@@ -70,6 +70,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    oreslang_contract_test(reject_client_contract_without_runtime clients-core-client-contract.ores --diagnostic "no admitted LLVM runtime implementation")
+    add_test(NAME client_contract_declaration_only_check
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/client_contract_check.py"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/clients-core-client-contract.ores")
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
