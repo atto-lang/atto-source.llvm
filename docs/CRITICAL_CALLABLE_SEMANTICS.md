@@ -37,6 +37,45 @@ pub critical fnc file_counter(): int {
 - On normal return, exception, cancellation, and actor/task teardown, the
   runtime releases the invocation ticket and wakes the next waiter.
 
+## Blocking and notification protocol (capacity-one logical queue)
+
+A `critical` gate is an *execution permit*, not a payload channel. Do not
+implement it by performing guest-visible `readch` / `writech` operations:
+those transport values, obey close/select semantics, and may share ordinary
+mailbox backpressure with unrelated work. Reuse the scheduler's Future/await
+machinery but retain a separate internal admission queue.
+
+1. `request` first checks the gate under a **short host mutex** (queue metadata
+   only). If idle, assign the caller the permit immediately.
+2. Otherwise append a distinct, cancellation-aware ticket to a bounded FIFO
+   queue; park the **logical continuation** in the scheduler's WAITING state.
+   Never occupy a worker/carrier thread to wait on a permit.
+3. On return, throw, panic, cancellation or teardown, release the invocation's
+   token exactly once. Under the short mutex, atomically transfer the permit
+   to the oldest non-cancelled ticket, then unlock.
+4. Publish the admitted ticket to the scheduler's **internal control/resume
+   queue**, not the actor's ordinary user-message mailbox. This must not be
+   starved by bulk regular mail. The scheduler, not `release`, later runs the
+   continuation on an admitted execution turn.
+5. On resume, verify the ticket still owns the gate (cancellation may have won
+   after handoff). Never run guest code directly from a Future completion or
+   while holding the host mutex.
+6. Waiting-ticket cancellation removes the ticket from FIFO. If cancellation
+   races with ownership handoff, it must release the newly acquired permit and
+   wake the next eligible caller. Capacity excludes the single owner; 8192
+   waiting tickets are permitted.
+7. Host/embedder *synchronous* callers may use a targeted blocking signal.
+   Synchronous **actor** and scheduler callers must never park a carrier;
+   without compiler-lowered suspension, contention fails closed with a
+   diagnostic instead of blocking native workers.
+
+The Java runtime uses a per-ticket `OresFuture` for asynchronous admission and
+an individual `CountDownLatch` only for a host-side synchronous fallback.
+The LLVM native gate returns an opaque gate-scoped token and an admission
+status; `release(token)` returns the newly permitted token, which its
+scheduler must enqueue. The native substrate currently does not include source
+actor continuation lowering.
+
 ## Preemption contract
 
 1. Ordinary non-suspending callables execute to completion on their admitted
