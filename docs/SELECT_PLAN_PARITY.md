@@ -14,6 +14,13 @@ The Java reference backend defines:
   mutation and immutable, versioned snapshots. Replacement retains key
   position. Pending operations remain bound to the old snapshot. Results
   with a stable case key must also identify the snapshot version.
+- **Generation ownership**: winning an operation from a superseded
+  DynamicSelectPlan snapshot must not rotate the FAIR cursor of a newer
+  snapshot; default selection consumes no round-robin credit. All updates
+  must reject version overflow instead of silently reusing old generations.
+- **Typed source boundary**: constructing a plan from a non-SelectCase
+  list/map and selecting from unrelated values must fail at type-check time,
+  not register an invalid native waiter.
 - **Fair** policy rotates among ready cases; explicit priority is ordered;
   random policy is opt-in. Close, rendezvous, cancellation, losing-arm
   detachment and default dispatch must share atomic arbitration.
@@ -51,6 +58,8 @@ The Java source checker now treats `SelectCase` and `SelectSet` as
   borrowed case collections, reused move-only write payloads, and
   select-plan mailbox transport. Positive fixtures must permit multiple
   selects on the same retained set with Copy write payloads.
+
+Java reference validation: [43 passing GraalVM compiler/runtime tests](https://github.com/athlet-o/athleto-e2e/actions/runs/38080551451) for the integrated PR #526. The additional concurrent mutation stress run is tracked separately. This does not verify LLVM native behavior.
 
 These requirements are not implemented by this documentation change.
 The current LLVM bootstrap must keep rejecting unsupported select syntax
