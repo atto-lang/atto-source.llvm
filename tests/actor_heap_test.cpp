@@ -1,9 +1,11 @@
 #include "oreslang/runtime/ActorHeap.hpp"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 using oreslang::runtime::ActorHeap;
 static void require(bool p, const char* why) {
@@ -12,6 +14,27 @@ static void require(bool p, const char* why) {
 
 int main() {
     try {
+        // Multiple startup threads must not race on the owner identity.
+        ActorHeap<2, 16> contested;
+        std::atomic<int> ready{0}, admitted{0};
+        std::atomic<bool> begin{false};
+        std::vector<std::thread> binders;
+        for (int i = 0; i < 32; ++i) {
+            binders.emplace_back([&] {
+                ready.fetch_add(1, std::memory_order_release);
+                while (!begin.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                if (contested.bind_carrier())
+                    admitted.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+        while (ready.load(std::memory_order_acquire) != 32)
+            std::this_thread::yield();
+        begin.store(true, std::memory_order_release);
+        for (auto& binder : binders) binder.join();
+        require(admitted.load() == 1,
+                "concurrent actor heap admission selected multiple owners");
+
         ActorHeap<2, 16> a, b;
         require(!a.allocate(8), "allocation succeeded before carrier binding");
         require(a.bind_carrier() && b.bind_carrier(), "carrier admission failed");
