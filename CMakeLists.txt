@@ -46,6 +46,17 @@ if(BUILD_TESTING)
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    # The source compiler does not yet lower actor handles or await-spawn.
+    # Both forms must fail without emitting IR until actor ABI parity lands.
+    oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "expected int expression")
+    add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
+    target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-group-lifecycle-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
+    set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
