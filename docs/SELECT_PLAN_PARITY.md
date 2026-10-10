@@ -59,7 +59,9 @@ The Java source checker now treats `SelectCase` and `SelectSet` as
   select-plan mailbox transport. Positive fixtures must permit multiple
   selects on the same retained set with Copy write payloads.
 
-Java reference validation: [43 passing GraalVM compiler/runtime tests](https://github.com/athlet-o/athleto-e2e/actions/runs/38080551451) for the integrated PR #526. The additional concurrent mutation stress run is tracked separately. This does not verify LLVM native behavior.
+Java reference validation: [45 passing GraalVM compiler/runtime tests, plus three repeated dynamic-plan suites](https://github.com/athlet-o/athleto-e2e/actions/runs/38080964024) for the integrated PR #526. The concurrent plan-mutation stress and single-use SelectResult payload extraction checks are included. This does not verify LLVM native behavior.
+
+Native fail-closed CI: [26/26 LLVM CTest contracts passed](https://github.com/athlet-o/athleto-e2e/actions/runs/38081134475), including explicit rejection of SelectPlan constructors and persistent SelectCase writes without emitted LLVM IR. Those tests verify *rejection*, not native borrow-checker implementation.
 
 These requirements are not implemented by this documentation change.
 The current LLVM bootstrap must keep rejecting unsupported select syntax
