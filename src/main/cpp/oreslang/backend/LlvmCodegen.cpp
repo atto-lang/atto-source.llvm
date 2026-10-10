@@ -31,18 +31,34 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Negate:
             return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, functions),
                                      "neg");
-        case Expression::Kind::Add:
-            return builder.CreateAdd(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
-                                     "add");
-        case Expression::Kind::Subtract:
-            return builder.CreateSub(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
-                                     "sub");
-        case Expression::Kind::Multiply:
-            return builder.CreateMul(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
-                                     "mul");
+        case Expression::Kind::Copy:
+        case Expression::Kind::Take:
+        case Expression::Kind::Share:
+            // This AST is statically restricted to i64, which is trivially
+            // copyable, has no destructor, and cannot alias an owned heap.
+            // The source pass has already checked explicit-take invalidation.
+            return lower(*expr.left, builder, i64, parameters, functions);
+        case Expression::Kind::Add: {
+            // C++ call-argument evaluation order is not guaranteed; lower
+            // explicitly in source order to match ownership analysis.
+            llvm::Value* left = lower(*expr.left, builder, i64, parameters, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, parameters, functions);
+            return builder.CreateAdd(left, right, "add");
+        }
+        case Expression::Kind::Subtract: {
+            // C++ call-argument evaluation order is not guaranteed; lower
+            // explicitly in source order to match ownership analysis.
+            llvm::Value* left = lower(*expr.left, builder, i64, parameters, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, parameters, functions);
+            return builder.CreateSub(left, right, "sub");
+        }
+        case Expression::Kind::Multiply: {
+            // C++ call-argument evaluation order is not guaranteed; lower
+            // explicitly in source order to match ownership analysis.
+            llvm::Value* left = lower(*expr.left, builder, i64, parameters, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, parameters, functions);
+            return builder.CreateMul(left, right, "mul");
+        }
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments) {
