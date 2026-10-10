@@ -159,8 +159,8 @@ public:
     std::optional<T> read(
             const Handle& handle, std::size_t offset = 0) const noexcept {
         static_assert(std::is_trivially_copyable<T>::value
-                      && std::is_default_constructible<T>::value,
-                      "only trivial, default-constructible native values");
+                      && std::is_nothrow_default_constructible<T>::value,
+                      "only trivially copyable values with noexcept default construction");
         if (!valid(handle)) return std::nullopt;
         const auto& slot = slots_[handle.slot_];
         if (offset > slot.length || sizeof(T) > slot.length - offset)
