@@ -71,6 +71,48 @@ cases = {
         "fnc inner(borrow int a): int { return a; } "
         "fnc outer(borrow int x): int { return inner(rt borrow x); }",
         "native reborrow of borrowed parameter unsupported"),
+    # A live call-argument loan must never cause an unimplemented suspend
+    # primitive to be accepted: every one still fails before any LLVM IR.
+    "borrow then await": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, await next); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then select": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, select {}); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then nb select": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, nb select {}); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then do nb select": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, do nb select {}); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then readch": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, readch channel); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then do readch": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, do readch channel); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then do nb readch": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, do nb readch channel); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then writech": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, writech channel); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then do nb writech": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, do nb writech channel); }",
+        "native async/channel/select boundary unsupported"),
+    "borrow then rt cooperate": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, rt cooperate); }",
+        "native async/channel/select boundary unsupported"),
     "borrow moved parameter": (
         "fnc use(borrow int a): int { return a; } "
         "fnc invoke(int x): int { return rt take x + use(rt borrow x); }",
