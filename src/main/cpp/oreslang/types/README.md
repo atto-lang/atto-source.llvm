@@ -12,9 +12,14 @@ the full Java/Graal ownership model.
   They pass an i64 pointer to a caller-owned stack slot, not an i64 value.
   Callees can read their value as `x`, but cannot take their owner.
 - `rt borrow x` and `rt borrow mut x` are admitted **only** as arguments
-  to matching borrowed parameters. The source must be an owned, named i64
-  parameter. Borrowing integer temporaries or borrowed parameters again is
-  intentionally rejected.
+  to matching borrowed parameters. The source must be a named i64
+  parameter, owned or already borrowed. Shared borrowed parameters can be
+  shared-reborrowed, while exclusive borrowed parameters can be shared- or
+  exclusive-reborrowed. Reborrows cannot outlive their direct synchronous
+  call; borrowing integer temporaries remains rejected.
+- Reborrow capabilities cannot be strengthened: `borrow int` cannot
+  become `borrow mut int`. The nested call retains the owner's pointer,
+  with no reference-valued variables, heap allocation or hidden escape.
 - Immutable loans can coexist; mutable loans are exclusive. A mutable loan
   forbids reads or moves of the owner during call-argument evaluation. A
   shared loan forbids taking its owner until the call returns.
@@ -40,7 +45,7 @@ stable external C/FFI interface.
 ## Not supported
 
 Actor-owned object graphs; structs; heap ownership; destructor/drop timing;
-mutable projections; reborrows; reference-valued variables or returns;
+mutable projections; general heap/field reborrows; reference-valued variables or returns;
 pinned frames; asynchronous suspend/resume; cancellation; `await`, `select`,
 `nb select`, `do nb select`, `readch`, `do readch`, `do nb readch`,
 and actor migration all still **fail closed without LLVM IR**.

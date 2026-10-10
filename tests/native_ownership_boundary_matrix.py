@@ -67,10 +67,34 @@ cases = {
         "fnc use(borrow int a): int { return a; } "
         "fnc invoke(int x): int { return use(x); }",
         "borrowed argument requires explicit rt borrow"),
-    "reborrow borrowed parameter": (
-        "fnc inner(borrow int a): int { return a; } "
-        "fnc outer(borrow int x): int { return inner(rt borrow x); }",
-        "native reborrow of borrowed parameter unsupported"),
+    "shared cannot strengthen to mutable": (
+        "fnc inner(borrow mut int a): int { return a; } "
+        "fnc outer(borrow int x): int { return inner(rt borrow mut x); }",
+        "cannot mutably reborrow shared parameter"),
+    "mutable reborrow double-exclusive": (
+        "fnc inner(borrow mut int a, borrow mut int b): int { return a + b; } "
+        "fnc outer(borrow mut int x): int { return inner(rt borrow mut x, rt borrow mut x); }",
+        "conflicting active native borrow"),
+    "mutable reborrow then shared": (
+        "fnc inner(borrow mut int a, borrow int b): int { return a + b; } "
+        "fnc outer(borrow mut int x): int { return inner(rt borrow mut x, rt borrow x); }",
+        "conflicting active native borrow"),
+    "shared reborrow then mutable": (
+        "fnc inner(borrow int a, borrow mut int b): int { return a + b; } "
+        "fnc outer(borrow mut int x): int { return inner(rt borrow x, rt borrow mut x); }",
+        "conflicting active native borrow"),
+    "read during exclusive reborrow": (
+        "fnc inner(borrow mut int a, int b): int { return a + b; } "
+        "fnc outer(borrow mut int x): int { return inner(rt borrow mut x, x); }",
+        "read conflicts with active mutable borrow"),
+    "reborrow then await": (
+        "fnc inner(borrow int a, int b): int { return a + b; } "
+        "fnc outer(borrow int x): int { return inner(rt borrow x, await next); }",
+        "native async/channel/select boundary unsupported"),
+    "reborrow then select": (
+        "fnc inner(borrow int a, int b): int { return a + b; } "
+        "fnc outer(borrow mut int x): int { return inner(rt borrow x, select {}); }",
+        "native async/channel/select boundary unsupported"),
     # A live call-argument loan must never cause an unimplemented suspend
     # primitive to be accepted: every one still fails before any LLVM IR.
     "borrow then await": (
