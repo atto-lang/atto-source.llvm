@@ -39,8 +39,8 @@ the region-close guard to abort instead.
   array, string, aliasing native pointer, borrow across await, exception or
   cancellation is accepted by this compiler subset.
 - The compiler now also admits a **restricted early-return CFG** after all
-  scalar local bindings are initialized: `if (int_expr == int_expr) {
-  return int_expr; }`, repeated zero or more times before the mandatory
+  scalar local bindings are initialized: `if (int_expr eq int_expr) {
+  return int_expr; } fi`, repeated zero or more times before the mandatory
   final `return`. Every admitted exit computes its result then drops ALL
   initialized owned scalar bindings in reverse order and closes the lexical
   native region. The current branch has no conditional locals, nested blocks,
@@ -66,14 +66,17 @@ closure and absence of tracing-GC statepoints.
 pub fnc main(): int {
   const a: owned int = 6;
   val b: owned int = 7;
-  if (a == 6) {
+  if (a eq 6) {
     return a * b; // native drop(b), drop(a), close(region), return 42
   }
+  fi
   return 0;       // also emits drop(b), drop(a), close(region)
 }
 ```
 
-The guard compares two `int` expressions with explicit `==`. It does not
+The guard compares two `int` expressions using canonical `eq` or the
+compatible `==` alias, and requires the Java-compatible `fi` terminator.
+It does not
 permit integer truthiness or arbitrary boolean constructs. Runtime tests must
 exercise the taken, not-taken and chained paths, verify all per-path drop/close
 calls, and reject branch-local ownership or missing final returns before LLVM IR
