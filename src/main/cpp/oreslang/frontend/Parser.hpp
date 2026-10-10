@@ -27,9 +27,17 @@ struct Parameter {
     Mode mode = Mode::Value;
 };
 
+// Immutable, lexical i64 slot with initializer-before-publication semantics.
+struct LocalBinding {
+    std::string name;
+    std::unique_ptr<Expression> initializer;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<Parameter> parameters;
+    std::vector<LocalBinding> locals;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
