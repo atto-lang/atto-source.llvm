@@ -1,7 +1,8 @@
 # Oreslang target environments, backends and capabilities
 
-Draft contract, October 10, 2026. This document describes both the implemented
-Java opt-in admission API and future cross-platform work. The LLVM compiler
+Draft cross-backend contract, October 10, 2026. The Java opt-in admission API
+is proposed in draft Java PR #586 and is not assumed merged or available on
+Java main. This document describes that proposed API and future work. The LLVM compiler
 does not yet support cross-file imports, environment admission, or the proposed
 output backends. Unsupported features must fail closed, not pretend to work.
 
@@ -19,7 +20,7 @@ dynamic.code, heap, gc.
 A browser-safe declaration is not a proof of trust. The runtime host must still
 enforce all declared permissions, quotas, and interop policies.
 
-## Current Java opt-in header contract
+## Proposed Java opt-in header contract (draft PR #586)
 
 A participating .ores file MUST begin, on its first physical line, with:
 
@@ -31,9 +32,9 @@ The second line is optional; omission means no requirements *declared*, not
 that effects have been inferred or verified. The directives are currently lexer
 comments for grammar compatibility; normal runs ignore them.
 
-The Java API is dev.oreslang.compiler.TargetAdmission.validate(entryUnit,
+The draft Java API is dev.oreslang.compiler.TargetAdmission.validate(entryUnit,
 sources, target, grantedCapabilities), or its overload with pinned import
-resolutions. The Java launcher now has an opt-in validation-only mode:
+resolutions. Draft PR #586 proposes this opt-in validation-only launcher mode:
 
     oreslang --check --target-env=browser --target-capabilities=net.client,clock src/main.ores
 
@@ -52,11 +53,11 @@ unrecognized targets fail closed. Java host imports require a server/desktop
 target and an explicit interop.java declaration. Execution still additionally
 needs IsolatePolicy authorization and a class allowlist.
 
-**LIMITATIONS:** This checker remains opt-in via --check and is not enabled by
+**LIMITATIONS:** If merged, this checker would remain opt-in via --check and not enabled by
 default for execution or other build modes. It is not integrated with code
 artifact emission, stdlib effect inference, dynamic imports or compiled LLVM. Declared effects can lie until compiler semantic
 effect inference is introduced. Do not advertise standard builds as safe solely
-because this API exists.
+because this draft API exists.
 
 ## Example rejection
 
