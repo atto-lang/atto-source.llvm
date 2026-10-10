@@ -1,0 +1,7 @@
+define class Box as
+  pub val int value = 7;
+  pub let int value = 8;
+end
+pub fnc main(): int {
+  return 0;
+}
