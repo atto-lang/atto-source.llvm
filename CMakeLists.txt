@@ -76,6 +76,12 @@ if(BUILD_TESTING)
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
 
+    add_executable(oreslang-deterministic-graph-arena-test tests/deterministic_graph_arena_test.cpp)
+    target_include_directories(oreslang-deterministic-graph-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-deterministic-graph-arena-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_deterministic_graph_arena COMMAND oreslang-deterministic-graph-arena-test)
+
     # Linux-specific actor-neutral wake/park primitive. This does NOT
     # implement the actor scheduler or certify lock-free mailbox delivery.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
