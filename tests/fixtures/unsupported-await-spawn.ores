@@ -1,0 +1,5 @@
+// Both immediate and awaited spawn remain unsupported by the LLVM source compiler.
+// No LLVM IR may be emitted for an unimplemented actor readiness barrier.
+pub fnc main(): int {
+    return await spawn WorkerActor();
+}
