@@ -144,5 +144,19 @@ if(BUILD_TESTING)
         add_test(NAME native_actor_ingress_handler_trace
                  COMMAND oreslang-actor-trace-test)
         set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
+
+        # Actual dedicated carrier callback accesses its own native ownership
+        # heap, while the broker and supervisor cannot discover that heap.
+        add_executable(oreslang-native-actor-heap-test
+            tests/native_actor_heap_integration_test.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-native-actor-heap-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-heap-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-actor-heap-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_actor_heap_isolation_and_drop
+                 COMMAND oreslang-native-actor-heap-test)
+        set_tests_properties(native_actor_heap_isolation_and_drop PROPERTIES TIMEOUT 30)
     endif()
 endif()
