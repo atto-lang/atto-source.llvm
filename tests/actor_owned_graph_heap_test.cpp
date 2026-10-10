@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorOwnedGraphHeap.hpp"
+#include "oreslang/runtime/HungryCarrier.hpp"
 
 #include <array>
 #include <cstdint>
@@ -7,6 +8,9 @@
 
 using oreslang::runtime::ActorHeapIdentity;
 using oreslang::runtime::ActorOwnedGraphHeap;
+using oreslang::runtime::HungryCarrier;
+using oreslang::runtime::ActorStep;
+using oreslang::runtime::ActorMessage;
 
 static void check(bool yes, const char* why) {
     if (!yes) throw std::runtime_error(why);
@@ -18,10 +22,27 @@ static void must_reject(Fn&& f, const char* why) {
     check(rejected, why);
 }
 
+static ActorStep done_handler(void*, ActorMessage, bool, std::int64_t) noexcept {
+    return {};
+}
+static std::int64_t io_noop(void*, std::int64_t value,
+                            const std::atomic<bool>&) noexcept {
+    return value;
+}
+static HungryCarrier::Options bound_options(ActorHeapIdentity owner) {
+    HungryCarrier::Options options{};
+    options.heap_owner = owner;
+    return options;
+}
+
 static void cycles_reclaim_without_gc() {
     using Heap = ActorOwnedGraphHeap<16, 32, 4>;
     ActorHeapIdentity owner{9, 7, 1};
     Heap graph(owner);
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    carrier.start();
+    check(!carrier.retirement_proof().has_value(),
+          "heap retirement proof available before carrier join");
     std::array<std::uint8_t, 3> a_data{1, 2, 3}, b_data{4, 5, 6};
     const auto a = graph.allocate(owner, a_data.data(), a_data.size()).value();
     const auto b = graph.allocate(owner, b_data.data(), b_data.size()).value();
@@ -37,10 +58,18 @@ static void cycles_reclaim_without_gc() {
           "native payload length mismatch");
     check(output[0] == 1 && output[2] == 3, "native payload altered");
 
-    must_reject([&]{ graph.retire(owner, false); },
-                "heap retired with outstanding continuation/borrow precondition");
-    check(graph.live_nodes(owner) == 2, "pre-quiescence failure altered heap");
-    graph.retire(owner, true);
+    auto borrow = graph.borrow(owner);
+    check(borrow.has_value(), "failed to obtain a test FFI/continuation lease");
+    carrier.join(); // stops carrier, broker, ingress, and drains producer leases
+    const auto proof = carrier.retirement_proof();
+    check(proof.has_value(), "no retirement proof after joined carrier");
+    must_reject([&]{ graph.retire(owner, *proof); },
+                "heap retired with an outstanding FFI/continuation lease");
+    check(!graph.retired(), "failed retirement erroneously freed graph storage");
+    check(!graph.borrow(owner).has_value(),
+          "a racing borrower got in after the retirement gate sealed");
+    borrow->reset();
+    graph.retire(owner, *proof);
     check(graph.retired(), "cyclic heap not retired deterministically");
     must_reject([&]{ (void)graph.copy_out(owner, a, output.data(), output.size()); },
                 "stale handle succeeded after heap retirement");
@@ -89,9 +118,21 @@ static void bounded_capacity_and_purge() {
     check(c.slot == b.slot && c.generation > b.generation, "recycled slot ABA");
     check(h.link(actor, a, c), "bounded edge not reusable");
     const auto d = ActorHeapIdentity{1, 3, 10};
-    must_reject([&]{ h.retire(d, true); }, "stale actor epoch retired live heap");
+    // A proof for a different epoch cannot reclaim this actor heap.
+    HungryCarrier foreign(nullptr, done_handler, nullptr, io_noop, bound_options(d));
+    foreign.start();
+    foreign.join();
+    auto foreign_proof = foreign.retirement_proof();
+    check(foreign_proof.has_value(), "no joined foreign proof");
+    must_reject([&]{ h.retire(actor, *foreign_proof); },
+                "foreign/stale actor epoch proof retired live heap");
     check(h.live_nodes(actor) == 2, "stale actor epoch modified heap");
-    h.retire(actor, true);
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(actor));
+    carrier.start();
+    carrier.join();
+    const auto proof = carrier.retirement_proof();
+    check(proof.has_value(), "joined native carrier did not mint retirement proof");
+    h.retire(actor, *proof);
     std::cout << "PASS fixed-size arena quotas and ABA mitigation\n";
 }
 
