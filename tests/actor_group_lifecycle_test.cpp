@@ -113,6 +113,48 @@ int main() {
         }
     }
     {
+        // Throwing callbacks must never prevent other callbacks or actor stop.
+        NativeActorGroup group(1, 3);
+        std::atomic<int> stops{0};
+        auto first = group.adopt(1, 1, 1, [&] {
+            stops.fetch_add(1);
+            throw std::runtime_error("stop hook failed");
+        });
+        auto second = group.adopt(1, 2, 1, [&] { stops.fetch_add(1); });
+        int observers = 0;
+        first.when_ready([&](const auto&) {
+            ++observers;
+            throw std::runtime_error("observer failed");
+        });
+        second.when_ready([&](const auto& result) {
+            check(!result.ready, "close accepted uninitialized worker");
+            ++observers;
+        });
+        group.close();
+        check(group.closed() && group.worker_count() == 0,
+              "close failed to detach all references");
+        check(stops.load() == 2, "one throwing stop hook hid another worker");
+        check(observers == 2, "one throwing readiness callback hid another");
+        group.close();
+        check(stops.load() == 2, "second close requested duplicate stop");
+    }
+    {
+        // Reentrant close from a stop hook cannot deadlock or double-stop.
+        NativeActorGroup group(1, 2);
+        int first_stops = 0, second_stops = 0;
+        auto first = group.adopt(1, 1, 1, [&] {
+            ++first_stops;
+            group.close();
+        });
+        auto second = group.adopt(1, 2, 1, [&] { ++second_stops; });
+        (void) first;
+        (void) second;
+        group.stop_workers();
+        check(group.closed(), "reentrant close not processed");
+        check(first_stops == 1 && second_stops == 1,
+              "reentrant close duplicated or omitted stop request");
+    }
+    {
         // Callbacks may re-enter group methods; no group lock is held.
         NativeActorGroup group(1, 1);
         auto ref = group.adopt(1, 1, 1, [] {});
