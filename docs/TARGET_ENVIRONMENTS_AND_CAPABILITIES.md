@@ -33,7 +33,12 @@ comments for grammar compatibility; normal runs ignore them.
 
 The Java API is dev.oreslang.compiler.TargetAdmission.validate(entryUnit,
 sources, target, grantedCapabilities), or its overload with pinned import
-resolutions. It checks the actual parsed Ast.ImportDecl objects and uses
+resolutions. The Java launcher now has an opt-in validation-only mode:
+
+    oreslang --check --target-env=browser --target-capabilities=net.client,clock src/main.ores
+
+This mode uses the actual LinkedProgramRunner import closure and its pinned
+resolutions. It does not execute the program or produce a browser artifact. It checks the actual parsed Ast.ImportDecl objects and uses
 ImportGraph.resolveImportUnitId. For each unconditional import A -> B:
 
 1. targets(A) must be a subset of targets(B).
@@ -47,9 +52,9 @@ unrecognized targets fail closed. Java host imports require a server/desktop
 target and an explicit interop.java declaration. Execution still additionally
 needs IsolatePolicy authorization and a class allowlist.
 
-**LIMITATIONS:** This checker is opt-in. It is not yet connected to the normal
-CLI, runtime module loader, build artifacts, stdlib effect inference, dynamic
-imports or compiled LLVM. Declared effects can lie until compiler semantic
+**LIMITATIONS:** This checker remains opt-in via --check and is not enabled by
+default for execution or other build modes. It is not integrated with code
+artifact emission, stdlib effect inference, dynamic imports or compiled LLVM. Declared effects can lie until compiler semantic
 effect inference is introduced. Do not advertise standard builds as safe solely
 because this API exists.
 
@@ -122,9 +127,9 @@ shared memory, GC-free allocation, or network support without host integration.
 ## Required merge gates
 
 1. Run Java TargetAdmissionTest on the exact PR head.
-2. Expose a target environment compiler flag that invokes the checked closure
-   with exact resolved import IDs; fail closed for missing headers in explicit
-   cross-target builds without regressing legacy server builds.
+2. Run Java TargetAdmissionLoaderTest and CLI smoke tests, confirming that
+   --check --target-env uses exact import IDs and ordinary server validation
+   still works without headers. Target-check mode is currently validation-only.
 3. Add package policy with strict versioning and compiler-inferred effects.
 4. Add native LLVM parity or explicit negative diagnostics, not permissive
    fallback.
