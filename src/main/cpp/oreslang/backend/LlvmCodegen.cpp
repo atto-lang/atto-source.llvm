@@ -116,14 +116,14 @@ std::string emit_verified_llvm_ir(const Program& source) {
         for (const auto& binding : fn.locals) {
             llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, declarations);
             llvm::Value* slot = builder.CreateAlloca(i64, nullptr, binding.name + ".owned");
-            builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(i64, 8));
+            builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
             builder.CreateStore(initial, slot);
             storage.emplace(binding.name, slot);
             lexical_slots.push_back(slot);
         }
         llvm::Value* result = lower(*fn.result, builder, i64, storage, declarations);
         for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it)
-            builder.CreateLifetimeEnd(*it, llvm::ConstantInt::get(i64, 8));
+            builder.CreateLifetimeEnd(*it, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
         builder.CreateRet(result);
     }
 
