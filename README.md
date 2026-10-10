@@ -21,6 +21,16 @@ reject them without producing IR. See [the native select parity contract](docs/S
 - Lower each function to i64 LLVM IR, verify the entire LLVM module before printing IR.
 - CI covers positive/negative source-to-IR contracts and Clang compilation/execution of
   standalone `main` functions, when Clang is present.
+- A narrow nonescaping **stack-only class** form: `define class Box as` with
+  `val/let int` fields initialized by literals; `let Box b = new Box()` inside
+  a function; reading `b.field` in an integer expression. Compiles to LLVM
+  stack `alloca` storage, with no tracing GC or native malloc. Returning,
+  borrowing, moving or sharing these objects remains unsupported and rejected.
+- `OwnedHeap.hpp` provides move-only native RAII owners, runtime borrow leases,
+  accounting and deterministic destruction. `EpochArena.hpp` provides
+  actor-carrier-local, bounded typed regions with reverse-order drop and
+  quiescence fences. Both have CTest and sanitizers; general `.ores` objects
+  are **not yet lowered into these allocators**.
 
 The `int` to `i64` mapping, wraparound arithmetic, external linkage, and calling conventions
 **are provisional** and are not a claim of Java semantic parity. In particular, this slice
@@ -42,8 +52,11 @@ echo $? # 42
 
 The CLI currently prints LLVM IR; object output and versioned ABI are not implemented.
 
-Unsupported actors, async/await, channels, traits/classes, imports, tuples, recursive/owned
-objects, GC, HFT scheduling and native runtime services **fail closed**. They remain roadmap items.
+Unsupported actors, async/await, channels, traits, general heap-allocated classes,
+imports, tuples, recursive/cyclic owned objects, tracing GC, HFT scheduling
+and compiler-integrated native actor memory domains **fail closed**.
+The narrow stack-only class subset and native RAII runtime primitives above
+are the first tested steps toward an ownership-first backend.
 
 Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
 
