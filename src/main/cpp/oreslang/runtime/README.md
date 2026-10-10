@@ -9,6 +9,31 @@ actor mailbox lease, supervisor trees, independent physical heap regions and bou
 
 No RT scheduler policy, zero-GC or actor isolation is currently implemented.
 
+## Experimental native ActorGroup lifecycle registry
+
+`ActorGroup.hpp` is a host-side bounded registry of strongly retained
+`ActorRef` observers, not compiled guest ActorGroup. A lifecycle supervisor
+calls `register_spawn(stop_hook)` **before starting** a carrier (an immediate
+pending ref), then `mark_ready(ref)` only after verified initialization,
+`startup_failed(ref, error)` on startup failure, and `finalized(ref)` only
+after all native user turns, pending continuations, wakers and borrow/heap
+loans are drained. `ready()` and `done()` are separate observer futures,
+not cancellation authorities. The kernel/carrier control owner supplies the
+stop hook; group `close()` requests shutdown and fences new admission but
+**does not fabricate done**. Worker entries are evicted on real finalization.
+
+The registry does not execute actor code, allocate per-actor heaps, perform
+source-level `spawn`/ `await`, create supervisor capabilities, or guarantee
+nonblocking `std::future::get()`: host tests may block, guest carrier code
+must not. Its callbacks execute outside its mutex; callers must keep native
+carrier/broker resources alive until stopping, joining and physical release
+are complete. A group owner must quiesce its runtime callbacks before
+destroying the group (destroying the registry does not join a carrier).
+
+CTest `actor_group_native_managed_refs` checks immediate vs ready refs,
+startup errors, wrong-group/stale refs, quota, idempotent close and concurrent
+readiness/close races. **Native Oreslang actor syntax still fails closed.**
+
 ## Dedicated hungry actor idle/I/O semantics — design only
 
 Read [Hungry isolated actor idle/I/O contract](../../../../../docs/HUNGRY_ACTOR_IDLE_IO.md).
