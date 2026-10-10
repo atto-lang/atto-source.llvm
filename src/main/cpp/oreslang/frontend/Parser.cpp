@@ -41,7 +41,7 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "self", "true", "false", "null", "obj", "arr",
-        "int", "owned"
+        "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -114,7 +114,8 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
 
 class Parser {
 public:
-    explicit Parser(std::string_view source) : lexer_(source), token_(lexer_.next()) {}
+    explicit Parser(std::string_view source, ParserOptions options)
+        : lexer_(source), token_(lexer_.next()), options_(options) {}
 
     Program parse() {
         Program program;
@@ -163,6 +164,9 @@ private:
             // 'owned int' is a heap-owned scalar, intentionally explicit.
             // It never decays into the ordinary alloca-backed int type.
             binding.heap_owned = accept("owned");
+            if (binding.heap_owned && !options_.experimental_owned_int) {
+                fail("'owned int' is experimental LLVM-only syntax; use --experimental-owned-int for allocator tests; ordinary int already has value ownership");
+            }
             require("int");
             require("=");
             binding.initializer = expression();
@@ -383,12 +387,13 @@ private:
 
     Lexer lexer_;
     Token token_;
+    ParserOptions options_;
 };
 
 } // namespace
 
-Program parse_program(std::string_view source) {
-    return Parser(source).parse();
+Program parse_program(std::string_view source, ParserOptions options) {
+    return Parser(source, options).parse();
 }
 
 } // namespace oreslang
