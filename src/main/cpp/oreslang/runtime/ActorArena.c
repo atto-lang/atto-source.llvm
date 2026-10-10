@@ -19,11 +19,19 @@ struct OresActorArena {
     uint32_t loans;
     int active, retiring;
     Slot* meta;
+    /* All metadata is preallocated, so slot admission is O(1) and makes
+     * no malloc/free calls during an actor turn. */
+    size_t* free_slots;
+    size_t free_count;
     unsigned char* slab;
     unsigned char* scratch;
     LoanEntry entries[ORES_MAX_LOANS];
 };
 static _Atomic(uint64_t) next_domain = 1;
+/* A turn token alone is not execution authority. Bind the admitted turn to
+ * its physical carrier; migration is allowed only after leave + new enter. */
+static _Thread_local OresActorArena* carrier_arena;
+static _Thread_local uint64_t carrier_epoch;
 static void deny(void) { abort(); }
 static void enter_lock(OresActorArena* a) {
     if (!a) deny();
@@ -36,7 +44,8 @@ static void leave_lock(OresActorArena* a) {
 }
 static void require_turn(OresActorArena* a, OresArenaTurn turn) {
     if (a->retiring || !a->active || turn.domain != a->domain
-        || turn.epoch != a->epoch) deny();
+        || turn.epoch != a->epoch || carrier_arena != a
+        || carrier_epoch != turn.epoch) deny();
 }
 static Slot* require_slot(OresActorArena* a, OresArenaHandle h) {
     if (h.domain != a->domain || h.index >= a->slots) deny();
@@ -60,12 +69,14 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
     if (slab_bytes > ORES_MAX_ACTOR_BYTES
         || scratch_bytes > ORES_MAX_ACTOR_BYTES - slab_bytes) deny();
     (void) checked_mul(slots, sizeof(Slot));
+    (void) checked_mul(slots, sizeof(size_t));
     OresActorArena* a = (OresActorArena*) calloc(1, sizeof(*a));
     if (!a) deny();
     a->meta = (Slot*) calloc(slots, sizeof(Slot));
+    a->free_slots = (size_t*) calloc(slots, sizeof(size_t));
     a->slab = (unsigned char*) calloc(1, slab_bytes);
     a->scratch = (unsigned char*) calloc(1, scratch_bytes);
-    if (!a->meta || !a->slab || !a->scratch) deny();
+    if (!a->meta || !a->free_slots || !a->slab || !a->scratch) deny();
     atomic_flag_clear(&a->lock);
     a->domain = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
     if (!a->domain || a->domain == UINT64_MAX) deny();
@@ -75,17 +86,24 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
     a->slot_bytes = slot_bytes;
     a->scratch_bytes = scratch_bytes;
     a->next_loan_nonce = 1;
-    for (size_t i = 0; i < slots; ++i) a->meta[i].generation = 1;
+    a->free_count = slots;
+    for (size_t i = 0; i < slots; ++i) {
+        a->meta[i].generation = 1;
+        a->free_slots[i] = slots - 1 - i;
+    }
     return a;
 }
 OresArenaTurn ores_actor_arena_enter(OresActorArena* a, uint64_t owner,
                                      uint64_t incarnation) {
+    if (carrier_arena != NULL) deny();
     enter_lock(a);
     if (a->retiring || a->active || a->owner != owner
         || a->incarnation != incarnation || a->epoch == UINT64_MAX) deny();
     a->active = 1;
     ++a->epoch;
     OresArenaTurn turn = {a->domain, a->epoch};
+    carrier_arena = a;
+    carrier_epoch = turn.epoch;
     leave_lock(a);
     return turn;
 }
@@ -94,10 +112,13 @@ void ores_actor_arena_leave(OresActorArena* a, OresArenaTurn turn) {
     /* Shutdown can mark retirement while an already admitted turn unwinds.
      * Leaving must remain legal after retirement, but all new reads/writes
      * are revoked by require_turn(). */
-    if (!a->active || turn.domain != a->domain || turn.epoch != a->epoch) deny();
+    if (!a->active || turn.domain != a->domain || turn.epoch != a->epoch
+        || carrier_arena != a || carrier_epoch != turn.epoch) deny();
     memset(a->scratch, 0, a->scratch_top);
     a->scratch_top = 0;
     a->active = 0;
+    carrier_arena = NULL;
+    carrier_epoch = 0;
     leave_lock(a);
 }
 OresArenaHandle ores_actor_arena_alloc(OresActorArena* a, OresArenaTurn turn,
@@ -105,17 +126,16 @@ OresArenaHandle ores_actor_arena_alloc(OresActorArena* a, OresArenaTurn turn,
     enter_lock(a);
     require_turn(a, turn);
     if (!bytes || bytes > a->slot_bytes) deny();
-    for (size_t i = 0; i < a->slots; ++i) {
-        Slot* s = &a->meta[i];
-        if (s->live || s->generation == UINT64_MAX) continue;
-        s->live = 1;
-        s->length = bytes;
-        OresArenaHandle handle = {a->domain, (uint64_t) i, s->generation};
-        leave_lock(a);
-        return handle;
-    }
-    deny();
-    OresArenaHandle never = {0, 0, 0}; return never;
+    if (!a->free_count) deny();
+    const size_t i = a->free_slots[--a->free_count];
+    if (i >= a->slots) deny();
+    Slot* s = &a->meta[i];
+    if (s->live || s->generation == UINT64_MAX) deny();
+    s->live = 1;
+    s->length = bytes;
+    OresArenaHandle handle = {a->domain, (uint64_t) i, s->generation};
+    leave_lock(a);
+    return handle;
 }
 void ores_actor_arena_read(OresActorArena* a, OresArenaTurn turn,
                             OresArenaHandle handle, size_t offset, void* out, size_t bytes) {
@@ -146,6 +166,8 @@ void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandl
     s->length = 0;
     s->live = 0;
     ++s->generation;
+    if (a->free_count >= a->slots) deny();
+    a->free_slots[a->free_count++] = (size_t) h.index;
     leave_lock(a);
 }
 OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
@@ -231,7 +253,8 @@ int ores_actor_arena_try_destroy(OresActorArena* a) {
     memset(a->slab, 0, checked_mul(a->slots, a->slot_bytes));
     memset(a->scratch, 0, a->scratch_bytes);
     memset(a->meta, 0, checked_mul(a->slots, sizeof(Slot)));
-    free(a->slab); free(a->scratch); free(a->meta);
+    memset(a->free_slots, 0, checked_mul(a->slots, sizeof(size_t)));
+    free(a->slab); free(a->scratch); free(a->meta); free(a->free_slots);
     leave_lock(a);
     memset(a, 0, sizeof(*a)); free(a);
     return 1;
