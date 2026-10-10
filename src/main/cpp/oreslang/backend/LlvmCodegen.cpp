@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -78,6 +79,16 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::Module module("oreslang-source", context);
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
+    llvm::Type* native_ptr = llvm::Type::getInt8PtrTy(context);
+    // Audited non-tracing-GC C ABI. Each allocation is function-scoped.
+    auto regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
+        llvm::FunctionType::get(native_ptr, {i64}, false));
+    auto regionNew = module.getOrInsertFunction("oreslang_owned_i64_region_new",
+        llvm::FunctionType::get(native_ptr, {native_ptr, i64}, false));
+    auto regionDrop = module.getOrInsertFunction("oreslang_owned_i64_region_drop",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, native_ptr}, false));
+    auto regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
     std::unordered_map<std::string, llvm::Function*> declarations;
 
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
@@ -109,21 +120,37 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 storage.emplace(param.name, &arg);
             }
         }
-        // Each local owns one native stack slot; a nested borrowed call may
-        // borrow that slot but cannot outlive the lexical function activation.
-        // Evaluate the initializer BEFORE making its storage visible.
-        std::vector<llvm::Value*> lexical_slots;
+        // An explicitly "owned int" lives in a bounded native C region;
+        // ordinary int remains stack-owned. Both allow only call-scoped loans.
+        struct LocalSlot { llvm::Value* address; bool heap_owned; };
+        std::vector<LocalSlot> lexical_slots;
+        const auto heap_count = std::count_if(fn.locals.begin(), fn.locals.end(),
+            [](const LocalBinding& b) { return b.heap_owned; });
+        llvm::Value* region = nullptr;
+        if (heap_count != 0)
+            region = builder.CreateCall(regionOpen,
+                {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
+                                        static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         for (const auto& binding : fn.locals) {
             llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, declarations);
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr, binding.name + ".owned");
-            builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
-            builder.CreateStore(initial, slot);
+            llvm::Value* slot = nullptr;
+            if (binding.heap_owned) {
+                slot = builder.CreateCall(regionNew, {region, initial}, binding.name + ".heap.owned");
+            } else {
+                slot = builder.CreateAlloca(i64, nullptr, binding.name + ".stack.owned");
+                builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+                builder.CreateStore(initial, slot);
+            }
             storage.emplace(binding.name, slot);
-            lexical_slots.push_back(slot);
+            lexical_slots.push_back({slot, binding.heap_owned});
         }
         llvm::Value* result = lower(*fn.result, builder, i64, storage, declarations);
-        for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it)
-            builder.CreateLifetimeEnd(*it, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+        for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
+            if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
+            else builder.CreateLifetimeEnd(it->address,
+                llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+        }
+        if (region != nullptr) builder.CreateCall(regionClose, {region});
         builder.CreateRet(result);
     }
 
