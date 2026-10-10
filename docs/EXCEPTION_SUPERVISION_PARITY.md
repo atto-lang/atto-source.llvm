@@ -154,6 +154,13 @@ provide supervisor failure delivery.
   `defer/finally` execution and a bounded secondary failure log. Compiled
   guest exceptional effects, native actor scheduler admission, await-aware
   unwinding and source `on_*` hooks are **not implemented**.
+- Java/Graal source evaluator cleanup now runs all defers in LIFO order after
+  intermediate cleanup failure, merges synchronous and suspended cleanup
+  failures without downgrading stronger control effects, and applies the same
+  precedence when running `finally`. Targeted GraalVM 25 tests: **18 passed,
+  0 failed, 0 errors, 0 skipped** at
+  https://github.com/zed-pkg-test/java-app/actions/runs/38096013585.
+  Further nested async/cancellation/fatal-failure model checks are required.
 - Both parsers reserve unsupported effect statements and fail closed.
 - Funded SHA-pinned host-component and targeted Java/Graal Maven evidence:
   https://github.com/zed-pkg-test/java-app/actions/runs/38095853057
