@@ -1,0 +1,3 @@
+// LLVM does not implement borrow-parameter lifetime checking.
+pub fnc inspect(borrow int item): int { return item; }
+pub fnc main(): int { return inspect(42); }
