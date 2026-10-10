@@ -25,6 +25,25 @@ The canonical contract, effect-classification rules, alias checks and negative-t
 
 **Implementation gap:** The current LLVM fragment has no imported/native I/O declarations, async lowering, I/O effect metadata or runtime standard library. It must not pretend that spelling `*_blocking` alone makes a builtin supported. When an I/O binding registry is added, reject any binding classified as synchronously blocking I/O unless its source-visible name ends in `_blocking`; check methods and aliases too. Both forms require an actual non-carrier-blocking execution contract. `_blocking` calls must lower to I/O submission plus implicit continuation suspension, with no explicit source `await`; async calls return an explicit awaitable. LLVM must fail closed rather than compile `_blocking` into a host-blocking C ABI call. Add valid and invalid compiler fixtures, capability-denial tests and concurrent carrier tests before declaring enforcement.
 
+## Ownership and borrow checker parity gate
+
+The LLVM frontend currently parses a deliberately narrow i64-only subset and
+does **not** lower Java's `rt borrow`, `rt borrow mut`, `rt take`,
+`rt copy`, `rt share`, borrowed parameters, structural read loans, or
+actor-owned memory. The native runtime's thread/arena helpers do not make this
+subset safe for move-only data or concurrent actors.
+
+Until the backend has explicit ownership provenance, lifetime scopes,
+reborrow/alias exclusion, transitive copy contracts, projection tracking,
+suspension and actor-boundary rules, these features must **fail closed** with a
+nonzero compiler exit and **no LLVM IR**. The negative CTest fixtures enforce
+that contract. Their passing status is evidence of unsupported-language
+rejection, **not** implementation or semantic parity with Java.
+
+A future positive ownership fixture must demonstrate full-stack type checking,
+lowering, IR emission, and runtime behavior in addition to differential
+Java/LLVM conformance; simply accepting the parser grammar is insufficient.
+
 ## Cross-implementation status
 
 | Java capability | LLVM status |
