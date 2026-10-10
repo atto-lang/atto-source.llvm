@@ -169,6 +169,26 @@ private:
             require(";");
             value.locals.push_back(std::move(binding));
         }
+        // First CFG expansion: a sequence of explicit integer-equality
+        // guards, each returning early. Branch bodies contain only 'return':
+        // conditional declarations, nested blocks, throws and suspension
+        // remain unsupported until partial-init/drop flags are implemented.
+        while (accept("if")) {
+            GuardedReturn guard;
+            guard.offset = token_.offset;
+            require("(");
+            guard.lhs = expression();
+            require("=");
+            require("=");
+            guard.rhs = expression();
+            require(")");
+            require("{");
+            require("return");
+            guard.result = expression();
+            require(";");
+            require("}");
+            value.early_returns.push_back(std::move(guard));
+        }
         require("return");
         value.result = expression();
         require(";");
@@ -339,6 +359,11 @@ private:
                     throw std::runtime_error("duplicate owned local '" + local.name
                                              + "' at byte " + std::to_string(local.offset));
                 }
+            }
+            for (const auto& guard : fn.early_returns) {
+                validate_expression(*guard.lhs, available, functions);
+                validate_expression(*guard.rhs, available, functions);
+                validate_expression(*guard.result, available, functions);
             }
             validate_expression(*fn.result, available, functions);
         }
