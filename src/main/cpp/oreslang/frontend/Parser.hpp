@@ -21,9 +21,18 @@ struct Expression {
     std::vector<std::unique_ptr<Expression>> arguments;
 };
 
+// A trivially owned, immutable i64 local. The first LLVM lexical-storage
+// lowering scope has deterministic entry/exit, with no heap or GC collector.
+struct LocalBinding {
+    std::string name;
+    std::unique_ptr<Expression> initializer;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
+    std::vector<LocalBinding> locals;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
