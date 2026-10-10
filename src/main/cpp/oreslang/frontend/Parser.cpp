@@ -33,7 +33,7 @@ bool reserved(std::string_view name) {
         "define", "class", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "suspends", "generator",
+        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -145,8 +145,11 @@ private:
         if (token_.text == "gpu" || token_.text == "quantum") {
             fail("native accelerator lowering unsupported");
         }
-        if (token_.text == "suspends") {
+        if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+        }
+        if (token_.text == "critical") {
+            fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
