@@ -30,8 +30,10 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
                                  OresActorSlot slot, int64_t value);
 void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
                                 OresActorTurn turn, OresActorSlot slot);
-/* Loans survive turns/await. They forbid drop and physical heap release.
- * A loan cannot itself dereference memory outside an admitted turn. */
+/* Shared read loans survive turns/await. They forbid slot writes and drops,
+ * plus physical heap release, until the last loan is released. A loan cannot
+ * itself dereference memory outside an admitted turn. Exclusive mutable
+ * loans are deliberately NOT exposed by this experimental scalar ABI. */
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
