@@ -17,7 +17,7 @@ calls `register_spawn(stop_hook)` **before starting** a carrier (an immediate
 pending ref), then `mark_ready(ref)` only after verified initialization,
 `startup_failed(ref, error)` on startup failure, and `finalized(ref)` only
 after all native user turns, pending continuations, wakers and borrow/heap
-loans are drained. `ready()` and `done()` are separate observer futures,
+loans are drained. `get_ready()` and `get_done()` return separate observer futures,
 not cancellation authorities. The kernel/carrier control owner supplies the
 stop hook; group `close()` requests shutdown and fences new admission but
 **does not fabricate done**. Worker entries are evicted on real finalization.
