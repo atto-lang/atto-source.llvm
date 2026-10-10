@@ -145,7 +145,7 @@ public:
     // method. The hook requests cooperative structured cancellation; it
     // cannot synchronously terminate uncooperative native/FFI code.
     bool request_stop(const ActorRef& ref) {
-        std::function<void()> hook;
+        std::shared_ptr<WorkerState> active;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto state = find_locked(ref);
@@ -156,9 +156,9 @@ public:
                     std::runtime_error("actor stopped before readiness")));
             }
             state->phase = Phase::stopping;
-            hook = state->request_stop;
+            active = std::move(state);
         }
-        hook(); // NEVER invoke guest/control callbacks under group lock
+        active->request_stop(); // NEVER invoke callbacks under group lock
         return true;
     }
 
@@ -183,12 +183,12 @@ public:
     // Seal registration before requesting shutdown; do not manufacture a
     // 'done' result. Runtime must deliver one finalization ack per worker.
     void close() {
-        std::vector<std::function<void()>> callbacks;
+        std::vector<std::shared_ptr<WorkerState>> callbacks;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (closed_) return;
+            callbacks.reserve(workers_.size()); // allocate before sealing
             closed_ = true;
-            callbacks.reserve(workers_.size());
             for (auto& item : workers_) {
                 auto& state = item.second;
                 if (state->stop_requested) continue;
@@ -198,11 +198,11 @@ public:
                         std::runtime_error("ActorGroup closed before actor readiness")));
                 }
                 state->phase = Phase::stopping;
-                callbacks.push_back(state->request_stop);
+                callbacks.push_back(state);
             }
         }
-        for (auto& callback : callbacks) {
-            try { callback(); } catch (...) { /* finalization ack still required */ }
+        for (auto& state : callbacks) {
+            try { state->request_stop(); } catch (...) { /* finalization ack still required */ }
         }
     }
 
