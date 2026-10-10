@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "native actor arena failed:%d\n", __LINE__); return 1; } } while (0)
-enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT };
+enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET };
 static void invalid(enum Misuse m) {
     OresActorArena* a = ores_actor_arena_open(23, 2, 2, 64, 128);
     OresArenaTurn t = ores_actor_arena_enter(a, 23, 2);
@@ -46,6 +46,8 @@ static void invalid(enum Misuse m) {
         (void) ores_actor_arena_scratch_alloc(a, t, 200, 8);
     } else if (m == BAD_ALIGNMENT) {
         (void) ores_actor_arena_scratch_alloc(a, t, 8, 3);
+    } else if (m == OVERSIZED_ACTOR_BUDGET) {
+        (void) ores_actor_arena_open(24, 4, 4096, 1024 * 1024, 128);
     }
 }
 #if defined(__unix__) || defined(__APPLE__)
@@ -109,7 +111,7 @@ int main(void) {
     ores_actor_arena_leave(a, unwinding);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
 #if defined(__unix__) || defined(__APPLE__)
-    for (int n = STALE_TURN; n <= BAD_ALIGNMENT; ++n) CHECK(rejects((enum Misuse) n));
+    for (int n = STALE_TURN; n <= OVERSIZED_ACTOR_BUDGET; ++n) CHECK(rejects((enum Misuse) n));
 #endif
     return 0;
 }
