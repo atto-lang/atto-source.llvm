@@ -42,7 +42,7 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int"
+        "gpu", "quantum", "over", "structural", "owned", "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -180,6 +180,7 @@ private:
             advance();
             binding.name = identifier();
             require(":");
+            binding.heap_owned = accept("owned");
             require("int");
             require("=");
             binding.initializer = expression();
