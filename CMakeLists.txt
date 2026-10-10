@@ -106,6 +106,24 @@ if(BUILD_TESTING)
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
 
+    # Real TCP traffic, not a stubbed HTTP handler. The trusted C transport
+    # invokes Oreslang actor methods compiled by oreslang-llvmc from source.
+    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_http_llvm_compiled_actor_loopback
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/http_actor_server_e2e.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor-owned-fields.ores"
+                --clang "${ORE_CLANG}"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --arena-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorArena.c"
+                --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_http_server.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        set_tests_properties(native_http_llvm_compiled_actor_loopback
+            PROPERTIES TIMEOUT 45)
+    endif()
+
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
     find_package(Threads REQUIRED)
