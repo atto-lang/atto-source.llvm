@@ -44,6 +44,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
+    oreslang_contract_test(owned_lexical_lifetime owned-lexical-main.ores --ir "llvm.lifetime.end")
+    oreslang_contract_test(reject_uninitialized_owned_local owned-uninitialized.ores --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_duplicate_owned_local owned-duplicate.ores --diagnostic "duplicate owned local")
+    oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
+
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
     # Ownership remains Java-only. Reject all source ownership forms before
     # LLVM IR emission until a lifetime/provenance-aware typechecker exists.
@@ -72,6 +78,8 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
+
     else()
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
