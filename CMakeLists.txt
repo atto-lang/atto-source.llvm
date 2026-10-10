@@ -113,6 +113,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-actor-heap-test tests/actor_heap_test.cpp)
     target_include_directories(oreslang-actor-heap-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-heap-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-actor-heap-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_heap_no_tracing_gc
              COMMAND oreslang-actor-heap-test)
