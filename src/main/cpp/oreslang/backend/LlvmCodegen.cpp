@@ -9,6 +9,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -117,6 +118,34 @@ std::string emit_verified_llvm_ir(const Program& source) {
         errors.flush();
         throw std::runtime_error("invalid generated LLVM module: " + diagnostics);
     }
+    // Strict no-tracing-GC admission. The current backend emits stack-local
+    // scalars only. Any future lowering must explicitly prove that its new
+    // native calls cannot invoke a collector or allocate managed objects.
+    // Reject indirect/unknown external calls by default.
+    for (const llvm::Function& function : module) {
+        if (function.isDeclaration()) continue;
+        if (function.hasGC()) {
+            throw std::runtime_error("LLVM strict no-GC forbids GC strategy annotations");
+        }
+        for (const llvm::BasicBlock& block : function) {
+            for (const llvm::Instruction& instruction : block) {
+                auto* call = llvm::dyn_cast<llvm::CallBase>(&instruction);
+                if (!call) continue;
+                const llvm::Function* target = call->getCalledFunction();
+                if (target == nullptr) {
+                    throw std::runtime_error("LLVM strict no-GC rejects indirect calls without ownership proof");
+                }
+                if (target->isDeclaration()) {
+                    const std::string name = target->getName().str();
+                    if (name.rfind("llvm.lifetime.start", 0) != 0
+                            && name.rfind("llvm.lifetime.end", 0) != 0) {
+                        throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
+                    }
+                }
+            }
+        }
+    }
+
     std::string result;
     llvm::raw_string_ostream output(result);
     module.print(output, nullptr);
