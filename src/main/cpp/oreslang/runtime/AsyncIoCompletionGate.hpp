@@ -17,7 +17,7 @@ enum class AsyncIoTerminal : std::uint8_t {
     pending, success, failure, cancelled, timed_out, closed
 };
 
-// Allocation-free, wait-free terminal arbitration for an already-admitted I/O
+// Allocation-free, one-CAS terminal arbitration for an already-admitted I/O
 // operation. Does not submit I/O, create async frames, own buffers or wake actors.
 class AsyncIoCompletionGate final {
 public:
