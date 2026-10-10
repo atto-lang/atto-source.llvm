@@ -41,7 +41,7 @@ bool reserved(std::string_view name) {
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
-        "let", "mut", "self", "true", "false", "null", "obj", "arr",
+        "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -151,8 +151,14 @@ private:
         require("(");
         if (!accept(")")) {
             do {
+                Parameter parameter;
+                if (accept("borrow")) {
+                    parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
+                                                    : Parameter::Mode::Borrow;
+                }
                 require("int");
-                value.parameters.push_back(identifier());
+                parameter.name = identifier();
+                value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
         }
@@ -201,16 +207,17 @@ private:
             const auto offset = token_.offset;
             advance();
             const auto operation = token_.text;
-            if (operation == "borrow") {
-                fail("native rt borrow requires lifetime/provenance checking and a borrowed-reference ABI; fail closed");
-            }
-            if (operation != "copy" && operation != "take" && operation != "share") {
+            if (operation != "borrow" && operation != "copy" &&
+                operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
+            const bool mutable_borrow = operation == "borrow" && accept("mut");
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
-                operation == "take" ? Expression::Kind::Take : Expression::Kind::Share,
+                operation == "take" ? Expression::Kind::Take :
+                operation == "share" ? Expression::Kind::Share :
+                mutable_borrow ? Expression::Kind::BorrowMut : Expression::Kind::Borrow,
                 offset);
             if (accept("(")) {
                 result->left = expression();
@@ -317,6 +324,8 @@ private:
             case Expression::Kind::Copy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
+            case Expression::Kind::Borrow:
+            case Expression::Kind::BorrowMut:
                 validate_expression(*expr.left, parameters, functions);
                 return;
             case Expression::Kind::Add:
@@ -338,15 +347,15 @@ private:
             }
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) {
-                if (!params.insert(param).second) {
-                    throw std::runtime_error("duplicate parameter '" + param
+                if (!params.insert(param.name).second) {
+                    throw std::runtime_error("duplicate parameter '" + param.name
                                              + "' at byte " + std::to_string(fn.offset));
                 }
             }
         }
         for (const auto& fn : program.functions) {
-            const std::unordered_set<std::string> params(fn.parameters.begin(),
-                                                         fn.parameters.end());
+            std::unordered_set<std::string> params;
+            for (const auto& param : fn.parameters) params.insert(param.name);
             validate_expression(*fn.result, params, functions);
         }
     }
