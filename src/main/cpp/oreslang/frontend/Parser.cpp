@@ -32,6 +32,7 @@ bool reserved(std::string_view name) {
     static constexpr std::string_view words[] = {
         "define", "class", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
+        "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
@@ -376,6 +377,13 @@ private:
                     "validated effects, ownership, device lowering and explicit "
                     "backend admission required; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
+        }
+        if (token_.text == "throw" || token_.text == "raise" ||
+            token_.text == "panic" || token_.text == "recover") {
+            throw std::runtime_error(
+                "native exceptional-control boundary unsupported: "
+                "typed unwind, defer/finally, recover and supervisor lowering required"
+                " at byte " + std::to_string(token_.offset));
         }
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
