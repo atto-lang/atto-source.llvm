@@ -14,6 +14,12 @@ The Java reference backend defines:
   mutation and immutable, versioned snapshots. Replacement retains key
   position. Pending operations remain bound to the old snapshot. Results
   with a stable case key must also identify the snapshot version.
+- **Admission ordering and lock safety**: sample FAIR case rotation when
+  the operation enters the serialized native selection arbitration point,
+  not before it enters that coordinator. Updates from a selected case must
+  not acquire a mutable-plan monitor while holding a channel coordinator:
+  this admits an application-visible inverted lock ordering and deadlock.
+  Use per-generation atomic fairness state or an equivalent acyclic protocol.
 - **Generation ownership**: winning an operation from a superseded
   DynamicSelectPlan snapshot must not rotate the FAIR cursor of a newer
   snapshot; default selection consumes no round-robin credit. All updates
