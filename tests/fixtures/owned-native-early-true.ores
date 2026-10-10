@@ -1,0 +1,9 @@
+// A taken early return must drop all native owners before returning.
+pub fnc main(): int {
+  const a: owned int = 6;
+  val b: owned int = 7;
+  if (a == 6) {
+    return a * b;
+  }
+  return 1;
+}
