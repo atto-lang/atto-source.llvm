@@ -11,6 +11,9 @@ creation:
 
 - Persistent: bounded fixed-size slots stored in a preallocated native slab.
   Allocation scans the slot bitmap/metadata, never calls malloc per object,
+  and the total preallocated slab plus scratch bytes is hard capped at 64 MiB
+  per arena in this prototype (the host must additionally enforce a runtime
+  aggregate quota before creating multiple arenas),
   uses generation-checked actor-domain handles, and survives carrier migration.
 - Scratch: bounded bump cursor with power-of-two logical offset alignment
   (1..64), reset and zeroized at the end of each admitted mailbox turn.
