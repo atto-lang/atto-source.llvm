@@ -1,13 +1,44 @@
 # Future LLVM native runtime
 
 Track execution-domain/actor ABI work in [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
-This directory intentionally contains no executable actor or memory allocator.
+This directory now contains experimental executable actor primitives and two
+native, ownership-driven allocation components. These are **not** compiler-
+integrated general Oreslang heaps, actor memory protection, or proofs that
+arbitrary guest code executes without garbage collection.
 
 Java reference classes: `ActorRuntime`, `OresScheduler`, `OresFuture`, `RuntimeGarbageCollector`.
 Native phases: structured cancellation, generational wake IDs, pinned/relocatable async frames,
 actor mailbox lease, supervisor trees, independent physical heap regions and bounded arenas.
 
-No RT scheduler policy, zero-GC or actor isolation is currently implemented.
+No hard real-time scheduler certification, general zero-GC source program,
+or cross-tenant actor memory isolation is currently implemented.
+
+## Deterministic native memory primitives (new)
+
+`OwnedHeap.hpp` supports move-only unique owners, shared/exclusive borrow
+leases, deterministic noexcept destruction, constructor failure rollback,
+bounded logical live-byte accounting, and fail-closed retirement of a heap
+while owned allocations/leases remain live. Explicit `Owned::drop()` refuses
+to discard a value with active borrows. A host code bug that implicitly
+destroys an owner while a lease survives defers free until the last lease:
+safe fallback, **not** compiler-level lifetime verification or a tracing GC.
+
+`EpochArena.hpp` is a single-carrier, allocation-free-at-operation-time
+region for typed native objects (including nontrivial noexcept destructors).
+It requires an explicit move-only ref/lease per object, refuses reset with
+live refs, drops in reverse construction order, and increments an epoch
+generation only after reclamation. On destruction with outstanding refs it
+terminates rather than allowing dangling arena pointers. Raw pointers saved
+by callbacks are not tracked; source-level lifetime proof, async and FFI
+quiescence must be implemented before using it for arbitrary guest objects.
+
+`tests/owned_heap_test.cpp` and `tests/epoch_arena_test.cpp` run in CTest,
+with separately mirrored GCC and Clang ASan/UBSan checks. The narrow LLVM
+frontend can also lower a nonescaping, integer-field class directly to a
+stack `alloca`; general `rt borrow`, `rt take`, heap ownership, actor
+lifetime transfer and source destructor glue remain rejected/unsupported.
+
+See [hybrid memory model](../../../../../docs/HYBRID_MEMORY_MODEL.md).
 
 ## Dedicated hungry actor idle/I/O semantics — design only
 
