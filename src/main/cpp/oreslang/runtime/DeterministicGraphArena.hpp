@@ -132,7 +132,7 @@ public:
 
     std::optional<Lease> borrow(Handle h) noexcept {
         if (!live(h)) return std::nullopt;
-        return std::optional<Lease>(std::in_place, *this, *slots_[h.slot].value);
+        return std::optional<Lease>(Lease(*this, *slots_[h.slot].value));
     }
 
     bool connect(Handle source, Handle target) noexcept {
