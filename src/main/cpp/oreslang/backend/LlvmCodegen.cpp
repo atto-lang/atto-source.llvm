@@ -82,7 +82,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::Module module("oreslang-source", context);
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
-    llvm::Type* native_ptr = llvm::Type::getInt8PtrTy(context);
+    // Pointer construction valid for LLVM 14+ and modern opaque pointers.
+    llvm::Type* native_ptr = llvm::Type::getInt8Ty(context)->getPointerTo();
     // Audited non-tracing-GC C ABI. Each allocation is function-scoped.
     auto regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
         llvm::FunctionType::get(native_ptr, {i64}, false));
