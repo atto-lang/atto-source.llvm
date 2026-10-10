@@ -2,6 +2,7 @@
 #include "oreslang/runtime/BoundedMpscQueue.hpp"
 #include "oreslang/runtime/BoundedSpscQueue.hpp"
 #include "oreslang/runtime/ParkingSignal.hpp"
+#include "oreslang/runtime/OwnedHeap.hpp"
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -53,6 +54,9 @@ struct CarrierStats {
     std::uint64_t protocol_failures = 0;
     std::uint64_t actor_thread_tag = 0;
     std::uint64_t abandoned_on_stop = 0; // accepted minus finished turns; valid after join()
+    std::uint64_t actor_live_bytes = 0;
+    std::uint64_t actor_live_objects = 0;
+    bool actor_heap_closed = false;
 };
 
 // Construction and thread start allocate and use syscalls, BEFORE any future
@@ -107,6 +111,7 @@ public:
         bool require_exclusive_core = false;  // fail closed until OS reservation manager exists
         bool require_strict_no_gc = false;    // fail closed until compiler/allocator proof exists
         bool require_hard_realtime = false;   // fail closed until watchdog/OS proof exists
+        std::size_t actor_heap_limit_bytes = 1024 * 1024; // per-carrier native owner budget
     };
     HungryCarrier(void* actor_state, ActorHandler handler, void* broker_state,
                   BrokerOperation operation, Options opts);
@@ -129,6 +134,10 @@ public:
     void join() noexcept;
     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
     CarrierStats stats() const noexcept;
+    // Valid only inside the actor's own Handler invocation. The broker,
+    // supervisor and other carriers observe null. This is a logical heap
+    // boundary; a malicious raw C++ callback is not a sandbox.
+    static OwnedHeap* current_actor_heap() noexcept;
 
 private:
     struct Job {
@@ -155,6 +164,7 @@ private:
     void* broker_state_;
     BrokerOperation operation_;
     Options options_;
+    OwnedHeap actor_heap_;
     std::shared_ptr<ProducerGate> producer_gate_;
     BoundedMpscQueue<ActorMessage, queue_capacity> messages_;
     std::array<BoundedSpscQueue<ActorMessage, queue_capacity>,
