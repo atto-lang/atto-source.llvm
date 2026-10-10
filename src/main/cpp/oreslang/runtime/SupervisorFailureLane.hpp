@@ -43,6 +43,11 @@ public:
         Kind kind;
         std::string summary;
         std::string parent_id;
+
+        Failure(ActorKey actor, Kind kind, std::string summary,
+                std::string parent_id = {})
+            : actor(std::move(actor)), kind(kind),
+              summary(std::move(summary)), parent_id(std::move(parent_id)) {}
     };
 
     struct Handler {
