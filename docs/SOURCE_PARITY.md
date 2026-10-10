@@ -41,12 +41,18 @@ The LLVM compiler now admits **non-escaping primitive i64 borrows** through
 `rt borrow mut x` arguments. These lower to typed native pointers referencing
 caller-owned, parameter-local stack slots. They are checked for immutable-vs-
 exclusive alias conflicts, use-after-`rt take`, moving while loaned, and
-source-order call nesting. All accepted function returns remain i64, and
-loan pointers cannot be stored or returned by this source fragment. Loan
-lifetime is bounded by each direct call: it ends when that call returns.
+source-order call nesting. Borrowed i64 parameters can themselves be
+reborrowed for nested synchronous calls: shared parameters allow shared
+reborrows only, while exclusive parameters allow shared or exclusive
+reborrows, with active-loan conflict checking. LLVM forwards the existing
+caller slot pointer rather than materializing a new owner. All accepted
+function returns remain i64, and loan pointers cannot be stored or returned
+by this source fragment. Loan lifetime is bounded by each direct call:
+it ends when that call returns.
 
-This is **not** support for general native references. Reborrows, borrowed
-temporaries, object/struct projections, destructors, heap provenance,
+This is **not** support for general native references. Reborrows of heap
+or field projections, borrowed temporaries, object/struct projections,
+destructors, heap provenance,
 mutable reference writes, actor-owned arenas and passing loans across
 suspension are not available. A `borrow mut` parameter is currently an
 exclusive read capability; no mutable assignments are admitted. The borrowed

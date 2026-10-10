@@ -19,8 +19,10 @@ namespace oreslang {
 namespace {
 
 // Owned i64 parameters receive stack slots so the only permitted loans can
-// pass their addresses through the call ABI. Borrowed inputs are already
-// pointers to caller-owned slots. Neither address can escape as a result:
+// pass their addresses through the call ABI. Borrowed inputs already hold
+// caller-owned slot pointers: passing them to nested borrowed parameters is
+// a checked, call-scoped reborrow with no new allocation. Neither address
+// can escape as a result:
 // native functions return only i64, and the ownership pass restricts rt borrow
 // to nonescaping call arguments.
 llvm::Value* lower(const Expression& expr,

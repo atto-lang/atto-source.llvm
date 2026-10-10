@@ -52,8 +52,12 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (!expr.left || expr.left->kind != Expression::Kind::Variable)
         reject(expr, "native borrow requires an addressable named int parameter");
     LocalOwnership& source = local(*expr.left, locals);
-    if (source.mode != Mode::Value)
-        reject(expr, "native reborrow of borrowed parameter unsupported");
+    // A borrowed parameter has a caller-held lifetime and already carries
+    // provenance to addressable i64 storage. A nested call can temporarily
+    // reborrow that same storage, but it cannot strengthen a shared borrow
+    // into a mutable one. Its new loan ends at that nested call's return.
+    if (source.mode == Mode::Borrow && exclusive)
+        reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
     if (source.moved)
         reject(expr, "borrow of explicitly moved int '" + expr.left->name + "'");
     if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
