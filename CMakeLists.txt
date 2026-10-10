@@ -58,6 +58,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    oreslang_contract_test(reject_await_spawn unsupported-await-spawn.ores
+        --diagnostic "native async/channel/select boundary unsupported")
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
