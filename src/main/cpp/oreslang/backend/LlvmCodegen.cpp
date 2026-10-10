@@ -22,31 +22,35 @@ llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
                    const std::unordered_map<std::string, llvm::Value*>& parameters,
+                   const std::unordered_map<std::string, llvm::Value*>& locals,
                    const std::unordered_map<std::string, llvm::Function*>& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable:
+            if (auto local = locals.find(expr.name); local != locals.end()) {
+                return builder.CreateLoad(i64, local->second, expr.name + ".load");
+            }
             return parameters.at(expr.name);
         case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, functions),
+            return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, locals, functions),
                                      "neg");
         case Expression::Kind::Add:
-            return builder.CreateAdd(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
+            return builder.CreateAdd(lower(*expr.left, builder, i64, parameters, locals, functions),
+                                     lower(*expr.right, builder, i64, parameters, locals, functions),
                                      "add");
         case Expression::Kind::Subtract:
-            return builder.CreateSub(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
+            return builder.CreateSub(lower(*expr.left, builder, i64, parameters, locals, functions),
+                                     lower(*expr.right, builder, i64, parameters, locals, functions),
                                      "sub");
         case Expression::Kind::Multiply:
-            return builder.CreateMul(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
+            return builder.CreateMul(lower(*expr.left, builder, i64, parameters, locals, functions),
+                                     lower(*expr.right, builder, i64, parameters, locals, functions),
                                      "mul");
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments) {
-                arguments.push_back(lower(*arg, builder, i64, parameters, functions));
+                arguments.push_back(lower(*arg, builder, i64, parameters, locals, functions));
             }
             return builder.CreateCall(functions.at(expr.name), arguments, "call");
         }
@@ -83,7 +87,27 @@ std::string emit_verified_llvm_ir(const Program& source) {
             parameters.emplace(fn.parameters[index], &arg);
             ++index;
         }
-        llvm::Value* result = lower(*fn.result, builder, i64, parameters, declarations);
+        // Lexical scalar locals are stack-owned. Every slot becomes live
+        // only after its initializer has been evaluated; all slots leave
+        // lifetime before return in reverse declaration order. The generated
+        // IR has no tracing-GC statepoints and calls no heap collector.
+        std::unordered_map<std::string, llvm::Value*> locals;
+        std::vector<llvm::Value*> lifetimeSlots;
+        for (const auto& local : fn.locals) {
+            llvm::Value* init = lower(*local.initializer, builder, i64,
+                                      parameters, locals, declarations);
+            llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
+                                                     local.name + ".owned");
+            builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(i64, 8));
+            builder.CreateStore(init, slot);
+            locals.emplace(local.name, slot);
+            lifetimeSlots.push_back(slot);
+        }
+        llvm::Value* result = lower(*fn.result, builder, i64, parameters,
+                                    locals, declarations);
+        for (auto iter = lifetimeSlots.rbegin(); iter != lifetimeSlots.rend(); ++iter) {
+            builder.CreateLifetimeEnd(*iter, llvm::ConstantInt::get(i64, 8));
+        }
         builder.CreateRet(result);
     }
 
