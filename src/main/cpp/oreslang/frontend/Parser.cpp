@@ -40,7 +40,8 @@ bool reserved(std::string_view name) {
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
-        "static", "pub", "private", "return", "defer", "val", "const",
+        "static", "pub", "private", "return", "defer", "throw", "raise",
+        "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int"
     };
@@ -150,6 +151,13 @@ private:
         }
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
+        }
+        if (token_.text == "trap" || token_.text == "recover" ||
+            token_.text == "throw" || token_.text == "raise" ||
+            token_.text == "panic" || token_.text == "try" ||
+            token_.text == "catch" || token_.text == "finally" ||
+            token_.text == "defer") {
+            fail("native exception/control effect unsupported: requires typed unwind, cleanup and actor supervision lowering");
         }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
