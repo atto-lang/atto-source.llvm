@@ -132,11 +132,32 @@ provide supervisor failure delivery.
 
 ## Current implementation limits
 
-- Java/Graal: the new host-side typed queue is independently testable, but is
-  not yet wired into `ActorRuntime`, `ActorGroup` or guest hook compilation.
-  Existing actor fail-stop and lifecycle completion remain separate.
-- LLVM: header-only host-side queue and CTest; no native source-level
-  exception unwinding, actor scheduler admission or guest hooks.
+- Java/Graal: `ActorRuntime` now reserves a terminal-failure CONTROL slot
+  **before actor publication** and publishes terminal failures before resolving
+  `get_done()`. Host/root supervisors can `pollSupervisionFailure()`, then
+  `acknowledgeSupervisionFailure(...)` or `retrySupervisionFailure(...)`.
+  The typed record carries the child UUID/generation and immediate parent UUID.
+  Guest panic markers use `GuestFailureSignal` rather than fragile JVM
+  exception-class-name matching. Cancellation and unclassified host exceptions
+  stay distinct. Successful actor exit releases its reserved slot.
+  **Not yet wired**: parent actor guest `on_*` hooks, compulsory compiler
+  coverage, automatic supervisor scheduler admission and restart strategies.
+- JVM/Graal GC: explicit actor FFM arenas govern eligible native allocations,
+  but Java Throwable and metadata objects still use managed memory. Do not
+  claim GC-free Java execution. An untrusted actor must be placed in a true
+  isolate/process for physical fatal-failure containment.
+- LLVM: the `SupervisorFailureLane` queues preallocated intrusive CONTROL
+  nodes with bounded inline summary/parent metadata. `publish_preallocated`
+  does not grow a queue or allocate event data. Separately,
+  `EffectUnwind.hpp` offers stack-allocated, fixed-capacity typed cleanup
+  statuses (`Return < Throw < Raise < Panic < Cancel < Fatal`) with LIFO
+  `defer/finally` execution and a bounded secondary failure log. Compiled
+  guest exceptional effects, native actor scheduler admission, await-aware
+  unwinding and source `on_*` hooks are **not implemented**.
 - Both parsers reserve unsupported effect statements and fail closed.
-- These prototypes do **not** establish the user's final no-main-crash or
-  priority-delivery guarantees until host integration and exact-head CI pass.
+- Funded SHA-pinned host-component and targeted Java/Graal Maven evidence:
+  https://github.com/zed-pkg-test/java-app/actions/runs/38095853057
+  and https://github.com/zed-pkg-test/java-app/actions/runs/38095841027
+- These changes improve actor-failure containment, but do **not** establish
+  end-to-end parent priority scheduling, compiler-enforced guest handlers or
+  crash-proof operation for a host VM/native process.
