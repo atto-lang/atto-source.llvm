@@ -27,6 +27,15 @@ Old references retain their **readiness ticket only** after retirement
 without keeping the actor's heap alive. Generation checks reject
 stale ref operations after actor ID reuse.
 
+Shutdown hardening: `stop_workers()` preallocates all stop callbacks and
+prepares failure results before committing phase changes, so an allocation
+failure cannot strand partially stopped workers. `close()` detaches its whole
+worker table under the group lock and then invokes all stop callbacks outside
+that lock, even when another callback throws. Completion callbacks may reenter
+group methods; no actor-group mutex is retained during those notifications.
+These are **CONTROL-plane** operations and may allocate; the guarantees do
+not imply a zero-allocation hot-path implementation.
+
 `close()` fences new admissions, rejects pending readiness, clears
 group-owned refs, and requests stop without holding the group mutex
 during supervisor callbacks. `stop_workers()` requests graceful stop
@@ -38,10 +47,16 @@ continuations must never execute directly on an actor completion thread.
 failure, late awaits, generation/identity, group closure, capacity, and
 ready-versus-close races.
 
+Validated exact source with GCC and Clang ASan/UBSan (including reentrant
+close and throwing callbacks):
+https://github.com/athlet-o/athleto-e2e/actions/runs/38093139710 .
+
 ## Explicit limitations
 
 This is a host-side C++ runtime primitive, **not working source-level
-LLVM `spawn` or `await spawn`**. The native compiler currently fails
+LLVM `spawn` or `await spawn`**. A central native supervisor must still
+enforce **exclusive ActorGroup ownership across distinct native groups**;
+the current per-group table does not provide a global ownership registry. The native compiler currently fails
 closed on both expressions; CTest fixtures enforce rejection without
 emitted LLVM IR. Pending features include actor constructor/source
 lowering, continuation frames, typed ActorRef ABI, scheduler-integrated
