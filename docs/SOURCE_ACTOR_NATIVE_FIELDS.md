@@ -34,7 +34,9 @@ Every actor field is initialized in a fixed slot by native
 Methods call `ores_actor_i64_heap_field_read`, which rejects missing
 fields and invalid/retired turns. Compiled mutable writes use the
 separately guarded `ores_actor_i64_heap_field_write`: non-mutable fields,
-loaned fields and stale turn capabilities fail closed. Method-local snapshots
+loaned fields and stale turn capabilities fail closed. Fixed actor fields
+cannot be dropped or overwritten through the generic heap slot API, and
+a generic slot cannot impersonate an initialized actor field. Method-local snapshots
 are updated after writes, so later expressions see the new field value. Explicitly `owned int` method locals retain their
 separately bounded native lexical arena with reverse-order drops.
 
