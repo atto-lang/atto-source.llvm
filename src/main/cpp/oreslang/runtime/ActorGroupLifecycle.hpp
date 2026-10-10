@@ -131,7 +131,7 @@ public:
             entry->phase = Phase::ready;
             callbacks = settle_ticket(entry->ref, {true, ""});
         }
-        notify(callbacks, {true, ""});
+        notify(callbacks, ref.ticket_->result);
         return true;
     }
 
@@ -146,10 +146,10 @@ public:
             std::lock_guard<std::mutex> guard(mutex_);
             Entry* entry = find_active_locked(ref);
             if (!entry) return false;
-            callbacks = settle_ticket(entry->ref, result);
+            callbacks = settle_ticket(entry->ref, std::move(result));
             workers_.erase(ref.actor_id());
         }
-        notify(callbacks, result);
+        notify(callbacks, ref.ticket_->result);
         return true;
     }
 
@@ -160,33 +160,41 @@ public:
      * whose stop request was never actually dispatched.
      */
     void stop_workers() {
+        struct Rejection {
+            NativeActorRef ref;
+            ActorReadyResult result;
+            std::vector<NativeActorRef::ReadyContinuation> callbacks;
+        };
         std::vector<StopRequest> stops;
-        std::vector<std::vector<NativeActorRef::ReadyContinuation>> waiters;
-        const ActorReadyResult rejected{false, "worker stopped before ready"};
+        std::vector<Rejection> rejections;
         {
             std::lock_guard<std::mutex> guard(mutex_);
             if (closed_) return;
             stops.reserve(workers_.size());
-            waiters.reserve(workers_.size());
+            rejections.reserve(workers_.size());
             for (const auto& item : workers_) {
                 const Entry& worker = item.second;
                 if (worker.phase == Phase::stopping) continue;
-                stops.push_back(worker.stop_request); // may throw, nothing changed yet
+                stops.push_back(worker.stop_request);
+                if (worker.phase == Phase::starting) {
+                    // Construct every failure string BEFORE touching any
+                    // readiness ticket or stop phase. OOM leaves the entire
+                    // group unchanged and allows a later stop/close retry.
+                    rejections.push_back(
+                        Rejection{worker.ref, {false, "worker stopped before ready"}, {}});
+                }
             }
-            // The fallible work above has completed; now gate readiness and
-            // stop retries under the same group lock.
+            for (auto& rejection : rejections)
+                rejection.callbacks = settle_ticket(
+                    rejection.ref, std::move(rejection.result));
             for (auto& item : workers_) {
                 Entry& worker = item.second;
-                if (worker.phase == Phase::stopping) continue;
-                if (worker.phase == Phase::starting) {
-                    // Each output vector moves existing callbacks, no guest
-                    // callback runs under the actor-group mutex.
-                    waiters.push_back(settle_ticket(worker.ref, rejected));
-                }
-                worker.phase = Phase::stopping;
+                if (worker.phase != Phase::stopping)
+                    worker.phase = Phase::stopping;
             }
         }
-        for (auto& callbacks : waiters) notify(callbacks, rejected);
+        for (auto& rejection : rejections)
+            notify(rejection.callbacks, rejection.ref.ticket_->result);
         request_stops(stops);
     }
 
@@ -208,9 +216,9 @@ public:
             Entry& worker = item.second;
             if (worker.phase == Phase::starting) {
                 try {
-                    const ActorReadyResult rejected{false, "ActorGroup closed before ready"};
-                    auto callbacks = settle_ticket(worker.ref, rejected);
-                    notify(callbacks, rejected);
+                    ActorReadyResult rejected{false, "ActorGroup closed before ready"};
+                    auto callbacks = settle_ticket(worker.ref, std::move(rejected));
+                    notify(callbacks, worker.ref.ticket_->result);
                 } catch (...) {
                     // Keep processing all detached workers. A true OOM can
                     // still prevent notifying an awaiter; it must never
@@ -253,11 +261,11 @@ private:
     }
 
     static std::vector<NativeActorRef::ReadyContinuation> settle_ticket(
-            const NativeActorRef& ref, const ActorReadyResult& result) {
+            const NativeActorRef& ref, ActorReadyResult result) {
         std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
         if (ref.ticket_->settled) return {};
+        ref.ticket_->result = std::move(result);
         ref.ticket_->settled = true;
-        ref.ticket_->result = result;
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         callbacks.swap(ref.ticket_->waiters);
         return callbacks;
