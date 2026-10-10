@@ -129,7 +129,7 @@ public:
             Entry* entry = find_active_locked(ref);
             if (!entry || entry->phase != Phase::starting || closed_) return false;
             entry->phase = Phase::ready;
-            callbacks = settle_ticket(ref, {true, ""});
+            callbacks = settle_ticket(entry->ref, {true, ""});
         }
         notify(callbacks, {true, ""});
         return true;
@@ -146,7 +146,7 @@ public:
             std::lock_guard<std::mutex> guard(mutex_);
             Entry* entry = find_active_locked(ref);
             if (!entry) return false;
-            callbacks = settle_ticket(ref, result);
+            callbacks = settle_ticket(entry->ref, result);
             workers_.erase(ref.actor_id());
         }
         notify(callbacks, result);
@@ -226,7 +226,8 @@ private:
     Entry* find_active_locked(const NativeActorRef& ref) {
         if (ref.runtime_id() != runtime_id_) return nullptr;
         const auto it = workers_.find(ref.actor_id());
-        if (it == workers_.end() || !(it->second.ref == ref)) return nullptr;
+        if (it == workers_.end() || !(it->second.ref == ref)
+            || it->second.ref.ticket_ != ref.ticket_) return nullptr;
         return &it->second;
     }
 
