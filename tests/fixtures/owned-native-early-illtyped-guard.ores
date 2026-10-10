@@ -4,5 +4,6 @@ pub fnc main(): int {
   if (a) {
     return 42;
   }
+  fi
   return 0;
 }
