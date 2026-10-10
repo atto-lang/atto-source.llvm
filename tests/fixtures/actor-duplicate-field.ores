@@ -1,0 +1,5 @@
+define actor Counter as {
+  const base: int = 1;
+  val base: int = 2;
+  pub fnc read(): int { return base; }
+}
