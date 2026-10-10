@@ -45,6 +45,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "expected 'return'")
+    oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
     # LLVM has no native I/O binding registry or continuation lowering yet.
     # Both spellings must fail closed with no IR until implementation lands.

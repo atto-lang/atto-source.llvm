@@ -5,6 +5,10 @@ Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-so
 
 **Status: small experimental source-to-LLVM compiler, not Java language/runtime parity.**
 
+Static select, channels, reusable `SelectPlan`, and mutable `DynamicSelectPlan`
+are **not implemented** in the LLVM compiler. The CI regression fixtures
+reject them without producing IR. See [the native select parity contract](docs/SELECT_PLAN_PARITY.md).
+
 ## Implemented slice (October 2026)
 
 - Parse one file with one or more `fnc`/`routine` declarations returning `int`, with optional

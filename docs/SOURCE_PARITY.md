@@ -36,6 +36,7 @@ The canonical contract, effect-classification rules, alias checks and negative-t
 | Compile and execute native guest | Clang can link i64 main on supported host |
 | General target-specific ABI/object emission | Not implemented |
 | Actors/supervisors, async frames, channels | Not implemented |
+| Static select and reusable SelectPlan / DynamicSelectPlan | Not implemented; fail-closed fixtures and [parity contract](SELECT_PLAN_PARITY.md) |
 | Cycles/Ref/WeakRef, borrow checking, arenas | Not implemented |
 | HPC/HFT and isolation | Not implemented |
 
