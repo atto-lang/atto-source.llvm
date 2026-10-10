@@ -1,27 +1,54 @@
 # LLVM ownership admission
 
-The only native source type accepted today is `int` (lowered provisionally
-as LLVM i64). `OwnershipChecker.cpp` is a real flow-sensitive pre-lowering
-pass for this restricted type: it checks explicit `rt take` invalidation,
-source-order reads, and ordered function-call argument evaluation.
+The LLVM native compiler has a deliberately narrow i64-only frontend. Its
+flow-sensitive ownership checker runs **before** IR construction. This is not
+the full Java/Graal ownership model.
 
-- `rt copy expression` and `rt share expression` are valid only for the
-  compiler's already-validated trivially copyable i64 expressions.
-- `rt take x` evaluates and invalidates named scalar parameter `x`.
-  Re-reading it inside the same expression or a later call argument fails.
-- A temporary computed value (`rt take (x + 1)`) moves only that temporary.
-- Borrowed parameters, `rt borrow`, `rt borrow mut`, reference projection,
-  actor-boundaries, async/await, select/nb select/do nb select, readch and
-  do/nb channel operations remain *unsupported and fail closed*, with no IR.
+## Implemented scalar ownership and scoped loans
 
-This does **not** implement Rust ownership for move-only structs, heap
-objects, actor-owned arenas, cross-actor transfer or JIT/native frames.
-In particular, no `rt share` of mutable objects or shallow aliasing is
-allowed. Those features require equivalent Java type/borrow rules and
-runtime lowering before native compiler admission.
+- Primitive `rt copy`, `rt share` and `rt take` preserve source-order
+  value semantics; explicit takes invalidate named owned i64 parameters.
+- `borrow int x` and `borrow mut int x` are typed function parameters.
+  They pass an i64 pointer to a caller-owned stack slot, not an i64 value.
+  Callees can read their value as `x`, but cannot take their owner.
+- `rt borrow x` and `rt borrow mut x` are admitted **only** as arguments
+  to matching borrowed parameters. The source must be an owned, named i64
+  parameter. Borrowing integer temporaries or borrowed parameters again is
+  intentionally rejected.
+- Immutable loans can coexist; mutable loans are exclusive. A mutable loan
+  forbids reads or moves of the owner during call-argument evaluation. A
+  shared loan forbids taking its owner until the call returns.
+- Both the checker and LLVM emitter evaluate arguments left-to-right, and
+  a nested call observes all loans still held by its enclosing call.
+  Loans release immediately after their direct call returns.
+- Every native function returns i64. Borrowed references cannot be stored,
+  returned, captured, placed in a field or retained past their call.
 
-Java authorities: `TypeChecker` and `OwnershipChecker`.
-The native CTest matrix checks both valid primitive ownership IR/native
-execution and negative borrow/actor/suspension rejection.
+Example supported source:
 
-See [source parity](../../../../../../docs/SOURCE_PARITY.md).
+```oreslang
+fnc inspect(borrow int x): int { return x + 1; }
+fnc wrapper(int x): int { return inspect(rt borrow x) + rt take x; }
+pub fnc main(): int { return wrapper(20); }
+```
+
+`borrow mut` is currently an exclusive read-access capability only: this
+fragment has no assignment syntax, no native mutable struct field projection,
+and no mutable reference writes. Its ABI is deliberately not certified as a
+stable external C/FFI interface.
+
+## Not supported
+
+Actor-owned object graphs; structs; heap ownership; destructor/drop timing;
+mutable projections; reborrows; reference-valued variables or returns;
+pinned frames; asynchronous suspend/resume; cancellation; `await`, `select`,
+`nb select`, `do nb select`, `readch`, `do readch`, `do nb readch`,
+and actor migration all still **fail closed without LLVM IR**.
+
+No claim of Rust-like zero-GC object lifetimes, actor isolation, Java parity
+or suspension safety follows from the scalar-only ABI. Every new reference
+kind needs its own alias/provenance, escape, drop, actor transfer and
+suspension rules, with executable positive and negative tests.
+
+Java authority: `TypeChecker` / `OwnershipChecker` in
+`oreslang-source.java`. See [native/source parity](../../../../../../docs/SOURCE_PARITY.md).
