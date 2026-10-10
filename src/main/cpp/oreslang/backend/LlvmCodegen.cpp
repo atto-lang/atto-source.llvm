@@ -18,52 +18,51 @@
 namespace oreslang {
 namespace {
 
+// Owned i64 parameters receive stack slots so the only permitted loans can
+// pass their addresses through the call ABI. Borrowed inputs are already
+// pointers to caller-owned slots. Neither address can escape as a result:
+// native functions return only i64, and the ownership pass restricts rt borrow
+// to nonescaping call arguments.
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
-                   const std::unordered_map<std::string, llvm::Value*>& parameters,
+                   const std::unordered_map<std::string, llvm::Value*>& storage,
                    const std::unordered_map<std::string, llvm::Function*>& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable:
-            return parameters.at(expr.name);
+            return builder.CreateLoad(i64, storage.at(expr.name), expr.name + ".read");
+        case Expression::Kind::Borrow:
+        case Expression::Kind::BorrowMut:
+            // Only addressable named parameters are admitted by OwnershipChecker.
+            return storage.at(expr.left->name);
         case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, functions),
-                                     "neg");
+            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, functions), "neg");
         case Expression::Kind::Copy:
         case Expression::Kind::Take:
         case Expression::Kind::Share:
-            // This AST is statically restricted to i64, which is trivially
-            // copyable, has no destructor, and cannot alias an owned heap.
-            // The source pass has already checked explicit-take invalidation.
-            return lower(*expr.left, builder, i64, parameters, functions);
+            // These remain primitive value operations, never graph references.
+            return lower(*expr.left, builder, i64, storage, functions);
         case Expression::Kind::Add: {
-            // C++ call-argument evaluation order is not guaranteed; lower
-            // explicitly in source order to match ownership analysis.
-            llvm::Value* left = lower(*expr.left, builder, i64, parameters, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, parameters, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, functions);
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
-            // C++ call-argument evaluation order is not guaranteed; lower
-            // explicitly in source order to match ownership analysis.
-            llvm::Value* left = lower(*expr.left, builder, i64, parameters, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, parameters, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, functions);
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
-            // C++ call-argument evaluation order is not guaranteed; lower
-            // explicitly in source order to match ownership analysis.
-            llvm::Value* left = lower(*expr.left, builder, i64, parameters, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, parameters, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, functions);
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
-            for (const auto& arg : expr.arguments) {
-                arguments.push_back(lower(*arg, builder, i64, parameters, functions));
-            }
+            for (const auto& arg : expr.arguments)
+                arguments.push_back(lower(*arg, builder, i64, storage, functions));
             return builder.CreateCall(functions.at(expr.name), arguments, "call");
         }
     }
@@ -76,15 +75,18 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* loan_ptr = i64->getPointerTo();
     std::unordered_map<std::string, llvm::Function*> declarations;
 
-    // Declare all functions first, enabling forward calls and recursion.
+    // Exact by-value i64 / borrowed-i64-pointer argument types for all
+    // same-module functions; no unsound conversion to i64 is permitted.
     for (const auto& fn : source.functions) {
         const std::string symbol = source.module.empty()
             ? fn.name : source.module + "." + fn.name;
-        const std::vector<llvm::Type*> argument_types(fn.parameters.size(), i64);
+        std::vector<llvm::Type*> argument_types;
+        for (const auto& param : fn.parameters)
+            argument_types.push_back(param.mode == Parameter::Mode::Value ? i64 : loan_ptr);
         llvm::FunctionType* signature = llvm::FunctionType::get(i64, argument_types, false);
-        // ABI and public/private linker visibility are not stable yet.
         declarations.emplace(fn.name, llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module));
     }
@@ -92,14 +94,20 @@ std::string emit_verified_llvm_ir(const Program& source) {
         llvm::Function* function = declarations.at(fn.name);
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
-        std::unordered_map<std::string, llvm::Value*> parameters;
+        std::unordered_map<std::string, llvm::Value*> storage;
         std::size_t index = 0;
         for (auto& arg : function->args()) {
-            arg.setName(fn.parameters[index]);
-            parameters.emplace(fn.parameters[index], &arg);
-            ++index;
+            const Parameter& param = fn.parameters[index++];
+            arg.setName(param.name);
+            if (param.mode == Parameter::Mode::Value) {
+                llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
+                builder.CreateStore(&arg, slot);
+                storage.emplace(param.name, slot);
+            } else {
+                storage.emplace(param.name, &arg);
+            }
         }
-        llvm::Value* result = lower(*fn.result, builder, i64, parameters, declarations);
+        llvm::Value* result = lower(*fn.result, builder, i64, storage, declarations);
         builder.CreateRet(result);
     }
 
