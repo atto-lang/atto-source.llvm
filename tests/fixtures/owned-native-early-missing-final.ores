@@ -4,4 +4,5 @@ pub fnc main(): int {
   if (a == 6) {
     return a * 7;
   }
+  fi
 }
