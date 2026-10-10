@@ -49,11 +49,11 @@ public:
         std::uint64_t group_id() const noexcept {
             return state_ ? state_->group : 0;
         }
-        std::shared_future<void> ready() const {
+        std::shared_future<void> get_ready() const {
             require();
             return state_->ready_future;
         }
-        std::shared_future<void> done() const {
+        std::shared_future<void> get_done() const {
             require();
             return state_->done_future;
         }
