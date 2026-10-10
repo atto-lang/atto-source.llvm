@@ -1,7 +1,9 @@
 # Future LLVM native runtime
 
 Track execution-domain/actor ABI work in [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
-This directory intentionally contains no executable actor or memory allocator.
+This directory now contains experimental executable actor-carrier primitives and
+a fixed-capacity actor-owned graph heap, but it still lacks source-lowered
+Oreslang actor classes and a general-purpose native object allocator.
 
 Java reference classes: `ActorRuntime`, `OresScheduler`, `OresFuture`, `RuntimeGarbageCollector`.
 Native phases: structured cancellation, generational wake IDs, pinned/relocatable async frames,
