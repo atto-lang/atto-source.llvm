@@ -67,6 +67,19 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
+    # Native deterministic ownership is a runtime primitive, not yet source
+    # Oreslang object/borrow lowering. Compile and execute it in every LLVM CI.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-owned-heap-test tests/owned_heap_test.cpp)
+    target_include_directories(oreslang-owned-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-owned-heap-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-owned-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_heap_deterministic_drop
+             COMMAND oreslang-owned-heap-test)
+    set_tests_properties(native_owned_heap_deterministic_drop PROPERTIES TIMEOUT 30)
+
     if(ORE_CLANG)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
