@@ -76,6 +76,17 @@ if(BUILD_TESTING)
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
 
+    # Portable native actor-owned graph storage and generational handles.
+    # Fixed-capacity cycles reclaim with actor lifetime; no tracing GC.
+    add_executable(oreslang-actor-graph-heap-test
+        tests/actor_owned_graph_heap_test.cpp)
+    target_include_directories(oreslang-actor-graph-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-graph-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_cyclic_graph_heap
+        COMMAND oreslang-actor-graph-heap-test)
+
     # Linux-specific actor-neutral wake/park primitive. This does NOT
     # implement the actor scheduler or certify lock-free mailbox delivery.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
