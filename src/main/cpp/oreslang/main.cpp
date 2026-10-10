@@ -21,6 +21,11 @@ int main(int argc, char** argv) {
         const std::string text((std::istreambuf_iterator<char>(source)),
                                std::istreambuf_iterator<char>());
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
+        // Headers are comments in the native lexer. Reject them explicitly until
+        // the native compiler can validate the complete environment/import graph.
+        if (text.find("// ores:") != std::string::npos) {
+            throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
+        }
         auto ast = oreslang::parse_program(text);
         std::cout << oreslang::emit_verified_llvm_ir(ast);
         return 0;
