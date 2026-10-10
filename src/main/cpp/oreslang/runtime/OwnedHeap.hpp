@@ -4,6 +4,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -54,13 +55,18 @@ class OwnedHeap final {
         mutable std::mutex borrow_mutex;
         std::size_t readers = 0;
         bool writer = false;
-        T value;
+        std::optional<T> value;
 
         template<class... Args>
         Slot(std::shared_ptr<State> owner, Args&&... args)
-            : state(std::move(owner)), value(std::forward<Args>(args)...) {}
+            : state(std::move(owner)), value(std::in_place, std::forward<Args>(args)...) {}
 
-        ~Slot() noexcept { state->release(sizeof(T)); }
+        // Destroy the user object before lowering live-byte accounting.
+        // Otherwise another thread could close a heap while T::~T is active.
+        ~Slot() noexcept {
+            value.reset();
+            state->release(sizeof(T));
+        }
 
         void acquire(bool exclusive) {
             std::lock_guard<std::mutex> guard(borrow_mutex);
@@ -124,9 +130,9 @@ public:
         void with(Fn&& fn) const {
             if (!slot_) throw std::logic_error("borrow lease is empty");
             if constexpr (Mutable) {
-                std::forward<Fn>(fn)(slot_->value);
+                std::forward<Fn>(fn)(*slot_->value);
             } else {
-                std::forward<Fn>(fn)(static_cast<const T&>(slot_->value));
+                std::forward<Fn>(fn)(static_cast<const T&>(*slot_->value));
             }
         }
     };
