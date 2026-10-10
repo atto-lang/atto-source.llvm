@@ -2,12 +2,14 @@
 pub fnc choose(int x): int {
   const a: owned int = x;
   const b: owned int = 7;
-  if (a == 0) {
+  if (a eq 0) {
     return 9;
   }
+  fi
   if (a == 6) {
     return a * b;
   }
+  fi
   return a + b;
 }
 pub fnc main(): int {
