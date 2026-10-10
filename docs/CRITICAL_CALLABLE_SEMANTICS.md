@@ -76,6 +76,52 @@ status; `release(token)` returns the newly permitted token, which its
 scheduler must enqueue. The native substrate currently does not include source
 actor continuation lowering.
 
+## Mutex, critical, and future macro lowering contract
+
+These constructs all use **logical invocation admission**, not OS-thread identity,
+but their state/capability exposure is deliberately different:
+
+| Construct | Queue and scope | Guest blocking | Cancellation/release | State safety |
+| --- | --- | --- | --- | --- |
+| `critical` instance/file/static callable | One `CriticalGate` per instance/code unit/static declaring class; FIFO cap=1 | `suspend`/async task awaits admission; synchronous carrier contention fails closed | Ticket automatically closes on task completion/throw/cancel | Compiler owns method body + ticket lifetime, including `await` |
+| `OresMutex.Critical<T>` **runtime adapter** | Same `CriticalGate` primitive, caller supplies protected T | `enterAsync()` returns `OresFuture<Guard<T>>` | Future cancel retracts queued ticket; linear guard release/fail unlocks | Not yet a public Oreslang `CriticalMutex<T>` type; must not transport unchecked |
+| `Mutex<T>` | Actor/private execution-domain local; normally no waiting queue | `lock()` returns guard or rejects recursive access | Lexical guard release | Cannot escape actor or be held across `await` |
+| `SharedMutex<T>` | Process-local fair JVM Semaphore(1), plus bounded async FIFO and host blocking waiters | `lock_async()` exposes guard Future; host `lock()` can wait, actor `lock()` rejected | Guard is linear, cancelled waiter removed, poison on failed section and explicit recovery | Shared-memory capability, runtime publication, and shared-safe payload checks required |
+| LLVM `LogicalMutex<T>` **native substrate** | Same opaque `CriticalGate` token allocator/queue as native `critical` | `request()` returns queued/admitted; scheduler must suspend and wake via internal control lane | `release(token)` returns next token, no guest callback inline | Only available to native runtime tests until compiler borrowing/actor lowering enforces token lifetime |
+
+Do not silently rewrite a `SharedMutex<T>` into a `critical` gate. That
+would bypass the shared-state capability/transport contract and poisoning.
+Do not rewrite a lexical `MutexGuard` into a suspending `critical` region
+without proving that the guarded borrows survive suspension safely. Conversely,
+a `suspend critical` invocation can retain *its invocation ticket* across a
+lowered `await`; it does not hold an OS mutex during that wait.
+
+### Macro expansion rules
+
+The current Java and LLVM source parsers do **not** expose a general Oreslang
+`macro` declaration/expansion feature. When hygienic macros are added, their
+output must be checked by the same type/borrow/effect pipeline as handwritten
+code. Specifically:
+
+- `critical` must lower to an unforgeable per-scope gate intrinsic and attach
+  exactly one logical ticket to its invocation; it is **not** syntactic sugar
+  for `readch`, `writech`, `SharedMutex.lock()`, or a host `synchronized`
+  block.
+- `with_lock`-like sugar must create a linear lexical `MutexGuard`, ensure
+  `release()` / `fail()` on all unwind paths, and preserve the existing
+  prohibition on holding that guard across `await`.
+- Expansion cannot erase `suspend` or `critical` effects, fabricate runtime
+  capabilities, smuggle a guard into an aggregate/closure, or bypass
+  `SharedMutex<T>` shared-safe ownership and capability checks.
+- An unadmitted or cancelled continuation must never touch protected state.
+  Handoff is published to the scheduler control lane, which resumes work only
+  after the prior guest turn unwinds and verifies token ownership.
+
+The next parity requirement is moving SharedMutex's mixed host/async admission
+onto a single explicit scheduler-visible queue **without** losing legacy
+host-blocking fairness, timeouts, poisoning, and deadlock detection. This remains
+an integration task, not an assumed property of the current adapter.
+
 ## Preemption contract
 
 1. Ordinary non-suspending callables execute to completion on their admitted
