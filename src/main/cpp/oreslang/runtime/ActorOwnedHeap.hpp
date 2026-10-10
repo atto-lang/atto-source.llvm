@@ -139,6 +139,15 @@ public:
         ++slot.generation;
         free_slots_[free_count_++] = handle.slot_;
         --live_count_;
+        // Deterministic ownership means no references survive when the last
+        // allocation is removed. Recycle the *entire* bump region at that
+        // quiescent point. Slot generations are deliberately NOT reset:
+        // previously issued handles remain invalid across reuse cycles.
+        // Partial frees remain non-compacting to avoid moving live values.
+        if (live_count_ == 0) {
+            used_ = 0;
+            std::fill(memory_.begin(), memory_.end(), std::byte{0});
+        }
         return true;
     }
 
