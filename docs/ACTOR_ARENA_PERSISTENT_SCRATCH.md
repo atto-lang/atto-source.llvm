@@ -56,3 +56,18 @@ cancellation, exceptions and FFI is a future compiler/scheduler task.
 3. Differential Java/LLVM ownership and stale-handle tests; more extensive
    fuzz/property tests and native sanitizers.
 4. Physical AOT/isolate execution and full integration performance tests.
+
+## Hardened native fast path and turn admission
+The per-actor native slab now maintains a preallocated free-slot stack:
+persistent allocation/drop perform O(1) slot selection with no heap allocation
+during an admitted actor turn. The turn capability is **carrier-bound** using
+C11 thread-local admission state, so copying an epoch/domain token to another
+native thread does not authorize concurrent access. Carrier migration is
+supported only after leaving and readmitting a later turn. Supervisor retirement
+still permits an admitted turn to unwind, and outstanding loan tokens remain
+cross-carrier releasable.
+
+Native malloc/calloc/free occur at actor arena open/physical destroy rather
+than on the scalar allocation hot path. This is not proof that every LLVM
+compiler-emitted guest operation avoids malloc: full typed source lowering and
+whole-program allocation audits remain outstanding.
