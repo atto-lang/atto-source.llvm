@@ -101,6 +101,13 @@ int main(void) {
     CHECK(ores_actor_arena_try_destroy(a) == 0);
     ores_actor_arena_release(a, hold);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
+    /* Supervisor cancellation may retire a heap during an active turn. */
+    a = ores_actor_arena_open(23, 3, 1, 32, 64);
+    OresArenaTurn unwinding = ores_actor_arena_enter(a, 23, 3);
+    ores_actor_arena_retire(a);
+    CHECK(ores_actor_arena_try_destroy(a) == 0);
+    ores_actor_arena_leave(a, unwinding);
+    CHECK(ores_actor_arena_try_destroy(a) == 1);
 #if defined(__unix__) || defined(__APPLE__)
     for (int n = STALE_TURN; n <= BAD_ALIGNMENT; ++n) CHECK(rejects((enum Misuse) n));
 #endif
