@@ -2,8 +2,9 @@
 pub fnc main(): int {
   const a: owned int = 6;
   val b: owned int = 7;
-  if (a == 6) {
+  if (a eq 6) {
     return a * b;
   }
+  fi
   return 1;
 }
