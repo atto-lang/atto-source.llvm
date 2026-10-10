@@ -1,0 +1,5 @@
+// Native select-plan construction is intentionally unsupported, not lowered unsafely.
+pub fnc main(): int {
+  val SelectPlan plan = SelectPlan.new([]);
+  return 0;
+}
