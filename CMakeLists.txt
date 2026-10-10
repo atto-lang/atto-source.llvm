@@ -49,13 +49,13 @@ if(BUILD_TESTING)
     oreslang_contract_test(owned_identifier_is_not_keyword owned-ordinary-identifier.ores --no-native-heap-abi)
     oreslang_contract_test(reject_experimental_owned_by_default owned-native-region-main.ores --diagnostic "experimental LLVM-only syntax")
     oreslang_contract_test(reject_experimental_owned_field_by_default owned-native-region-unsupported.ores --diagnostic "experimental LLVM-only syntax")
-    oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --ir "call void @oreslang_owned_i64_region_drop") --experimental-owned-int
-    oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --ir "call void @oreslang_owned_i64_region_close") --experimental-owned-int
-    oreslang_contract_test(reject_unsupported_native_heap_type owned-native-region-unsupported.ores --diagnostic "expected 'int'") --experimental-owned-int
+    oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --ir "call void @oreslang_owned_i64_region_drop" --experimental-owned-int)
+    oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --ir "call void @oreslang_owned_i64_region_close" --experimental-owned-int)
+    oreslang_contract_test(reject_unsupported_native_heap_type owned-native-region-unsupported.ores --diagnostic "expected 'int'" --experimental-owned-int)
     # Guarded early returns require one deterministic cleanup path per edge.
-    oreslang_contract_test(reject_early_branch_local_owner owned-native-early-uninitialized.ores --diagnostic "expected 'return'") --experimental-owned-int
-    oreslang_contract_test(reject_early_missing_final_return owned-native-early-missing-final.ores --diagnostic "expected 'return'") --experimental-owned-int
-    oreslang_contract_test(reject_early_illtyped_guard owned-native-early-illtyped-guard.ores --diagnostic "expected '='") --experimental-owned-int
+    oreslang_contract_test(reject_early_branch_local_owner owned-native-early-uninitialized.ores --diagnostic "expected 'return'" --experimental-owned-int)
+    oreslang_contract_test(reject_early_missing_final_return owned-native-early-missing-final.ores --diagnostic "expected 'return'" --experimental-owned-int)
+    oreslang_contract_test(reject_early_illtyped_guard owned-native-early-illtyped-guard.ores --diagnostic "expected '='" --experimental-owned-int)
 
     oreslang_contract_test(reject_uninitialized_owned_local owned-uninitialized.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_duplicate_owned_local owned-duplicate.ores --diagnostic "duplicate owned local")
@@ -92,12 +92,12 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_identifier owned-ordinary-identifier.ores --run 42 --clang "${ORE_CLANG}" --no-native-heap-abi)
-        oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c") --experimental-owned-int
-        oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c") --experimental-owned-int
-        oreslang_contract_test(native_exec_owned_early_taken owned-native-early-true.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c") --experimental-owned-int
-        oreslang_contract_test(native_exec_owned_early_skipped owned-native-early-false.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c") --experimental-owned-int
-        oreslang_contract_test(native_exec_owned_early_chain owned-native-early-chain.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c") --experimental-owned-int
-        oreslang_contract_test(owned_early_branch_ir owned-native-early-true.ores --ir "guard.return") --experimental-owned-int
+        oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
+        oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
+        oreslang_contract_test(native_exec_owned_early_taken owned-native-early-true.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
+        oreslang_contract_test(native_exec_owned_early_skipped owned-native-early-false.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
+        oreslang_contract_test(native_exec_owned_early_chain owned-native-early-chain.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
+        oreslang_contract_test(owned_early_branch_ir owned-native-early-true.ores --ir "guard.return" --experimental-owned-int)
 
 
     else()
