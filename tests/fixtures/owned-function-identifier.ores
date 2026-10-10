@@ -1,0 +1,7 @@
+// The ordinary identifier 'owned' is valid in function and parameter positions.
+pub fnc owned(int owned): int {
+  return owned + 1;
+}
+pub fnc main(): int {
+  return owned(41);
+}
