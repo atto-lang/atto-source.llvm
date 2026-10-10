@@ -1,7 +1,20 @@
-# Native owned scalar region: strict no-tracing-GC heap lowering
+# Experimental native scalar-region lowering (not Oreslang `owned` syntax)
 
-Oreslang's experimental LLVM backend now supports:
+**Status:** Compiler/allocator fixture only, behind the LLVM
+`--experimental-owned-int` flag. **`owned` is not a keyword in the shared
+Oreslang language.** Java/Graal's canonical ownership semantics are implicit:
+ordinary `int` is `Copy` and non-`Copy` objects move by value. Explicit
+borrowing and moves use the existing `rt borrow`, `rt take`, `rt copy`,
+`rt share` contracts. The experimental spelling below must not be used in
+language examples or public downstream source files.
+
+The LLVM compiler normally rejects `owned int` before emitting IR and prints
+a diagnostic explaining how to opt in for backend allocator tests. The ordinary
+identifier `owned` remains legal (e.g. `const owned: int = 6;`).
+
+Only an explicit experimental test compilation admits:
 ```oreslang
+// Only with oreslang-llvmc --experimental-owned-int test.ores
 pub fnc main(): int {
   const value: owned int = 6;
   val result: owned int = value * 7;
@@ -9,13 +22,15 @@ pub fnc main(): int {
 }
 ```
 
-`owned int` is an explicit heap-backed scalar owner. Unlike `int`, which
+`owned int` here is a **backend testing marker**, not a standard Oreslang type or ownership qualifier. Unlike `int`, which
 lives in a stack `alloca` with LLVM lifetime hints, every `owned int`
 is allocated in a bounded native region created for the function call.
 The compiler copies scalar values to return/call arguments, so no native
 heap pointer escapes this restricted source subset.
 
-The verified LLVM IR calls `oreslang_owned_i64_region_open`,
+Normal scalar code emits no native region declarations, no calls to a
+native heap allocator, and no per-call heap allocations. In the experimental
+mode, the verified LLVM IR calls `oreslang_owned_i64_region_open`,
 `oreslang_owned_i64_region_new`, emits exactly one
 `oreslang_owned_i64_region_drop` per successfully created owned binding in
 reverse declaration order, and finally `oreslang_owned_i64_region_close`.
@@ -31,6 +46,13 @@ A validated native executable must complete normally: a missing drop causes
 the region-close guard to abort instead.
 
 ## Restrictions
+
+- There is **no supported general `owned` keyword or type constructor**;
+  do not infer public language parity from this experimental spelling.
+- Normal `int` uses native register/stack storage without forced heap boxing.
+  Promoting primitive values to heap storage must not become a requirement
+  for deterministic ownership or actor programming.
+
 
 - The region currently belongs to a **function activation**, not an actor.
   It cannot survive the return or be shared between actors. The OresVM actor
