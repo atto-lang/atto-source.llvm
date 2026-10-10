@@ -120,23 +120,64 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
-            require("module");
-            program.module = identifier();
-            accept("as"); // Both 'define module M as' and 'define module M' occur in Java.
-            wrapped_module = true;
+            if (accept("module")) {
+                program.module = identifier();
+                accept("as");
+                wrapped_module = true;
+            } else if (accept("actor")) {
+                program.actors.push_back(actor());
+            } else {
+                fail("expected 'module' or 'actor'");
+            }
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            program.functions.push_back(function());
+            if (accept("define")) {
+                require("actor");
+                program.actors.push_back(actor());
+            } else {
+                program.functions.push_back(function());
+            }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty()) fail("expected at least one function");
+        if (program.functions.empty() && program.actors.empty())
+            fail("expected a function or actor");
         validate(program);
         return program;
     }
 
 private:
+    Actor actor() {
+        Actor value;
+        value.offset = token_.offset;
+        value.name = identifier();
+        require("as");
+        const bool braced = accept("{");
+        // The first native actor subset deliberately admits only immutable
+        // scalar fields and read-only methods; no async or user destructors.
+        while (token_.text == "const" || token_.text == "val") {
+            LocalBinding field;
+            field.offset = token_.offset;
+            advance();
+            field.name = identifier();
+            require(":");
+            require("int");
+            require("=");
+            field.initializer = expression();
+            require(";");
+            value.fields.push_back(std::move(field));
+        }
+        if (value.fields.empty()) fail("actor requires at least one scalar field");
+        while (token_.text == "fnc" || token_.text == "routine" || token_.text == "pub") {
+            value.methods.push_back(function());
+        }
+        if (value.methods.empty()) fail("actor requires at least one read-only method");
+        if (braced) require("}");
+        else require("end");
+        return value;
+    }
+
     Function function() {
         Function value;
         value.offset = token_.offset;
@@ -341,6 +382,40 @@ private:
                 }
             }
             validate_expression(*fn.result, available, functions);
+        }
+
+        std::unordered_set<std::string> actorNames;
+        for (const auto& actor : program.actors) {
+            if (!actorNames.insert(actor.name).second
+                || functions.count(actor.name) != 0) {
+                throw std::runtime_error("duplicate actor symbol '" + actor.name + "'");
+            }
+            std::unordered_set<std::string> fields;
+            // Deliberately restrict initializers to closed arithmetic:
+            // initialization must not escape the actor turn or call FFI.
+            const std::unordered_set<std::string> none;
+            const std::unordered_map<std::string, std::size_t> noCalls;
+            for (const auto& field : actor.fields) {
+                validate_expression(*field.initializer, none, noCalls);
+                if (!fields.insert(field.name).second)
+                    throw std::runtime_error("duplicate actor field '" + field.name + "'");
+            }
+            std::unordered_set<std::string> methods;
+            for (const auto& method : actor.methods) {
+                if (!methods.insert(method.name).second)
+                    throw std::runtime_error("duplicate actor method '" + method.name + "'");
+                std::unordered_set<std::string> available = fields;
+                for (const auto& param : method.parameters) {
+                    if (!available.insert(param).second)
+                        throw std::runtime_error("actor parameter shadows field '" + param + "'");
+                }
+                for (const auto& local : method.locals) {
+                    validate_expression(*local.initializer, available, functions);
+                    if (!available.insert(local.name).second)
+                        throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
+                }
+                validate_expression(*method.result, available, functions);
+            }
         }
     }
 
