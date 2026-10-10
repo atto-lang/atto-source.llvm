@@ -25,6 +25,8 @@ OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
                                        OresActorTurn turn, int64_t value);
 int64_t ores_actor_i64_heap_read(OresActorI64Heap* heap,
                                   OresActorTurn turn, OresActorSlot slot);
+/* Generic writes cannot target compiler-initialized fixed actor fields.
+ * Fixed-field writes must go through the checked field_write entrypoint. */
 void ores_actor_i64_heap_write(OresActorI64Heap* heap,
                                  OresActorTurn turn,
                                  OresActorSlot slot, int64_t value);
