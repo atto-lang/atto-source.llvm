@@ -151,6 +151,12 @@ void validate_i64_ownership(const Program& program) {
         Locals locals;
         for (const auto& param : function.parameters)
             locals.emplace(param.name, LocalOwnership{param.mode});
+        for (const auto& binding : function.locals) {
+            // Lifetime starts only after validating the initializer. Moves
+            // made by earlier bindings carry through to later expressions.
+            check_value(*binding.initializer, locals, functions);
+            locals.emplace(binding.name, LocalOwnership{Mode::Value});
+        }
         check_value(*function.result, locals, functions);
     }
 }
