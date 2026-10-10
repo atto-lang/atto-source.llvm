@@ -121,6 +121,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-owned-heap-test)
     set_tests_properties(native_actor_owned_heap_quiescence PROPERTIES TIMEOUT 20)
 
+    # Host-only deterministic actor arena: persistent slab + per-turn scratch.
+    add_executable(oreslang-native-actor-arena-test
+        tests/native_actor_arena_test.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-arena-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_arena_persistent_scratch_quiescence
+        COMMAND oreslang-native-actor-arena-test)
+    set_tests_properties(native_actor_arena_persistent_scratch_quiescence
+        PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-owned-native-region-test
         tests/native_owned_region_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
