@@ -1,0 +1,12 @@
+// Immutable source actor fields persisted in a native ActorId heap.
+define actor Counter as {
+  const base: int = 40;
+  val delta: int = 2;
+  pub fnc read(): int {
+    return base + delta;
+  }
+  pub fnc plus(int n): int {
+    const local: owned int = base + delta;
+    return local + n;
+  }
+}
