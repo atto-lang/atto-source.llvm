@@ -53,6 +53,13 @@ public:
             throw std::overflow_error("DOP byte length exceeds signed 64-bit ABI");
     }
 
+    Layout layout() const noexcept { return layout_; }
+    std::uint64_t rows() const noexcept { return rows_; }
+    std::uint32_t fields() const noexcept { return fields_; }
+    std::uint32_t scalar_bytes() const noexcept { return scalar_bytes_; }
+    std::uint32_t alignment() const noexcept { return alignment_; }
+    std::uint32_t lanes() const noexcept { return lanes_; }
+
     std::uint64_t byte_length() const {
         switch (layout_) {
         case Layout::AoS:
