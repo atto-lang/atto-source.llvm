@@ -37,6 +37,23 @@ provides that proof and prevents concurrent/reentrant accesses.
 destructor glue, inter-actor transport, the source borrow checker and
 actor-specific native memory quotas are still not lowered by LLVM.
 
+The fixed-capacity arena now also exposes
+`emplace_owned<T>(actor, ctorArgs...)` for no-throw native actor-owned
+objects. It registers one type-erased `noexcept` destructor callback in the
+node slot. `remove` invalidates the node generation before invoking the
+destructor; `retire` revokes all node handles before running every remaining
+object destructor exactly once, independent of graph cycles. Object slots
+reject raw byte-copy and overwrite operations to prevent bypassing native
+object lifetime rules. The C++ test checks explicit drop, reuse after drop,
+exact-once retirement, and ASan/UBSan memory safety.
+
+**Scope:** this is executable native object lifetime/drop glue, not compiler
+lowering of arbitrary Oreslang class fields or async borrow lifetimes.
+The compiler must still generate typed placement constructors and destructor
+glue and forbid destructor reentry/cross-actor pointers. Constructors and
+destructors are intentionally restricted to `noexcept` and default-aligned
+objects; larger/overaligned object layout needs a different arena.
+
 The native `ActorOwnedGraphHeap` test covers cycles, deterministic
 logical reclamation, ABA generation reuse, cross-owner exclusion,
 capacity, and refusal to retire before quiescence. Native CTest:
