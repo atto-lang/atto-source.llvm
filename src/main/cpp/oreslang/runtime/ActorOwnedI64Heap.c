@@ -201,6 +201,35 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
     }
     rejected();
 }
+void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
+                                    uint64_t domain, uint64_t epoch,
+                                    uint64_t index, int64_t initial) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity) rejected();
+    ActorSlot* field = &heap->slots[index];
+    // Unlike an ordinary slot, source-level actor fields are initialized
+    // exactly once during the actor's first admitted turn.
+    if (field->live || field->generation != 1) rejected();
+    field->value = initial;
+    field->live = 1;
+    unlock_heap(heap);
+}
+
+int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
+                                       uint64_t domain, uint64_t epoch,
+                                       uint64_t index) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity || !heap->slots[index].live)
+        rejected();
+    const int64_t value = heap->slots[index].value;
+    unlock_heap(heap);
+    return value;
+}
+
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap) {
     lock_heap(heap);
     heap->retiring = 1; /* no subsequent actor turn may enter */
