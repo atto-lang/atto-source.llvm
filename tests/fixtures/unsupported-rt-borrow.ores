@@ -1,0 +1,2 @@
+// No LLVM ownership proof exists for rt borrow yet.
+pub fnc main(): int { return rt borrow 42; }
