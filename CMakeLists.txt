@@ -53,9 +53,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --ir "call void @oreslang_owned_i64_region_close") --experimental-owned-int
     oreslang_contract_test(reject_unsupported_native_heap_type owned-native-region-unsupported.ores --diagnostic "expected 'int'") --experimental-owned-int
     # Guarded early returns require one deterministic cleanup path per edge.
-    oreslang_contract_test(reject_early_branch_local_owner owned-native-early-uninitialized.ores --diagnostic "expected 'return'")
-    oreslang_contract_test(reject_early_missing_final_return owned-native-early-missing-final.ores --diagnostic "expected 'return'")
-    oreslang_contract_test(reject_early_illtyped_guard owned-native-early-illtyped-guard.ores --diagnostic "expected '='")
+    oreslang_contract_test(reject_early_branch_local_owner owned-native-early-uninitialized.ores --diagnostic "expected 'return'") --experimental-owned-int
+    oreslang_contract_test(reject_early_missing_final_return owned-native-early-missing-final.ores --diagnostic "expected 'return'") --experimental-owned-int
+    oreslang_contract_test(reject_early_illtyped_guard owned-native-early-illtyped-guard.ores --diagnostic "expected '='") --experimental-owned-int
 
     oreslang_contract_test(reject_uninitialized_owned_local owned-uninitialized.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_duplicate_owned_local owned-duplicate.ores --diagnostic "duplicate owned local")
