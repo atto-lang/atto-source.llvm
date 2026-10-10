@@ -1,0 +1,28 @@
+name: LLVM ownership syntax and CFG stress
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  owned-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Install LLVM and native compilers
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure complete project CTest inventory
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build native runtime and source compiler
+        run: cmake --build build --parallel 2
+      - name: Execute complete CTest suite
+        run: ctest --test-dir build --output-on-failure --parallel 2
+      - name: Repeat source-to-native ownership and CFG regressions
+        run: |
+          python3 tests/owned_syntax_stress.py \
+            --compiler ./build/oreslang-llvmc \
+            --clang clang \
+            --native-runtime src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c
