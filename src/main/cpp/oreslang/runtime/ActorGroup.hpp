@@ -32,6 +32,8 @@ class ActorGroup final {
         std::shared_future<void> done_future;
         Phase phase = Phase::starting; // guarded by ActorGroup::mutex_
         bool stop_requested = false;  // guarded by ActorGroup::mutex_
+        bool ready_settled = false;   // close/stop can settle readiness first
+        bool initialized = false;     // on_start succeeded (distinct from settled)
 
         WorkerState(std::uint64_t group_id, std::uint64_t worker_id,
                     std::function<void()> stop)
@@ -106,6 +108,8 @@ public:
         auto state = find_locked(ref);
         if (!state || state->phase != Phase::starting || closed_) return false;
         state->phase = Phase::ready;
+        state->initialized = true;
+        state->ready_settled = true;
         state->ready_promise.set_value();
         return true;
     }
@@ -116,9 +120,16 @@ public:
         if (!error) throw std::invalid_argument("startup failure cause required");
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = find_locked(ref);
-        if (!state || state->phase != Phase::starting) return false;
+        // close() or request_stop() can win the race and settle readiness
+        // exceptionally before on_start reports its own failure. The latter
+        // must still finalize this entry after physical cleanup, without
+        // double-fulfilling the readiness promise or stranding get_done().
+        if (!state || state->initialized) return false;
+        if (!state->ready_settled) {
+            state->ready_settled = true;
+            state->ready_promise.set_exception(error);
+        }
         state->phase = Phase::terminal;
-        state->ready_promise.set_exception(error);
         state->done_promise.set_exception(error);
         workers_.erase(state->id);
         return true;
@@ -130,7 +141,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = find_locked(ref);
         if (!state || state->phase == Phase::terminal) return false;
-        if (state->phase == Phase::starting) {
+        if (!state->ready_settled) {
+            state->ready_settled = true;
             state->ready_promise.set_exception(std::make_exception_ptr(
                 std::runtime_error("actor finalized before readiness")));
         }
@@ -151,7 +163,8 @@ public:
             auto state = find_locked(ref);
             if (!state || state->stop_requested) return false;
             state->stop_requested = true;
-            if (state->phase == Phase::starting) {
+            if (!state->ready_settled) {
+                state->ready_settled = true;
                 state->ready_promise.set_exception(std::make_exception_ptr(
                     std::runtime_error("actor stopped before readiness")));
             }
@@ -193,7 +206,8 @@ public:
                 auto& state = item.second;
                 if (state->stop_requested) continue;
                 state->stop_requested = true;
-                if (state->phase == Phase::starting) {
+                if (!state->ready_settled) {
+                    state->ready_settled = true;
                     state->ready_promise.set_exception(std::make_exception_ptr(
                         std::runtime_error("ActorGroup closed before actor readiness")));
                 }
