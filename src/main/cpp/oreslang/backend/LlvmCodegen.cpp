@@ -80,6 +80,14 @@ std::string emit_verified_llvm_ir(const Program& source) {
             "oreslang_owned_i64_region_close",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
 
+    llvm::FunctionCallee fieldInit = module.getOrInsertFunction(
+            "ores_actor_i64_heap_field_init",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                    {ptr, i64, i64, i64, i64}, false));
+    llvm::FunctionCallee fieldRead = module.getOrInsertFunction(
+            "ores_actor_i64_heap_field_read",
+            llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false));
+
     std::unordered_map<std::string, llvm::Function*> declarations;
 
     // Declare all functions first, enabling forward calls and recursion.
@@ -147,6 +155,91 @@ std::string emit_verified_llvm_ir(const Program& source) {
         builder.CreateRet(result);
     }
 
+    // Actor field layout is fixed and private to an admitted native actor
+    // heap. Runtime/FFI code is responsible for creating a heap with at least
+    // actor.fields.size() slots and passing fresh scheduler turn tokens.
+    for (const auto& actor : source.actors) {
+        const std::string symbol = "oreslang_actor_" + actor.name;
+        auto* initTy = llvm::FunctionType::get(
+                llvm::Type::getVoidTy(context), {ptr, i64, i64}, false);
+        auto* initialize = llvm::Function::Create(
+                initTy, llvm::Function::ExternalLinkage, symbol + "_init", module);
+        auto* initBlock = llvm::BasicBlock::Create(context, "entry", initialize);
+        llvm::IRBuilder<> initBuilder(initBlock);
+        auto arg = initialize->arg_begin();
+        llvm::Value* actorHeap = &*arg++;
+        llvm::Value* domain = &*arg++;
+        llvm::Value* epoch = &*arg++;
+        const std::unordered_map<std::string, llvm::Value*> noValues;
+        const std::unordered_map<std::string, llvm::Function*> noFunctions;
+        for (std::size_t index = 0; index < actor.fields.size(); ++index) {
+            auto* value = lower(*actor.fields[index].initializer, initBuilder, i64,
+                                noValues, noValues, noFunctions);
+            initBuilder.CreateCall(fieldInit,
+                 {actorHeap, domain, epoch,
+                  llvm::ConstantInt::get(i64, index), value});
+        }
+        initBuilder.CreateRetVoid();
+
+        for (const auto& method : actor.methods) {
+            std::vector<llvm::Type*> types{ptr, i64, i64};
+            types.insert(types.end(), method.parameters.size(), i64);
+            auto* signature = llvm::FunctionType::get(i64, types, false);
+            auto* fn = llvm::Function::Create(
+                    signature, llvm::Function::ExternalLinkage,
+                    symbol + "_" + method.name, module);
+            auto* block = llvm::BasicBlock::Create(context, "entry", fn);
+            llvm::IRBuilder<> builder(block);
+            auto args = fn->arg_begin();
+            llvm::Value* heap = &*args++;
+            llvm::Value* currentDomain = &*args++;
+            llvm::Value* currentEpoch = &*args++;
+            std::unordered_map<std::string, llvm::Value*> parameters;
+            for (const auto& name : method.parameters) {
+                parameters.emplace(name, &*args++);
+            }
+            std::unordered_map<std::string, llvm::Value*> locals;
+            for (std::size_t index = 0; index < actor.fields.size(); ++index) {
+                llvm::Value* value = builder.CreateCall(fieldRead,
+                    {heap, currentDomain, currentEpoch,
+                     llvm::ConstantInt::get(i64, index)}, actor.fields[index].name);
+                auto* slot = builder.CreateAlloca(i64, nullptr,
+                                                actor.fields[index].name + ".field");
+                builder.CreateStore(value, slot);
+                locals.emplace(actor.fields[index].name, slot);
+            }
+            struct LocalSlot {llvm::Value* slot; bool heap;};
+            std::vector<LocalSlot> ownedSlots;
+            const auto count = std::count_if(method.locals.begin(), method.locals.end(),
+                    [](const LocalBinding& local){return local.heap_owned;});
+            llvm::Value* region = nullptr;
+            if (count) region = builder.CreateCall(heapOpen,
+                   {llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(count))});
+            for (const auto& local : method.locals) {
+                auto* value = lower(*local.initializer, builder, i64,
+                                    parameters, locals, declarations);
+                llvm::Value* address = nullptr;
+                if (local.heap_owned) {
+                    address = builder.CreateCall(heapNew, {region, value});
+                } else {
+                    address = builder.CreateAlloca(i64, nullptr, local.name + ".local");
+                    builder.CreateLifetimeStart(address, llvm::ConstantInt::get(i64, 8));
+                    builder.CreateStore(value, address);
+                }
+                locals.emplace(local.name, address);
+                ownedSlots.push_back({address, local.heap_owned});
+            }
+            auto* result = lower(*method.result, builder, i64,
+                                 parameters, locals, declarations);
+            for (auto iter = ownedSlots.rbegin(); iter != ownedSlots.rend(); ++iter) {
+                if (iter->heap) builder.CreateCall(heapDrop, {region, iter->slot});
+                else builder.CreateLifetimeEnd(iter->slot, llvm::ConstantInt::get(i64, 8));
+            }
+            if (region) builder.CreateCall(heapClose, {region});
+            builder.CreateRet(result);
+        }
+    }
+
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
     if (llvm::verifyModule(module, &errors)) {
@@ -177,7 +270,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_owned_i64_region_open"
                             && name != "oreslang_owned_i64_region_new"
                             && name != "oreslang_owned_i64_region_drop"
-                            && name != "oreslang_owned_i64_region_close") {
+                            && name != "oreslang_owned_i64_region_close"
+                            && name != "ores_actor_i64_heap_field_init"
+                            && name != "ores_actor_i64_heap_field_read") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }
