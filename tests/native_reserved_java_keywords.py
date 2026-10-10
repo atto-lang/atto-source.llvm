@@ -30,6 +30,52 @@ CASES = {
         "pub fnc main(int value): int { return structural; }",
         "expected int expression",
     ),
+    # Exceptional control effects are reserved in both implementations.
+    # LLVM cannot silently reinterpret them as ordinary user identifiers.
+    "throw-function": (
+        "pub fnc throw(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "raise-function": (
+        "pub fnc raise(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "panic-function": (
+        "pub fnc panic(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "recover-parameter": (
+        "pub fnc main(int recover): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "throw-expression": (
+        "pub fnc main(): int { return throw; }",
+        "expected int expression",
+    ),
+    "panic-expression": (
+        "pub fnc main(): int { return panic; }",
+        "expected int expression",
+    ),
+    "trap-modifier": (
+        "pub trap fnc main(): int { return 42; }",
+        "native exception/control effect unsupported",
+    ),
+    "raise-statement": (
+        "pub fnc main(): int { raise 42; return 0; }",
+        "native exception/control effect unsupported",
+    ),
+    "panic-statement": (
+        "pub fnc main(): int { panic 42; return 0; }",
+        "native exception/control effect unsupported",
+    ),
+    "defer-statement": (
+        "pub fnc main(): int { defer cleanup(); return 0; }",
+        "native exception/control effect unsupported",
+    ),
+    "try-statement": (
+        "pub fnc main(): int { try { return 42; } catch (err) { return 0; } }",
+        "native exception/control effect unsupported",
+    ),
 }
 
 
