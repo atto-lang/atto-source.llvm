@@ -1,20 +1,30 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
 namespace oreslang {
 
-// CONTROL-plane substrate only: the source compiler does not yet lower
-// guest ActorGroup hooks or throw/raise/panic into this channel.
+/**
+ * Native actor-supervision CONTROL lane, independent of data mailboxes.
+ * Reserve a node before admitting a child. After reservation, publication
+ * writes bounded data into that node and appends an intrusive FIFO link:
+ * no per-failure queue growth, heap allocation or tracing GC.
+ *
+ * The caller is responsible for scheduling the supervisor's logical lane.
+ * This class never runs callbacks under its mutex, and is not guest lowering.
+ */
 class SupervisorFailureLane {
 public:
     struct ActorKey {
@@ -32,10 +42,9 @@ public:
         ActorKey actor;
         Kind kind;
         std::string summary;
+        std::string parent_id;
     };
 
-    // Pure virtual methods require exhaustive host-side dispatch coverage.
-    // Guest on_panic/on_raise/on_throw compiler enforcement is not implemented.
     struct Handler {
         virtual ~Handler() = default;
         virtual void on_throw(const Failure&) = 0;
@@ -49,76 +58,98 @@ public:
         if (capacity == 0) throw std::invalid_argument("capacity must be positive");
     }
 
-    // Call before spawning each child. Capacity exhaustion rejects admission.
     void reserve(const ActorKey& actor) {
         if (actor.id.empty()) throw std::invalid_argument("empty actor identity");
         std::lock_guard<std::mutex> lock(mu_);
-        if (children_.count(actor)) throw std::logic_error("duplicate supervision reservation");
-        if (children_.size() >= capacity_) throw std::logic_error("supervision slots exhausted");
-        children_.emplace(actor, Slot{});
+        if (children_.size() >= capacity_) {
+            throw std::logic_error("supervision slots exhausted");
+        }
+        auto [it, inserted] = children_.try_emplace(actor);
+        if (!inserted) throw std::logic_error("duplicate supervision reservation");
+        // std::map does not relocate nodes; this pointer survives until ack.
+        it->second.actor = &it->first;
     }
 
-    // Terminal publication never competes with the user's data mailbox.
-    // At most one terminal event per reserved actor generation is admitted.
     bool publish(Failure failure) {
+        return publish_preallocated(failure.actor, failure.kind,
+                                    failure.summary, failure.parent_id);
+    }
+
+    /**
+     * Allocation-free terminal publication after pre-reservation, barring
+     * platform mutex/runtime behavior. Fail closed for unknown generations.
+     * Does not execute handlers or acquire an ordinary mailbox lock.
+     */
+    bool publish_preallocated(const ActorKey& actor, Kind kind,
+                              std::string_view summary,
+                              std::string_view parent_id = {}) {
         std::lock_guard<std::mutex> lock(mu_);
-        auto& slot = require(failure.actor);
-        if (slot.event) return false;
-        if (failure.summary.size() > 512) failure.summary.resize(512);
-        slot.event = std::move(failure);
-        pending_.push_back(slot.event->actor);
+        Slot& slot = require(actor);
+        if (slot.has_event) return false;
+        slot.kind = kind;
+        store(slot.summary, slot.summary_length, summary);
+        store(slot.parent_id, slot.parent_length, parent_id);
+        slot.has_event = true;
+        enqueue(slot);
         return true;
     }
 
-    // Marks an event in flight. Reservation persists until explicit ack.
     std::optional<Failure> poll() {
         std::lock_guard<std::mutex> lock(mu_);
-        if (pending_.empty()) return std::nullopt;
-        auto actor = pending_.front();
-        pending_.pop_front();
-        auto& slot = require(actor);
-        if (slot.in_flight || !slot.event) throw std::logic_error("queue invariant");
-        slot.in_flight = true;
-        return slot.event;
+        if (!head_) return std::nullopt;
+        Slot* slot = head_;
+        if (!slot->queued || slot->in_flight || !slot->has_event) {
+            throw std::logic_error("supervisor queue invariant");
+        }
+        // Materialize before unlink. On allocation failure, CONTROL remains
+        // queued and no in-flight message becomes inaccessible.
+        Failure failure{*slot->actor, slot->kind,
+            std::string(slot->summary.data(), slot->summary_length),
+            std::string(slot->parent_id.data(), slot->parent_length)};
+        unlink_head();
+        slot->in_flight = true;
+        return failure;
     }
 
     void ack(const ActorKey& actor) {
         std::lock_guard<std::mutex> lock(mu_);
-        auto& slot = require(actor);
-        if (!slot.in_flight) throw std::logic_error("event is not in flight");
-        children_.erase(actor);
+        auto it = children_.find(actor);
+        if (it == children_.end() || !it->second.in_flight) {
+            throw std::logic_error("event is not in flight");
+        }
+        children_.erase(it);
     }
 
     void retry(const ActorKey& actor) {
         std::lock_guard<std::mutex> lock(mu_);
-        auto& slot = require(actor);
+        Slot& slot = require(actor);
         if (!slot.in_flight) throw std::logic_error("event is not in flight");
         slot.in_flight = false;
-        pending_.push_back(actor);
+        enqueue(slot);
     }
 
     void retire_gracefully(const ActorKey& actor) {
         std::lock_guard<std::mutex> lock(mu_);
-        auto& slot = require(actor);
-        if (slot.event) throw std::logic_error("failure requires ack");
-        children_.erase(actor);
+        auto it = children_.find(actor);
+        if (it == children_.end()) throw std::logic_error("unknown/stale actor generation");
+        if (it->second.has_event) throw std::logic_error("failure requires ack");
+        children_.erase(it);
     }
 
-    // Never invoke guest/host handler while holding the CONTROL queue mutex.
     bool dispatch_one(Handler& handler) {
-        const auto failure = poll();
-        if (!failure) return false;
+        auto event = poll();
+        if (!event) return false;
         try {
-            switch (failure->kind) {
-                case Kind::Throw: handler.on_throw(*failure); break;
-                case Kind::Raise: handler.on_raise(*failure); break;
-                case Kind::Panic: handler.on_panic(*failure); break;
-                case Kind::Cancel: handler.on_cancel(*failure); break;
-                case Kind::HostFailure: handler.on_host_failure(*failure); break;
+            switch (event->kind) {
+                case Kind::Throw: handler.on_throw(*event); break;
+                case Kind::Raise: handler.on_raise(*event); break;
+                case Kind::Panic: handler.on_panic(*event); break;
+                case Kind::Cancel: handler.on_cancel(*event); break;
+                case Kind::HostFailure: handler.on_host_failure(*event); break;
             }
-            ack(failure->actor);
+            ack(event->actor);
         } catch (...) {
-            retry(failure->actor);
+            retry(event->actor);
             throw;
         }
         return true;
@@ -128,27 +159,64 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         return children_.size();
     }
+
     std::size_t pending_count() const {
         std::lock_guard<std::mutex> lock(mu_);
-        return pending_.size();
+        return pending_count_;
     }
 
 private:
     struct Slot {
-        std::optional<Failure> event;
+        const ActorKey* actor = nullptr;
+        Kind kind = Kind::HostFailure;
+        std::array<char, 512> summary{};
+        std::array<char, 128> parent_id{};
+        std::size_t summary_length = 0;
+        std::size_t parent_length = 0;
+        bool has_event = false;
         bool in_flight = false;
+        bool queued = false;
+        Slot* next = nullptr;
     };
 
+    template <std::size_t N>
+    static void store(std::array<char, N>& buffer, std::size_t& length,
+                      std::string_view text) {
+        length = std::min(N, text.size());
+        if (length != 0) std::memcpy(buffer.data(), text.data(), length);
+    }
+
     Slot& require(const ActorKey& actor) {
-        const auto found = children_.find(actor);
-        if (found == children_.end()) throw std::logic_error("unknown/stale actor generation");
-        return found->second;
+        auto it = children_.find(actor);
+        if (it == children_.end()) throw std::logic_error("unknown/stale actor generation");
+        return it->second;
+    }
+
+    void enqueue(Slot& slot) {
+        if (slot.queued || slot.in_flight) throw std::logic_error("double queue");
+        slot.next = nullptr;
+        slot.queued = true;
+        if (tail_) tail_->next = &slot;
+        else head_ = &slot;
+        tail_ = &slot;
+        ++pending_count_;
+    }
+
+    void unlink_head() {
+        Slot* current = head_;
+        head_ = current->next;
+        if (!head_) tail_ = nullptr;
+        current->next = nullptr;
+        current->queued = false;
+        --pending_count_;
     }
 
     const std::size_t capacity_;
     mutable std::mutex mu_;
     std::map<ActorKey, Slot> children_;
-    std::deque<ActorKey> pending_;
+    Slot* head_ = nullptr;
+    Slot* tail_ = nullptr;
+    std::size_t pending_count_ = 0;
 };
 
 } // namespace oreslang
