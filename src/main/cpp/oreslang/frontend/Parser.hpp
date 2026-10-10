@@ -11,7 +11,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, Copy, Take, Share };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, Copy, Take, Share, Borrow, BorrowMut };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -21,9 +21,15 @@ struct Expression {
     std::vector<std::unique_ptr<Expression>> arguments;
 };
 
+struct Parameter {
+    enum class Mode { Value, Borrow, BorrowMut };
+    std::string name;
+    Mode mode = Mode::Value;
+};
+
 struct Function {
     std::string name;
-    std::vector<std::string> parameters;
+    std::vector<Parameter> parameters;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
