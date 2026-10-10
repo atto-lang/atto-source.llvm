@@ -43,7 +43,7 @@ static void test_independent_actor_storage_and_cycles() {
     check(!alice.read<Node>(*two), "removed node handle must stay stale");
     check(!alice.remove(*two), "double-remove must fail");
     auto replacement = alice.allocate(sizeof(Node), alignof(Node));
-    check(replacement, "reused slot must allocate");
+    check(replacement.has_value(), "reused slot must allocate");
     check(!alice.read<Node>(*two), "reused slot must not resurrect old ID");
     check(alice.write(*replacement, Node{*replacement, 42}),
           "self-cycle must be supported without reference counting");
@@ -90,11 +90,11 @@ static void test_heap_address_reuse_aba() {
     alignas(Heap) unsigned char storage[sizeof(Heap)];
     Heap* former = new (storage) Heap(33);
     auto old = former->allocate(8);
-    check(old, "old heap allocation");
+    check(old.has_value(), "old heap allocation");
     former->~Heap();
     Heap* fresh = new (storage) Heap(33);
     auto value = fresh->allocate(8);
-    check(value, "new actor incarnation must allocate");
+    check(value.has_value(), "new actor incarnation must allocate");
     check(!fresh->read<std::uint64_t>(*old),
           "new actor heap must reject old-generation handle");
     fresh->~Heap();
