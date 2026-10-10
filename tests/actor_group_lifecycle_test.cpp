@@ -1,6 +1,9 @@
 #include "oreslang/runtime/ActorGroup.hpp"
 
 #include <atomic>
+#ifdef NDEBUG
+#undef NDEBUG // lifecycle regression assertions must run in Release builds
+#endif
 #include <cassert>
 #include <chrono>
 #include <future>
@@ -47,6 +50,52 @@ static void startup_failure_propagates_to_both_observers() {
     require_throws([&] { ref.get_done().get(); });
     assert(!group.mark_ready(ref));
     assert(group.size() == 0);
+}
+
+static void cancelled_startup_failure_must_settle_done_exactly_once() {
+    for (int i = 0; i < 200; ++i) {
+        ActorGroup group(1);
+        std::atomic<int> stops{0};
+        const auto ref = group.register_spawn([&] { ++stops; });
+        if ((i & 1) == 0) {
+            group.close();
+        } else {
+            assert(group.request_stop(ref));
+        }
+        assert(stops == 1);
+        // The cancellation observer is already settled, but physical cleanup
+        // and the subsequent startup failure must still settle termination.
+        require_throws([&] { ref.get_ready().get(); });
+        assert(ref.get_done().wait_for(0ms) == std::future_status::timeout);
+        assert(group.startup_failed(ref,
+            std::make_exception_ptr(std::runtime_error("startup failed after stop"))));
+        require_throws([&] { ref.get_done().get(); });
+        assert(ref.get_done().wait_for(0ms) == std::future_status::ready);
+        assert(group.size() == 0);
+        assert(!group.startup_failed(ref,
+            std::make_exception_ptr(std::runtime_error("duplicate"))));
+        assert(!group.finalized(ref));
+    }
+}
+
+static void concurrent_shutdown_and_failed_startup_do_not_strand_futures() {
+    for (int i = 0; i < 200; ++i) {
+        ActorGroup group(1);
+        std::atomic<int> stops{0};
+        const auto ref = group.register_spawn([&] { ++stops; });
+        std::thread failure([&] {
+            group.startup_failed(ref,
+                std::make_exception_ptr(std::runtime_error("start failed")));
+        });
+        group.close();
+        failure.join();
+        assert(ref.get_ready().wait_for(0ms) == std::future_status::ready);
+        assert(ref.get_done().wait_for(0ms) == std::future_status::ready);
+        require_throws([&] { ref.get_ready().get(); });
+        require_throws([&] { ref.get_done().get(); });
+        assert(group.size() == 0);
+        assert(stops <= 1);
+    }
 }
 
 static void close_fences_admission_and_only_requests_stop() {
@@ -113,6 +162,8 @@ static void readiness_racing_close_cannot_resurrect_a_worker() {
 int main() {
     spawn_ref_is_pending_until_startup_and_done_is_independent();
     startup_failure_propagates_to_both_observers();
+    cancelled_startup_failure_must_settle_done_exactly_once();
+    concurrent_shutdown_and_failed_startup_do_not_strand_futures();
     close_fences_admission_and_only_requests_stop();
     stale_foreign_and_quota_cases_fail_closed();
     readiness_racing_close_cannot_resurrect_a_worker();
