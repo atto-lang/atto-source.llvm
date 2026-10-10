@@ -16,6 +16,7 @@ typedef struct {
     uint64_t generation;
     uint32_t loans;
     unsigned char live;
+    unsigned char field_mutable;
 } ActorSlot;
 
 typedef struct {
@@ -144,7 +145,9 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
                                   OresActorSlot slot, int64_t value) {
     lock_heap(heap);
     require_turn(heap, turn);
-    checked_slot(heap, slot)->value = value;
+    ActorSlot* target = checked_slot(heap, slot);
+    if (target->loans != 0) rejected();
+    target->value = value;
     unlock_heap(heap);
 }
 void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
@@ -214,6 +217,34 @@ void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
     if (field->live || field->generation != 1) rejected();
     field->value = initial;
     field->live = 1;
+    unlock_heap(heap);
+}
+
+void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
+                                           uint64_t domain, uint64_t epoch,
+                                           uint64_t index, int64_t initial) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity) rejected();
+    ActorSlot* field = &heap->slots[index];
+    if (field->live || field->generation != 1) rejected();
+    field->value = initial;
+    field->field_mutable = 1;
+    field->live = 1;
+    unlock_heap(heap);
+}
+
+void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
+                                     uint64_t domain, uint64_t epoch,
+                                     uint64_t index, int64_t value) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity) rejected();
+    ActorSlot* field = &heap->slots[index];
+    if (!field->live || !field->field_mutable || field->loans != 0) rejected();
+    field->value = value;
     unlock_heap(heap);
 }
 
