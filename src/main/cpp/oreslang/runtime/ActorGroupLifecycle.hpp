@@ -153,55 +153,76 @@ public:
         return true;
     }
 
-    /** Request stop once for each managed actor, without blocking carriers. */
+    /**
+     * Request stop once for each managed actor without blocking a carrier.
+     * Stage stop callbacks and notification capacity *before* changing
+     * phases, so an allocation failure cannot strand a "stopping" worker
+     * whose stop request was never actually dispatched.
+     */
     void stop_workers() {
         std::vector<StopRequest> stops;
-        std::vector<std::pair<std::vector<NativeActorRef::ReadyContinuation>,
-                              ActorReadyResult>> notifications;
+        std::vector<std::vector<NativeActorRef::ReadyContinuation>> waiters;
+        const ActorReadyResult rejected{false, "worker stopped before ready"};
         {
             std::lock_guard<std::mutex> guard(mutex_);
             if (closed_) return;
+            stops.reserve(workers_.size());
+            waiters.reserve(workers_.size());
+            for (const auto& item : workers_) {
+                const Entry& worker = item.second;
+                if (worker.phase == Phase::stopping) continue;
+                stops.push_back(worker.stop_request); // may throw, nothing changed yet
+            }
+            // The fallible work above has completed; now gate readiness and
+            // stop retries under the same group lock.
             for (auto& item : workers_) {
                 Entry& worker = item.second;
                 if (worker.phase == Phase::stopping) continue;
                 if (worker.phase == Phase::starting) {
-                    ActorReadyResult result{false, "worker stopped before ready"};
-                    notifications.emplace_back(settle_ticket(worker.ref, result), result);
+                    // Each output vector moves existing callbacks, no guest
+                    // callback runs under the actor-group mutex.
+                    waiters.push_back(settle_ticket(worker.ref, rejected));
                 }
                 worker.phase = Phase::stopping;
-                stops.push_back(worker.stop_request);
             }
         }
-        for (auto& notification : notifications)
-            notify(notification.first, notification.second);
+        for (auto& callbacks : waiters) notify(callbacks, rejected);
         request_stops(stops);
     }
 
-    /** Fence admissions and readiness before invoking any stop callback. */
+    /**
+     * Close never allocates to collect stop callbacks. Detach the entire
+     * worker table with unordered_map::swap under the admission lock, then
+     * process every detached entry independently. An exception from a
+     * readiness callback can never prevent the corresponding stop request.
+     */
     void close() noexcept {
-        std::vector<StopRequest> stops;
-        std::vector<std::pair<std::vector<NativeActorRef::ReadyContinuation>,
-                              ActorReadyResult>> notifications;
-        try {
-            {
-                std::lock_guard<std::mutex> guard(mutex_);
-                if (closed_) return;
-                closed_ = true;
-                for (auto& item : workers_) {
-                    Entry& worker = item.second;
-                    ActorReadyResult result{false, "ActorGroup closed before ready"};
-                    notifications.emplace_back(settle_ticket(worker.ref, result), result);
-                    if (worker.phase != Phase::stopping)
-                        stops.push_back(std::move(worker.stop_request));
+        std::unordered_map<std::uint64_t, Entry> detached;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            if (closed_) return;
+            closed_ = true;
+            detached.swap(workers_);
+        }
+        for (auto& item : detached) {
+            Entry& worker = item.second;
+            if (worker.phase == Phase::starting) {
+                try {
+                    const ActorReadyResult rejected{false, "ActorGroup closed before ready"};
+                    auto callbacks = settle_ticket(worker.ref, rejected);
+                    notify(callbacks, rejected);
+                } catch (...) {
+                    // Keep processing all detached workers. A true OOM can
+                    // still prevent notifying an awaiter; it must never
+                    // prevent the group from requesting actor shutdown.
                 }
-                workers_.clear();
             }
-            for (auto& notification : notifications)
-                notify(notification.first, notification.second);
-            request_stops(stops);
-        } catch (...) {
-            // Destructors cannot throw. Supervisor callbacks must be noexcept
-            // or report failure through a separate host error channel.
+            if (worker.phase != Phase::stopping) {
+                try { worker.stop_request(); }
+                catch (...) {
+                    // Other workers' stop requests still run.
+                }
+            }
         }
     }
 
