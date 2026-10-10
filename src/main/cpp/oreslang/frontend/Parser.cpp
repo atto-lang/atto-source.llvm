@@ -42,7 +42,7 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "over", "structural", "int"
+        "gpu", "quantum", "over", "structural", "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -142,6 +142,9 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (token_.text == "gpu" || token_.text == "quantum") {
+            fail("native accelerator lowering unsupported");
+        }
         if (token_.text == "suspends") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
@@ -365,6 +368,12 @@ private:
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
+        if (token_.text == "gpu" || token_.text == "quantum") {
+            throw std::runtime_error("native gpu/quantum boundary unsupported: "
+                    "validated effects, ownership, device lowering and explicit "
+                    "backend admission required; no implicit CPU fallback at byte "
+                    + std::to_string(token_.offset));
+        }
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
         // suspended/native execution frame or deferred callback.
