@@ -27,6 +27,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Header-only native arena proof: independent actor byte regions without
+    # tracing GC. This is not yet a compiled Oreslang actor object heap.
+    add_executable(oreslang-actor-owned-heap-test tests/actor_owned_heap_test.cpp)
+    target_include_directories(oreslang-actor-owned-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-owned-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_heap_contract
+        COMMAND oreslang-actor-owned-heap-test)
+
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
