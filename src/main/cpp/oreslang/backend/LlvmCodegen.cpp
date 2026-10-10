@@ -63,7 +63,7 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source) {
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
-    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::IntegerType* i64 = llvm::Type::getInt64Ty(context);
     std::unordered_map<std::string, llvm::Function*> declarations;
 
     // Declare all functions first, enabling forward calls and recursion.
