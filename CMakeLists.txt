@@ -108,6 +108,14 @@ if(BUILD_TESTING)
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
 
+    # Independent actor-owned native heap tests are portable (no Linux syscalls).
+    add_executable(oreslang-actor-heap-test tests/actor_heap_test.cpp)
+    target_include_directories(oreslang-actor-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-heap-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_heap_no_tracing_gc
+             COMMAND oreslang-actor-heap-test)
+
     # Linux-specific actor-neutral wake/park primitive. This does NOT
     # implement the actor scheduler or certify lock-free mailbox delivery.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
