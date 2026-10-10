@@ -16,6 +16,8 @@ def main():
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
     parser.add_argument("--native-runtime")
+    parser.add_argument("--actor-runtime")
+    parser.add_argument("--native-harness")
     args = parser.parse_args()
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
@@ -42,6 +44,17 @@ def main():
                 "-x", "c", str(native_source),
                 "-std=c11", "-I", str(native_source.parents[2]),
             ])
+        if args.actor_runtime:
+            path = pathlib.Path(args.actor_runtime)
+            clang_args.extend([
+                "-x", "c", str(path), "-std=c11",
+                "-I", str(path.parents[2]),
+            ])
+        if args.native_harness:
+            harness = pathlib.Path(args.native_harness)
+            # The actor source module may contain no top-level main;
+            # the trusted test harness supplies native actor turns.
+            clang_args.extend(["-x", "c", str(harness), "-std=c11"])
         clang_args.extend(["-o", executable])
         native = subprocess.run(
             clang_args, input=compile_result.stdout,
