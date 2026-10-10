@@ -70,6 +70,19 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    # Native ActorGroup worker refs are host-side only: no Oreslang actor
+    # spawn or await-spawn codegen until typed continuation lowering lands.
+    oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "expected int expression")
+    add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
+    target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-group-lifecycle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
+    set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
