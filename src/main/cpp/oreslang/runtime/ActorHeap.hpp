@@ -44,6 +44,13 @@ private:
         std::size_t length = 0;
         bool live = false;
     };
+    static void scrub(Slot& item) noexcept {
+        // Volatile writes prevent the compiler from deleting an end-of-life
+        // wipe as dead stores. This is an actor cleanup path, not hot tracing GC.
+        volatile std::byte* bytes = item.bytes.data();
+        for (std::size_t n = 0; n < SlotBytes; ++n)
+            bytes[n] = std::byte{0};
+    }
     std::array<Slot, Slots> slots_{};
     const std::uint64_t identity_ =
         next_actor_heap_identity.fetch_add(1, std::memory_order_relaxed);
@@ -76,7 +83,7 @@ public:
             std::terminate();
     }
     ~ActorHeap() noexcept {
-        for (auto& item : slots_) item.bytes.fill(std::byte{0});
+        for (auto& item : slots_) scrub(item);
     }
     ActorHeap(const ActorHeap&) = delete;
     ActorHeap& operator=(const ActorHeap&) = delete;
@@ -133,7 +140,7 @@ public:
         if (!item) return false;
         live_bytes_ -= item->length;
         --live_blocks_;
-        item->bytes.fill(std::byte{0});
+        scrub(*item);
         item->length = 0;
         item->live = false;
         // Never reuse a generation after integer wraparound.
