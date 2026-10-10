@@ -65,7 +65,9 @@ async def sweep(port, mode):
             assert sorted(actor_counts) == list(range(case * 200 + 1, case * 200 + 201)), (idx, actor_counts[:5])
         print("MATRIX backend=llvm mode=%s isolation=%s actors=5 requests=1000 concurrency=%d p50_ms=%.3f p99_ms=%.3f rps=%.3f gc_count=0 gc_pause_ms=0 rss_delta_kb=%d errors=0" %
               (mode, profile, limit, samples[499], samples[989], N / elapsed, after-before), flush=True)
+    shutdown_started = time.perf_counter()
     assert (await fetch(port, "/shutdown"))[:2] == (200, "bye")
+    return shutdown_started
 
 def main():
     parser = argparse.ArgumentParser()
@@ -89,11 +91,12 @@ def main():
                 assert line.startswith("PORT="), (mode, line, process.poll())
                 port = int(line.split()[0].split("=")[1])
                 begin = time.perf_counter()
-                asyncio.run(sweep(port, mode))
+                shutdown_started = asyncio.run(sweep(port, mode))
                 result = process.wait(timeout=20)
                 assert result == 0, (result, process.stderr.read())
-                print("MATRIX backend=llvm mode=%s shutdown_ms=%.3f physical_reclaim=true" %
-                      (mode, (time.perf_counter() - begin) * 1000), flush=True)
+                ended = time.perf_counter()
+                print("MATRIX backend=llvm mode=%s shutdown_ms=%.3f mode_total_ms=%.3f physical_reclaim=true" %
+                      (mode, (ended - shutdown_started) * 1000, (ended - begin) * 1000), flush=True)
             finally:
                 if process.poll() is None:
                     process.kill()
