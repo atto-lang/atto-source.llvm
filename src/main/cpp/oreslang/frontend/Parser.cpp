@@ -182,6 +182,12 @@ private:
         require(":");
         require("int");
         require("{");
+        if (token_.text == "try" || token_.text == "catch" ||
+            token_.text == "finally" || token_.text == "throw" ||
+            token_.text == "raise" || token_.text == "panic" ||
+            token_.text == "recover" || token_.text == "defer") {
+            fail("native exception/control effect unsupported: requires typed unwind, cleanup and actor supervision lowering");
+        }
         require("return");
         value.result = expression();
         require(";");
