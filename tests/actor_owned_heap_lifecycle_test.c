@@ -14,7 +14,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, WRITE_IMMUTABLE_FIELD, WRITE_LOANED_FIELD, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, WRITE_IMMUTABLE_FIELD, WRITE_LOANED_FIELD, GENERIC_WRITE_FIXED_FIELD, GENERIC_DROP_FIXED_FIELD, READ_GENERIC_AS_FIXED_FIELD, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE };
 static void invalid_call(enum Misuse which) {
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
     OresActorTurn turn = ores_actor_i64_heap_enter(heap, 29, 7);
@@ -44,6 +44,16 @@ static void invalid_call(enum Misuse which) {
         OresActorSlot field = {turn.domain, 1, 1};
         (void) ores_actor_i64_heap_borrow(heap, turn, field);
         ores_actor_i64_heap_field_write(heap, turn.domain, turn.epoch, 1, 6);
+    } else if (which == GENERIC_WRITE_FIXED_FIELD) {
+        ores_actor_i64_heap_field_init_mutable(heap, turn.domain, turn.epoch, 1, 5);
+        OresActorSlot field = {turn.domain, 1, 1};
+        ores_actor_i64_heap_write(heap, turn, field, 6);
+    } else if (which == GENERIC_DROP_FIXED_FIELD) {
+        ores_actor_i64_heap_field_init_mutable(heap, turn.domain, turn.epoch, 1, 5);
+        OresActorSlot field = {turn.domain, 1, 1};
+        ores_actor_i64_heap_drop(heap, turn, field);
+    } else if (which == READ_GENERIC_AS_FIXED_FIELD) {
+        (void) ores_actor_i64_heap_field_read(heap, turn.domain, turn.epoch, 0);
     } else if (which == DOUBLE_LOAN_RELEASE) {
         OresActorLoan loan = ores_actor_i64_heap_borrow(heap, turn, slot);
         ores_actor_i64_heap_release(heap, loan);
@@ -123,6 +133,9 @@ int main(void) {
     CHECK(rejects(WRITE_LOANED));
     CHECK(rejects(WRITE_IMMUTABLE_FIELD));
     CHECK(rejects(WRITE_LOANED_FIELD));
+    CHECK(rejects(GENERIC_WRITE_FIXED_FIELD));
+    CHECK(rejects(GENERIC_DROP_FIXED_FIELD));
+    CHECK(rejects(READ_GENERIC_AS_FIXED_FIELD));
     CHECK(rejects(DOUBLE_LOAN_RELEASE));
     CHECK(rejects(REENTER));
     CHECK(rejects(CALL_AFTER_RETIRE));
