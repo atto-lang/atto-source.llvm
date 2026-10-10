@@ -14,7 +14,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE };
 static void invalid_call(enum Misuse which) {
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
     OresActorTurn turn = ores_actor_i64_heap_enter(heap, 29, 7);
@@ -33,6 +33,21 @@ static void invalid_call(enum Misuse which) {
     } else if (which == DROP_LOANED) {
         (void) ores_actor_i64_heap_borrow(heap, turn, slot);
         ores_actor_i64_heap_drop(heap, turn, slot);
+    } else if (which == WRITE_LOANED) {
+        (void) ores_actor_i64_heap_borrow(heap, turn, slot);
+        /* Even a different admitted turn must not mutate shared-borrowed data. */
+        ores_actor_i64_heap_leave(heap, turn);
+        OresActorTurn resumed = ores_actor_i64_heap_enter(heap, 29, 7);
+        ores_actor_i64_heap_write(heap, resumed, slot, 22);
+    } else if (which == STALE_SLOT_REUSED) {
+        ores_actor_i64_heap_drop(heap, turn, slot);
+        (void) ores_actor_i64_heap_new(heap, turn, 12);
+        (void) ores_actor_i64_heap_read(heap, turn, slot);
+    } else if (which == FOREIGN_SLOT) {
+        OresActorI64Heap* foreign = ores_actor_i64_heap_open(30, 7, 2);
+        OresActorTurn other = ores_actor_i64_heap_enter(foreign, 30, 7);
+        OresActorSlot other_slot = ores_actor_i64_heap_new(foreign, other, 5);
+        (void) ores_actor_i64_heap_read(heap, turn, other_slot);
     } else if (which == DOUBLE_LOAN_RELEASE) {
         OresActorLoan loan = ores_actor_i64_heap_borrow(heap, turn, slot);
         ores_actor_i64_heap_release(heap, loan);
@@ -88,8 +103,7 @@ int main(void) {
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
     OresActorTurn next = ores_actor_i64_heap_enter(heap, 29, 7);
     CHECK(ores_actor_i64_heap_read(heap, next, saved) == 40);
-    ores_actor_i64_heap_write(heap, next, saved, 42);
-    ores_actor_i64_heap_leave(heap, next);
+    ores_actor_i64_heap_leave(heap, next); /* shared loan still protects saved */
     /* A different native thread executes the next actor turn. */
     Carrier carrier = {heap, 21, 43, 0};
     thrd_t native;
@@ -98,17 +112,27 @@ int main(void) {
     CHECK(thrd_join(native, &exit_status) == thrd_success);
     CHECK(exit_status == 0 && !carrier.failed);
     OresActorTurn after = ores_actor_i64_heap_enter(heap, 29, 7);
-    CHECK(ores_actor_i64_heap_read(heap, after, saved) == 42);
+    CHECK(ores_actor_i64_heap_read(heap, after, saved) == 40);
     ores_actor_i64_heap_leave(heap, after);
+    /* End the read-only lease before admitting an exclusive write. */
+    ores_actor_i64_heap_release(heap, suspended);
+    OresActorTurn writable = ores_actor_i64_heap_enter(heap, 29, 7);
+    ores_actor_i64_heap_write(heap, writable, saved, 42);
+    CHECK(ores_actor_i64_heap_read(heap, writable, saved) == 42);
+    OresActorLoan shutdown_hold = ores_actor_i64_heap_borrow(heap, writable, saved);
+    ores_actor_i64_heap_leave(heap, writable);
     ores_actor_i64_heap_retire(heap);
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 0); /* outstanding loan */
-    ores_actor_i64_heap_release(heap, suspended);
+    ores_actor_i64_heap_release(heap, shutdown_hold);
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 1);
 #if defined(__unix__) || defined(__APPLE__)
     CHECK(rejects(WRONG_OWNER));
     CHECK(rejects(WRONG_EPOCH));
     CHECK(rejects(FORGED_SLOT));
     CHECK(rejects(DROP_LOANED));
+    CHECK(rejects(WRITE_LOANED));
+    CHECK(rejects(STALE_SLOT_REUSED));
+    CHECK(rejects(FOREIGN_SLOT));
     CHECK(rejects(DOUBLE_LOAN_RELEASE));
     CHECK(rejects(REENTER));
     CHECK(rejects(CALL_AFTER_RETIRE));
