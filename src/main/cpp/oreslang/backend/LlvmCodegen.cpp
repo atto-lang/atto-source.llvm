@@ -134,17 +134,41 @@ std::string emit_verified_llvm_ir(const Program& source) {
             locals.emplace(local.name, address);
             slots.push_back({address, local.heap_owned});
         }
-        llvm::Value* result = lower(*fn.result, builder, i64, parameters,
-                                    locals, declarations);
-        for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
-            if (iter->heap) {
-                builder.CreateCall(heapDrop, {region, iter->address});
-            } else {
-                builder.CreateLifetimeEnd(iter->address, llvm::ConstantInt::get(i64, 8));
+        // Every admitted return edge owns the same fully initialized
+        // lexical slots. Emit reverse-order deterministic cleanup for each
+        // reachable exit after computing the return value. Partial-init,
+        // exception, and suspension exits are intentionally not admitted.
+        const auto emitReturn = [&](llvm::Value* value) {
+            for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
+                if (iter->heap) {
+                    builder.CreateCall(heapDrop, {region, iter->address});
+                } else {
+                    builder.CreateLifetimeEnd(iter->address, llvm::ConstantInt::get(i64, 8));
+                }
             }
+            if (region != nullptr) builder.CreateCall(heapClose, {region});
+            builder.CreateRet(value);
+        };
+        for (const auto& guard : fn.early_returns) {
+            llvm::Value* lhs = lower(*guard.lhs, builder, i64,
+                                     parameters, locals, declarations);
+            llvm::Value* rhs = lower(*guard.rhs, builder, i64,
+                                     parameters, locals, declarations);
+            llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "return.guard.eq");
+            llvm::BasicBlock* taken = llvm::BasicBlock::Create(
+                    context, "guard.return", function);
+            llvm::BasicBlock* next = llvm::BasicBlock::Create(
+                    context, "guard.next", function);
+            builder.CreateCondBr(condition, taken, next);
+            builder.SetInsertPoint(taken);
+            llvm::Value* selected = lower(*guard.result, builder, i64,
+                                           parameters, locals, declarations);
+            emitReturn(selected);
+            builder.SetInsertPoint(next);
         }
-        if (region != nullptr) builder.CreateCall(heapClose, {region});
-        builder.CreateRet(result);
+        llvm::Value* result = lower(*fn.result, builder, i64,
+                                     parameters, locals, declarations);
+        emitReturn(result);
     }
 
     std::string diagnostics;
