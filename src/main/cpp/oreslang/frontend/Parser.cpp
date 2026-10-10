@@ -91,7 +91,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*.=").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -120,14 +120,20 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
-            require("module");
-            program.module = identifier();
-            accept("as"); // Both 'define module M as' and 'define module M' occur in Java.
-            wrapped_module = true;
+            if (accept("module")) {
+                program.module = identifier();
+                accept("as");
+                wrapped_module = true;
+            } else if (token_.text == "class") {
+                program.plain_classes.push_back(plain_class());
+            } else {
+                fail("expected 'module'");
+            }
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            program.functions.push_back(function());
+            if (accept("define")) program.plain_classes.push_back(plain_class());
+            else program.functions.push_back(function());
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
@@ -137,6 +143,40 @@ public:
     }
 
 private:
+    PlainClass plain_class() {
+        require("class");
+        PlainClass klass;
+        klass.name = identifier();
+        require("as");
+        while (token_.kind != Kind::End && token_.text != "end") {
+            accept("pub");
+            if (!accept("val") && !accept("let"))
+                fail("stack-only class supports int fields declared val/let");
+            require("int");
+            ClassField field;
+            field.name = identifier();
+            require("=");
+            const bool negative = accept("-");
+            if (token_.kind != Kind::Integer)
+                fail("stack-only class field initializer must be a literal");
+            std::string digits(token_.text);
+            if (digits.front() == '_' || digits.back() == '_'
+                    || digits.find("__") != std::string::npos)
+                fail("malformed integer separator");
+            digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+            const auto parsed = std::from_chars(
+                digits.data(), digits.data() + digits.size(), field.initial);
+            if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+                fail("integer literal overflows signed 64-bit result");
+            if (negative) field.initial = -field.initial;
+            advance();
+            require(";");
+            klass.fields.push_back(std::move(field));
+        }
+        require("end");
+        return klass;
+    }
+
     Function function() {
         Function value;
         value.offset = token_.offset;
@@ -154,6 +194,21 @@ private:
         require(":");
         require("int");
         require("{");
+        while (token_.text == "let" || token_.text == "val") {
+            advance();
+            StackObject object;
+            object.type = identifier();
+            object.name = identifier();
+            require("=");
+            require("new");
+            const std::string constructed = identifier();
+            if (object.type != constructed)
+                fail("stack class initializer type must match the declared class");
+            require("(");
+            require(")");
+            require(";");
+            value.stack_objects.push_back(std::move(object));
+        }
         require("return");
         value.result = expression();
         require(";");
@@ -239,6 +294,11 @@ private:
                 } while (accept(","));
                 require(")");
             }
+        } else if (accept(".")) {
+            auto field = make_expression(Expression::Kind::Field, offset);
+            field->name = identifier();
+            field->left = std::move(expr);
+            return field;
         }
         return expr;
     }
