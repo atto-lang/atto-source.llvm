@@ -59,6 +59,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
     oreslang_contract_test(native_owned_lexical_lifetime owned-lexical-main.ores --ir "llvm.lifetime.end")
+    oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --ir "call void @oreslang_owned_i64_region_drop")
+    oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --ir "call void @oreslang_owned_i64_region_close")
+    oreslang_contract_test(reject_unsupported_native_heap_type owned-native-region-unsupported.ores --diagnostic "expected 'int'")
     oreslang_contract_test(reject_local_uninitialized owned-uninitialized.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_local_duplicate owned-duplicate.ores --diagnostic "duplicate owned local")
     oreslang_contract_test(reject_local_forward_reference owned-use-before-declaration.ores --diagnostic "unknown parameter")
@@ -133,6 +136,8 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_lexical_local owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_lexical_shared_loan owned-local-shared-borrow.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_lexical_mutable_loan owned-local-mutable-borrow.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_rt_copy_scalar native-rt-copy-scalar.ores --run 42 --clang "${ORE_CLANG}")
@@ -149,6 +154,17 @@ if(BUILD_TESTING)
 
     # Inert native POD allocator: deterministic ownership without tracing GC.
     # The test does not establish compiler-enforced object lifetime parity.
+    # Bounded native region with provenance-checked deterministic scalar drops.
+    add_executable(oreslang-native-owned-i64-region-test
+        tests/native_owned_region_test.c
+        src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+    target_include_directories(oreslang-native-owned-i64-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-owned-i64-region-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_i64_region_drop_and_provenance
+        COMMAND oreslang-native-owned-i64-region-test)
+
     add_executable(oreslang-fixed-arena-test tests/fixed_arena_test.cpp)
     target_include_directories(oreslang-fixed-arena-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
