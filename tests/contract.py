@@ -16,9 +16,15 @@ def main():
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
     parser.add_argument("--native-runtime")
+    parser.add_argument("--experimental-owned-int", action="store_true")
+    parser.add_argument("--no-native-heap-abi", action="store_true")
     args = parser.parse_args()
+    command = [args.compiler]
+    if args.experimental_owned_int:
+        command.append("--experimental-owned-int")
+    command.append(args.fixture)
     compile_result = subprocess.run(
-        [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
+        command, capture_output=True, text=True, check=False, timeout=20
     )
     if args.diagnostic:
         assert compile_result.returncode != 0, "invalid source unexpectedly accepted"
@@ -28,6 +34,10 @@ def main():
     assert compile_result.returncode == 0, compile_result.stderr
     assert compile_result.stdout.startswith("; ModuleID"), compile_result.stdout
     assert not compile_result.stderr, compile_result.stderr
+    if args.no_native_heap_abi:
+        assert "oreslang_owned_i64_region_" not in compile_result.stdout, (
+            "ordinary Oreslang program unexpectedly declares a native heap ABI"
+        )
     if args.ir:
         assert args.ir in compile_result.stdout, compile_result.stdout
     if args.run is None:
