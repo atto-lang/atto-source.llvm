@@ -87,7 +87,10 @@ OresArenaTurn ores_actor_arena_enter(OresActorArena* a, uint64_t owner,
 }
 void ores_actor_arena_leave(OresActorArena* a, OresArenaTurn turn) {
     enter_lock(a);
-    require_turn(a, turn);
+    /* Shutdown can mark retirement while an already admitted turn unwinds.
+     * Leaving must remain legal after retirement, but all new reads/writes
+     * are revoked by require_turn(). */
+    if (!a->active || turn.domain != a->domain || turn.epoch != a->epoch) deny();
     memset(a->scratch, 0, a->scratch_top);
     a->scratch_top = 0;
     a->active = 0;
