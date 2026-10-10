@@ -46,6 +46,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
     oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
+    # LLVM has no native I/O binding registry or continuation lowering yet.
+    # Both spellings must fail closed with no IR until implementation lands.
+    oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
+    oreslang_contract_test(reject_unsupported_native_io_bare unsupported-native-io-bare.ores --diagnostic "unknown function or wrong call arity")
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
     oreslang_contract_test(reject_duplicates duplicate-function.ores --diagnostic "duplicate function")
     oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")

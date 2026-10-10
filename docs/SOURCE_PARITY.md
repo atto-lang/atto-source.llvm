@@ -17,6 +17,14 @@ Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
 
+## Native I/O naming contract (future binding admission)
+
+All source-visible **synchronous-looking I/O** APIs must end in `_blocking`; the runtime must **transparently suspend the calling continuation and release the actor carrier** while I/O is in flight, then resume with a `T` result or an error. They must not block an OS scheduler carrier. **Asynchronous I/O** APIs may, but need not, end in `_async`, and return `Future<T>`. This includes filesystem metadata operations, sockets, DNS, terminal/stdio and HTTP operations that can block the caller. Pure functions and host-internal C++ methods do not acquire suffixes.
+
+The canonical contract, effect-classification rules, alias checks and negative-test matrix live in [oreslang-common-source/docs/NATIVE_IO_NAMING.md](https://github.com/ores-truffle-oreslang/oreslang-common-source/blob/main/docs/NATIVE_IO_NAMING.md). Example future APIs: `fs.read_text_blocking(path)` and `await fs.read_text_async(path)`.
+
+**Implementation gap:** The current LLVM fragment has no imported/native I/O declarations, async lowering, I/O effect metadata or runtime standard library. It must not pretend that spelling `*_blocking` alone makes a builtin supported. When an I/O binding registry is added, reject any binding classified as synchronously blocking I/O unless its source-visible name ends in `_blocking`; check methods and aliases too. Both forms require an actual non-carrier-blocking execution contract. `_blocking` calls must lower to I/O submission plus implicit continuation suspension, with no explicit source `await`; async calls return an explicit awaitable. LLVM must fail closed rather than compile `_blocking` into a host-blocking C ABI call. Add valid and invalid compiler fixtures, capability-denial tests and concurrent carrier tests before declaring enforcement.
+
 ## Cross-implementation status
 
 | Java capability | LLVM status |
