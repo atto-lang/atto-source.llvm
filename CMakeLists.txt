@@ -29,6 +29,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Host-only native managed-worker lifecycle substrate. This test does
+    # not claim that parsed .ores ActorGroup/spawn/await is supported.
+    add_executable(oreslang-actor-group-lifecycle-test
+        tests/actor_group_lifecycle_test.cpp)
+    target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-group-lifecycle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME actor_group_native_managed_refs
+        COMMAND oreslang-actor-group-lifecycle-test)
+    set_tests_properties(actor_group_native_managed_refs PROPERTIES TIMEOUT 20)
+
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
