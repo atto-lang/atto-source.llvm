@@ -48,16 +48,29 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
     # Ownership remains Java-only. Reject all source ownership forms before
     # LLVM IR emission until a lifetime/provenance-aware typechecker exists.
-    oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "native rt borrow requires lifetime/provenance")
     oreslang_contract_test(reject_borrowed_param unsupported-borrowed-parameter.ores --diagnostic "expected 'int'")
-    oreslang_contract_test(reject_rt_borrow_mut unsupported-rt-borrow-mut.ores --diagnostic "expected int expression")
-    oreslang_contract_test(reject_rt_take unsupported-rt-take.ores --diagnostic "expected int expression")
-    oreslang_contract_test(reject_rt_copy unsupported-rt-copy.ores --diagnostic "expected int expression")
-    oreslang_contract_test(reject_rt_share unsupported-rt-share.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_rt_borrow_mut unsupported-rt-borrow-mut.ores --diagnostic "native rt borrow requires lifetime/provenance")
+    oreslang_contract_test(reject_rt_take unsupported-rt-take.ores --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_rt_copy unsupported-rt-copy.ores --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_rt_share unsupported-rt-share.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unqualified_borrow_call unsupported-borrow-function.ores --diagnostic "unknown function or wrong call arity")
-    oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "expected 'return'")
-    oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "native async/channel/select boundary unsupported")
+    oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
+
+    # Native i64 is a Copy value: rt copy/rt share are scalar value copies,
+    # while rt take invalidates named scalar binding until function exit.
+    oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "ret i64 42")
+    oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "ret i64 42")
+    oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores --ir "ret i64 42")
+    oreslang_contract_test(reject_take_then_reuse native-reject-take-then-reuse.ores --diagnostic "use of explicitly moved int")
+    oreslang_contract_test(reject_take_call_arg_overlap native-reject-take-call-args.ores --diagnostic "use of explicitly moved int")
+    oreslang_contract_test(reject_double_take native-reject-double-take.ores --diagnostic "use of explicitly moved int")
+    add_test(NAME native_ownership_async_boundary_matrix
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_ownership_boundary_matrix.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
     # LLVM has no native I/O binding registry or continuation lowering yet.
     # Both spellings must fail closed with no IR until implementation lands.
     oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
@@ -73,6 +86,9 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_rt_copy_scalar native-rt-copy-scalar.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_rt_take_scalar native-rt-take-scalar.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_rt_share_scalar native-rt-share-scalar.ores --run 42 --clang "${ORE_CLANG}")
     else()
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()

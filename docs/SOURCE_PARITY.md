@@ -27,16 +27,25 @@ The canonical contract, effect-classification rules, alias checks and negative-t
 
 ## Ownership and borrow checker parity gate
 
+The native LLVM compiler now has a **flow-sensitive i64-only ownership
+admission pass** (`types/OwnershipChecker.cpp`). `rt copy`, `rt take`, and
+`rt share` compile for trivially copyable `int` values only. They do not
+allocate, share heap memory or bypass destructors. Explicit `rt take x` marks
+the named parameter `x` moved; any later read of `x` within the same
+left-to-right return expression or its function-call arguments is an error,
+even though `int` otherwise supports implicit copies. The LLVM emitter
+uses explicit left-to-right operand lowering to preserve the checked order.
+
 The LLVM frontend currently parses a deliberately narrow i64-only subset and
-does **not** lower Java's `rt borrow`, `rt borrow mut`, `rt take`,
-`rt copy`, `rt share`, borrowed parameters, structural read loans, or
-actor-owned memory. The native runtime's thread/arena helpers do not make this
+does **not** lower Java's `rt borrow`, `rt borrow mut`, borrowed
+parameters, structural read loans, actor-owned memory, or move-only object
+graphs. Primitive i64 `rt take/copy/share` do not imply those advanced features. The native runtime's thread/arena helpers do not make this
 subset safe for move-only data or concurrent actors.
 
-Until the backend has explicit ownership provenance, lifetime scopes,
+Until the backend has explicit heap ownership provenance, lifetime scopes,
 reborrow/alias exclusion, transitive copy contracts, projection tracking,
-suspension and actor-boundary rules, these features must **fail closed** with a
-nonzero compiler exit and **no LLVM IR**. The negative CTest fixtures enforce
+suspension and actor-boundary rules, all reference and async/channel/actor
+operations must **fail closed** with a nonzero compiler exit and **no LLVM IR**. The negative CTest fixtures enforce
 that contract. Their passing status is evidence of unsupported-language
 rejection, **not** implementation or semantic parity with Java.
 
@@ -50,13 +59,13 @@ Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 | --- | --- |
 | Lexer, modules, functions | Partial i64-only subset, not full Java parity |
 | Function calls, expressions | i64 arithmetic and same-module calls |
-| Type/ownership checking | Only parameter/name/arity checking |
+| Type/ownership checking | Name/arity and i64 explicit-take move invalidation; references, borrows and async unsupported |
 | LLVM IR verification | Implemented |
 | Compile and execute native guest | Clang can link i64 main on supported host |
 | General target-specific ABI/object emission | Not implemented |
 | Actors/supervisors, async frames, channels | Not implemented |
 | Static select and reusable SelectPlan / DynamicSelectPlan | Not implemented; fail-closed fixtures and [parity contract](SELECT_PLAN_PARITY.md) |
-| Cycles/Ref/WeakRef, borrow checking, arenas | Not implemented |
+| Cycles/Ref/WeakRef, borrow checking, arenas | No heap/alias borrow checking; i64 source-order ownership checking only |
 | HPC/HFT and isolation | Not implemented |
 
 **Unreconciled:** Java `int` width and overflow, possible runtime faults,
