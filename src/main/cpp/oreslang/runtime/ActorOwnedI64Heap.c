@@ -17,6 +17,7 @@ typedef struct {
     uint32_t loans;
     unsigned char live;
     unsigned char field_mutable;
+    unsigned char fixed_field;
 } ActorSlot;
 
 typedef struct {
@@ -122,6 +123,8 @@ OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
         ActorSlot* s = &heap->slots[i];
         if (!s->live && s->generation != UINT64_MAX) {
             s->value = value;
+            s->field_mutable = 0;
+            s->fixed_field = 0;
             s->live = 1;
             OresActorSlot id = {heap->domain, i, s->generation};
             unlock_heap(heap);
@@ -146,7 +149,7 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* target = checked_slot(heap, slot);
-    if (target->loans != 0) rejected();
+    if (target->fixed_field || target->loans != 0) rejected();
     target->value = value;
     unlock_heap(heap);
 }
@@ -155,7 +158,7 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* s = checked_slot(heap, slot);
-    if (s->loans != 0 || s->generation == UINT64_MAX) rejected();
+    if (s->fixed_field || s->loans != 0 || s->generation == UINT64_MAX) rejected();
     s->value = 0;
     s->live = 0;
     ++s->generation;
@@ -216,6 +219,7 @@ void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
     // exactly once during the actor's first admitted turn.
     if (field->live || field->generation != 1) rejected();
     field->value = initial;
+    field->fixed_field = 1;
     field->live = 1;
     unlock_heap(heap);
 }
@@ -231,6 +235,7 @@ void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
     if (field->live || field->generation != 1) rejected();
     field->value = initial;
     field->field_mutable = 1;
+    field->fixed_field = 1;
     field->live = 1;
     unlock_heap(heap);
 }
@@ -243,7 +248,7 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
     require_turn(heap, turn);
     if (index >= heap->capacity) rejected();
     ActorSlot* field = &heap->slots[index];
-    if (!field->live || !field->field_mutable || field->loans != 0) rejected();
+    if (!field->live || !field->fixed_field || !field->field_mutable || field->loans != 0) rejected();
     field->value = value;
     unlock_heap(heap);
 }
@@ -254,8 +259,8 @@ int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
     lock_heap(heap);
     OresActorTurn turn = {domain, epoch};
     require_turn(heap, turn);
-    if (index >= heap->capacity || !heap->slots[index].live)
-        rejected();
+    if (index >= heap->capacity || !heap->slots[index].live
+        || !heap->slots[index].fixed_field) rejected();
     const int64_t value = heap->slots[index].value;
     unlock_heap(heap);
     return value;
