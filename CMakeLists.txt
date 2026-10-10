@@ -47,6 +47,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
     oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "expected 'return'")
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "expected int expression")
+    # Borrow ownership/lifetime semantics are not lowered by this i64-only LLVM frontend.
+    # Both the borrowed parameter and rt-borrow expression must reject, emit no IR.
+    oreslang_contract_test(reject_unadmitted_borrow_param unsupported-borrow-param.ores --diagnostic "expected 'int'")
+    oreslang_contract_test(reject_unadmitted_rt_borrow unsupported-rt-borrow.ores --diagnostic "expected non-keyword identifier")
     oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
     # LLVM has no native I/O binding registry or continuation lowering yet.
     # Both spellings must fail closed with no IR until implementation lands.
