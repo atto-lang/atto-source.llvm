@@ -165,6 +165,21 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_i64_region_drop_and_provenance
         COMMAND oreslang-native-owned-i64-region-test)
 
+    # Persist actor-native data across message turns and carrier migration.
+    # Retirement denies new admissions; physical free waits for active loans.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-owned-i64-heap-test
+        tests/actor_owned_heap_lifecycle_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-owned-i64-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-owned-i64-heap-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-owned-i64-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_i64_heap_loan_quiescence
+        COMMAND oreslang-actor-owned-i64-heap-test)
+    set_tests_properties(native_actor_owned_i64_heap_loan_quiescence PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-fixed-arena-test tests/fixed_arena_test.cpp)
     target_include_directories(oreslang-fixed-arena-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
