@@ -109,6 +109,7 @@ if(BUILD_TESTING)
     endif()
 
     # Independent actor-owned native heap tests are portable (no Linux syscalls).
+    find_package(Threads REQUIRED)
     add_executable(oreslang-actor-heap-test tests/actor_heap_test.cpp)
     target_include_directories(oreslang-actor-heap-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
