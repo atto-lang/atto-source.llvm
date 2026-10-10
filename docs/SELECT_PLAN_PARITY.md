@@ -23,6 +23,39 @@ The Java reference backend defines:
   channel waiter. Do not claim zero allocations or a speedup until native
   benchmarks demonstrate it.
 
+## Borrow-checker parity requirements
+
+The Java source checker now treats `SelectCase` and `SelectSet` as
+**move-only** descriptors, independently of the Copy classification of
+`Channel<T>` handles. Native codegen must preserve these rules:
+
+- `SelectCase.read(channel)` must not retain a lexical `&Channel<T>`
+  reference. It may retain a copied actor-domain-local channel handle.
+- `SelectCase.write(channel, value)` requires a Copy payload because the
+  descriptor may execute repeatedly. Reject borrowed, guard-bearing, and
+  move-only payloads. One-shot `writech` or static select remains the path
+  for move-only transfers until a linear one-shot case is designed.
+- `SelectSet.new(cases)` takes ownership of its case collection, not a
+  borrowed reference into a stack frame. The set is move-only, while
+  `select from set` borrows the existing descriptor without consuming it.
+- A `DynamicSelectPlan` mutation cannot install an escaping borrow into
+  a versioned snapshot. A pending snapshot owns its captured operands
+  until one winner or cancellation releases registrations.
+- Plan/case/set capabilities cannot be copied via Option/Result, structs,
+  tuple or array wrappers, stored in actor-crossing messages, or implicitly
+  shared between tenants/actor domains.
+- Compiler hoisting of a static select must prove that per-iteration
+  case expression evaluation can be removed without changing ownership,
+  side effects, actor affinity or hot-reload generation.
+- Native negative fixtures must reject double moves, borrowed channels,
+  borrowed case collections, reused move-only write payloads, and
+  select-plan mailbox transport. Positive fixtures must permit multiple
+  selects on the same retained set with Copy write payloads.
+
+These requirements are not implemented by this documentation change.
+The current LLVM bootstrap must keep rejecting unsupported select syntax
+rather than emitting IR with unsound ownership assumptions.
+
 ## Native implementation acceptance requirements
 
 1. Typed channel cases (read/write/default), copy/ownership rules, and
