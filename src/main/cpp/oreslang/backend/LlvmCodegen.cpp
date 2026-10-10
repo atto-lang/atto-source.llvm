@@ -7,6 +7,7 @@
 
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -18,35 +19,53 @@
 namespace oreslang {
 namespace {
 
+struct StackSlot {
+    llvm::Value* address;
+    llvm::StructType* layout;
+    const PlainClass* description;
+};
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
                    const std::unordered_map<std::string, llvm::Value*>& parameters,
-                   const std::unordered_map<std::string, llvm::Function*>& functions) {
+                   const std::unordered_map<std::string, llvm::Function*>& functions,
+                   const std::unordered_map<std::string, StackSlot>& objects) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable:
             return parameters.at(expr.name);
+        case Expression::Kind::Field: {
+            const auto& owned = objects.at(expr.left->name);
+            const auto& fields = owned.description->fields;
+            unsigned index = 0;
+            for (; index < fields.size(); ++index)
+                if (fields[index].name == expr.name) break;
+            if (index == fields.size())
+                throw std::runtime_error("unknown verified stack field");
+            auto* ptr = builder.CreateStructGEP(owned.layout, owned.address, index, "field.ptr");
+            return builder.CreateLoad(i64, ptr, "owned.field");
+        }
         case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, functions),
+            return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, functions, objects),
                                      "neg");
         case Expression::Kind::Add:
-            return builder.CreateAdd(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
+            return builder.CreateAdd(lower(*expr.left, builder, i64, parameters, functions, objects),
+                                     lower(*expr.right, builder, i64, parameters, functions, objects),
                                      "add");
         case Expression::Kind::Subtract:
-            return builder.CreateSub(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
+            return builder.CreateSub(lower(*expr.left, builder, i64, parameters, functions, objects),
+                                     lower(*expr.right, builder, i64, parameters, functions, objects),
                                      "sub");
         case Expression::Kind::Multiply:
-            return builder.CreateMul(lower(*expr.left, builder, i64, parameters, functions),
-                                     lower(*expr.right, builder, i64, parameters, functions),
+            return builder.CreateMul(lower(*expr.left, builder, i64, parameters, functions, objects),
+                                     lower(*expr.right, builder, i64, parameters, functions, objects),
                                      "mul");
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments) {
-                arguments.push_back(lower(*arg, builder, i64, parameters, functions));
+                arguments.push_back(lower(*arg, builder, i64, parameters, functions, objects));
             }
             return builder.CreateCall(functions.at(expr.name), arguments, "call");
         }
@@ -61,6 +80,19 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::Module module("oreslang-source", context);
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     std::unordered_map<std::string, llvm::Function*> declarations;
+    std::unordered_map<std::string, llvm::StructType*> classLayouts;
+    std::unordered_map<std::string, const PlainClass*> classDescriptions;
+
+    // Trivial, nonescaping owned class values have stack storage only.
+    // No managed heap, malloc, tracing roots or GC safepoints are emitted.
+    for (const auto& klass : source.plain_classes) {
+        const std::string name = source.module.empty()
+            ? klass.name : source.module + "." + klass.name;
+        auto* layout = llvm::StructType::create(context, "ores.class." + name);
+        layout->setBody(std::vector<llvm::Type*>(klass.fields.size(), i64), false);
+        classLayouts.emplace(klass.name, layout);
+        classDescriptions.emplace(klass.name, &klass);
+    }
 
     // Declare all functions first, enabling forward calls and recursion.
     for (const auto& fn : source.functions) {
@@ -83,7 +115,19 @@ std::string emit_verified_llvm_ir(const Program& source) {
             parameters.emplace(fn.parameters[index], &arg);
             ++index;
         }
-        llvm::Value* result = lower(*fn.result, builder, i64, parameters, declarations);
+        std::unordered_map<std::string, StackSlot> objects;
+        for (const auto& object : fn.stack_objects) {
+            auto* layout = classLayouts.at(object.type);
+            auto* address = builder.CreateAlloca(layout, nullptr, object.name + ".owned");
+            const auto* klass = classDescriptions.at(object.type);
+            for (unsigned i = 0; i < klass->fields.size(); ++i) {
+                auto* field = builder.CreateStructGEP(layout, address, i, "init.ptr");
+                builder.CreateStore(llvm::ConstantInt::getSigned(
+                    i64, klass->fields[i].initial), field);
+            }
+            objects.emplace(object.name, StackSlot{address, layout, klass});
+        }
+        llvm::Value* result = lower(*fn.result, builder, i64, parameters, declarations, objects);
         builder.CreateRet(result);
     }
 
