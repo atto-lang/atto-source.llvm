@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 
 namespace oreslang::runtime {
 
@@ -43,7 +45,10 @@ public:
 
 private:
     struct Slot final {
-        std::array<std::byte, NodeBytes> payload{};
+        alignas(std::max_align_t) std::array<std::byte, NodeBytes> payload{};
+        // Compiler-lowered drop glue. No C++ virtual tables, heap-owned
+        // closures, or C++ exceptions on deterministic actor retirement.
+        void (*drop)(void*) noexcept = nullptr;
         std::array<Handle, LinksPerNode> links{};
         std::size_t length = 0;
         std::size_t link_count = 0;
@@ -59,6 +64,7 @@ private:
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
     bool retired_ = false;
+    bool dropping_ = false;
 
     void require_owner(ActorHeapIdentity requester) const {
         if (!(requester == owner_))
@@ -68,8 +74,8 @@ private:
 
     void require_open_access(ActorHeapIdentity requester) const {
         require_owner(requester);
-        if (borrow_gate_.sealed())
-            throw std::logic_error("actor graph heap is retiring; new access forbidden");
+        if (borrow_gate_.sealed() || dropping_)
+            throw std::logic_error("actor graph heap is retiring or executing destructor glue");
     }
 
     Slot& require_node(Handle id) {
@@ -82,18 +88,26 @@ private:
     }
 
     void erase_all() noexcept {
+        // Revoke every public handle BEFORE any destructor can observe it.
+        // Destructor glue must not reenter this arena or follow weak links.
+        retired_ = true;
+        dropping_ = true;
         for (auto& slot : slots_) {
+            auto* drop = slot.drop;
+            slot.drop = nullptr;
+            const bool was_live = slot.live;
+            slot.live = false;
+            if (was_live && drop) drop(slot.payload.data());
             std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
             slot.links.fill(Handle{0, 0, 0});
             slot.length = 0;
             slot.link_count = 0;
-            slot.live = false;
             if (slot.generation < std::numeric_limits<std::uint64_t>::max())
                 ++slot.generation;
         }
         active_nodes_ = 0;
         active_edges_ = 0;
-        retired_ = true;
+        dropping_ = false;
     }
 
 public:
@@ -141,6 +155,41 @@ public:
             if (length) std::memcpy(slot.payload.data(), bytes, length);
             slot.length = length;
             slot.link_count = 0;
+            slot.drop = nullptr;
+            slot.live = true;
+            ++active_nodes_;
+            return Handle{heap_id_, static_cast<std::uint32_t>(i), slot.generation};
+        }
+        return std::nullopt;
+    }
+
+    /**
+     * Explicit native object allocation for future compiler lowering.
+     * Unlike raw byte slots, these slots MUST run their registered destructor
+     * exactly once before storage can be recycled or the actor heap retires.
+     */
+    template<class T, class... Args>
+    std::optional<Handle> emplace_owned(ActorHeapIdentity actor, Args&&... args) {
+        static_assert(sizeof(T) <= NodeBytes, "actor object exceeds slot capacity");
+        static_assert(alignof(T) <= alignof(std::max_align_t),
+                      "overaligned actor object requires a different arena");
+        static_assert(std::is_nothrow_constructible<T, Args...>::value,
+                      "actor heap constructors must not throw");
+        static_assert(std::is_nothrow_destructible<T>::value,
+                      "actor heap drop glue must not throw");
+        require_open_access(actor);
+        for (std::size_t i = 0; i < NodeCapacity; ++i) {
+            Slot& slot = slots_[i];
+            if (slot.live || slot.generation == std::numeric_limits<std::uint64_t>::max())
+                continue;
+            std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
+            void* memory = slot.payload.data();
+            ::new (memory) T(std::forward<Args>(args)...);
+            slot.length = sizeof(T);
+            slot.link_count = 0;
+            slot.drop = [](void* address) noexcept {
+                static_cast<T*>(address)->~T();
+            };
             slot.live = true;
             ++active_nodes_;
             return Handle{heap_id_, static_cast<std::uint32_t>(i), slot.generation};
@@ -152,6 +201,7 @@ public:
                          std::size_t capacity) {
         require_open_access(actor);
         Slot& slot = require_node(id);
+        if (slot.drop) throw std::logic_error("owned objects are not raw byte payloads");
         if (capacity < slot.length || (slot.length && destination == nullptr))
             throw std::invalid_argument("output buffer too small");
         if (slot.length) std::memcpy(destination, slot.payload.data(), slot.length);
@@ -161,6 +211,7 @@ public:
     void write(ActorHeapIdentity actor, Handle id, const void* bytes, std::size_t length) {
         require_open_access(actor);
         Slot& slot = require_node(id);
+        if (slot.drop) throw std::logic_error("owned objects cannot be overwritten as bytes");
         if (length > NodeBytes || (length && !bytes))
             throw std::invalid_argument("invalid actor graph payload");
         std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
@@ -209,13 +260,18 @@ public:
             active_edges_ -= before - keep;
         }
         active_edges_ -= deleted.link_count;
+        auto* drop = deleted.drop;
+        deleted.drop = nullptr;
+        deleted.live = false;
+        ++deleted.generation;
+        --active_nodes_;
+        dropping_ = true;
+        if (drop) drop(deleted.payload.data());
+        dropping_ = false;
         std::fill(deleted.payload.begin(), deleted.payload.end(), std::byte{0});
         deleted.links.fill(Handle{0, 0, 0});
         deleted.length = 0;
         deleted.link_count = 0;
-        deleted.live = false;
-        ++deleted.generation;
-        --active_nodes_;
     }
 
     /**
