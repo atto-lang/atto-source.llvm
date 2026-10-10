@@ -124,6 +124,22 @@ if(BUILD_TESTING)
     # Both spellings must fail closed with no IR until implementation lands.
     oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
     oreslang_contract_test(reject_unsupported_native_io_bare unsupported-native-io-bare.ores --diagnostic "unknown function or wrong call arity")
+    # Neither naming style is permitted without a typed I/O registry, async
+    # transport and continuation lowering. No IR may be emitted on failure.
+    add_test(NAME native_async_only_io_boundary_matrix
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_async_io_boundary_matrix.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    oreslang_contract_test(pure_user_blocking_suffix pure-user-blocking-suffix.ores --ir "call i64 @pure_math_blocking")
+    # The terminal-state gate is a standalone native safety primitive, not
+    # an async I/O reactor or source-level await implementation.
+    add_executable(oreslang-async-io-operation-test tests/async_io_operation_test.cpp)
+    target_include_directories(oreslang-async-io-operation-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-async-io-operation-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-async-io-operation-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_async_io_completion_generation_races COMMAND oreslang-async-io-operation-test)
+    set_tests_properties(native_async_io_completion_generation_races PROPERTIES TIMEOUT 20)
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
     oreslang_contract_test(reject_duplicates duplicate-function.ores --diagnostic "duplicate function")
     oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
