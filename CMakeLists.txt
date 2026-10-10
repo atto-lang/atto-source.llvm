@@ -47,6 +47,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
     oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "expected 'return'")
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "expected int expression")
+    # Native select-plan/ownership syntax must remain fail-closed until fully
+    # typed borrows, descriptor ownership and atomic registrations land.
+    oreslang_contract_test(reject_select_plan_factory unsupported-select-plan-constructor.ores --diagnostic "expected 'return'")
+    oreslang_contract_test(reject_reusable_case_write unsupported-select-case-write.ores --diagnostic "expected 'return'")
     oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
     # LLVM has no native I/O binding registry or continuation lowering yet.
     # Both spellings must fail closed with no IR until implementation lands.
