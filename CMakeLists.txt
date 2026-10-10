@@ -80,6 +80,15 @@ if(BUILD_TESTING)
              COMMAND oreslang-owned-heap-test)
     set_tests_properties(native_owned_heap_deterministic_drop PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-epoch-arena-test tests/epoch_arena_test.cpp)
+    target_include_directories(oreslang-epoch-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-epoch-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_epoch_deterministic_drop
+             COMMAND oreslang-epoch-arena-test)
+    set_tests_properties(native_actor_epoch_deterministic_drop PROPERTIES TIMEOUT 20)
+
     if(ORE_CLANG)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
