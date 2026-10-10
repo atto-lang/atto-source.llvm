@@ -3,6 +3,38 @@
 Java source of truth: [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 LLVM roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
 
+## ActorGroup managed-spawn contract
+
+The Oreslang Java runtime is the reference for actor startup and group
+lifecycle behavior. In source, `spawn WorkerActor()` returns a live
+`ActorRef<WorkerActor>` immediately; `await spawn WorkerActor()` is an
+asynchronous *readiness* barrier that returns that same ref after `on_start`
+and required-field initialization succeed. Neither waits for actor termination.
+`await ref.done` is the independent finalization barrier.
+
+A group must retain **explicitly managed** actor refs (not merely group-member
+IDs), register them before scheduled startup can race finalization, evict on
+finalization, and cancel managed workers on close. Ordinary cooperating event
+subscribers are not managed/supervised implicitly. The owner/parent or
+supervisor is the only lifecycle authority; foreign-runtime refs, stale
+generation handles, and group-close admissions must be rejected.
+
+The host-only native `oreslang/runtime/ActorGroup.hpp` registry implements a
+bounded proof slice: immediate unready ref registration, readiness/done observer
+futures, manager-side stop callbacks, identity checks, startup errors,
+terminal eviction, and concurrent readiness vs close fencing. It has **no**
+Oreslang guest binding, no actor heap/frames, and no continuation scheduler.
+Its futures are host observers: blocking `.get()` on a carrier would be
+incorrect. Native compiled `await` must suspend the logical task through
+the actor scheduler and resume with the original ActorRef.
+
+LLVM source remains **fail closed** for actor declarations and await-spawn.
+The `reject_await_spawn` negative conformance fixture requires diagnostic,
+nonzero exit and no emitted IR. Positive parity remains blocked on typed
+actor-class IR, on_start initialization, parent/group lifetime ownership,
+nonblocking continuation ABI, worker-handle generation fencing, and
+differential Java/LLVM runtime races.
+
 ## Compiler fragment currently accepted
 
 - Zero or one `define module M [as] ... end` wrapper.
