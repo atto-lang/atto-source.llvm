@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -75,18 +76,33 @@ std::string emit_verified_llvm_ir(const Program& source) {
 #else
     llvm::Type* ptr = llvm::Type::getInt8PtrTy(context);
 #endif
-    llvm::FunctionCallee heapOpen = module.getOrInsertFunction(
-            "oreslang_owned_i64_region_open",
-            llvm::FunctionType::get(ptr, {i64}, false));
-    llvm::FunctionCallee heapNew = module.getOrInsertFunction(
-            "oreslang_owned_i64_region_new",
-            llvm::FunctionType::get(ptr, {ptr, i64}, false));
-    llvm::FunctionCallee heapDrop = module.getOrInsertFunction(
-            "oreslang_owned_i64_region_drop",
-            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr, ptr}, false));
-    llvm::FunctionCallee heapClose = module.getOrInsertFunction(
-            "oreslang_owned_i64_region_close",
-            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
+    // Zero guest allocation is the default: native heap ABI declarations
+    // must not appear in a module containing ordinary (Copy) scalar locals.
+    // Only explicitly opted-in experimental fixtures have heap_owned bindings.
+    const bool needsNativeRegion = std::any_of(
+            source.functions.begin(), source.functions.end(),
+            [](const Function& fn) {
+                return std::any_of(fn.locals.begin(), fn.locals.end(),
+                        [](const LocalBinding& binding) { return binding.heap_owned; });
+            });
+    std::optional<llvm::FunctionCallee> heapOpen;
+    std::optional<llvm::FunctionCallee> heapNew;
+    std::optional<llvm::FunctionCallee> heapDrop;
+    std::optional<llvm::FunctionCallee> heapClose;
+    if (needsNativeRegion) {
+        heapOpen.emplace(module.getOrInsertFunction(
+                "oreslang_owned_i64_region_open",
+                llvm::FunctionType::get(ptr, {i64}, false)));
+        heapNew.emplace(module.getOrInsertFunction(
+                "oreslang_owned_i64_region_new",
+                llvm::FunctionType::get(ptr, {ptr, i64}, false)));
+        heapDrop.emplace(module.getOrInsertFunction(
+                "oreslang_owned_i64_region_drop",
+                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr, ptr}, false)));
+        heapClose.emplace(module.getOrInsertFunction(
+                "oreslang_owned_i64_region_close",
+                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false)));
+    }
 
     std::unordered_map<std::string, llvm::Function*> declarations;
 
@@ -123,7 +139,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 [](const LocalBinding& item) { return item.heap_owned; });
         llvm::Value* region = nullptr;
         if (heapCount != 0) {
-            region = builder.CreateCall(heapOpen, {
+            region = builder.CreateCall(*heapOpen, {
                     llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(heapCount))
             }, "actor.owned.lexical.region");
         }
@@ -132,7 +148,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                                          parameters, locals, declarations);
             llvm::Value* address = nullptr;
             if (local.heap_owned) {
-                address = builder.CreateCall(heapNew, {region, initial},
+                address = builder.CreateCall(*heapNew, {region, initial},
                                              local.name + ".native.owned");
             } else {
                 address = builder.CreateAlloca(i64, nullptr, local.name + ".stack.owned");
@@ -149,12 +165,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
         const auto emitReturn = [&](llvm::Value* value) {
             for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
                 if (iter->heap) {
-                    builder.CreateCall(heapDrop, {region, iter->address});
+                    builder.CreateCall(*heapDrop, {region, iter->address});
                 } else {
                     builder.CreateLifetimeEnd(iter->address, llvm::ConstantInt::get(i64, 8));
                 }
             }
-            if (region != nullptr) builder.CreateCall(heapClose, {region});
+            if (region != nullptr) builder.CreateCall(*heapClose, {region});
             builder.CreateRet(value);
         };
         for (const auto& guard : fn.early_returns) {
