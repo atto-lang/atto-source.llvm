@@ -14,6 +14,14 @@
 
 namespace oreslang::runtime {
 
+namespace {
+thread_local OwnedHeap* current_actor_owned_heap = nullptr;
+} // namespace
+
+OwnedHeap* HungryCarrier::current_actor_heap() noexcept {
+    return current_actor_owned_heap;
+}
+
 // An independent shared control block outlives the carrier. One atomic
 // admission word linearizes close versus in-flight producer leases.
 struct HungryCarrier::ProducerGate {
@@ -134,6 +142,7 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
                              Options options)
     : actor_state_(actor_state), handler_(handler), broker_state_(broker_state),
       operation_(operation), options_(options),
+      actor_heap_(options.actor_heap_limit_bytes),
       producer_gate_(std::make_shared<ProducerGate>(this)) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
@@ -237,9 +246,18 @@ void HungryCarrier::join() noexcept {
     } else {
         abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
     }
+    // Quiescent actor retirement must not leave live heap allocations.
+    // Do not deallocate their backing storage underneath retained host
+    // handles; keep this a recorded contract violation instead of a UAF.
+    try {
+        actor_heap_.close();
+    } catch (const std::logic_error&) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
+    const auto heap = actor_heap_.stats();
     return {accepted_.load(std::memory_order_acquire),
             completed_.load(std::memory_order_acquire),
             io_done_.load(std::memory_order_acquire),
@@ -248,7 +266,10 @@ CarrierStats HungryCarrier::stats() const noexcept {
             stale_.load(std::memory_order_acquire),
             failures_.load(std::memory_order_acquire),
             thread_tag_.load(std::memory_order_acquire),
-            abandoned_on_stop_.load(std::memory_order_acquire)};
+            abandoned_on_stop_.load(std::memory_order_acquire),
+            static_cast<std::uint64_t>(heap.live_bytes),
+            static_cast<std::uint64_t>(heap.live_objects),
+            heap.closed};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -271,7 +292,12 @@ bool HungryCarrier::pin_cpu() noexcept {
 
 void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
+    // The heap is discoverable only for the lexical handler call on this
+    // carrier. A broker or unrelated carrier has a distinct TLS context.
+    OwnedHeap* previous_heap = current_actor_owned_heap;
+    current_actor_owned_heap = &actor_heap_;
     const auto step = handler_(actor_state_, message, resumed, result);
+    current_actor_owned_heap = previous_heap;
     if (stop_.load(std::memory_order_acquire)) return;
     if (step.kind == StepKind::done) {
         completed_.fetch_add(1, std::memory_order_release);
