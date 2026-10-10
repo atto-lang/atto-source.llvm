@@ -56,6 +56,21 @@ backend does not provide a supported nonblocking mechanism. Never claim
 `io_uring`, `AsynchronousFileChannel`, libdispatch, or offload workers
 guarantee zero blocked OS threads on all platforms.
 
+## Native completion terminal gate (partial implementation)
+
+The standalone `runtime/AsyncIoCompletionGate.hpp` tracks a typed
+`(actor_id, generation, operation_id)` identity and arbitrates
+`pending -> success/failure/cancelled/timed_out/closed` via a single
+atomic compare/exchange. Terminal transitions are single-winner and stale
+actor-generation/op IDs are rejected. `tests/async_io_operation_test.cpp`
+stresses 1,000 three-way completion/cancellation/timeout races.
+
+This primitive does **not** retain the actor heap, own in-flight buffers,
+install a reactor, schedule continuations or make callbacks safe after its
+own allocation has been freed. Actual integration must pair it with a
+separately verified lifetime gate and a priority-capable scheduler wakeup.
+It is not evidence of native async I/O support.
+
 ## Current status and gates
 
 Native LLVM on `main` has no imported standard-library I/O registry,
