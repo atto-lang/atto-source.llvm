@@ -385,11 +385,18 @@ private:
         }
 
         std::unordered_set<std::string> actorNames;
+        std::unordered_set<std::string> generatedSymbols;
+        auto reserveGenerated = [&](const std::string& name) {
+            if (functions.count(name) || !generatedSymbols.insert(name).second)
+                throw std::runtime_error("conflicting generated actor symbol '" + name + "'");
+        };
         for (const auto& actor : program.actors) {
             if (!actorNames.insert(actor.name).second
                 || functions.count(actor.name) != 0) {
                 throw std::runtime_error("duplicate actor symbol '" + actor.name + "'");
             }
+            const std::string prefix = "oreslang_actor_" + actor.name + "_";
+            reserveGenerated(prefix + "init");
             std::unordered_set<std::string> fields;
             // Deliberately restrict initializers to closed arithmetic:
             // initialization must not escape the actor turn or call FFI.
@@ -404,6 +411,7 @@ private:
             for (const auto& method : actor.methods) {
                 if (!methods.insert(method.name).second)
                     throw std::runtime_error("duplicate actor method '" + method.name + "'");
+                reserveGenerated(prefix + method.name);
                 std::unordered_set<std::string> available = fields;
                 for (const auto& param : method.parameters) {
                     if (!available.insert(param).second)
