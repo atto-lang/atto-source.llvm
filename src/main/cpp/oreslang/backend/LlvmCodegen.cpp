@@ -6,7 +6,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -66,7 +68,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
     llvm::IntegerType* i64 = llvm::Type::getInt64Ty(context);
+    // LLVM 15+ uses opaque pointers. LLVM 14 may still use the typed
+    // i8* API; select by the toolchain used to compile this frontend.
+#if LLVM_VERSION_MAJOR >= 15
+    llvm::Type* ptr = llvm::PointerType::get(context, 0);
+#else
     llvm::Type* ptr = llvm::Type::getInt8PtrTy(context);
+#endif
     llvm::FunctionCallee heapOpen = module.getOrInsertFunction(
             "oreslang_owned_i64_region_open",
             llvm::FunctionType::get(ptr, {i64}, false));
