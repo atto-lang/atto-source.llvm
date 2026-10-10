@@ -23,16 +23,16 @@ static void spawn_ref_is_pending_until_startup_and_done_is_independent() {
     const auto ref = group.register_spawn([&] { stops.fetch_add(1); });
     assert(ref.group_id() == group.id());
     assert(ref.id() != 0);
-    assert(ref.ready().wait_for(0ms) == std::future_status::timeout);
-    assert(ref.done().wait_for(0ms) == std::future_status::timeout);
+    assert(ref.get_ready().wait_for(0ms) == std::future_status::timeout);
+    assert(ref.get_done().wait_for(0ms) == std::future_status::timeout);
     assert(group.size() == 1);
 
     assert(group.mark_ready(ref));
-    ref.ready().get();
-    assert(ref.done().wait_for(0ms) == std::future_status::timeout);
+    ref.get_ready().get();
+    assert(ref.get_done().wait_for(0ms) == std::future_status::timeout);
     assert(!group.mark_ready(ref));
     assert(group.finalized(ref));
-    ref.done().get();
+    ref.get_done().get();
     assert(!group.finalized(ref));
     assert(group.size() == 0);
     assert(stops == 0);
@@ -43,8 +43,8 @@ static void startup_failure_propagates_to_both_observers() {
     const auto ref = group.register_spawn([] {});
     assert(group.startup_failed(ref,
         std::make_exception_ptr(std::runtime_error("startup failed"))));
-    require_throws([&] { ref.ready().get(); });
-    require_throws([&] { ref.done().get(); });
+    require_throws([&] { ref.get_ready().get(); });
+    require_throws([&] { ref.get_done().get(); });
     assert(!group.mark_ready(ref));
     assert(group.size() == 0);
 }
@@ -59,16 +59,16 @@ static void close_fences_admission_and_only_requests_stop() {
     group.close();
     assert(group.closed());
     assert(stops == 2);
-    require_throws([&] { unready.ready().get(); });
-    ready.ready().get();
+    require_throws([&] { unready.get_ready().get(); });
+    ready.get_ready().get();
     assert(!group.mark_ready(unready));
-    assert(unready.done().wait_for(0ms) == std::future_status::timeout);
+    assert(unready.get_done().wait_for(0ms) == std::future_status::timeout);
     assert(group.size() == 2); // physical finalization not fabricated
     require_throws([&] { group.register_spawn([] {}); });
     assert(group.finalized(unready));
     assert(group.finalized(ready));
-    unready.done().get();
-    ready.done().get();
+    unready.get_done().get();
+    ready.get_done().get();
     assert(group.size() == 0);
 }
 
@@ -101,12 +101,12 @@ static void readiness_racing_close_cannot_resurrect_a_worker() {
 
         // The group may win (failed readiness) or on_start may win
         // (successful readiness), but the observer always settles exactly once.
-        assert(ref.ready().wait_for(0ms) == std::future_status::ready);
-        try { ref.ready().get(); } catch (const std::runtime_error&) {}
+        assert(ref.get_ready().wait_for(0ms) == std::future_status::ready);
+        try { ref.get_ready().get(); } catch (const std::runtime_error&) {}
         assert(!group.mark_ready(ref));
         assert(stops == 1);
         assert(group.finalized(ref));
-        ref.done().get();
+        ref.get_done().get();
     }
 }
 
