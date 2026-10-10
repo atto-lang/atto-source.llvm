@@ -31,6 +31,15 @@ whereas compiler-generated drop glue must actually free each last-owned value.
   callbacks or async I/O have quiesced:** future compiler lowering must
   represent all such lifetimes with leases. A region with leaked leases
   terminates on destructor rather than permitting a use-after-free.
+- Each experimental native `HungryCarrier` now creates a separate
+  `OwnedHeap` instance with a configurable `actor_heap_limit_bytes` budget.
+  `HungryCarrier::current_actor_heap()` returns that heap only during that
+  actor's handler turn; the I/O broker and supervisor see null. The carrier
+  closes the heap after worker/producer quiescence, recording a lifecycle
+  failure if allocations remain alive. Per-carrier live bytes and object
+  counts appear in `CarrierStats`. This is *logical ownership isolation*,
+  not an OS-protected or hostile-tenant sandbox; arbitrary native callbacks
+  can still deliberately leak pointers.
 - The LLVM frontend/codegen now accepts a narrowly restricted class form:
   integer fields initialized by literals, plus local `let Box x = new Box()`
   whose only permitted use is reading integer fields in an int expression.
@@ -52,7 +61,8 @@ whereas compiler-generated drop glue must actually free each last-owned value.
 ## Validation introduced in this change
 
 CTest now includes `native_owned_heap_deterministic_drop`,
-`native_actor_epoch_deterministic_drop`, `owned_stack_class`,
+`native_actor_epoch_deterministic_drop`,
+`native_actor_heap_isolation_and_drop`, `owned_stack_class`,
 `native_exec_owned_stack_class`, plus rejection fixtures for class escape,
 unknown fields and duplicate fields. GCC and Clang ASan/UBSan build/run of
 the independent native primitives are performed on a credential-free
