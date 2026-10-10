@@ -55,8 +55,15 @@ struct Program {
     std::vector<Function> functions;
 };
 
-// Parse and statically validate a strict Java-compatible subset: int functions,
-// int parameters, return expressions and same-module calls. Reject everything else.
-Program parse_program(std::string_view source);
+// Experimental native memory lowering is a toolchain test mode, not part of
+// the shared Oreslang grammar. Normal compilations reject the 'owned int'
+// spelling; ordinary scalar ownership is implicit and allocation-free.
+struct ParserOptions {
+    bool experimental_owned_int = false;
+};
+
+// Parse the supported source subset, rejecting unsupported ownership forms
+// before emitting any LLVM IR.
+Program parse_program(std::string_view source, ParserOptions options = {});
 
 } // namespace oreslang
