@@ -86,6 +86,31 @@ static void test_bounded_storage_and_invalid_accesses() {
 
 // Reconstructing a heap at exactly the same address must not resurrect an
 // old actor's handles. This also guards hot reload and actor-ID reuse.
+static void test_long_lived_actor_full_drain_recycles_bytes_without_aba() {
+    using Tiny = ActorOwnedHeap<64, 2>;
+    Tiny heap(9);
+    auto old = heap.allocate(16, 8);
+    check(old.has_value(), "initial allocation");
+    check(heap.remove(*old), "initial deterministic free");
+    check(heap.used() == 0, "last free must recycle byte capacity");
+
+    // Without a full-drain reset, a bump allocator runs out after only
+    // a handful of request handlers even though it has no live objects.
+    for (int n = 0; n < 1000; ++n) {
+        auto current = heap.allocate(16, 8);
+        check(current.has_value(), "long-lived actor must reuse freed bytes");
+        check(!heap.read<std::uint64_t>(*old),
+              "stale generation must never resurrect after cursor reset");
+        check(heap.read<std::uint64_t>(*current).value() == 0,
+              "reused memory must be zeroed");
+        check(heap.write(*current, std::uint64_t{123}),
+              "recycled allocation remains writable");
+        check(heap.remove(*current), "deterministic removal");
+        check(heap.used() == 0 && heap.live_allocations() == 0,
+              "every completed request releases bump capacity");
+    }
+}
+
 static void test_heap_address_reuse_aba() {
     alignas(Heap) unsigned char storage[sizeof(Heap)];
     Heap* former = new (storage) Heap(33);
@@ -105,6 +130,7 @@ int main() {
         test_independent_actor_storage_and_cycles();
         test_bounded_storage_and_invalid_accesses();
         test_heap_address_reuse_aba();
+        test_long_lived_actor_full_drain_recycles_bytes_without_aba();
         std::cout << "PASS native actor-owned byte heap contracts\n";
         return 0;
     } catch (const std::exception& failure) {
