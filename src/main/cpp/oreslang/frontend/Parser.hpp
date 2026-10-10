@@ -27,6 +27,13 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool field_mutable = false; // Only `let` actor fields; locals remain immutable.
+    std::size_t offset = 0;
+};
+
+struct FieldAssignment {
+    std::string field;
+    std::unique_ptr<Expression> value;
     std::size_t offset = 0;
 };
 
@@ -34,6 +41,7 @@ struct Function {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<LocalBinding> locals;
+    std::vector<FieldAssignment> assignments;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
