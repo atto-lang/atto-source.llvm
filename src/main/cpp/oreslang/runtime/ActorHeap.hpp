@@ -8,6 +8,7 @@
 #include <cstring>
 #include <exception>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <thread>
 
@@ -46,13 +47,18 @@ private:
     std::array<Slot, Slots> slots_{};
     const std::uint64_t identity_ =
         next_actor_heap_identity.fetch_add(1, std::memory_order_relaxed);
+    // Binding may be attempted concurrently by startup/admission code.
+    // The mutex is used ONLY during admission, never in the heap hot path.
+    std::mutex bind_mutex_;
     std::thread::id owner_{};
-    bool bound_ = false;
+    std::atomic<bool> bound_{false};
     std::size_t live_bytes_ = 0;
     std::size_t live_blocks_ = 0;
 
     bool owner_thread() const noexcept {
-        return bound_ && std::this_thread::get_id() == owner_;
+        // acquire synchronizes visibility of the immutable owner_ assignment.
+        return bound_.load(std::memory_order_acquire) &&
+               std::this_thread::get_id() == owner_;
     }
 
     Slot* find(Handle handle) noexcept {
@@ -78,9 +84,10 @@ public:
     ActorHeap& operator=(ActorHeap&&) = delete;
 
     bool bind_carrier() noexcept {
-        if (!bound_) {
+        std::lock_guard<std::mutex> lock(bind_mutex_);
+        if (!bound_.load(std::memory_order_relaxed)) {
             owner_ = std::this_thread::get_id();
-            bound_ = true;
+            bound_.store(true, std::memory_order_release);
         }
         return owner_thread();
     }
