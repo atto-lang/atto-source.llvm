@@ -91,6 +91,21 @@ if(BUILD_TESTING)
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
 
+    # Persistent actor-owned heap contract, distinct from per-call owned
+    # scalar regions. Uses C11 atomics and cross-carrier thread migration.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-owned-heap-test
+        tests/actor_owned_heap_lifecycle_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-owned-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-owned-heap-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-owned-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_heap_quiescence
+        COMMAND oreslang-actor-owned-heap-test)
+    set_tests_properties(native_actor_owned_heap_quiescence PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-owned-native-region-test
         tests/native_owned_region_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
