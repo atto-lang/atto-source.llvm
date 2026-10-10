@@ -136,8 +136,54 @@ static void bounded_capacity_and_purge() {
     std::cout << "PASS fixed-size arena quotas and ABA mitigation\n";
 }
 
+struct DroppableActorObject final {
+    std::atomic<int>* drops;
+    explicit DroppableActorObject(std::atomic<int>* counter) noexcept : drops(counter) {}
+    ~DroppableActorObject() noexcept {
+        drops->fetch_add(1, std::memory_order_relaxed);
+    }
+};
+
+static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
+    using Heap = ActorOwnedGraphHeap<4, 64, 3>;
+    const ActorHeapIdentity owner{14, 21, 2};
+    std::atomic<int> drops{0};
+    Heap h(owner);
+
+    const auto a = h.emplace_owned<DroppableActorObject>(owner, &drops).value();
+    const auto b = h.emplace_owned<DroppableActorObject>(owner, &drops).value();
+    check(h.link(owner, a, b) && h.link(owner, b, a),
+          "owned object graph mutual cycle not admitted");
+    check(h.link(owner, a, a), "owned object self-cycle not admitted");
+    std::array<std::byte, 64> invalidCopy{};
+    must_reject([&] { (void)h.copy_out(owner, a, invalidCopy.data(),
+                                      invalidCopy.size()); },
+                "owned C++ object was incorrectly copied out as POD bytes");
+    must_reject([&] { h.write(owner, a, invalidCopy.data(), invalidCopy.size()); },
+                "owned C++ object was incorrectly overwritten as POD bytes");
+    h.remove(owner, a);
+    check(drops.load(std::memory_order_relaxed) == 1,
+          "explicitly deleted object destructor did not run exactly once");
+    const auto c = h.emplace_owned<DroppableActorObject>(owner, &drops).value();
+    check(c.slot == a.slot && c.generation > a.generation,
+          "droppable actor object slot did not advance generation");
+    must_reject([&] { h.remove(owner, a); },
+                "stale destructor slot was not rejected");
+
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    carrier.start();
+    carrier.join();
+    const auto proof = carrier.retirement_proof();
+    check(proof.has_value(), "missing joined carrier proof for destructor drop");
+    h.retire(owner, *proof);
+    check(drops.load(std::memory_order_relaxed) == 3,
+          "actor retirement did not drop exactly two remaining live objects");
+    std::cout << "PASS deterministic native destructor glue and cyclic actor retirement\\n";
+}
+
 int main() {
     cycles_reclaim_without_gc();
     stale_generation_and_foreign_heap_rejected();
     bounded_capacity_and_purge();
+    test_destructors_are_exactly_once_on_cycles_and_retirement();
 }
