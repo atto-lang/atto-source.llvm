@@ -1,0 +1,7 @@
+// 'owned' is not a reserved word in the standard source grammar.
+// A scalar binding must never be implicitly heap-boxed because of its name.
+pub fnc main(): int {
+  const owned: int = 6;
+  const value: int = owned * 7;
+  return value;
+}
