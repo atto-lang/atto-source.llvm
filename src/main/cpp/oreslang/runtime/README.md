@@ -9,6 +9,37 @@ actor mailbox lease, supervisor trees, independent physical heap regions and bou
 
 No RT scheduler policy, zero-GC or actor isolation is currently implemented.
 
+## Experimental actor-owned cyclic graph storage (not source-lowered)
+
+`ActorOwnedGraphHeap.hpp` provides a **real fixed-capacity native storage
+prototype** owned by one authenticated actor execution identity. Nodes store
+inline bytes (no per-node `malloc` or JVM garbage collector), and non-owning
+generation-checked handles form self/mutual cycles without reference counting.
+One explicit `retire(actor, quiesced=true)` invalidates every handle and
+zeros storage; retired or stale actor generations cannot read the graph.
+Deleting a node purges incoming edges and advances its generation before
+reusing its slot. Separate actors have separate fixed arrays and reject
+foreign handles.
+
+The `quiesced` argument is a *precondition*, **not** proof that async
+frames, borrows, FFI resources or hot-reload continuations have drained.
+Do not wire `retire` into real actor cancellation until the scheduler
+provides that proof and prevents concurrent/reentrant accesses.
+`NodeBytes` are POD byte payloads; arbitrary Oreslang class layout,
+destructor glue, inter-actor transport, the source borrow checker and
+actor-specific native memory quotas are still not lowered by LLVM.
+
+The native `ActorOwnedGraphHeap` test covers cycles, deterministic
+logical reclamation, ABA generation reuse, cross-owner exclusion,
+capacity, and refusal to retire before quiescence. Native CTest:
+`native_actor_owned_cyclic_graph_heap`.
+
+This is the `ACTOR_ARENA` substrate. It does **not** require one
+GraalVM isolate per actor. `VM_ISOLATE` is a separate execution policy:
+one isolated Engine can house multiple independently owned actor arenas,
+but those actors share that Engine's JIT and VM-level GC. A separate
+`PROCESS_ISOLATE` is reserved for stricter security boundaries.
+
 ## Dedicated hungry actor idle/I/O semantics — design only
 
 Read [Hungry isolated actor idle/I/O contract](../../../../../docs/HUNGRY_ACTOR_IDLE_IO.md).
