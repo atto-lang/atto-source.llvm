@@ -10,7 +10,7 @@ lifecycle behavior. In source, `spawn WorkerActor()` returns a live
 `ActorRef<WorkerActor>` immediately; `await spawn WorkerActor()` is an
 asynchronous *readiness* barrier that returns that same ref after `on_start`
 and required-field initialization succeed. Neither waits for actor termination.
-`await ref.done` is the independent finalization barrier.
+`await ref.get_ready()` and `await ref.get_done()` are explicit `Future<void>` method calls; the second is the independent finalization barrier. Property-style `.ready` and `.done` are not the source API.
 
 A group must retain **explicitly managed** actor refs (not merely group-member
 IDs), register them before scheduled startup can race finalization, evict on
