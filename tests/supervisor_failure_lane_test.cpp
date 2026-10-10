@@ -77,5 +77,32 @@ int main() {
     CHECK(lane.dispatch_one(handler));
     CHECK(lane.reserved_count() == 0);
 
+    // Native low-allocation panic path uses storage reserved at spawn.
+    Lane preallocated(2);
+    preallocated.reserve(key(77));
+    const std::string oversized(2000, 'p');
+    CHECK(preallocated.publish_preallocated(
+        key(77), Lane::Kind::Panic, oversized, "daddy-root"));
+    CHECK(!preallocated.publish_preallocated(
+        key(77), Lane::Kind::Raise, "duplicate"));
+    const auto terminal = preallocated.poll();
+    CHECK(terminal.has_value());
+    CHECK(terminal->summary.size() == 512);
+    CHECK(terminal->parent_id == "daddy-root");
+    CHECK(terminal->kind == Lane::Kind::Panic);
+    preallocated.ack(key(77));
+    CHECK(preallocated.reserved_count() == 0);
+
+    // Reservation may be reused, but the previous generation is rejected.
+    preallocated.reserve(key(77, 2));
+    bool stale = false;
+    try {
+        preallocated.publish_preallocated(
+            key(77), Lane::Kind::Panic, "old generation");
+    } catch (const std::logic_error&) { stale = true; }
+    CHECK(stale);
+    preallocated.retire_gracefully(key(77, 2));
+    CHECK(preallocated.reserved_count() == 0);
+
     return 0;
 }
