@@ -66,7 +66,7 @@ static void stale_generation_and_foreign_heap_rejected() {
                 "foreign actor entered heap");
     const auto other = second.allocate(bob, &data, sizeof(data)).value();
     must_reject([&]{ (void)first.link(alice, reused,
-                       typename Heap::Handle{other.heap, other.slot, other.generation}); },
+                       Heap::Handle{other.heap, other.slot, other.generation}); },
                 "cross-actor graph edge accepted");
     check(first.live_nodes(alice) == 1, "failed authority check changed state");
     std::cout << "PASS stale generation and cross-actor handles\n";
