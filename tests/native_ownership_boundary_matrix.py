@@ -28,9 +28,53 @@ cases = {
     "do nb writech": ("pub fnc main(): int { do nb writech messages, 1; return 42; }", "native async/channel/select boundary unsupported"),
     "generator yield": ("generator fnc main(): int { yield 42; return 0; }", "native actor/async declaration"),
     "cooperate": ("pub fnc main(): int { return rt cooperate; }", "native async/channel/select boundary unsupported"),
-    "borrow": ("pub fnc main(int x): int { return rt borrow x; }", "native rt borrow requires lifetime/provenance"),
-    "borrow mut": ("pub fnc main(int x): int { return rt borrow mut x; }", "native rt borrow requires lifetime/provenance"),
-    "borrowed parameter": ("pub fnc main(borrow int x): int { return x; }", "expected 'int'"),
+    "borrow": ("pub fnc main(int x): int { return rt borrow x; }", "borrowed reference may only be passed"),
+    "borrow mut": ("pub fnc main(int x): int { return rt borrow mut x; }", "borrowed reference may only be passed"),
+    "take from borrowed parameter": ("fnc view(borrow int x): int { return rt take x; }", "cannot rt take through a borrowed parameter"),
+    "borrow of temporary": (
+        "fnc view(borrow int x): int { return x; } pub fnc main(): int { return view(rt borrow (40 + 2)); }",
+        "native borrow requires an addressable named int parameter"),
+    "immutable/exclusive conflict": (
+        "fnc join(borrow int a, borrow mut int b): int { return a + b; } "
+        "fnc invoke(int x): int { return join(rt borrow x, rt borrow mut x); }",
+        "conflicting active native borrow"),
+    "exclusive/exclusive conflict": (
+        "fnc join(borrow mut int a, borrow mut int b): int { return a + b; } "
+        "fnc invoke(int x): int { return join(rt borrow mut x, rt borrow mut x); }",
+        "conflicting active native borrow"),
+    "move during shared loan": (
+        "fnc use(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow x, rt take x); }",
+        "cannot move int while borrow is active"),
+    "read during exclusive loan": (
+        "fnc use(borrow mut int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return use(rt borrow mut x, x); }",
+        "read conflicts with active mutable borrow"),
+    "nested call loan conflict": (
+        "fnc inner(borrow mut int b): int { return b; } "
+        "fnc outer(borrow int a, int b): int { return a + b; } "
+        "fnc invoke(int x): int { return outer(rt borrow x, inner(rt borrow mut x)); }",
+        "conflicting active native borrow"),
+    "borrow mode mismatch": (
+        "fnc use(borrow mut int a): int { return a; } "
+        "fnc invoke(int x): int { return use(rt borrow x); }",
+        "borrow mode does not match borrowed parameter"),
+    "borrow instead of value": (
+        "fnc use(int a): int { return a; } "
+        "fnc invoke(int x): int { return use(rt borrow x); }",
+        "borrowed reference may only be passed"),
+    "value instead of borrowed": (
+        "fnc use(borrow int a): int { return a; } "
+        "fnc invoke(int x): int { return use(x); }",
+        "borrowed argument requires explicit rt borrow"),
+    "reborrow borrowed parameter": (
+        "fnc inner(borrow int a): int { return a; } "
+        "fnc outer(borrow int x): int { return inner(rt borrow x); }",
+        "native reborrow of borrowed parameter unsupported"),
+    "borrow moved parameter": (
+        "fnc use(borrow int a): int { return a; } "
+        "fnc invoke(int x): int { return rt take x + use(rt borrow x); }",
+        "borrow of explicitly moved int"),
 }
 with tempfile.TemporaryDirectory(prefix="oreslang-native-borrow-matrix-") as d:
     path = pathlib.Path(d) / "test.ores"
