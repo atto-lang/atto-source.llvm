@@ -178,8 +178,13 @@ private:
             guard.offset = token_.offset;
             require("(");
             guard.lhs = expression();
-            require("=");
-            require("=");
+            // Java Oreslang uses 'eq' as canonical value equality, with
+            // '==' as a compatible alias. This strict subset does not admit
+            // arbitrary condition types, 'neq' or compound predicates yet.
+            if (!accept("eq")) {
+                require("=");
+                require("=");
+            }
             guard.rhs = expression();
             require(")");
             require("{");
@@ -187,6 +192,8 @@ private:
             guard.result = expression();
             require(";");
             require("}");
+            // Java Oreslang requires fi even for brace-form if blocks.
+            require("fi");
             value.early_returns.push_back(std::move(guard));
         }
         require("return");
