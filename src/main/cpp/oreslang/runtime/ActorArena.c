@@ -8,6 +8,8 @@
 #define ORES_MAX_LOANS 64u
 #define ORES_MAX_SLOT_BYTES (1024u * 1024u)
 #define ORES_MAX_SCRATCH_BYTES (16u * 1024u * 1024u)
+/* Prevent parameter multiplication from creating a multi-GiB actor arena. */
+#define ORES_MAX_ACTOR_BYTES (64u * 1024u * 1024u)
 typedef struct { uint64_t generation; size_t length; uint32_t loans; unsigned char live; } Slot;
 typedef struct { uint64_t nonce, index, generation; } LoanEntry;
 struct OresActorArena {
@@ -55,6 +57,8 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
         || !slot_bytes || slot_bytes > ORES_MAX_SLOT_BYTES
         || !scratch_bytes || scratch_bytes > ORES_MAX_SCRATCH_BYTES) deny();
     const size_t slab_bytes = checked_mul(slots, slot_bytes);
+    if (slab_bytes > ORES_MAX_ACTOR_BYTES
+        || scratch_bytes > ORES_MAX_ACTOR_BYTES - slab_bytes) deny();
     (void) checked_mul(slots, sizeof(Slot));
     OresActorArena* a = (OresActorArena*) calloc(1, sizeof(*a));
     if (!a) deny();
@@ -120,7 +124,7 @@ void ores_actor_arena_read(OresActorArena* a, OresArenaTurn turn,
     Slot* s = require_slot(a, handle);
     require_span(s->length, offset, bytes);
     if (bytes && !out) deny();
-    memcpy(out, a->slab + (size_t) handle.index * a->slot_bytes + offset, bytes);
+    if (bytes) memcpy(out, a->slab + (size_t) handle.index * a->slot_bytes + offset, bytes);
     leave_lock(a);
 }
 void ores_actor_arena_write(OresActorArena* a, OresArenaTurn turn,
@@ -130,7 +134,7 @@ void ores_actor_arena_write(OresActorArena* a, OresArenaTurn turn,
     Slot* s = require_slot(a, handle);
     require_span(s->length, offset, bytes);
     if (s->loans || (bytes && !src)) deny();
-    memcpy(a->slab + (size_t) handle.index * a->slot_bytes + offset, src, bytes);
+    if (bytes) memcpy(a->slab + (size_t) handle.index * a->slot_bytes + offset, src, bytes);
     leave_lock(a);
 }
 void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
@@ -205,7 +209,7 @@ void ores_actor_arena_scratch_write(OresActorArena* a, OresArenaTurn turn,
     enter_lock(a);
     require_turn(a, turn); scratch_bounds(a, h, off, bytes);
     if (bytes && !src) deny();
-    memcpy(a->scratch + (size_t) h.offset + off, src, bytes);
+    if (bytes) memcpy(a->scratch + (size_t) h.offset + off, src, bytes);
     leave_lock(a);
 }
 void ores_actor_arena_scratch_read(OresActorArena* a, OresArenaTurn turn,
@@ -213,7 +217,7 @@ void ores_actor_arena_scratch_read(OresActorArena* a, OresArenaTurn turn,
     enter_lock(a);
     require_turn(a, turn); scratch_bounds(a, h, off, bytes);
     if (bytes && !out) deny();
-    memcpy(out, a->scratch + (size_t) h.offset + off, bytes);
+    if (bytes) memcpy(out, a->scratch + (size_t) h.offset + off, bytes);
     leave_lock(a);
 }
 void ores_actor_arena_retire(OresActorArena* a) {
