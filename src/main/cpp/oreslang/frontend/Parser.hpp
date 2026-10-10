@@ -39,9 +39,17 @@ struct Function {
     bool exported = false;
 };
 
+struct Actor {
+    std::string name;
+    std::vector<LocalBinding> fields;
+    std::vector<Function> methods;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::string module;
     std::vector<Function> functions;
+    std::vector<Actor> actors;
 };
 
 // Parse and statically validate a strict Java-compatible subset: int functions,
