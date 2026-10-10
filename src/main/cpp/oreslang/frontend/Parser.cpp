@@ -91,7 +91,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -154,6 +154,18 @@ private:
         require(":");
         require("int");
         require("{");
+        while (token_.text == "const" || token_.text == "val") {
+            LocalBinding binding;
+            binding.offset = token_.offset;
+            advance();
+            binding.name = identifier();
+            require(":");
+            require("int");
+            require("=");
+            binding.initializer = expression();
+            require(";");
+            value.locals.push_back(std::move(binding));
+        }
         require("return");
         value.result = expression();
         require(";");
@@ -314,9 +326,18 @@ private:
             }
         }
         for (const auto& fn : program.functions) {
-            const std::unordered_set<std::string> params(fn.parameters.begin(),
-                                                         fn.parameters.end());
-            validate_expression(*fn.result, params, functions);
+            std::unordered_set<std::string> available(fn.parameters.begin(),
+                                                      fn.parameters.end());
+            for (const auto& local : fn.locals) {
+                // The initializer is checked BEFORE publication: x=x+1 or
+                // forward references cannot read uninitialized stack memory.
+                validate_expression(*local.initializer, available, functions);
+                if (!available.insert(local.name).second) {
+                    throw std::runtime_error("duplicate owned local '" + local.name
+                                             + "' at byte " + std::to_string(local.offset));
+                }
+            }
+            validate_expression(*fn.result, available, functions);
         }
     }
 
