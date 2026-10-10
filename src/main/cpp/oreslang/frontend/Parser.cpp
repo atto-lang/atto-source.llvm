@@ -33,7 +33,7 @@ bool reserved(std::string_view name) {
         "define", "class", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "generator",
+        "spawn", "stop", "done", "await", "rt", "async", "suspends", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -42,7 +42,7 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "int"
+        "over", "structural", "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -142,6 +142,9 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (token_.text == "suspends") {
+            fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+        }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
