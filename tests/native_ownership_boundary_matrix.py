@@ -27,7 +27,7 @@ cases = {
     "do writech": ("pub fnc main(): int { do writech messages, 1; return 42; }", "native async/channel/select boundary unsupported"),
     "do nb writech": ("pub fnc main(): int { do nb writech messages, 1; return 42; }", "native async/channel/select boundary unsupported"),
     "generator yield": ("generator fnc main(): int { yield 42; return 0; }", "native actor/async declaration"),
-    "cooperate": ("pub fnc main(): int { return rt cooperate; }", "unsupported native rt operation"),
+    "cooperate": ("pub fnc main(): int { return rt cooperate; }", "native async/channel/select boundary unsupported"),
     "borrow": ("pub fnc main(int x): int { return rt borrow x; }", "native rt borrow requires lifetime/provenance"),
     "borrow mut": ("pub fnc main(int x): int { return rt borrow mut x; }", "native rt borrow requires lifetime/provenance"),
     "borrowed parameter": ("pub fnc main(borrow int x): int { return x; }", "expected 'int'"),
