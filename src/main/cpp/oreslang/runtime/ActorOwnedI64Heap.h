@@ -43,6 +43,14 @@ void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
 int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
                                        uint64_t domain, uint64_t epoch,
                                        uint64_t index);
+/* Only compiler-declared mutable fields are writable.
+ * Outstanding loans prohibit writes, including after a suspended turn. */
+void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
+                                            uint64_t domain, uint64_t epoch,
+                                            uint64_t index, int64_t initial);
+void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
+                                     uint64_t domain, uint64_t epoch,
+                                     uint64_t index, int64_t value);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
 /* Returns zero while a turn or loan is outstanding; returns one and frees
  * native memory after quiescence. Never call with an invalidated heap pointer.
