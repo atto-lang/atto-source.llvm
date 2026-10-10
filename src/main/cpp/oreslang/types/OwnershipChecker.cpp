@@ -3,76 +3,151 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace oreslang {
 namespace {
 
+using Mode = Parameter::Mode;
+using Functions = std::unordered_map<std::string, const Function*>;
+
 struct LocalOwnership {
+    Mode mode = Mode::Value;
     bool moved = false;
+    std::size_t shared_loans = 0;
+    bool exclusive_loan = false;
+};
+using Locals = std::unordered_map<std::string, LocalOwnership>;
+
+[[noreturn]] void reject(const Expression& expr, const std::string& reason) {
+    throw std::runtime_error(reason + " at byte " + std::to_string(expr.offset));
+}
+
+LocalOwnership& local(const Expression& expr, Locals& locals) {
+    auto it = locals.find(expr.name);
+    if (it == locals.end())
+        reject(expr, "internal ownership error: undeclared parameter '" + expr.name + "'");
+    return it->second;
+}
+
+void check_value(const Expression& expr, Locals& locals, const Functions& functions);
+
+struct Loan {
+    std::string name;
+    bool exclusive = false;
 };
 
-// Validate in the exact order expressions are evaluated by LlvmCodegen.
-// A primitive i64 is Copy, but explicit `rt take x` invalidates x in Java
-// even when ordinary implicit reads/calls are allowed to copy the integer.
-void check_expression(const Expression& expr,
-                      std::unordered_map<std::string, LocalOwnership>& locals) {
+// Only named, OWNED int parameter storage is currently addressable. A loan
+// exists only as a call argument and must be returned at the call boundary.
+// No borrow of a temporary, return of a reference, or reborrow of an existing
+// borrowed parameter can enter native LLVM lowering.
+Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
+    const bool exclusive = expr.kind == Expression::Kind::BorrowMut;
+    if (expr.kind != Expression::Kind::Borrow &&
+        expr.kind != Expression::Kind::BorrowMut)
+        reject(expr, "borrowed argument requires explicit rt borrow [mut]");
+    if ((expected == Mode::BorrowMut) != exclusive)
+        reject(expr, "borrow mode does not match borrowed parameter");
+    if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+        reject(expr, "native borrow requires an addressable named int parameter");
+    LocalOwnership& source = local(*expr.left, locals);
+    if (source.mode != Mode::Value)
+        reject(expr, "native reborrow of borrowed parameter unsupported");
+    if (source.moved)
+        reject(expr, "borrow of explicitly moved int '" + expr.left->name + "'");
+    if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
+        reject(expr, "conflicting active native borrow of '" + expr.left->name + "'");
+    if (exclusive) source.exclusive_loan = true;
+    else ++source.shared_loans;
+    return {expr.left->name, exclusive};
+}
+
+void release(const Loan& loan, Locals& locals) {
+    auto& source = locals.at(loan.name);
+    if (loan.exclusive) source.exclusive_loan = false;
+    else --source.shared_loans;
+}
+
+void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
+    const auto found = functions.find(expr.name);
+    if (found == functions.end())
+        reject(expr, "internal ownership error: unresolved function");
+    const auto& parameters = found->second->parameters;
+    if (parameters.size() != expr.arguments.size())
+        reject(expr, "internal ownership error: call arity mismatch");
+
+    // Preserve the full set of argument loans until the call has completed.
+    // Nested calls observe outstanding outer-call loans. Evaluation is
+    // strictly left-to-right, matching the LLVM emitter.
+    std::vector<Loan> loans;
+    for (std::size_t i = 0; i < parameters.size(); ++i) {
+        const Expression& argument = *expr.arguments[i];
+        if (parameters[i].mode == Mode::Value)
+            check_value(argument, locals, functions);
+        else
+            loans.push_back(acquire(argument, parameters[i].mode, locals));
+    }
+    for (auto it = loans.rbegin(); it != loans.rend(); ++it)
+        release(*it, locals);
+}
+
+void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return;
         case Expression::Kind::Variable: {
-            auto found = locals.find(expr.name);
-            if (found == locals.end()) {
-                throw std::runtime_error(
-                    "internal native ownership error: undeclared variable '" + expr.name + "'");
-            }
-            if (found->second.moved) {
-                throw std::runtime_error("use of explicitly moved int '" + expr.name
-                                         + "' at byte " + std::to_string(expr.offset));
-            }
+            LocalOwnership& source = local(expr, locals);
+            if (source.moved)
+                reject(expr, "use of explicitly moved int '" + expr.name + "'");
+            if (source.exclusive_loan)
+                reject(expr, "read conflicts with active mutable borrow of '" + expr.name + "'");
             return;
         }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
-            // Native i64 has no owner graph to clone or publish. These are
-            // validated copies of scalar values, never Shared<T> handles.
-            check_expression(*expr.left, locals);
+        case Expression::Kind::Negate:
+            check_value(*expr.left, locals, functions);
             return;
-        case Expression::Kind::Take:
-            check_expression(*expr.left, locals);
+        case Expression::Kind::Take: {
+            check_value(*expr.left, locals, functions);
             if (expr.left->kind == Expression::Kind::Variable) {
-                locals.at(expr.left->name).moved = true;
+                LocalOwnership& source = local(*expr.left, locals);
+                if (source.mode != Mode::Value)
+                    reject(expr, "cannot rt take through a borrowed parameter");
+                if (source.exclusive_loan || source.shared_loans != 0)
+                    reject(expr, "cannot move int while borrow is active");
+                source.moved = true;
             }
             return;
-        case Expression::Kind::Negate:
-            check_expression(*expr.left, locals);
-            return;
+        }
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
-            check_expression(*expr.left, locals);
-            check_expression(*expr.right, locals);
+            check_value(*expr.left, locals, functions);
+            check_value(*expr.right, locals, functions);
             return;
         case Expression::Kind::Call:
-            // Keep all argument ownership effects live until invocation.
-            // The supported parameters are owned i64 by value; there are
-            // no borrowed or structural references in this native ABI.
-            for (const auto& arg : expr.arguments) {
-                check_expression(*arg, locals);
-            }
+            check_call(expr, locals, functions);
             return;
+        case Expression::Kind::Borrow:
+        case Expression::Kind::BorrowMut:
+            reject(expr, "borrowed reference may only be passed to a borrowed parameter");
     }
-    throw std::runtime_error("invalid native ownership expression kind");
+    reject(expr, "invalid native ownership expression kind");
 }
 
 } // namespace
 
 void validate_i64_ownership(const Program& program) {
+    Functions functions;
+    for (const auto& function : program.functions)
+        functions.emplace(function.name, &function);
     for (const auto& function : program.functions) {
-        std::unordered_map<std::string, LocalOwnership> locals;
-        for (const auto& param : function.parameters) {
-            locals.emplace(param, LocalOwnership{});
-        }
-        check_expression(*function.result, locals);
+        Locals locals;
+        for (const auto& param : function.parameters)
+            locals.emplace(param.name, LocalOwnership{param.mode});
+        check_value(*function.result, locals, functions);
     }
 }
 

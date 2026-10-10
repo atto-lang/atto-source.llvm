@@ -36,20 +36,31 @@ left-to-right return expression or its function-call arguments is an error,
 even though `int` otherwise supports implicit copies. The LLVM emitter
 uses explicit left-to-right operand lowering to preserve the checked order.
 
-The LLVM frontend currently parses a deliberately narrow i64-only subset and
-does **not** lower Java's `rt borrow`, `rt borrow mut`, borrowed
-parameters, structural read loans, actor-owned memory, or move-only object
-graphs. Primitive i64 `rt take/copy/share` do not imply those advanced features. The native runtime's thread/arena helpers do not make this
-subset safe for move-only data or concurrent actors.
+The LLVM compiler now admits **non-escaping primitive i64 borrows** through
+`borrow int` / `borrow mut int` function parameters and `rt borrow x` /
+`rt borrow mut x` arguments. These lower to typed native pointers referencing
+caller-owned, parameter-local stack slots. They are checked for immutable-vs-
+exclusive alias conflicts, use-after-`rt take`, moving while loaned, and
+source-order call nesting. All accepted function returns remain i64, and
+loan pointers cannot be stored or returned by this source fragment. Loan
+lifetime is bounded by each direct call: it ends when that call returns.
+
+This is **not** support for general native references. Reborrows, borrowed
+temporaries, object/struct projections, destructors, heap provenance,
+mutable reference writes, actor-owned arenas and passing loans across
+suspension are not available. A `borrow mut` parameter is currently an
+exclusive read capability; no mutable assignments are admitted. The borrowed
+parameter pointer ABI is internal to this restricted compilation model,
+not a validated external C/FFI interface.
 
 Until the backend has explicit heap ownership provenance, lifetime scopes,
 reborrow/alias exclusion, transitive copy contracts, projection tracking,
-suspension and actor-boundary rules, all reference and async/channel/actor
-operations must **fail closed** with a nonzero compiler exit and **no LLVM IR**. The negative CTest fixtures enforce
-that contract. Their passing status is evidence of unsupported-language
-rejection, **not** implementation or semantic parity with Java.
+suspension and actor-boundary rules, all **non-scalar** references and all
+async/channel/actor operations must **fail closed** with a nonzero compiler
+exit and **no LLVM IR**. Negative tests enforce that rule; positive
+LLVM/Clang tests verify limited scalar borrow lowering, not Java parity.
 
-A future positive ownership fixture must demonstrate full-stack type checking,
+A future complex-object ownership fixture must demonstrate full-stack type checking,
 lowering, IR emission, and runtime behavior in addition to differential
 Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 
@@ -59,13 +70,13 @@ Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 | --- | --- |
 | Lexer, modules, functions | Partial i64-only subset, not full Java parity |
 | Function calls, expressions | i64 arithmetic and same-module calls |
-| Type/ownership checking | Name/arity and i64 explicit-take move invalidation; references, borrows and async unsupported |
+| Type/ownership checking | Name/arity, i64 explicit moves and scoped nonescaping scalar loans; heap references and async unsupported |
 | LLVM IR verification | Implemented |
 | Compile and execute native guest | Clang can link i64 main on supported host |
 | General target-specific ABI/object emission | Not implemented |
 | Actors/supervisors, async frames, channels | Not implemented |
 | Static select and reusable SelectPlan / DynamicSelectPlan | Not implemented; fail-closed fixtures and [parity contract](SELECT_PLAN_PARITY.md) |
-| Cycles/Ref/WeakRef, borrow checking, arenas | No heap/alias borrow checking; i64 source-order ownership checking only |
+| Cycles/Ref/WeakRef, borrow checking, arenas | i64 shared/exclusive argument-loan checking; no heap/struct/actor borrow checking |
 | HPC/HFT and isolation | Not implemented |
 
 **Unreconciled:** Java `int` width and overflow, possible runtime faults,
