@@ -43,6 +43,8 @@ inline bool word_part(char c) { return word_start(c) || (c >= '0' && c <= '9'); 
 inline bool digit(char c) { return c >= '0' && c <= '9'; }
 
 inline std::vector<Token> tokenize(std::string_view source) {
+    if (source.size() > 65536)
+        throw std::invalid_argument("accelerator source exceeds 64 KiB admission limit");
     std::vector<Token> result;
     std::size_t i = 0;
     while (i < source.size()) {
@@ -91,6 +93,8 @@ inline std::vector<Token> tokenize(std::string_view source) {
         }
         throw std::invalid_argument("unsupported accelerator symbol at byte " + std::to_string(i));
     }
+    if (result.size() >= 4096)
+        throw std::invalid_argument("accelerator source exceeds token admission limit");
     result.push_back({"<eof>", false, false, source.size()});
     return result;
 }
@@ -119,11 +123,15 @@ public:
         if (!current().number) fail("expected finite f32 coefficient");
         std::string literal;
         for (char c : current().text) if (c != '_') literal += c;
+        if (literal.size() > 128) fail("f32 coefficient token too long");
         ++at_;
         errno = 0;
         char* end = nullptr;
         const float value = std::strtof(literal.c_str(), &end);
-        if (end == literal.c_str() || *end != '\0' || errno == ERANGE || !std::isfinite(value))
+        // ERANGE may signal a representable f32 subnormal. Reject
+        // underflow to zero, but preserve valid nonzero subnormal values.
+        if (end == literal.c_str() || *end != '\0' || !std::isfinite(value)
+                || (errno == ERANGE && value == 0.0f))
             fail("invalid finite f32 coefficient");
         return negative ? -value : value;
     }
