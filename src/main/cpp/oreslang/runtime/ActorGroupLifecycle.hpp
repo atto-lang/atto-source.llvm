@@ -108,6 +108,7 @@ private:
  */
 class NativeActorGroup final {
 public:
+    using ActorRef = NativeActorRef;
     using StopRequest = std::function<void()>;
 
     enum class ControlTurn { idle, executed, busy, retired };
