@@ -21,6 +21,12 @@ struct Token {
     std::size_t offset;
 };
 
+bool exceptional_control(std::string_view word) {
+    return word == "throw" || word == "raise" || word == "panic" ||
+           word == "recover" || word == "defer" || word == "try" ||
+           word == "catch" || word == "finally" || word == "trap";
+}
+
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
 bool identifier_start(char ch) {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
@@ -40,7 +46,8 @@ bool reserved(std::string_view name) {
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
-        "static", "pub", "private", "return", "defer", "val", "const",
+        "static", "pub", "private", "return", "defer", "throw", "raise",
+        "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int"
     };
@@ -92,7 +99,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Match Java/Graal's contiguous equality token; never accept '= ='.
+        // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
@@ -263,6 +270,8 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (exceptional_control(token_.text))
+            fail("native exception/control effect unsupported");
         if (token_.text == "gpu" || token_.text == "quantum") {
             fail("native accelerator lowering unsupported");
         }
@@ -340,9 +349,13 @@ private:
         }
         while (token_.text != "return" && token_.text != "if") {
             if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
+            if (exceptional_control(token_.text))
+                fail("native exception/control effect unsupported");
             if (accept("stop")) {
                 value.actor_stops.push_back(identifier());
                 require(";");
+                value.actor_actions.push_back({ActorAction::Kind::Stop,
+                                               value.actor_stops.size() - 1});
                 continue;
             }
             Statement statement;
@@ -357,6 +370,8 @@ private:
                 require(")");
                 require(";");
                 value.actor_sends.push_back(std::move(send));
+                value.actor_actions.push_back({ActorAction::Kind::Send,
+                                               value.actor_sends.size() - 1});
                 continue;
             }
             if (action->kind == Expression::Kind::Field && accept("=")) {
@@ -385,7 +400,6 @@ private:
             require("if");
             require("(");
             guard.lhs = expression();
-            // Match canonical Java/Graal grammar: eq or contiguous ==.
             if (!accept("eq")) require("==");
             guard.rhs = expression();
             require(")");
@@ -654,14 +668,21 @@ private:
                 }
                 validate_expression(*stmt.expression, params, functions);
             }
-            for (const auto& send : fn.actor_sends) {
-                if (!references.count(send.reference))
-                    throw std::runtime_error("unknown actor message receiver '" + send.reference + "'");
-                validate_expression(*send.payload, params, functions);
-            }
-            for (const auto& stop : fn.actor_stops) {
-                if (!live_actors.erase(stop))
-                    throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
+            // Validate effects in lexical order. In particular, a send after
+            // stop must not pass by consulting the all-spawns reference map.
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    if (!references.count(send.reference))
+                        throw std::runtime_error("unknown actor message receiver '" + send.reference + "'");
+                    if (!live_actors.count(send.reference))
+                        throw std::runtime_error("actor message sent after stop '" + send.reference + "'");
+                    validate_expression(*send.payload, params, functions);
+                } else {
+                    const auto& stop = fn.actor_stops.at(action.index);
+                    if (!live_actors.erase(stop))
+                        throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
+                }
             }
             if (!live_actors.empty())
                 throw std::runtime_error("actor reference must be stopped before return");

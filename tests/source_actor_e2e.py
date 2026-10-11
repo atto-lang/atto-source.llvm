@@ -23,10 +23,12 @@ def main():
         ("source-actor-spawn-stop.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
+        ("source-actor-interleaved-stop.ores", 2, None, None),
     ]
     negatives = {
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
+        "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "native async/channel/select boundary unsupported",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
@@ -50,6 +52,12 @@ def main():
             assert "oreslang_source_actor_stop" in guest.stdout, name
             if name != "source-actor-spawn-stop.ores":
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-interleaved-stop.ores":
+                # IR call ordering must reflect lexical source ordering.
+                # Previous lowering grouped every send before every stop.
+                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop")
+                final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
+                assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
             ll = pathlib.Path(temp, name + ".ll")
             ll.write_text(guest.stdout)
             exe = pathlib.Path(temp, name + ".guest")
@@ -70,11 +78,16 @@ def main():
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
-            for line in lines:
+            for i, line in enumerate(lines):
                 assert "constructor_on_worker=1 released=1" in line, line
-                assert f"processed={count}" in line, line
-                if last is not None:
-                    assert f"last={last}" in line, line
+                if name == "source-actor-interleaved-stop.ores":
+                    expected = [(1, 1), (2, 7)][i]
+                    assert f"processed={expected[0]}" in line, line
+                    assert f"last={expected[1]}" in line, line
+                else:
+                    assert f"processed={count}" in line, line
+                    if last is not None:
+                        assert f"last={last}" in line, line
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
