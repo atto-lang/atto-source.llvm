@@ -71,6 +71,11 @@ struct ReceiveBooleanArm {
 // contracts are checked before the explicit fail-closed lowering gate.
 struct TaggedReceiveArm {
     std::string qualified_case;
+    // One terminal directional send after any field assignments; lowered
+    // into a scheduler-admitted message, never a synchronous actor call.
+    std::string route_direction;
+    std::string route_variant;
+    std::unique_ptr<Expression> route_payload;
     std::vector<std::string> binders;
     bool binds_payload = false;
     bool tuple_destructure = false;
@@ -84,6 +89,9 @@ struct Function {
     std::vector<LocalBinding> locals;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
+    std::vector<std::string> pipeline_actors; // exactly source, transform, sink
+    std::string pipeline_expect_actor;
+    std::int64_t pipeline_expect_value = 0;
     // Restricted initial compiler continuation: await ref.get_ready()
     // directly after spawning actors, before messages or cleanup.
     std::string ready_await_actor;
