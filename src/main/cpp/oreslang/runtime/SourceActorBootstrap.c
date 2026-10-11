@@ -2,6 +2,7 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeActorFuture.h"
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,6 +16,8 @@
 #define SOURCE_GROUP_ROOT_SLOT (SOURCE_GROUP_SLOTS - 1u)
 
 #define SOURCE_MAX_VARIANTS 64u
+#define SOURCE_PRODUCER_CLOSED (UINT64_C(1) << 63)
+#define SOURCE_PRODUCER_COUNT (SOURCE_PRODUCER_CLOSED - 1)
 
 typedef struct {
     OresMp2Contract value;
@@ -40,6 +43,7 @@ typedef struct {
     SourceVariantContract* variants;
     size_t variant_count;
     atomic_size_t wire_reserved;
+    atomic_uint_fast64_t producer_gate;
     atomic_int initialized;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
@@ -269,6 +273,7 @@ static void* source_spawn(
     instance->variants = registered;
     instance->variant_count = registered ? variant_count : 0;
     atomic_init(&instance->wire_reserved, 0);
+    atomic_init(&instance->producer_gate, 0);
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref = ores_native_actor_scheduler_spawn(group.scheduler, slot);
@@ -380,7 +385,39 @@ static int source_select_variant(const SourceActor* actor,
     }
     return 0;
 }
+/* Producer leases protect calls that have entered the send ABI before
+ * trusted stop closes admission. They do NOT validate stale opaque pointers:
+ * the host must fence the start of new producer calls before destruction.
+ * No hot-path clock reads and no per-message polling.
+ */
+static int source_enter_producer(SourceActor* actor) {
+    uint_fast64_t state = atomic_load_explicit(&actor->producer_gate,
+                                               memory_order_acquire);
+    do {
+        if ((state & SOURCE_PRODUCER_CLOSED)
+                || (state & SOURCE_PRODUCER_COUNT) == SOURCE_PRODUCER_COUNT)
+            return 0;
+    } while (!atomic_compare_exchange_weak_explicit(
+        &actor->producer_gate, &state, state + 1,
+        memory_order_acq_rel, memory_order_acquire));
+    return 1;
+}
+static void source_leave_producer(SourceActor* actor) {
+    uint_fast64_t prior = atomic_fetch_sub_explicit(
+        &actor->producer_gate, 1, memory_order_acq_rel);
+    ensure((prior & SOURCE_PRODUCER_COUNT) != 0);
+}
+static int source_send_binary_unlocked(SourceActor* actor,
+                                       const uint8_t* wire, size_t size);
 static int source_send_binary(SourceActor* actor,
+                              const uint8_t* wire, size_t size) {
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !source_enter_producer(actor))
+        return 0;
+    int result = source_send_binary_unlocked(actor, wire, size);
+    source_leave_producer(actor);
+    return result;
+}
+static int source_send_binary_unlocked(SourceActor* actor,
                               const uint8_t* wire, size_t size) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
             || (!actor->on_wire && !actor->on_variant) || !wire
@@ -444,11 +481,24 @@ void oreslang_source_actor_stop(void* opaque) {
     group_lock();
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.scheduler && slot < group.next_slot && group.actors[slot] == instance);
+    /* Once this bit is set no new sender lease can enter. Producers that
+     * already entered must finish their validation/enqueue or reject paths
+     * before actor-owned contracts can be freed. */
+    uint_fast64_t old_gate = atomic_fetch_or_explicit(
+        &instance->producer_gate, SOURCE_PRODUCER_CLOSED,
+        memory_order_acq_rel);
+    ensure((old_gate & SOURCE_PRODUCER_CLOSED) == 0);
     ensure(ores_native_actor_scheduler_stop(group.scheduler, instance->ref));
     /* Never hold the ActorGroup mutex during a blocking host join.
      * A finishing initializer itself needs that mutex to publish readiness.
      * Trusted main is the sole source stop owner in this compiler subset. */
     group_unlock();
+    /* Shutdown-only barrier, not cooperative polling inside actor execution.
+     * The caller is the trusted external host, never a scheduler carrier. */
+    while ((atomic_load_explicit(&instance->producer_gate,
+                                memory_order_acquire) & SOURCE_PRODUCER_COUNT) != 0) {
+        sched_yield();
+    }
     ensure(ores_native_actor_scheduler_wait_done(group.scheduler, instance->ref));
     group_lock();
     ensure(group.actors[slot] == instance);
