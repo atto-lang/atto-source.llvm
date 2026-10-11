@@ -339,14 +339,74 @@ int main() {
                   "first carrier rejected CONTROL turn");
         });
         entered.get_future().wait();
-        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::busy,
-              "two CONTROL handlers executed concurrently");
+        // Two distinct actors are independent lanes; parent/user single-flight
+        // must not impose a group-global throughput bottleneck.
+        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::executed,
+              "different actor CONTROL was serialized behind unrelated actor");
         check(!group.finalized(a), "active CONTROL bypassed physical finalization gate");
         release.set_value();
         carrier.join();
-        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::executed,
-              "second CONTROL not admitted after first yielded");
         check(group.finalized(a) && group.finalized(b), "CONTROL not quiescent");
+    }
+    {
+        // Normal user code and CONTROL share the SAME target actor lane,
+        // regardless of carrier migration. CONTROL admission has priority
+        // once reserved; unrelated actors remain parallel.
+        NativeActorGroup group(1204, 2);
+        auto a = group.adopt(1204, 1, 1, [] {});
+        auto b = group.adopt(1204, 2, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b), "normal/control actors not ready");
+        std::promise<void> entered, release;
+        auto gate = release.get_future().share();
+        std::atomic<int> normal{0}, control{0}, other{0};
+        std::thread carrier([&] {
+            check(group.run_user_turn(a, [&] {
+                ++normal;
+                entered.set_value();
+                gate.wait();
+            }) == NativeActorGroup::UserTurn::executed, "normal actor turn rejected");
+        });
+        entered.get_future().wait();
+        check(!group.finalized(a), "physical release crossed active normal actor turn");
+        check(group.enqueue_control(a, [&] { ++control; }), "CONTROL reserve during normal failed");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::busy,
+              "parent CONTROL overlapped active normal turn");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::busy,
+              "second ordinary turn ran concurrently on same actor");
+        check(group.run_user_turn(b, [&] { ++other; })
+                  == NativeActorGroup::UserTurn::executed,
+              "unrelated actor could not run concurrently");
+        release.set_value();
+        carrier.join();
+        check(normal == 1 && other == 1 && control == 0, "logical turn accounting drift");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::busy,
+              "new ordinary turn bypassed reserved CONTROL priority");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::executed,
+              "reserved parent CONTROL did not resume after normal turn");
+        check(control == 1, "CONTROL executed more than once");
+        check(group.run_user_turn(a, [&] { ++normal; })
+                  == NativeActorGroup::UserTurn::executed,
+              "ordinary actor turn was not re-admitted after CONTROL");
+        check(normal == 2, "post-CONTROL ordinary actor turn missing");
+        check(group.finalized(a) && group.finalized(b),
+              "quiescent actors were not finalized");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::retired,
+              "retired actor accepted stale normal admission");
+    }
+    {
+        // Exceptions cannot strand the actor's logical lane.
+        NativeActorGroup group(1205, 1);
+        auto a = group.adopt(1205, 1, 1, [] {});
+        check(group.mark_ready(a), "exception actor not ready");
+        check(group.enqueue_control(a, [] { throw std::runtime_error("CONTROL panic"); }),
+              "exception CONTROL reserve failed");
+        bool threw = false;
+        try { (void)group.run_control_turn(a); }
+        catch (const std::runtime_error&) { threw = true; }
+        check(threw, "CONTROL failure did not propagate");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::executed,
+              "failed CONTROL stranded logical lane");
+        check(group.finalized(a), "failed CONTROL blocked terminal finalization");
     }
     {
         NativeActorGroup group(1203, 1);
