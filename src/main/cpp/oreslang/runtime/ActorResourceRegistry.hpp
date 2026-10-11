@@ -20,6 +20,14 @@ public:
     enum class Kind { socket, file, timer, ffi_callback, native_allocation };
     enum class Phase { live, retiring, closing, reclaimed };
     enum class Reclaim { not_retired, busy, closing, complete };
+    enum class Activity { turn, loan, callback };
+
+    struct Ticket {
+        std::uint64_t actor_id;
+        std::uint64_t incarnation;
+        std::uint64_t nonce;
+        Activity activity;
+    };
 
     struct Result {
         Reclaim status;
@@ -55,12 +63,12 @@ public:
 
     // Scheduler-only tokens. Tokens are observations of outstanding activity,
     // never authority to dereference actor memory on foreign threads.
-    std::uint64_t acquire_turn() { return acquire(turns_); }
-    std::uint64_t acquire_loan() { return acquire(loans_); }
-    std::uint64_t acquire_callback() { return acquire(callbacks_); }
-    void release_turn(std::uint64_t token) { release(turns_, token); }
-    void release_loan(std::uint64_t token) { release(loans_, token); }
-    void release_callback(std::uint64_t token) { release(callbacks_, token); }
+    Ticket acquire_turn() { return acquire(turns_, Activity::turn); }
+    Ticket acquire_loan() { return acquire(loans_, Activity::loan); }
+    Ticket acquire_callback() { return acquire(callbacks_, Activity::callback); }
+    void release_turn(Ticket token) { release(turns_, Activity::turn, token); }
+    void release_loan(Ticket token) { release(loans_, Activity::loan, token); }
+    void release_callback(Ticket token) { release(callbacks_, Activity::callback, token); }
 
     void retire() {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -115,21 +123,24 @@ private:
         if (phase_ != Phase::live) throw std::logic_error("actor resource registry retired");
     }
 
-    std::uint64_t acquire(std::unordered_set<std::uint64_t>& set) {
+    Ticket acquire(std::unordered_set<std::uint64_t>& set, Activity role) {
         std::lock_guard<std::mutex> guard(mutex_);
         require_live();
+        if (set.size() >= 4096)
+            throw std::length_error("actor activity ticket capacity exceeded");
         if (next_token_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor resource token exhausted");
-        const auto token = ++next_token_;
-        set.insert(token);
-        return token;
+        const auto nonce = ++next_token_;
+        set.insert(nonce);
+        return Ticket{actor_id_, incarnation_, nonce, role};
     }
 
-    void release(std::unordered_set<std::uint64_t>& set, std::uint64_t token) {
+    void release(std::unordered_set<std::uint64_t>& set, Activity role, Ticket token) {
         std::lock_guard<std::mutex> guard(mutex_);
-        // Releases remain admissible during retirement; duplicates and unknown
-        // tokens are errors. No new loans, callbacks, or turns may be acquired.
-        if (set.erase(token) != 1)
+        // Never allow foreign actor-incarnation or cross-role tickets to
+        // release one of this actor's loans, callbacks, or turns.
+        if (token.actor_id != actor_id_ || token.incarnation != incarnation_
+                || token.activity != role || set.erase(token.nonce) != 1)
             throw std::logic_error("invalid or duplicate actor resource lease release");
     }
 
