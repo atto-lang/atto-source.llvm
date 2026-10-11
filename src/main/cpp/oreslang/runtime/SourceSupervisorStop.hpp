@@ -134,16 +134,23 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
             if (resolution.requested != SupervisorProcess::Directive::stop) {
                 throw std::logic_error("invalid verified source STOP directive");
             }
-            // Host effects are NOT invoked for an already-stopped or replaced
-            // child. Recheck after policy dispatch to fence lifecycle races.
+            // Recheck after policy dispatch, then claim STOP atomically
+            // against concurrent RESTART *before* any external host effect.
+            // If the sink throws, the effect could have partially happened:
+            // retain STOPPING, never release the generation for retry.
             verify(resolution.notice);
-            sink(resolution);
             const auto& n = resolution.notice;
-            children->stop(
-                SupervisorChildRegistry::ChildRef{
-                    supervisor_id, runtime_id, n.logical_child_id},
-                OresNativeActorRef{runtime_id, n.actor_id, n.generation},
-                n.logical_incarnation);
+            const auto child = SupervisorChildRegistry::ChildRef{
+                supervisor_id, runtime_id, n.logical_child_id};
+            const auto actor = OresNativeActorRef{
+                runtime_id, n.actor_id, n.generation};
+            children->begin_stop(
+                child, actor, n.logical_incarnation, resolution.turn_generation);
+            sink(resolution);
+            // The sink's normal return is an authoritative STOP receipt by
+            // host contract. No registry mutex is held across the callback.
+            children->commit_stop(
+                child, actor, n.logical_incarnation, resolution.turn_generation);
         });
 }
 
