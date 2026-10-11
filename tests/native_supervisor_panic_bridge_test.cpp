@@ -239,6 +239,9 @@ int main() {
           "terminal child replay registration was not consumed");
     check(s.bridge->accepted() == 1 && s.bridge->rejected() == 3,
           "native supervisor bridge replay/forgery accounting drift");
+    check(!ores_native_actor_scheduler_publish_failure(
+                  s.scheduler, s.parent, replay),
+          "native scheduler published a duplicate terminal failure generation");
     check(s.process->resolved() == 1 && !s.process->healthy()
           && s.process->undelivered() == 0,
           "self-closing supervisor lost or duplicated a committed decision");
