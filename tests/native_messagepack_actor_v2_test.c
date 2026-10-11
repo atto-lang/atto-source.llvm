@@ -241,6 +241,18 @@ int main(void) {
     }
     assert(second_admitted);
     wait_atomic(&state.finished[0], 2);
+    /* A terminal admission gate rejects fresh producer work without freeing
+     * the group or disturbing completed messages and stop/control handling. */
+    assert(ores_mp2_group_close_admission(group));
+    assert(ores_mp2_group_close_admission(group)); /* idempotent */
+    assert(!ores_mp2_group_send(group, a, wire[0], sizes[0]));
+    assert(!ores_mp2_group_send(group, b, wire[5], sizes[5]));
+    atomic_store(&flood_rejected, 0);
+    for (size_t i = 0; i < SENDERS; ++i)
+        assert(pthread_create(&flood_threads[i], NULL, saturated_sender, &flood) == 0);
+    for (size_t i = 0; i < SENDERS; ++i)
+        assert(pthread_join(flood_threads[i], NULL) == 0);
+    assert(atomic_load(&flood_rejected) == SENDERS);
     assert(ores_mp2_group_stop(group, a));
     assert(ores_mp2_group_stop(group, b));
     assert(ores_mp2_group_wait_done(group, a));
@@ -251,6 +263,6 @@ int main(void) {
     assert(atomic_load(&state.finished[1]) == 1);
     assert(atomic_load(&state.max_active[0]) == 1);
     assert(atomic_load(&state.max_active[1]) == 1);
-    puts("MESSAGEPACK_V2_NATIVE_PASS vectors=7 owned=1 scheduler=1 overload=1 independent=1");
+    puts("MESSAGEPACK_V2_NATIVE_PASS vectors=7 owned=1 scheduler=1 overload=1 independent=1 close_admission=1");
     return 0;
 }
