@@ -363,6 +363,21 @@ int main() {
             [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
                 ++sink_calls;
             });
+        if (case_id == 5) {
+            // A partial logical-child envelope is invalid at the process
+            // admission boundary, before any compiler-lowered CONTROL turn.
+            bool rejected = false;
+            try {
+                verified->accept(failure);
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            check(rejected && sink_calls == 0 && verified->resolved() == 0
+                  && verified->pending() == 0,
+                  "partial child identity survived native admission");
+            verified->close();
+            continue;
+        }
         verified->accept(failure);
         unsigned loop = 0;
         while (!locally_queued.empty()) {
