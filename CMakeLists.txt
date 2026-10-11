@@ -487,4 +487,15 @@ if(BUILD_TESTING)
                  COMMAND oreslang-actor-trace-test)
         set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
     endif()
+    # Canonical actor transport; exact Java MessagePack v2 golden vectors.
+    add_executable(oreslang-native-messagepack-v2-test
+        tests/native_messagepack_actor_v2_test.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-messagepack-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-messagepack-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_messagepack_v2_owned_actor_dispatch
+        COMMAND oreslang-native-messagepack-v2-test)
+
 endif()
