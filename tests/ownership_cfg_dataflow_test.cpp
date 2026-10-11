@@ -1,5 +1,11 @@
 #include "oreslang/types/OwnershipCfg.hpp"
 
+// These ownership proofs must execute even in Release CMake builds.
+// With -DNDEBUG every assert vanishes, creating a false-green safety gate
+// and an unused-function -Werror build failure.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <functional>
 #include <stdexcept>

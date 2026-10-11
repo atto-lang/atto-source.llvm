@@ -1,85 +1,60 @@
-# Native class ownership: bounded multi-field and guarded CFG slice
+# Native stack-class ownership: bounded field moves and actor-send admission
 
-This current-main native compiler supports **1–16 ordered `int` fields per
-stack-allocated class** and nonescaping shared/exclusive call-scoped loans.
-It also supports limited return-only equality guards with deterministic
-cleanup on every taken and fallthrough exit. These are deliberately bounded
-features, **not** full Java/Graal class, Rust lifetime or actor async parity.
+LLVM compiles bounded stack classes with 1–16 initialized `int` (`i64`)
+fields, explicit same-type local whole-class moves, and checked synchronous
+call-scoped shared/mutable borrows. The native CFG proof tracks per-field states
+across return-only equality guards. The compiler does **not** yet have a
+general-purpose source CFG, nontrivial object destructors, or source-level
+suspension; unsupported constructs fail closed before LLVM IR.
 
-## Accepted source
+## Scope
 
-```ores
-define class Player as
-  pub let int health = 100;
-  pub let int stamina = 80;
-end
+- `let Pair a = new Pair(); let Pair b = rt take a;` is an admitted
+  **local-only, whole-record** transfer of a fully initialized stack object.
+  A second transfer, reading moved-from storage, a live loan, type mismatch,
+  or a partially moved record must fail without LLVM IR. By-value class
+  parameters/returns and actor transfers remain unsupported.
+- `rt take a.left` moves a single primitive `i64` **field place**. The
+  checker marks that field uninitialized. Reusing it, moving it twice, or
+  borrowing/transfering the incomplete class is rejected. Other still-live
+  fields remain accessible. `a.left = value;` reinitializes it after the
+  right-hand expression is validated, restoring complete-object admission.
+- These fields are trivially destructible integers. LLVM lowers a field take
+  as a load, coupled with static move-state invalidation. **This is not a
+  general-purpose field destructor or ownership-transfer ABI.**
+- Synchronous actor `send` payload expressions are checked in original
+  send/stop order. An explicit scalar `rt take` cannot be reused in a later
+  send or return; raw borrowed references cannot be passed as scalar actor
+  payloads. Native scheduler/heap epochs and actor stop checks are retained.
+- Ordinary actor refs, class loans and scalar function calls keep existing
+  conservative whole-object exclusivity. No split loans, escaping pointers,
+  partially initialized nontrivial classes or cross-actor object references.
+- Return-only `if (lhs eq rhs) { return expr; } fi` guards remain bounded to
+  eight preceding a required final return. A move in a taken return path
+  does not affect a distinct fallthrough path. No branch-local object
+  constructors or arbitrary `if/else`/loops are admitted.
+- The independent field-sensitive `OwnershipCfg.hpp` lattice can compute
+  joins, but *runtime conditional drop flags* and exact-once destructor
+  glue are not implemented. `llvm.lifetime.end` is a lifetime marker, not
+  an object destructor.
+- Function-scoped synchronous `defer` (merged LLVM #153) runs LIFO after
+  computing the return value; it remains incompatible with guest
+  throw/panic/exception unwind and cancellation. Source `await`, typed
+  `Future<T>`, pinned guest frames and actor transfers still fail closed.
 
-fnc damage(borrow mut Player p): void {
-  p.health = p.health - 10;
-  return;
-}
+## Regression coverage
 
-pub fnc main(): int {
-  let Player p = new Player();
-  damage(rt borrow mut p);
-  if (p.health eq 90) { return p.stamina - 38; } fi
-  return 0;
-}
-```
+`native_field_and_region_move_admission` generates 1/2/8/16-field positive
+read/take/reinitialization cases and rejects double takes, use-after-move,
+whole-class borrow/transfer of partial objects, borrowed-field moves and
+unsafe native region `owned int` transfers. Every invalid source must emit
+**zero LLVM IR** and an ownership diagnostic.
 
-Each local `new Player()` is a native LLVM stack record with an ordered
-`{i64, i64, ...}` layout, constant field initialization, field-indexed
-`getelementptr` loads/stores, and exact `8 * number_of_fields` byte
-lifetime markers. Ordinary source does not allocate a native GC/arena region.
-`owned int` remains a **nonstandard LLVM-only opt-in experiment**;
-`owned` is a valid ordinary identifier in public Oreslang syntax.
+Dedicated native Clang fixtures cover field takes, restoration, guarded return
+paths and existing whole-class local moves. The source actor end-to-end harness
+executes positive moved-scalar send payloads against the scheduler and rejects
+borrows and use-after-move payloads. Full CMake/CTest, Clang ASan/UBSan, and
+the strict 11-source Java/LLVM fixture suite remain release gates.
 
-## Ownership and control-flow rules
-
-- Classes are **non-`Copy`**. By-value class parameters/returns and
-  `rt take` of class objects are rejected until real move/drop lowering
-  exists. `borrow Player` permits reads; `borrow mut Player` permits
-  reads and writes only while its call-scoped exclusive loan is active.
-- **Whole-object exclusivity is conservative.** Even accesses to different
-  fields of the same class cannot bypass a conflicting shared/mutable loan.
-  Disjoint-field borrow splitting needs independent alias/provenance proofs.
-- Class declarations require 1–16 distinct initialized `int` fields.
-  Nested classes, pointer fields, unknown field names/types, extra fields,
-  inheritance, constructors with arguments and escaping references reject
-  with no IR.
-- After locals have been initialized and ordinary statements executed, up
-  to eight `if (i64 eq i64) { return i64; } fi` guards may precede a
-  **mandatory terminal return**. Conditions must be pure expressions and
-  class field reads: side-effectful calls, `rt take`, and borrows in the
-  condition are rejected.
-- An early `return rt take local_int` moves the trivially copyable scalar
-  only in the **taken** branch's checker snapshot; it does not invalidate
-  the distinct fallthrough branch. This is not general SSA/CFG ownership
-  join analysis or support for moving non-`Copy` objects.
-- Each return edge evaluates its result before reverse-order lexical
-  lifetime endings. Experimental native owned-i64 regions have exactly one
-  `drop` per live owner and one `close` per dynamic return path.
-- All class locals are constructed **before** guards. Branch-local class
-  allocations, arbitrary branches/loops, partial initialization, effects,
-  `defer`, unwind/exception/panic cleanup, actor hops, `await`, `select`,
-  suspension and cancellation remain fail-closed.
-
-## Real verification
-
-- [PR #122](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/122)
-  merged with [123/123 full native CTests and sanitized class binaries](https://github.com/zed-pkg-test/java-app/actions/runs/38109426280),
-  including 16 native field-layout executions.
-- [PR #126](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/126)
-  merged with [135/135 full native CTests](https://github.com/zed-pkg-test/java-app/actions/runs/38110049147):
-  eight generated 1–8-guard native cleanup programs, ASan/UBSan class and
-  region examples, and contemporaneous pinned-continuation actor tests.
-- The exact `contracts/v1/semantics/fixtures/ownership.ores` negative
-  mutation fixture rejects with an ownership diagnostic and emits no IR.
-  [Pinned-head strict Java/LLVM comparison](https://github.com/zed-pkg-test/java-app/actions/runs/38105473772)
-  passed 11/11 shared fixtures before these new native-only extensions;
-  broad parity still needs additional shared executable fixtures.
-
-The next major correctness gate is CFG/HIR ownership-state joins, partial
-object initialization and **exactly-once non-`Copy` move/drop glue**, followed
-by exception/cancellation unwind, actor-heap provenance and suspension
-integration. Track this in [issue #96](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/96).
+Related: [LLVM ownership #96](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/96),
+[suspension-safe ownership #45](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/45).
