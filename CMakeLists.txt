@@ -42,6 +42,10 @@ if(BUILD_TESTING)
     add_test(NAME actor_group_native_managed_refs
         COMMAND oreslang-actor-group-lifecycle-test)
     set_tests_properties(actor_group_native_managed_refs PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
+    target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_frame_backpressure COMMAND oreslang-bounded-actor-port-test)
 
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
