@@ -54,6 +54,28 @@ if(BUILD_TESTING)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
+    # Compile-time i64 contract subset: actually type-check a module before
+    # emitting verified IR, then link/run a native main. Cross-unit imports and
+    # String contracts must reject without emitting any LLVM IR.
+    oreslang_contract_test(native_i64_module_contract_valid native-contract-i64-valid.ores
+        --ir "ret i64 42" --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_i64_module_contract_missing native-contract-i64-missing.ores
+        --diagnostic "missing public native module contract method")
+    oreslang_contract_test(native_i64_module_contract_private native-contract-i64-private.ores
+        --diagnostic "missing public native module contract method")
+    oreslang_contract_test(native_i64_module_contract_arity native-contract-i64-arity.ores
+        --diagnostic "native module contract parameter arity mismatch")
+    oreslang_contract_test(native_i64_module_contract_borrow native-contract-i64-borrow.ores
+        --diagnostic "native module contract ownership mode mismatch")
+    oreslang_contract_test(native_i64_module_contract_unknown native-contract-i64-unknown.ores
+        --diagnostic "unknown native module contract")
+    oreslang_contract_test(native_i64_module_contract_duplicate native-contract-i64-duplicate.ores
+        --diagnostic "duplicate native module contract method")
+    oreslang_contract_test(native_contract_unlinked_import native-contract-i64-import.ores
+        --diagnostic "native contract imports require a validated cross-unit linker")
+    oreslang_contract_test(native_contract_string_unimplemented native-contract-reject-string.ores
+        --diagnostic "expected 'int'")
+
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
