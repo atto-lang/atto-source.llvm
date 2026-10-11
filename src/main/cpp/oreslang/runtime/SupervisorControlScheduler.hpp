@@ -81,6 +81,9 @@ public:
 
     /** Gracefully drain committed CONTROL work; no new admission afterward. */
     void close() {
+        // Shutdown requests may race. Only one caller may touch std::thread
+        // join() handles; simultaneous joins on the same thread are UB.
+        std::lock_guard<std::mutex> close_guard(close_mutex_);
         {
             std::lock_guard<std::mutex> guard(mutex_);
             accepting_ = false;
@@ -133,6 +136,7 @@ private:
     }
 
     const std::size_t capacity_;
+    std::mutex close_mutex_;
     mutable std::mutex mutex_;
     std::condition_variable wakeup_;
     std::deque<Task> queue_;
