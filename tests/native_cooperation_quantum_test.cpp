@@ -1,6 +1,6 @@
 #include "oreslang/runtime/SourceCooperationQuantum.h"
 #include <atomic>
-#include <cassert>
+#include <stdexcept>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -24,6 +24,10 @@ std::atomic<int> FakeClock::reads{0};
 
 using Quantum = oreslang::runtime::BasicSourceCooperationQuantum<FakeClock>;
 
+static void require(bool ok) {
+    if (!ok) throw std::runtime_error("native cooperation-quantum invariant failed");
+}
+
 static void reset_clock() {
     FakeClock::nanos.store(0);
     FakeClock::reads.store(0);
@@ -33,26 +37,26 @@ static void reduction_fast_path() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    assert(FakeClock::reads.load() == 2);
+    require(FakeClock::reads.load() == 2);
     for (int i = 1; i <= 512; ++i) {
         const bool checkDue = q.completedBackedgeNeedsCheck();
-        assert(checkDue == (i % 64 == 0));
-        if (checkDue) assert(q.shouldCooperateAtCheck() == (i == 512));
+        require(checkDue == (i % 64 == 0));
+        if (checkDue) require(q.shouldCooperateAtCheck() == (i == 512));
     }
-    assert(FakeClock::reads.load() == 9);
-    assert(q.completedBackedgesThisDispatch() == 512);
+    require(FakeClock::reads.load() == 9);
+    require(q.completedBackedgesThisDispatch() == 512);
 }
 
 static void timer_slow_path() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    for (int i = 0; i < 63; ++i) assert(!q.completedBackedgeNeedsCheck());
+    for (int i = 0; i < 63; ++i) require(!q.completedBackedgeNeedsCheck());
     FakeClock::nanos.store(2'050'000);
-    assert(FakeClock::reads.load() == 2);
-    assert(q.completedBackedgeNeedsCheck());
-    assert(q.shouldCooperateAtCheck());
-    assert(FakeClock::reads.load() == 3);
+    require(FakeClock::reads.load() == 2);
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == 3);
 }
 
 static void await_is_not_cooperate() {
@@ -62,11 +66,11 @@ static void await_is_not_cooperate() {
     q.recordedCooperate();
     FakeClock::nanos.store(30'000'000'000LL);
     q.beginDispatch();
-    assert(q.timeSinceLastCooperate() == std::chrono::seconds(30));
+    require(q.timeSinceLastCooperate() == std::chrono::seconds(30));
     for (int i = 0; i < 64; ++i) q.completedBackedgeNeedsCheck();
-    assert(!q.shouldCooperateAtCheck());
+    require(!q.shouldCooperateAtCheck());
     q.recordedCooperate();
-    assert(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
+    require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
 }
 
 static void repeated_dispatches_keep_task_context() {
@@ -77,12 +81,12 @@ static void repeated_dispatches_keep_task_context() {
         q.beginDispatch();
         for (int i = 0; i < 512; ++i) {
             if (q.completedBackedgeNeedsCheck())
-                assert(q.shouldCooperateAtCheck() == (i == 511));
+                require(q.shouldCooperateAtCheck() == (i == 511));
         }
         q.recordedCooperate();
     }
-    assert(q.completedBackedgesThisDispatch() == 512);
-    assert(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
+    require(q.completedBackedgesThisDispatch() == 512);
+    require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
 }
 int main() {
     reduction_fast_path();
