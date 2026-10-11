@@ -273,7 +273,13 @@ void validate_i64_ownership(const Program& program) {
             }
             locals.emplace(binding.name, std::move(entry));
         }
+        std::vector<const Expression*> deferred_calls;
         for (const auto& stmt : function.statements) {
+            if (stmt.kind == Statement::Kind::Defer) {
+                // Defer uses ownership state at exit, not registration.
+                deferred_calls.push_back(stmt.expression.get());
+                continue;
+            }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, locals);
                 if (recv.mode == Mode::Borrow)
@@ -287,6 +293,10 @@ void validate_i64_ownership(const Program& program) {
                 check_call(*stmt.expression, locals, functions);
             }
         }
+        auto check_deferred_exit = [&](Locals& path) {
+            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+                check_call(**it, path, functions);
+        };
         const Locals cfg_entry = locals;
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the
@@ -296,8 +306,10 @@ void validate_i64_ownership(const Program& program) {
             check_pure_guard(*guard.rhs, locals, functions);
             Locals taken = locals;
             check_value(*guard.result, taken, functions);
+            check_deferred_exit(taken);
         }
         if (function.result) check_value(*function.result, locals, functions);
+        check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
         // field-sensitive fixed-point verifier. This currently models the
         // admitted return-only source CFG. The lattice also handles general

@@ -291,7 +291,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             storage.emplace(binding.name, slot);
             lexical_slots.push_back({slot, binding.heap_owned, 8});
         }
+        std::vector<const Expression*> deferred_calls;
         for (const auto& stmt : fn.statements) {
+            if (stmt.kind == Statement::Kind::Defer) {
+                deferred_calls.push_back(stmt.expression.get());
+                continue;
+            }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 llvm::Value* updated = lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
                 builder.CreateStore(updated, field_storage.at(field_key(stmt.receiver, stmt.field)));
@@ -316,6 +321,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         // every return owns the same lexical slots and native region.
         // Branch-local class creation / effectful conditions fail admission.
         auto emit_cleanup_return = [&](llvm::Value* value) {
+            // Evaluate deferred calls after the return value in reverse
+            // registration order, while lexical owners are still alive.
+            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+                lower(**it, builder, i64, storage, field_storage, declarations);
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
                 if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
                 else builder.CreateLifetimeEnd(it->address,
