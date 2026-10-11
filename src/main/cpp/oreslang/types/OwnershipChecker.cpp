@@ -298,7 +298,9 @@ void validate_i64_ownership(const Program& program) {
         std::function<void(const Expression&, Ops&)> add_effects;
         add_effects = [&](const Expression& expr, Ops& operations) {
             if (expr.kind == Expression::Kind::Variable) {
-                operations.push_back({OpKind::Read, expr.name});
+                const auto found = locals.find(expr.name);
+                const bool object = found != locals.end() && !found->second.class_name.empty();
+                operations.push_back({object ? OpKind::ReadObject : OpKind::Read, expr.name});
                 return;
             }
             if (expr.kind == Expression::Kind::Field) {
