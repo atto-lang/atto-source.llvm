@@ -13,6 +13,14 @@ PAIR = (
 )
 
 POSITIVE = {
+    "field-take-and-reinitialize-on-both-edges": PAIR + """
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  if (p.first eq 1) { p.first = rt take p.second; p.second = 40; }
+  else { p.first = rt take p.second; p.second = 40; } fi
+  return p.first + p.second;
+}
+""",
     "both-arms": PAIR + """
 fnc update(borrow mut Pair p, int flag): void {
   if (flag == 0) { p.first = 12; } else { p.second = 30; } fi
@@ -65,6 +73,14 @@ pub fnc main(): int {
 }
 
 NEGATIVE = {
+    "divergent-field-move": (PAIR + """
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  if (p.first eq 1) { p.first = rt take p.second; }
+  else { p.first = 41; } fi
+  return p.first;
+}
+""", "ownership violation: conditional CFG predecessor ownership mismatch"),
     "divergent-ownership": ("""
 fnc consume(int n): void { return; }
 pub fnc main(): int {

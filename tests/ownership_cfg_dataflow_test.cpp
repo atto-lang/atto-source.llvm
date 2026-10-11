@@ -1,7 +1,8 @@
 #include "oreslang/types/OwnershipCfg.hpp"
 
-// Ownership safety test assertions must remain executable under Release
-// (NDEBUG otherwise removes rejection probes and triggers -Werror unused).
+// These ownership proofs must execute even in Release CMake builds.
+// With -DNDEBUG every assert vanishes, creating a false-green safety gate
+// and an unused-function -Werror build failure.
 #ifdef NDEBUG
 #undef NDEBUG
 #endif

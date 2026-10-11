@@ -55,9 +55,18 @@ struct ClassDecl {
     std::vector<ClassField> fields;
 };
 
+// Native source value categories. Future<T> remains a no-IR boundary
+// until the compiler can lower nonblocking pinned continuations.
+struct SourceType {
+    enum class Kind { I64, ActorRef, Future };
+    Kind kind = Kind::I64;
+    std::string argument;
+};
+
 struct ActorSpawnBinding {
     std::string name;
     std::string actor_type;
+    SourceType declared_type;
     std::size_t offset = 0;
 };
 struct ActorSend {

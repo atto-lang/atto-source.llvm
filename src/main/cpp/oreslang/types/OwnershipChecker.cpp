@@ -24,6 +24,8 @@ struct LocalOwnership {
     bool exclusive_loan = false;
     std::string class_name;
     std::unordered_set<std::string> class_fields;
+    // Primitive i64 class fields can be moved and later restored by a write.
+    std::unordered_set<std::string> moved_fields;
 };
 using Locals = std::unordered_map<std::string, LocalOwnership>;
 
@@ -84,6 +86,9 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
         reject(expr, (source.class_name.empty()
             ? "borrow of explicitly moved int '" : "ownership violation: borrow of moved class '")
             + expr.left->name + "'");
+    if (!source.class_name.empty() && !source.moved_fields.empty())
+        reject(expr, "ownership violation: cannot borrow a partially moved class '" +
+            expr.left->name + "'");
     if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
         reject(expr, "conflicting active native borrow of '" + expr.left->name + "'");
     if (exclusive) source.exclusive_loan = true;
@@ -145,6 +150,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         }
         case Expression::Kind::Field: {
             const auto& source = checked_field(expr.left->name, expr.name, expr.offset, locals);
+            if (source.moved_fields.count(expr.name) != 0)
+                reject(expr, "ownership violation: use-after-move class field '" +
+                    expr.left->name + "." + expr.name + "'");
             if (source.exclusive_loan)
                 reject(expr, "ownership violation: field read conflicts with active mutable borrow");
             return;
@@ -155,12 +163,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
-            // LLVM currently lowers a field projection to an i64 load. It
-            // cannot represent a partially moved object or suppress that
-            // field's destructor. Refuse source-level moves of field places
-            // rather than quietly treating `rt take` as `rt copy`.
-            if (expr.left->kind == Expression::Kind::Field)
-                reject(expr, "ownership violation: class field take requires per-field move/drop lowering");
+            // The bounded class subset has only trivially destructible i64
+            // fields. Lowering a field take as a load is valid only because
+            // checker state invalidates that place until an explicit write.
             check_value(*expr.left, locals, functions);
             if (expr.left->kind == Expression::Kind::Variable) {
                 LocalOwnership& source = local(*expr.left, locals);
@@ -175,6 +180,15 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 if (source.exclusive_loan || source.shared_loans != 0)
                     reject(expr, "cannot move int while borrow is active");
                 source.moved = true;
+            } else if (expr.left->kind == Expression::Kind::Field) {
+                const Expression& field = *expr.left;
+                LocalOwnership& source = checked_field(
+                    field.left->name, field.name, field.offset, locals);
+                if (source.mode != Mode::Value)
+                    reject(expr, "ownership violation: cannot take a class field through a borrowed parameter");
+                if (source.exclusive_loan || source.shared_loans != 0)
+                    reject(expr, "ownership violation: cannot take a class field with active loans");
+                source.moved_fields.insert(field.name);
             }
             return;
         }
@@ -268,7 +282,8 @@ void validate_i64_ownership(const Program& program) {
                         std::to_string(binding.offset));
                 auto& source = found->second;
                 if (source.mode != Mode::Value || source.moved ||
-                        source.exclusive_loan || source.shared_loans != 0)
+                        source.exclusive_loan || source.shared_loans != 0 ||
+                        !source.moved_fields.empty())
                     throw std::runtime_error("ownership violation: class move requires live unborrowed owner at byte " +
                         std::to_string(binding.offset));
                 entry.class_fields = source.class_fields;
@@ -289,6 +304,7 @@ void validate_i64_ownership(const Program& program) {
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
                 check_value(*stmt.expression, state, functions);
+                recv.moved_fields.erase(stmt.field);
             } else if (stmt.kind == Statement::Kind::Call) {
                 if (stmt.expression->kind != Expression::Kind::Call)
                     throw std::runtime_error("invalid native call statement");
@@ -319,6 +335,7 @@ void validate_i64_ownership(const Program& program) {
                     const auto found = else_state.find(item.first);
                     if (found == else_state.end() ||
                             item.second.moved != found->second.moved ||
+                            item.second.moved_fields != found->second.moved_fields ||
                             item.second.shared_loans != found->second.shared_loans ||
                             item.second.exclusive_loan != found->second.exclusive_loan)
                         throw std::runtime_error("ownership violation: conditional CFG predecessor ownership mismatch at byte " +
@@ -328,6 +345,14 @@ void validate_i64_ownership(const Program& program) {
                 continue;
             }
             check_effect(stmt, locals);
+        }
+        // Actor sends transfer scalar payloads in lexical send/stop order.
+        // Do not let the backend load moved locals or leak raw borrow pointers.
+        for (const auto& action : function.actor_actions) {
+            if (action.kind == ActorAction::Kind::Send) {
+                const auto& send = function.actor_sends.at(action.index);
+                check_value(*send.payload, locals, functions);
+            }
         }
         auto check_deferred_exit = [&](Locals& path) {
             for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
@@ -362,8 +387,12 @@ void validate_i64_ownership(const Program& program) {
             if (owner.class_name.empty()) {
                 cfg.entry.emplace(name, state);
             } else {
-                for (const auto& field : owner.class_fields)
-                    cfg.entry.emplace(name + "." + field, state);
+                for (const auto& field : owner.class_fields) {
+                    auto field_state = state;
+                    if (owner.moved_fields.count(field))
+                        field_state.possible = ownership::kMoved;
+                    cfg.entry.emplace(name + "." + field, field_state);
+                }
             }
         }
         using OpKind = ownership::Operation::Kind;
@@ -382,10 +411,19 @@ void validate_i64_ownership(const Program& program) {
                 operations.push_back({OpKind::Read, expr.left->name + "." + expr.name});
                 return;
             }
-            if (expr.kind == Expression::Kind::Take && expr.left &&
-                    expr.left->kind == Expression::Kind::Variable) {
-                operations.push_back({OpKind::Move, expr.left->name});
-                return;
+            if (expr.kind == Expression::Kind::Take && expr.left) {
+                if (expr.left->kind == Expression::Kind::Variable) {
+                    operations.push_back({OpKind::Move, expr.left->name});
+                    return;
+                }
+                if (expr.left->kind == Expression::Kind::Field) {
+                    if (!expr.left->left ||
+                            expr.left->left->kind != Expression::Kind::Variable)
+                        reject(expr, "native CFG requires named class field take");
+                    operations.push_back({OpKind::Move,
+                        expr.left->left->name + "." + expr.left->name});
+                    return;
+                }
             }
             if (expr.left) add_effects(*expr.left, operations);
             if (expr.right) add_effects(*expr.right, operations);
@@ -401,9 +439,14 @@ void validate_i64_ownership(const Program& program) {
             add_effects(*guard.rhs, condition.operations);
             condition.successors = {2 * i + 1, 2 * i + 2};
             add_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
+            // Preserve deferred call inputs after each early-return value.
+            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+                add_effects(**it, cfg.blocks[2 * i + 1].operations);
         }
         if (function.result)
             add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
+        for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+            add_effects(**it, cfg.blocks[guard_count * 2].operations);
         ownership::verify(cfg);
 
     }
