@@ -211,6 +211,8 @@ private:
                 fail("duplicate enum wire tag");
             item.tag = static_cast<std::uint32_t>(tag);
             next = tag + 1;
+            if (result.cases.size() >= 4096)
+                fail("tagged enum exceeds 4096 alternatives");
             result.cases.push_back(std::move(item));
             accept(",");
             accept(";");
@@ -233,6 +235,8 @@ private:
             const std::string qualified = owner + "." + variant;
             if (!seen.insert(qualified).second)
                 fail("duplicate pattern alternative");
+            if (result.alternatives.size() >= 4096)
+                fail("tagged pattern exceeds 4096 alternatives");
             result.alternatives.push_back(qualified);
             accept(",");
             accept(";");
@@ -242,7 +246,8 @@ private:
         return result;
     }
 
-    MessageShape message_shape() {
+    MessageShape message_shape(unsigned depth = 0) {
+        if (depth > 64) fail("message shape exceeds maximum type nesting depth");
         if (accept("bool")) return {MessageShape::Kind::Boolean, {}};
         if (accept("int")) return {MessageShape::Kind::Integer, {}};
         if (accept("string")) return {MessageShape::Kind::String, {}};
@@ -277,7 +282,9 @@ private:
         if (accept(close))
             fail("empty structural message pattern is not supported");
         do {
-            shape.elements.push_back(message_shape());
+            if (shape.elements.size() >= 4096)
+                fail("message shape exceeds maximum descriptor elements");
+            shape.elements.push_back(message_shape(depth + 1));
         } while (accept(","));
         require(close);
         return shape;
