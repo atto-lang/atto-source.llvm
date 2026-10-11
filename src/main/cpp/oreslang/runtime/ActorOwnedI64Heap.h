@@ -35,6 +35,22 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
+/* Compiler-facing field layout for a single actor instance.
+ * Field indexes are compile-time layout indexes, not arbitrary pointers.
+ * The caller must enter the owning actor turn first. */
+typedef struct OresActorI64Fields OresActorI64Fields;
+OresActorI64Fields* ores_actor_i64_fields_create(
+    OresActorI64Heap* heap, OresActorTurn turn,
+    const int64_t* initial_values, uint32_t field_count);
+int64_t ores_actor_i64_fields_get(
+    OresActorI64Heap* heap, OresActorTurn turn,
+    const OresActorI64Fields* fields, uint32_t field);
+void ores_actor_i64_fields_set(
+    OresActorI64Heap* heap, OresActorTurn turn,
+    OresActorI64Fields* fields, uint32_t field, int64_t value);
+void ores_actor_i64_fields_drop(
+    OresActorI64Heap* heap, OresActorTurn turn,
+    OresActorI64Fields* fields);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
 /* Returns zero while a turn or loan is outstanding; returns one and frees
  * native memory after quiescence. Never call with an invalidated heap pointer.
