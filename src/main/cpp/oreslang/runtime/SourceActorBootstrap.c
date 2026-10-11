@@ -24,6 +24,8 @@ typedef struct {
     char* owned_schema;
     char* owned_shape;
     uint8_t sha[32];
+    char* owned_enum_name;
+    uint32_t declared_tag;
 } SourceVariantContract;
 
 typedef struct {
@@ -190,6 +192,7 @@ static void release_source_variants(SourceVariantContract* variants,
     for (size_t i = 0; i < count; ++i) {
         free(variants[i].owned_schema);
         free(variants[i].owned_shape);
+        free(variants[i].owned_enum_name);
         memset(variants[i].sha, 0, sizeof(variants[i].sha));
     }
     free(variants);
@@ -200,7 +203,8 @@ static void release_source_variants(SourceVariantContract* variants,
  * and registered under another. Duplicate schema IDs are ambiguous and
  * always rejected rather than matched by payload or declaration order. */
 static SourceVariantContract* source_copy_variants(
-    const OresMp2Contract* contracts, size_t count) {
+    const OresMp2Contract* contracts, size_t count,
+    const OresSourceNominalCase* nominal) {
     if (!contracts || count == 0 || count > SOURCE_MAX_VARIANTS) return NULL;
     SourceVariantContract* owned = calloc(count, sizeof(*owned));
     if (!owned) return NULL;
@@ -220,6 +224,29 @@ static SourceVariantContract* source_copy_variants(
             owned[i].owned_schema, owned[i].owned_shape, owned[i].sha
         };
         if (!ores_mp2_contract_valid(&owned[i].value)) goto fail;
+        if (nominal) {
+            if (!nominal[i].enum_name || !nominal[i].declared_tag
+                    || nominal[i].declared_tag > INT32_MAX
+                    || strncmp(owned[i].value.shape, "T[S,I", 5) != 0
+                    || (owned[i].value.shape[5] != ']'
+                        && owned[i].value.shape[5] != ','))
+                goto fail;
+            size_t nlen = source_bounded_length(nominal[i].enum_name, 256);
+            if (!nlen || nlen > 256) goto fail;
+            /* Source enum owners are compiler identifiers, not arbitrary
+             * runtime strings chosen by serialized wire payloads. */
+            for (size_t j = 0; j < nlen; ++j) {
+                const unsigned char ch = (unsigned char)nominal[i].enum_name[j];
+                if (!((ch >= 'A' && ch <= 'Z')
+                      || (ch >= 'a' && ch <= 'z')
+                      || ch == '_' || (j > 0 && ch >= '0' && ch <= '9')))
+                    goto fail;
+            }
+            owned[i].owned_enum_name = malloc(nlen + 1);
+            if (!owned[i].owned_enum_name) goto fail;
+            memcpy(owned[i].owned_enum_name, nominal[i].enum_name, nlen + 1);
+            owned[i].declared_tag = nominal[i].declared_tag;
+        }
         for (size_t earlier = 0; earlier < i; ++earlier) {
             if (strcmp(owned[earlier].value.schema_id,
                        owned[i].value.schema_id) == 0) goto fail;
@@ -238,13 +265,14 @@ static void* source_spawn(
     OresSourceActorInit constructor, OresSourceActorMessage on_message,
     OresSourceActorWireMessage on_wire,
     OresSourceActorVariantMessage on_variant, uint64_t fields,
-    const OresMp2Contract* contracts, size_t variant_count) {
+    const OresMp2Contract* contracts, size_t variant_count,
+    const OresSourceNominalCase* nominal) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
     ensure((on_message != NULL) + (on_wire != NULL)
         + (on_variant != NULL) == 1);
     SourceVariantContract* registered = NULL;
     if (on_wire || on_variant) {
-        registered = source_copy_variants(contracts, variant_count);
+        registered = source_copy_variants(contracts, variant_count, nominal);
         if (!registered) return NULL;
     }
     group_lock();
@@ -290,13 +318,15 @@ static void* source_spawn(
 void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields) {
-    return source_spawn(constructor, on_message, NULL, NULL, fields, NULL, 0);
+    return source_spawn(constructor, on_message, NULL, NULL,
+                        fields, NULL, 0, NULL);
 }
 void* oreslang_source_actor_spawn_wire(
     OresSourceActorInit constructor, OresSourceActorWireMessage on_wire,
     uint64_t fields, const OresMp2Contract* contract) {
     if (!on_wire || !contract) return NULL;
-    return source_spawn(constructor, NULL, on_wire, NULL, fields, contract, 1);
+    return source_spawn(constructor, NULL, on_wire, NULL,
+                        fields, contract, 1, NULL);
 }
 void* oreslang_source_actor_spawn_variants(
     OresSourceActorInit constructor,
@@ -304,7 +334,15 @@ void* oreslang_source_actor_spawn_variants(
     const OresMp2Contract* contracts, size_t contract_count) {
     if (!on_variant) return NULL;
     return source_spawn(constructor, NULL, NULL, on_variant,
-                        fields, contracts, contract_count);
+                        fields, contracts, contract_count, NULL);
+}
+void* oreslang_source_actor_spawn_tagged_variants(
+    OresSourceActorInit constructor, OresSourceActorVariantMessage on_variant,
+    uint64_t fields, const OresMp2Contract* contracts,
+    const OresSourceNominalCase* identities, size_t contract_count) {
+    if (!on_variant || !identities) return NULL;
+    return source_spawn(constructor, NULL, NULL, on_variant,
+                        fields, contracts, contract_count, identities);
 }
 int64_t oreslang_source_actor_await_ready(
     void* opaque, OresSourceActorContinuation continuation) {
@@ -457,7 +495,12 @@ static int source_send_binary_unlocked(SourceActor* actor,
     size_t index = 0;
     if (!source_select_variant(actor, accepted->packet.bytes, size, &index)
             || !ores_mp2_validate_owned(&actor->variants[index].value,
-                                         &accepted->packet)) {
+                                         &accepted->packet)
+            || (actor->variants[index].owned_enum_name
+                && !ores_mp2_tagged_identity_matches_validated(
+                    &actor->variants[index].value, &accepted->packet,
+                    actor->variants[index].owned_enum_name,
+                    actor->variants[index].declared_tag))) {
         ores_mp2_owned_release(&accepted->packet);
         free(accepted);
         atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
