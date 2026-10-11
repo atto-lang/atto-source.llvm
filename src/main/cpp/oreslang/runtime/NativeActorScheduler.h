@@ -32,6 +32,21 @@ int ores_native_actor_scheduler_poll_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
+/* One reserved CONTROL message per actor, independent of normal-mail
+ * capacity; only an admitted actor lane may invoke the CONTROL handler.
+ * CONTROL callbacks never run on a failed child's carrier by direct call.
+ */
+OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
+    size_t actor_count, size_t per_actor_capacity, size_t workers,
+    OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
+/* A failed/retired child publishes a typed control envelope (encoded in
+ * payload) to the parent. Returns 0 if the reserved slot is full or if the
+ * target is stale/stopped; caller must retry or explicitly escalate.
+ */
+int ores_native_actor_scheduler_publish_control(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef parent, uint64_t payload);
+uint64_t ores_native_actor_scheduler_control_completed(
+    OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn callback, void* ctx);

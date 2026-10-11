@@ -9,6 +9,8 @@ typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
+    unsigned has_control;
+    uint64_t control_payload;
     unsigned spawned, retired;
     uint64_t generation;
 } ActorLane;
@@ -22,9 +24,10 @@ struct OresNativeActorScheduler {
     size_t actor_count, per_actor_capacity, worker_count;
     size_t next_actor, outstanding;
     uint64_t domain;
-    uint64_t accepted, rejected, completed;
+    uint64_t accepted, rejected, completed, control_completed;
     int retired;
     OresNativeActorTaskFn callback;
+    OresNativeActorTaskFn control_callback;
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
@@ -36,13 +39,19 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
-static int find_ready(OresNativeActorScheduler* s, size_t* actor) {
-    for (size_t offset = 0; offset < s->actor_count; ++offset) {
-        size_t i = (s->next_actor + offset) % s->actor_count;
-        if (s->actors[i].queued && !s->actors[i].active) {
-            *actor = i;
-            s->next_actor = (i + 1) % s->actor_count;
-            return 1;
+static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) {
+    /* CONTROL must be admitted ahead of normal mail, across all actors.
+     * The parent still owns its exclusive logical lane. */
+    for (int pass = 1; pass >= 0; --pass) {
+        for (size_t offset = 0; offset < s->actor_count; ++offset) {
+            size_t i = (s->next_actor + offset) % s->actor_count;
+            if (!s->actors[i].active
+                && (pass ? s->actors[i].has_control : s->actors[i].queued != 0)) {
+                *actor = i;
+                *control = pass;
+                s->next_actor = (i + 1) % s->actor_count;
+                return 1;
+            }
         }
     }
     return 0;
@@ -52,7 +61,8 @@ static void* carrier(void* raw) {
     for (;;) {
         lock(s);
         size_t i = 0;
-        while (!find_ready(s, &i)) {
+        int control = 0;
+        while (!find_ready(s, &i, &control)) {
             if (s->retired && !s->outstanding) {
                 unlock(s);
                 return NULL;
@@ -60,14 +70,21 @@ static void* carrier(void* raw) {
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
         }
         ActorLane* lane = &s->actors[i];
-        uint64_t payload = lane->messages[lane->head];
-        lane->head = (lane->head + 1) % s->per_actor_capacity;
-        lane->queued--;
+        uint64_t payload;
+        if (control) {
+            payload = lane->control_payload;
+            lane->has_control = 0;
+        } else {
+            payload = lane->messages[lane->head];
+            lane->head = (lane->head + 1) % s->per_actor_capacity;
+            lane->queued--;
+        }
         lane->active = 1;
         unlock(s);
 
         executing = s;
-        s->callback(s->context, i, payload);
+        if (control) s->control_callback(s->context, i, payload);
+        else s->callback(s->context, i, payload);
         executing = NULL;
 
         lock(s);
@@ -75,7 +92,8 @@ static void* carrier(void* raw) {
         lane->active = 0;
         s->outstanding--;
         s->completed++;
-        if (lane->queued) pthread_cond_signal(&s->ready);
+        if (control) ++s->control_completed;
+        if (lane->queued || lane->has_control) pthread_cond_signal(&s->ready);
         if (!s->outstanding) {
             pthread_cond_broadcast(&s->drained);
             if (s->retired) pthread_cond_broadcast(&s->ready);
@@ -83,9 +101,10 @@ static void* carrier(void* raw) {
         unlock(s);
     }
 }
-OresNativeActorScheduler* ores_native_actor_scheduler_open(
+OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actors, size_t capacity, size_t workers,
-    OresNativeActorTaskFn callback, void* ctx) {
+    OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
+    void* ctx) {
     if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
@@ -101,6 +120,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open(
     s->per_actor_capacity = capacity;
     s->worker_count = workers;
     s->callback = callback;
+    s->control_callback = control_callback;
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i)
         s->actors[i].messages = s->slots + i * capacity;
@@ -132,6 +152,12 @@ allocation_failed:
     free(s->actors);
     free(s);
     return NULL;
+}
+OresNativeActorScheduler* ores_native_actor_scheduler_open(
+    size_t actors, size_t capacity, size_t workers,
+    OresNativeActorTaskFn callback, void* ctx) {
+    return ores_native_actor_scheduler_open_control(
+        actors, capacity, workers, callback, NULL, ctx);
 }
 static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
     return s && ref.scheduler_domain == s->domain
@@ -191,6 +217,32 @@ int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
     unlock(s);
     return ok;
 }
+int ores_native_actor_scheduler_publish_control(
+    OresNativeActorScheduler* s, OresNativeActorRef parent, uint64_t payload) {
+    if (!s) return 0;
+    lock(s);
+    int ok = !s->retired && s->control_callback && matching(s, parent)
+        && !s->actors[parent.actor_slot].retired
+        && !s->actors[parent.actor_slot].has_control
+        && s->accepted != UINT64_MAX;
+    if (ok) {
+        ActorLane* lane = &s->actors[parent.actor_slot];
+        lane->control_payload = payload;
+        lane->has_control = 1;
+        ++s->accepted;
+        ++s->outstanding;
+        pthread_cond_signal(&s->ready);
+    } else if (s->rejected != UINT64_MAX) ++s->rejected;
+    unlock(s);
+    return ok;
+}
+uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    uint64_t n = s->control_completed;
+    unlock(s);
+    return n;
+}
 int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor) {
     if (!s) return 0;
@@ -215,7 +267,8 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
     if (!s) return 0;
     lock(s);
     int done = matching(s, actor) && s->actors[actor.actor_slot].retired
-        && !s->actors[actor.actor_slot].queued && !s->actors[actor.actor_slot].active;
+        && !s->actors[actor.actor_slot].queued && !s->actors[actor.actor_slot].has_control
+        && !s->actors[actor.actor_slot].active;
     unlock(s);
     return done;
 }
