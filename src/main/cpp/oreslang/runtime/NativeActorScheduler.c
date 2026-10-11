@@ -15,7 +15,7 @@ typedef struct {
     unsigned control_is_failure;
     unsigned spawned, retired;
     /* Mutually exclusive terminal classification, under the scheduler lock. */
-    unsigned failure_published, normal_exit_sealed;
+    unsigned failure_attempted, failure_published, normal_exit_sealed;
     uint64_t generation;
 } ActorLane;
 struct OresNativeActorScheduler {
@@ -280,14 +280,21 @@ int ores_native_actor_scheduler_publish_failure(
     OresNativeActorTerminalFailure failure) {
     if (!s) return 0;
     lock(s);
-    int ok = s->panic_callback != NULL && !s->retired
+    /* A valid terminal failure claim remains terminal even if the parent
+     * CONTROL queue is saturated or the parent has already retired. The
+     * caller must escalate/retry; it must never relabel the child as normal.
+     */
+    int attempted = s->panic_callback != NULL
         && matching(s, parent) && matching(s, failure.child)
         && s->actors[failure.child.actor_slot].retired
         && !s->actors[failure.child.actor_slot].normal_exit_sealed
-        && !s->actors[failure.child.actor_slot].failure_published
         && parent.actor_slot != failure.child.actor_slot
         && failure.kind >= ORES_NATIVE_CONTROL_PANIC
-        && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
+        && failure.kind <= ORES_NATIVE_CONTROL_STOPPED;
+    if (attempted)
+        s->actors[failure.child.actor_slot].failure_attempted = 1;
+    int ok = attempted && !s->retired
+        && !s->actors[failure.child.actor_slot].failure_published
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
         && s->accepted != UINT64_MAX;
@@ -349,7 +356,7 @@ int ores_native_actor_scheduler_seal_normal_exit(
     if (ok) {
         ActorLane* a = &s->actors[actor.actor_slot];
         ok = a->retired && !a->active && !a->queued && !a->has_control
-            && !a->failure_published && !a->normal_exit_sealed;
+            && !a->failure_attempted && !a->normal_exit_sealed;
         if (ok) a->normal_exit_sealed = 1;
     }
     unlock(s);
