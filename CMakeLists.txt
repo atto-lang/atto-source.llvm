@@ -59,6 +59,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_actor_await_spawn_ir actor-await-spawn-source.ores --ir "ores_actor_host_poll_ready")
     oreslang_contract_test(reject_spawn_foreign_actor actor-spawn-wrong-type.ores --diagnostic "source spawn actor must match enclosing actor declaration")
     oreslang_contract_test(reject_spawn_without_done actor-spawn-missing-done.ores --diagnostic "expected 'await'")
+    oreslang_contract_test(reject_actor_script_method_collision actor-script-method-collision.ores
+        --diagnostic "reserved actor lifecycle method")
     oreslang_contract_test(reject_actor_field_unknown actor-fields-unknown.ores --diagnostic "unknown or forbidden actor field")
     oreslang_contract_test(reject_actor_field_duplicate actor-fields-duplicate.ores --diagnostic "duplicate actor field")
     oreslang_contract_test(reject_actor_field_escape actor-fields-escape.ores --diagnostic "expected int expression")
