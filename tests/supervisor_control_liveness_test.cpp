@@ -134,8 +134,12 @@ int main() {
     check(suspended->resolved() == 0 && suspended->undelivered() == 1,
           "close-versus-resume misreported an unresolved decision");
 
-    // After graceful close no queued work can claim successful CONTROL.
-    control->close();
+    // Closing concurrently from two host threads must never race on joinable
+    // std::thread handles. Both close requests must be idempotent.
+    std::thread close_a([control] { control->close(); });
+    std::thread close_b([control] { control->close(); });
+    close_a.join();
+    close_b.join();
     check(!enqueue([] {}), "closed CONTROL scheduler admitted new work");
     auto rejected = std::make_shared<SupervisorProcess>(
         712, 712, 2, enqueue,
