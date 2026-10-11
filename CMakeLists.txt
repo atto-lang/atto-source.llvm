@@ -30,6 +30,17 @@ include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    find_program(ORE_NODE NAMES node nodejs)
+    if(ORE_CLANG AND ORE_NODE)
+        add_test(NAME wasm32_source_class_ownership_runtime
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_owned_classes_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --node "${ORE_NODE}"
+                --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        set_tests_properties(wasm32_source_class_ownership_runtime PROPERTIES TIMEOUT 240)
+    endif()
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
@@ -284,6 +295,14 @@ if(BUILD_TESTING)
     # Source-level bounded class ownership and per-call shared/exclusive loans.
     # All class records are stack allocated; unverified class shapes and
     # by-value object parameters remain compile-time errors with no IR.
+    # Field projections and experimental native region owners may not be moved
+    # until the CFG checker and LLVM emitter agree on partial moves and drops.
+    # Matrix asserts precise ownership diagnostics and no partial LLVM IR.
+    add_test(NAME native_field_and_region_move_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_field_move_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_field_and_region_move_fail_closed PROPERTIES TIMEOUT 90)
     oreslang_contract_test(class_reject_byvalue_mutation class-mutation-byvalue-reject.ores --diagnostic "ownership violation")
     # This is the *exact same Git blob* as the Java/Graal conformance
     # source (contracts/v1/semantics/fixtures/ownership.ores), not a

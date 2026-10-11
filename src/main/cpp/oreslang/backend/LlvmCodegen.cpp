@@ -87,6 +87,19 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     llvm::LLVMContext context;
+    // Fail closed for Wasm guests without the native actor and heap ABI.
+    if (wasm32_target) {
+        if (!source.actors.empty())
+            throw std::runtime_error("wasm32 source actors are not implemented");
+        for (const auto& fn : source.functions) {
+            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+                !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
+                throw std::runtime_error("wasm32 actor operations are not implemented");
+            for (const auto& local : fn.locals)
+                if (local.heap_owned)
+                    throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
+        }
+    }
     llvm::Module module("oreslang-source", context);
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.

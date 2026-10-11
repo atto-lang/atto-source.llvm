@@ -16,6 +16,7 @@ using Functions = std::unordered_map<std::string, const Function*>;
 struct LocalOwnership {
     Mode mode = Mode::Value;
     bool moved = false;
+    bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -148,11 +149,23 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
+            // LLVM currently lowers a field projection to an i64 load. It
+            // cannot represent a partially moved object or suppress that
+            // field's destructor. Refuse source-level moves of field places
+            // rather than quietly treating `rt take` as `rt copy`.
+            if (expr.left->kind == Expression::Kind::Field)
+                reject(expr, "ownership violation: class field take requires per-field move/drop lowering");
             check_value(*expr.left, locals, functions);
             if (expr.left->kind == Expression::Kind::Variable) {
                 LocalOwnership& source = local(*expr.left, locals);
                 if (source.mode != Mode::Value)
                     reject(expr, "cannot rt take through a borrowed parameter");
+                // A region-owned scalar is still dropped unconditionally on
+                // every CFG return edge. Until an ownership transfer ABI and
+                // path-local drop flags exist, taking it would silently run
+                // a destructor for a logically moved-out owned allocation.
+                if (source.heap_owned)
+                    reject(expr, "ownership violation: owned int take requires transfer/drop lowering");
                 if (source.exclusive_loan || source.shared_loans != 0)
                     reject(expr, "cannot move int while borrow is active");
                 source.moved = true;
@@ -239,6 +252,7 @@ void validate_i64_ownership(const Program& program) {
             if (!binding.new_class)
                 check_value(*binding.initializer, locals, functions);
             LocalOwnership entry;
+            entry.heap_owned = binding.heap_owned;
             entry.class_name = binding.class_name;
             if (binding.new_class)
                 entry.class_fields = class_fields.at(binding.class_name);
@@ -247,9 +261,8 @@ void validate_i64_ownership(const Program& program) {
         std::vector<const Expression*> deferred_calls;
         for (const auto& stmt : function.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
-                // Arguments are evaluated on scope exit, not registration.
-                // Revalidate on each outgoing CFG path after its return value
-                // has been evaluated (and may have moved a local).
+                // Run validation at each outgoing return path, after the
+                // returned value was evaluated and might have moved a local.
                 deferred_calls.push_back(stmt.expression.get());
                 continue;
             }
