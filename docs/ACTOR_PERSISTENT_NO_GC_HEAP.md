@@ -51,9 +51,9 @@ native pointers held by dishonest FFI code. Never call into an already
 freed heap; a stale raw host pointer cannot be made safe by a generation ID.
 
 This is a **tested native runtime substrate**, not full compiler lowering.
-The restricted LLVM Oreslang parser still rejects source actor classes,
-actor fields, async/await, `trap`, class/struct layouts and nontrivial
-destructors. The earlier compiler path lowers `owned int` into a
+The LLVM parser supports only the restricted i64 actor-field fragment
+specified below. It still rejects general actors, async/await, `trap`,
+class/struct layouts, and nontrivial destructors. The earlier compiler path lowers `owned int` into a
 *function-scoped* native region; a future compiler bridge must select this
 actor-persistent domain through an unforgeable ActorId execution context.
 
