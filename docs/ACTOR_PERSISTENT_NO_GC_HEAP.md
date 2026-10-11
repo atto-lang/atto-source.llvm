@@ -210,3 +210,41 @@ a handler resolved an observer promise, before the carrier called its
 turn-completed acknowledgment. The regression now waits for real
 scheduler-lane release, and the sanitizer check passes. Future actor
 runtime implementations must preserve that same distinction.
+
+
+## Canonical multi-worker scheduler adapter (October 11)
+
+`NativeActorScheduledGroup.hpp` builds on **one**
+`NativeActorOwnedHeapGroup` and the canonical
+`ActorGroupLifecycle.hpp` ownership registry. Each generated worker
+instance has its own persistent heap, field record and bounded
+`ActorExclusiveScheduler` DATA lane, while an independent parent CONTROL
+lane admits all readiness, result and physical termination callbacks.
+The supervisor does not block waiting for a running child or process
+guest completions on a child's carrier. Generated i64 method calls
+admit on a child lane, and their eventual callbacks are marshalled to
+the parent's exclusive CONTROL lane.
+
+Under DATA overload, a call returns a rejected admission result but
+still delivers exactly one async failure callback. Stop/cancel closes
+the child's DATA lane, cancels its admitted-but-not-running handlers,
+requests actor terminal CONTROL, and waits for loans, continuations,
+in-flight turns and physically freed heap before resolving `get_done()`.
+The group serializes its underlying worker-vector mutation and CONTROL
+iteration under a distinct **host-side registry lock**. Actors still
+have per-instance logical single-flight execution lanes.
+
+The exact LLVM-generated `Counter` symbols are exercised across
+three distinct actor incarnations in
+`tests/actor_scheduled_group_generated_host.cpp`: separate mutable
+field values, parallel calls, one shared parent CONTROL lane,
+normal termination and cancellation while a bounded DATA mailbox
+contains queued work. These are generated-method integration tests,
+**not yet general compiler lowering for several `spawn` bindings in
+one source program**.
+
+The adapter relies on an owned, reliable carrier executor and a
+long-lived `shared_ptr` host/controller. The host must not destroy
+the scheduler, actor registry or control queue before all terminal
+observers settle. Arbitrary FFI pointer escape and C-level abort
+remain outside this resource-safety proof.
