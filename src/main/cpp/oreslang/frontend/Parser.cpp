@@ -33,7 +33,7 @@ bool reserved(std::string_view name) {
         "define", "class", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "suspends", "generator",
+        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -42,7 +42,7 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "over", "structural", "int"
+        "gpu", "quantum", "over", "structural", "owned", "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -92,7 +92,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -142,8 +142,14 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
-        if (token_.text == "suspends") {
+        if (token_.text == "gpu" || token_.text == "quantum") {
+            fail("native accelerator lowering unsupported");
+        }
+        if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+        }
+        if (token_.text == "critical") {
+            fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
@@ -168,6 +174,19 @@ private:
         require(":");
         require("int");
         require("{");
+        while (token_.text == "const" || token_.text == "val") {
+            LocalBinding binding;
+            binding.offset = token_.offset;
+            advance();
+            binding.name = identifier();
+            require(":");
+            binding.heap_owned = accept("owned");
+            require("int");
+            require("=");
+            binding.initializer = expression();
+            require(";");
+            value.locals.push_back(std::move(binding));
+        }
         require("return");
         value.result = expression();
         require(";");
@@ -359,12 +378,26 @@ private:
         for (const auto& fn : program.functions) {
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) params.insert(param.name);
+            for (const auto& binding : fn.locals) {
+                // Validate before publishing the name: reject self/forward reads.
+                validate_expression(*binding.initializer, params, functions);
+                if (!params.insert(binding.name).second) {
+                    throw std::runtime_error("duplicate owned local '" + binding.name
+                        + "' at byte " + std::to_string(binding.offset));
+                }
+            }
             validate_expression(*fn.result, params, functions);
         }
     }
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
+        if (token_.text == "gpu" || token_.text == "quantum") {
+            throw std::runtime_error("native gpu/quantum boundary unsupported: "
+                    "validated effects, ownership, device lowering and explicit "
+                    "backend admission required; no implicit CPU fallback at byte "
+                    + std::to_string(token_.offset));
+        }
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
         // suspended/native execution frame or deferred callback.
