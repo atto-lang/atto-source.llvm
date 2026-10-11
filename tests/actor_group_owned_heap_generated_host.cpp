@@ -202,6 +202,65 @@ int main() {
             check(rejected(survivor_ref->get_done()),
                   "detached-group cancellation did not propagate");
         }
+        {
+            // Releasing a completed continuation inline on its own actor lane
+            // must not reacquire lane_ or deadlock a physical carrier.
+            NativeActorOwnedHeapGroup group(516, 1);
+            auto worker = group.spawn(61, 1, 16, generated, [&] { ++queued; });
+            check(worker->initialize(), "inline-continuation actor initialization failed");
+            check(worker->with_turn([&](auto*, auto, auto*) {
+                auto pin = worker->pin_continuation();
+                check(worker->pending_continuations() == 1,
+                      "inline continuation pin was not accounted");
+                pin.release();
+                check(worker->pending_continuations() == 0,
+                      "inline continuation completion did not release pin");
+            }), "inline continuation completion failed");
+            worker->request_normal_stop();
+            check(group.drain_control() == 1,
+                  "inline completed continuation stranded actor finalization");
+            worker->ref().get_done().get();
+        }
+        {
+            // Parent CONTROL processing must not block behind an admitted
+            // child handler: the child's completion enqueues another wake.
+            NativeActorOwnedHeapGroup group(517, 1);
+            auto worker = group.spawn(62, 1, 16, generated, [&] { ++queued; });
+            check(worker->initialize(), "busy-turn actor initialization failed");
+            std::promise<void> admitted;
+            std::promise<void> finish_turn;
+            auto release = finish_turn.get_future().share();
+            std::atomic<bool> guest_ok{false};
+            std::thread child([&] {
+                guest_ok.store(worker->with_turn([&](auto*, auto, auto*) {
+                    admitted.set_value();
+                    if (release.wait_for(5s) != std::future_status::ready)
+                        throw std::runtime_error("guest turn release timed out");
+                }));
+            });
+            bool entered = admitted.get_future().wait_for(5s) == std::future_status::ready;
+            // Stop after the actor has demonstrably entered the turn;
+            // otherwise an early CONTROL poll proves nothing about blocking.
+            if (entered) worker->request_normal_stop();
+            std::promise<std::size_t> control_result;
+            auto settled = control_result.get_future();
+            std::thread parent([&] {
+                try { control_result.set_value(group.drain_control()); }
+                catch (...) { control_result.set_exception(std::current_exception()); }
+            });
+            auto responsiveness = settled.wait_for(500ms);
+            finish_turn.set_value();
+            child.join();
+            parent.join();
+            check(entered, "busy native actor never entered its turn");
+            check(responsiveness == std::future_status::ready,
+                  "parent CONTROL blocked a carrier behind guest actor");
+            check(settled.get() == 0, "CONTROL finalized an active actor");
+            check(guest_ok.load(), "running guest turn failed while stopping");
+            check(group.drain_control() == 1,
+                  "child completion did not enable pending CONTROL teardown");
+            worker->ref().get_done().get();
+        }
         return 0;
     } catch (const std::exception& failure) {
         std::fprintf(stderr, "actor group test failed: %s\n", failure.what());
