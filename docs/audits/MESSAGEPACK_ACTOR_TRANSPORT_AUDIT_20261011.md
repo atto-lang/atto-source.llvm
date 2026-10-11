@@ -31,8 +31,8 @@ Neither draft certifies end-to-end actor-message wire transport.
 | MP-06 | Unknown host objects, deep/cyclic graphs, malformed lengths and huge strings | Fail-closed scalar/sequence encoder and bounded nodes/depth/bytes | Fixed for supported subset |
 | MP-07 | Java source type resolver merges `Array<T>` and `List<T>` into `ListType(T)` | Keep the distinction in future compiler-owned schema IR; do not wire to real sends before this is solved | **OPEN, release blocker** |
 | MP-08 | Java maps i8/i16/i32/u*/bigint/f32 to broad Primitive.INT/FLOAT, but codec supports only signed i64/finite f64 | Additional source mailbox declaration gate rejects incompatible width/signedness and Vector/Slice spellings | Partly contained; generic/import and IR preservation still **OPEN** |
-| MP-09 | Native LLVM compiler has no equivalent runtime MessagePack codec or tested actor source lowering | Require native typed encoder/decoder and exact shared vector execution | **OPEN, release blocker** |
-| MP-10 | Host ActorRuntime transport can transfer scoped capabilities or freeze Java graphs, unlike the public Serializable contract | Do not claim the host path is a portable codec; retain audited capability CONTROL path and integrate codec only with compiler-owned message schemas | **OPEN, release blocker** |
+| MP-09 | Native C++17 codec now executes byte-identical MessagePack v2 vectors, but LLVM compiler actor send/receive lowering is missing | Keep full native scheduler/compiler and source-level integration as release gates | **PARTIAL, release blocker** |
+| MP-10 | Legacy host ActorRuntime transport still permits scoped capabilities, distinct from source Serializable messages | Opt-in trusted mailbox binding now binary-snapshots real actor sends; keep CONTROL capabilities separate and migrate source/API coverage | **PARTIAL, release blocker** |
 | MP-11 | An attacker can submit a matching digest but must not choose the decoded type or serializer | Codec shape/schema must come from trusted compiler descriptor, not from incoming message | **OPEN, runtime integration gate** |
 | MP-12 | Java source `@Serializable` could be interpreted as proof without generated encode/decode | Parser rejects until derivation exists | Fixed as fail-closed reservation |
 | MP-13 | Same-file type aliases are forbidden inside actor lexical boundaries; that early rejection does not validate imported aliases | Assert the *actual* lexical diagnostic, add imported alias/end-to-end codec tests later | **OPEN imported-alias conformance gate** |
@@ -102,3 +102,44 @@ reservation and structured supervision/cancellation release.
    shared same-source programs at exact PR heads with funded runners.
 8. Keep both PRs **DRAFT** until all production gates pass; do not mark
    design-only conformance fixtures as executed compiler tests.
+
+
+## Executed integration milestone (2026-10-11, after initial audit)
+
+**Java/GraalVM source and actor runtime:**
+- The Java draft now contains \`dev.oreslang.types.ActorWireSchema\`, which generates
+  source-spelling-aware canonical schemas, preserving Array vs List and exact
+  Tuple/FixedArray/FixedList arity, and rejecting missing numeric codecs.
+- \`ActorRuntime\` supports one-time trusted mailbox-schema binding and
+  MessagePack encode/decode **before** regular queue admission; both shared
+  and private actors were exercised through their real mailboxes, including
+  sender list mutation, immutable decoded values, invalid-message recovery,
+  and late-binding rejection. Existing legacy host CONTROL capabilities stay
+  on their separate pre-existing path.
+- The actual Java \`OresEvalRootNode\` source executor now derives a
+  \`MailboxSchema\` from a local actor's \`receive(ActorMail<T>)\` signature at
+  spawn time, bound to a code-unit and actor name identity.
+- **Executed exact-project Maven test:** [GHA #38168958540]
+  (https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38168958540)
+  verified 76 exact Java source/test/resource blobs and **39 JUnit tests
+  passed, zero failures/errors**, including real source-compiled tuple/list
+  mailbox execution.
+
+**Native C++17 binary codec parity:**
+- The LLVM draft includes the standalone \`MessagePackWireV2.hpp\` encoder/
+  decoder, a native golden-vector/hostile-input test and an optional OpenSSL
+  Crypto-backed CTest target.
+- **Executed native funded proof:** [GHA #38169364693]
+  (https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38169364693)
+  compiled the exact C++17 sources and matched all six shared Java/Python
+  v2 hex vectors byte-for-byte, plus malformed/schema-confusion cases.
+- These passing tests prove *binary codec subset parity*, not LLVM source
+  compiler actor send/receive lowering or supervisor mailbox integration.
+  A full LLVM CMake/CTest suite and Java native-image execution remain open.
+
+**Production blockers remain:** Source classes/generic imported aliases,
+schema evolution, authenticated remote actors, structured codec registration
+for all numeric widths and tagged alternatives; native LLVM actor lowering;
+atomic admission/cancellation with proven byte-quota accounting at all
+bindings; concurrent-mutation races; native image and complete compiler
+conformance; independent approval. The PRs remain **DRAFT**.
