@@ -94,6 +94,7 @@ int main() {
         NativeActorMembershipRegistry m(31, 4, 3);
         NativeActorGroup owner(31, 1), competing(31, 1);
         auto ref = owner.adopt(31, 77, 11, [] {});
+        check(owner.mark_ready(ref), "owned actor failed readiness");
         check(m.register_actor(77, 11), "register owned actor");
         auto a = m.create_group(10, 4);
         auto b = m.create_group(20, 4);
