@@ -66,6 +66,10 @@ private:
         bool cancelled = false;
         bool event_observed = false;
         bool release_observed = false;
+        bool observer_registered = false;
+        bool settled = false;
+        std::exception_ptr terminal_error;
+        Completion host_observer;
         std::promise<void> ready_promise, done_promise;
         std::shared_future<void> ready, done;
 
@@ -75,8 +79,23 @@ private:
               identity(std::move(id)), reserved_bytes(bytes),
               ready(ready_promise.get_future().share()),
               done(done_promise.get_future().share()) {}
-        void fail(std::exception_ptr error) noexcept {
-            try { done_promise.set_exception(error); } catch (...) { }
+        void settle(std::exception_ptr error = {}) noexcept {
+            Completion notify;
+            {
+                std::lock_guard<std::mutex> guard(lock);
+                if (settled) return;
+                settled = true;
+                terminal_error = error;
+                notify = std::move(host_observer);
+            }
+            try {
+                if (error) done_promise.set_exception(error);
+                else done_promise.set_value();
+            } catch (...) { }
+            // Host callback must enqueue, NEVER call actor user code.
+            if (notify) {
+                try { notify(error); } catch (...) { /* supervisor sees timed-out routing */ }
+            }
         }
     };
 public:
@@ -84,6 +103,27 @@ public:
     public:
         std::shared_future<void> get_ready() const { return state_->ready; }
         std::shared_future<void> get_done() const { return state_->done; }
+        /**
+         * Register a single nonblocking host CONTROL-notification hook.
+         * Invoked exactly once after provider release (or on an uncertain
+         * launch/release failure), never under internal locks. Caller MUST
+         * post an actor CONTROL event, not execute actor user code here.
+         */
+        void on_done(Completion notify) {
+            if (!notify) throw std::invalid_argument("host notification required");
+            bool already_settled;
+            std::exception_ptr terminal;
+            {
+                std::lock_guard<std::mutex> guard(state_->lock);
+                if (state_->observer_registered)
+                    throw std::logic_error("GPU host completion already registered");
+                state_->observer_registered = true;
+                already_settled = state_->settled;
+                terminal = state_->terminal_error;
+                if (!already_settled) state_->host_observer = std::move(notify);
+            }
+            if (already_settled) notify(terminal);
+        }
         bool cancel() {
             std::lock_guard<std::mutex> guard(state_->lock);
             if (state_->event_observed || state_->cancelled) return false;
@@ -128,7 +168,7 @@ public:
             // Never return credits without a real device completion event.
             const auto failure = std::current_exception();
             try { state->ready_promise.set_exception(failure); } catch (...) { }
-            state->fail(failure);
+            state->settle(failure);
         }
         return Submission(std::move(state));
     }
@@ -151,6 +191,7 @@ public:
 private:
     static void after_device_event(std::shared_ptr<State> state, std::exception_ptr error) noexcept {
         bool cancelled = false;
+        std::exception_ptr validation_error;
         {
             std::lock_guard<std::mutex> lock(state->lock);
             if (state->event_observed) return;
@@ -164,9 +205,12 @@ private:
                     state->fence->complete(state->ticket, !error);
                 }
             } catch (...) {
-                state->fail(std::current_exception());
-                return; // No physical free or refund on identity uncertainty.
+                validation_error = std::current_exception();
             }
+        }
+        if (validation_error) {
+            state->settle(validation_error);
+            return; // No physical free or refund on identity uncertainty.
         }
         try {
             state->core->provider->release(state->identity, state->reserved_bytes,
@@ -179,7 +223,7 @@ private:
                     state->release_observed = true;
                 }
                 if (release_error) {
-                    state->fail(release_error); // Credits intentionally retained.
+                    state->settle(release_error); // Credits intentionally retained.
                     return;
                 }
                 try {
@@ -191,16 +235,16 @@ private:
                         state->core->used_bytes -= state->reserved_bytes;
                     }
                     if (cancelled)
-                        state->fail(std::make_exception_ptr(
+                        state->settle(std::make_exception_ptr(
                             std::runtime_error("GPU cancelled after event and physical release")));
-                    else if (error) state->fail(error);
-                    else state->done_promise.set_value();
+                    else if (error) state->settle(error);
+                    else state->settle();
                 } catch (...) {
-                    state->fail(std::current_exception());
+                    state->settle(std::current_exception());
                 }
             });
         } catch (...) {
-            state->fail(std::current_exception()); // Keep reservations.
+            state->settle(std::current_exception()); // Keep reservations.
         }
     }
 
