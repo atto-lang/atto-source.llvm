@@ -15,7 +15,8 @@ def main():
     parser.add_argument("--diagnostic")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
-    parser.add_argument("--native-runtime")
+    parser.add_argument("--native-runtime", action="append")
+    parser.add_argument("--native-harness")
     args = parser.parse_args()
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
@@ -36,12 +37,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
         clang_args = [args.clang, "-x", "ir", "-"]
-        if args.native_runtime:
-            native_source = pathlib.Path(args.native_runtime)
+        for runtime_path in args.native_runtime or []:
+            native_source = pathlib.Path(runtime_path)
             clang_args.extend([
                 "-x", "c", str(native_source),
                 "-std=c11", "-I", str(native_source.parents[2]),
             ])
+        if args.native_harness:
+            clang_args.extend(["-x", "c", args.native_harness, "-pthread"])
         clang_args.extend(["-o", executable])
         native = subprocess.run(
             clang_args, input=compile_result.stdout,
