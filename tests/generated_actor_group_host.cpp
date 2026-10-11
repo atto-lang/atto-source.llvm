@@ -118,5 +118,35 @@ int main() {
         try { ref.get_done().get(); } catch (const std::runtime_error&) { done_failed = true; }
         require(ready_failed && done_failed, "startup cancellation must fail both futures");
     }
+    {
+        // A stop request cannot finalize field storage while an externally
+        // admitted native turn still owns the logical actor lane.
+        NativeActorGroup group(105, 1);
+        GeneratedActorFieldWorker worker(group, 105, 56, 1, 16,
+                                         ores_actor_Counter_init, ores_actor_Counter_drop);
+        auto ref = worker.ref();
+        require(worker.initialize(), "active-turn actor not ready");
+        auto* heap = worker.trusted_heap();
+        auto pending = ores_actor_i64_heap_enter(heap, 56, 1);
+        group.stop_workers();
+        require(!worker.poll_finalized(), "heap freed while native turn admitted");
+        require(ref.get_done().wait_for(0ms) == std::future_status::timeout,
+                "done settled while actor turn still active");
+        ores_actor_i64_heap_leave(heap, pending);
+        require(worker.poll_finalized(), "turn completion did not allow field drop");
+        ref.get_done().get();
+    }
+    {
+        // Constructor rejection must precede ActorGroup ownership admission,
+        // otherwise a throwing constructor leaves a phantom live worker.
+        NativeActorGroup group(106, 1);
+        bool rejected = false;
+        try {
+            GeneratedActorFieldWorker invalid(group, 106, 57, 1, 16,
+                                              nullptr, ores_actor_Counter_drop);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected && group.worker_count() == 0,
+                "invalid generated function table leaked ActorGroup membership");
+    }
     return 0;
 }
