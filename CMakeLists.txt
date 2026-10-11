@@ -55,6 +55,16 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-llvmc>"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generated-client-contract.ores")
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+
+    if(ORE_CLANG)
+        add_test(NAME experimental_native_string_source_ownership
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/experimental_string_source.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeString.c"
+                --include-root "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    endif()
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
