@@ -82,6 +82,22 @@ public:
     NativeSupervisorCodeSlot& operator=(const NativeSupervisorCodeSlot&) = delete;
     ~NativeSupervisorCodeSlot() { close(); }
 
+    /**
+     * One slot may be installed on exactly one supervisor in one runtime
+     * registry. Same numeric supervisor IDs in another registry are not
+     * interchangeable.
+     */
+    void bind_owner(const void* runtime_domain, std::uint64_t supervisor_id) {
+        if (runtime_domain == nullptr || supervisor_id == 0)
+            throw std::invalid_argument("invalid supervisor code owner");
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (closed_) throw std::logic_error("native supervisor code slot closed");
+        if (owner_domain_ != nullptr)
+            throw std::logic_error("native supervisor code slot already installed");
+        owner_domain_ = runtime_domain;
+        owner_supervisor_ = supervisor_id;
+    }
+
     Descriptor current() const {
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) throw std::logic_error("native supervisor code slot closed");
@@ -151,6 +167,8 @@ private:
     mutable std::mutex mutex_;
     mutable std::vector<std::weak_ptr<Generation>> retained_;
     std::shared_ptr<Generation> current_;
+    const void* owner_domain_ = nullptr;
+    std::uint64_t owner_supervisor_ = 0;
     bool closed_ = false;
 };
 
