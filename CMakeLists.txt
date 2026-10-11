@@ -252,6 +252,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
     set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
+    # Cooperation membership is many-to-many, distinct from one lifecycle owner.
+    add_executable(oreslang-native-actor-membership-test tests/native_actor_membership_test.cpp)
+    target_include_directories(oreslang-native-actor-membership-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-membership-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
+    set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
