@@ -204,10 +204,15 @@ public:
         (void) it;
         if (!inserted) throw std::logic_error("duplicate STOP turn reservation");
         try {
-            stop_receipts_.emplace(child.logical_child_id,
+            auto [receipt_it, inserted_receipt] = stop_receipts_.emplace(
+                child.logical_child_id,
                 StopReceipt{child, failed_actor, incarnation, turn_generation,
                             StopReceiptStatus::pending});
+            (void) receipt_it;
+            if (!inserted_receipt)
+                throw std::logic_error("stale STOP receipt prevented reservation");
         } catch (...) {
+            // No partially published STOP lease or overwritten old receipt.
             pending_stops_.erase(child.logical_child_id);
             throw;
         }
@@ -360,6 +365,7 @@ private:
             throw std::logic_error("wrong STOP turn generation");
         auto found = stop_receipts_.find(child.logical_child_id);
         if (found == stop_receipts_.end()
+            || !(found->second.child == child)
             || found->second.turn_generation != turn_generation
             || found->second.incarnation != incarnation
             || !same_actor(found->second.failed_actor, actor))
