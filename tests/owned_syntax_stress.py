@@ -136,8 +136,13 @@ pub fnc main(): int {
                 check("gc.statepoint" not in ir and "gc.root" not in ir,
                       f"GC intrinsic in {path}")
                 if experimental:
-                    check(ir.count("call ptr @oreslang_owned_i64_region_new")
-                          == owned_count,
+                    # LLVM 14 emits typed i8* pointers; LLVM 15+ uses
+                    # opaque ptr. Count actual call sites, not IR type text.
+                    allocation_calls = sum(
+                        "call " in line and
+                        "@oreslang_owned_i64_region_new(" in line
+                        for line in ir.splitlines())
+                    check(allocation_calls == owned_count,
                           f"native owners mismatch in {path}")
                     check(ir.count("call void @oreslang_owned_i64_region_drop")
                           == owned_count * (guards + 1),
