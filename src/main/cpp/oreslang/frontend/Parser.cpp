@@ -475,9 +475,35 @@ private:
             require(";");
             value.locals.push_back(std::move(binding));
         }
-        require("return");
-        value.result = expression();
-        require(";");
+        bool returned = false;
+        while (token_.kind != Kind::End && token_.text != "}") {
+            if (accept("do")) {
+                Function::DoDispatch item;
+                item.dispatch = dispatch(true);
+                value.procedural.push_back(std::move(item));
+                (void)accept(";");
+                continue;
+            }
+            if (accept("return")) {
+                if (accept("do")) {
+                    Function::DoDispatch item;
+                    item.dispatch = dispatch(true);
+                    item.terminal = true;
+                    value.procedural.push_back(std::move(item));
+                    (void)accept(";");
+                } else {
+                    value.result = expression();
+                    if (!accept(";")
+                            && value.result->kind != Expression::Kind::Match
+                            && value.result->kind != Expression::Kind::Switch)
+                        require(";");
+                }
+                returned = true;
+                break;
+            }
+            fail("native function expects do match/switch or return");
+        }
+        if (!returned) fail("native function requires a final return or return do");
         require("}");
         return value;
     }
@@ -525,6 +551,8 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (token_.text == "match" || token_.text == "switch")
+            return dispatch(false);
         if (accept("(")) {
             auto inner = expression();
             require(")");
