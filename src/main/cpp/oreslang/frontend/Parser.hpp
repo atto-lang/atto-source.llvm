@@ -35,8 +35,7 @@ struct LocalBinding {
     bool heap_owned = false;
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
-    // Explicit local-only move: let Box dst = rt take(src);
-    // Class-valued function ABI, partial moves and nontrivial drops remain gated.
+    // Restricted local stack-only explicit class move.
     bool move_class = false;
     std::string move_source;
     bool field_mutable = false; // actor-owned fields only
