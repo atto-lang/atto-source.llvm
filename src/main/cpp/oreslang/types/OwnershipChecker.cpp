@@ -19,6 +19,7 @@ struct LocalOwnership {
     Mode mode = Mode::Value;
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
+    bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -76,6 +77,9 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     // into a mutable one. Its new loan ends at that nested call's return.
     if (source.mode == Mode::Borrow && exclusive)
         reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
+    if (exclusive && source.mode == Mode::Value &&
+            !source.class_name.empty() && !source.mutable_owner)
+        reject(expr, "cannot mutably borrow immutable owner '" + expr.left->name + "'");
     if (source.moved)
         reject(expr, (source.class_name.empty()
             ? "borrow of explicitly moved int '" : "ownership violation: borrow of moved class '")
@@ -253,6 +257,7 @@ void validate_i64_ownership(const Program& program) {
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
+            entry.mutable_owner = binding.owner_mutable;
             entry.class_name = binding.class_name;
             if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
@@ -279,6 +284,8 @@ void validate_i64_ownership(const Program& program) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
                 if (recv.mode == Mode::Borrow)
                     throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
+                if (recv.mode == Mode::Value && !recv.mutable_owner)
+                    throw std::runtime_error("ownership violation: class mutation requires let mut owner");
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
                 check_value(*stmt.expression, state, functions);
