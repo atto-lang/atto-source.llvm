@@ -145,6 +145,7 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 420)
     endif()
 
+    find_package(Threads REQUIRED)
     # Bounded actor FIFO admission, independent of physical carrier/thread ID.
     add_executable(oreslang-native-actor-mailbox-test
         tests/native_actor_mailbox_test.c
@@ -160,7 +161,6 @@ if(BUILD_TESTING)
 
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
-    find_package(Threads REQUIRED)
     add_executable(oreslang-actor-owned-heap-test
         tests/actor_owned_heap_lifecycle_test.c
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
