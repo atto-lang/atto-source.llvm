@@ -32,6 +32,8 @@ struct State {
     std::mutex mutex;
     std::condition_variable wake;
     bool child_cleanup = false;
+    bool child_published_while_active = false;
+    bool release_child_carrier = false;
     bool callback_entered = false;
     bool decision_done = false;
     std::atomic<unsigned> unexpected{0};
@@ -62,6 +64,16 @@ static void ordinary_message(void* raw, size_t actor, std::uint64_t payload) {
     if (!ores_native_actor_scheduler_publish_failure(
             s.scheduler, s.parent, failure))
         ++s.unexpected;
+    {
+        std::unique_lock<std::mutex> lock(s.mutex);
+        s.child_published_while_active = true;
+        s.wake.notify_all();
+        // With multiple native workers the parent CONTROL may be schedulable,
+        // but must wait for this actual child turn to finish physically.
+        if (!s.wake.wait_for(lock, 5s,
+                [&] { return s.release_child_carrier; }))
+            ++s.unexpected;
+    }
 }
 
 static void typed_parent_control(
@@ -78,7 +90,7 @@ int main() {
     // Native actor scheduler reserves one exclusive CONTROL slot for parent.
     // Its typed callback forwards into a *separate* host supervisor scheduler.
     s.scheduler = ores_native_actor_scheduler_open_typed_control(
-        3, 1, 1, ordinary_message, nullptr, typed_parent_control, &s);
+        3, 1, 3, ordinary_message, nullptr, typed_parent_control, &s);
     check(s.scheduler != nullptr, "native actor scheduler startup failed");
     s.parent = ores_native_actor_scheduler_spawn(s.scheduler, 0);
     s.child = ores_native_actor_scheduler_spawn(s.scheduler, 1);
@@ -126,9 +138,25 @@ int main() {
     s.bridge = std::make_unique<NativeSupervisorPanicBridge>(
         s.scheduler, s.parent, s.process);
     s.bridge->register_child(s.child);
+    OresNativeActorTerminalFailure premature{
+        ORES_NATIVE_CONTROL_PANIC, s.child, 37, 20261011
+    };
+    check(!ores_native_actor_scheduler_publish_failure(
+            s.scheduler, s.parent, premature),
+          "active child could publish a terminal failure before stop");
     check(ores_native_actor_scheduler_send(s.scheduler, s.child, 99),
           "child terminal message not admitted");
 
+    {
+        std::unique_lock<std::mutex> lock(s.mutex);
+        check(s.wake.wait_for(lock, 5s,
+                [&] { return s.child_published_while_active; }),
+              "native child never published its typed terminal event");
+        check(s.control_events.load() == 0 && s.policy_calls.load() == 0,
+              "parent CONTROL started while failed child was still executing");
+        s.release_child_carrier = true;
+    }
+    s.wake.notify_all();
     {
         std::unique_lock<std::mutex> lock(s.mutex);
         check(s.wake.wait_for(lock, 5s, [&] { return s.callback_entered; }),
