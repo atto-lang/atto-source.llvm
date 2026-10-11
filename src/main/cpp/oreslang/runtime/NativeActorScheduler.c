@@ -14,6 +14,8 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
+    /* Mutually exclusive terminal classification, under the scheduler lock. */
+    unsigned failure_published, normal_exit_sealed;
     uint64_t generation;
 } ActorLane;
 struct OresNativeActorScheduler {
@@ -281,6 +283,8 @@ int ores_native_actor_scheduler_publish_failure(
     int ok = s->panic_callback != NULL && !s->retired
         && matching(s, parent) && matching(s, failure.child)
         && s->actors[failure.child.actor_slot].retired
+        && !s->actors[failure.child.actor_slot].normal_exit_sealed
+        && !s->actors[failure.child.actor_slot].failure_published
         && parent.actor_slot != failure.child.actor_slot
         && failure.kind >= ORES_NATIVE_CONTROL_PANIC
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
@@ -288,6 +292,8 @@ int ores_native_actor_scheduler_publish_failure(
         && !s->actors[parent.actor_slot].has_control
         && s->accepted != UINT64_MAX;
     if (ok) {
+        /* Claim terminal failure atomically against normal-exit sealing. */
+        s->actors[failure.child.actor_slot].failure_published = 1;
         ActorLane* a = &s->actors[parent.actor_slot];
         a->failure = failure;
         a->control_is_failure = 1;
@@ -334,6 +340,20 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
         && !s->actors[actor.actor_slot].active;
     unlock(s);
     return done;
+}
+int ores_native_actor_scheduler_seal_normal_exit(
+    OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor);
+    if (ok) {
+        ActorLane* a = &s->actors[actor.actor_slot];
+        ok = a->retired && !a->active && !a->queued && !a->has_control
+            && !a->failure_published && !a->normal_exit_sealed;
+        if (ok) a->normal_exit_sealed = 1;
+    }
+    unlock(s);
+    return ok;
 }
 int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
                                           OresNativeActorRef actor) {
