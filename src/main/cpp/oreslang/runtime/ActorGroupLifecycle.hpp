@@ -178,11 +178,11 @@ public:
                 || it->second.generation != ref.generation()
                 || it->second.ticket != ref.ticket_)
                 return false;
-            if (!ref.ticket_->settled) {
-                ActorReadyResult rejected{false,
-                    failure.empty() ? "actor terminated before ready" : failure};
-                callbacks = settle_ticket(ref, std::move(rejected));
-            }
+            // Close may settle readiness after detaching the worker table,
+            // outside the group lock. The ticket mutex decides the winner.
+            ActorReadyResult rejected{false,
+                failure.empty() ? "actor terminated before ready" : failure};
+            callbacks = settle_ticket(ref, std::move(rejected));
             // Settle the done promise ONLY on this acknowledged finalization.
             // A failed on_start propagates to both observers.
             settle_done(ref, failure);
