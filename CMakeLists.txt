@@ -497,4 +497,14 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_owned_tagged_wire_v1
         COMMAND oreslang-native-actor-wire-v1-test)
 
+    add_executable(oreslang-native-messagepack-v2-test
+        tests/native_messagepack_actor_v2_test.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-messagepack-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-messagepack-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_messagepack_v2_owned_actor_dispatch
+        COMMAND oreslang-native-messagepack-v2-test)
+
 endif()
