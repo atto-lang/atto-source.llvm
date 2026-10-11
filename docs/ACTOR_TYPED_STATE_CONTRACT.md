@@ -2,8 +2,8 @@
 
 Actor state belongs to an actor *instance*. Its schema belongs to the actor type.
 Guest code cannot read `self.state`, override `handle_state`, or receive a raw
-native pointer. All access is through the sealed, synchronous
-`self.handle_state(|access| { ... })` intrinsic.
+native pointer. All access is through the sealed `critical handle_state` method, invoked as
+`await self.handle_state(|access| { ... })` when the callback suspends.
 
 ## Finite typed keys (preferred)
 
@@ -48,11 +48,14 @@ until a declaration is provided. This avoids implicit unbounded native storage.
 
 ## Required compiler/runtime gates
 
-1. Reserve `state` actor declarations and `handle_state` as a non-overridable
-   actor intrinsic. Reject direct `self.state` and user-defined overrides.
+1. Reserve `state` actor declarations and `critical handle_state` as a
+   non-overridable actor intrinsic. Reject direct `self.state` and user-defined overrides.
 2. Type-check the callback against a schema-specific, ephemeral capability.
-3. Reject await/yield, async FFI, nested handle_state, capture/return/store of
-   the capability, and any borrowed or mutable alias escaping the callback.
+3. Permit await/select within the callback using scheduler-owned async critical
+   admission and continuation fencing. Reentrant calls must follow explicit
+   critical ownership semantics (not blanket rejection); never hold a physical
+   mutex or JVM monitor across suspension. Reject capture/return/store of the
+   state capability and borrowed aliases escaping their valid scope.
 4. Lower finite fields to a stable typed layout with explicit alignment,
    initialization and finalization; lower dynamic maps to bounded storage.
 5. ActorGroup owns allocation, ready initialization, cancellation, panic,
