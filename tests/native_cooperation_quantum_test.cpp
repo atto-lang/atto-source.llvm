@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <type_traits>
+#include <utility>
 
 struct FakeClock {
     using rep = std::chrono::steady_clock::rep;
@@ -23,6 +25,8 @@ std::atomic<std::int64_t> FakeClock::nanos{0};
 std::atomic<int> FakeClock::reads{0};
 
 using Quantum = oreslang::runtime::BasicSourceCooperationQuantum<FakeClock>;
+static_assert(std::is_same_v<decltype(std::declval<Quantum>().completedBackedgesThisDispatch()), std::uint64_t>,
+              "per-dispatch reductions must not wrap at 32 bits");
 
 static void require(bool ok) {
     if (!ok) throw std::runtime_error("native cooperation-quantum invariant failed");
