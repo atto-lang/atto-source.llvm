@@ -17,6 +17,12 @@ int main() {
     const auto using_rw = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::Accept);
+    // Verified serial admission cannot be inferred from the callback itself;
+    // the two-argument untrusted policy still fails closed.
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
     c.callback_critical = true;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::Accept);
