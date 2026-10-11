@@ -71,3 +71,27 @@ actual guest `.ores` programs before release.
 5. Full LLVM CMake/CTest, full Java Maven plus Graal native-image and long fuzz/stress runs on exact current integrated heads remain merge gates.
 
 Keep PR #180 draft. Do not merge until the remaining release blockers have test evidence.
+
+
+## Compiler-generated guest progress: bounded tagged int (2026-10-11)
+
+The earlier "not yet executable guest" limitation has been PARTIALLY
+resolved. The LLVM compiler now executes a real Oreslang
+`source-tagged-int-payload-dispatch.ores` fixture. `ref.send(Enum.Case(19))`
+generates a Java-compatible pinned `T[S,I,I]` MessagePack frame.
+`on Enum.Case as n` narrows its integer payload into an arm-local value.
+Distinct Add/Sub variants with identical payload shape execute correctly
+on the same actor serial lane, preserving field state and order.
+
+Independent CI:
+- LLVM real guest, negative compiler parser tests and GCC/Clang
+  sanitizer checks: https://github.com/zed-pkg-test/java-app/actions/runs/38183268136
+- Java `TaggedMessageCodec` exact byte vectors for Add(19)/Sub(4):
+  https://github.com/zed-pkg-test/java-app/actions/runs/38183802496
+  (59 targeted JUnit tests, 83 exact Git-blob inputs).
+
+The previous merge blockers remain for nonliteral/non-uint31 payloads,
+string and tuple binder lowering, actor reply/forward/done, Future<T>,
+cancellation/defer/recover, stale actor pointer safety, variant scaling,
+and full original-organization conformance. Do not infer broader guest
+support from this first typed integer slice.
