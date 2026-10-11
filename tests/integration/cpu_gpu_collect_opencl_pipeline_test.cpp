@@ -1,4 +1,6 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp" // authoritative NativeActorGroup on current main
+#include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/PipelineSourceLowering.hpp"
 #include "oreslang/runtime/BoundedActorPort.hpp" // current-main CONTROL/port PR #97
 #include "oreslang/runtime/GpuActorControlBridge.hpp"
 #include "oreslang/runtime/OpenClF32Device.hpp"
@@ -11,6 +13,8 @@
 #include <chrono>
 #include <cstring>
 #include <exception>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -90,11 +94,21 @@ struct RealOpenClProvider : gpu::GpuDispatchCoordinator::Provider {
     }
 };
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc != 2) throw std::invalid_argument("expected source .ores pipeline path");
+    std::ifstream source_file(argv[1]);
+    if (!source_file) throw std::runtime_error("cannot read pipeline source");
+    const std::string source((std::istreambuf_iterator<char>(source_file)),
+                             std::istreambuf_iterator<char>());
     dop::Plan layout(dop::Layout::AoSoA, 7, 3, 4, 16, 4);
-    auto kernel = dop::lower_opencl(
-        dop::Kernel(layout, dop::Element::F32, dop::Op::ScaleBias, 2.0f, 1.0f),
-        {64, 4096, 100, true});
+    const auto checked = compile_pipeline_source(
+        source, layout, {64, 4096, 100, true});
+    if (checked.entry != "do_work"
+        || checked.stages[0].name != "CpuWorker"
+        || checked.stages[1].name != "GpuWorker"
+        || checked.stages[2].name != "CollectResultsWorker")
+        throw std::runtime_error("invalid source-derived actor stage identity");
+    const auto& kernel = checked.kernel;
     const auto bytes = static_cast<std::size_t>(kernel.required_bytes);
     auto group = std::make_shared<Group>(1004, 3);
     auto cpu = group->adopt(1004, 1, 1, [] {});
