@@ -59,11 +59,22 @@ struct Statement {
     std::size_t offset = 0;
 };
 
+// Side-effect-free equality guard with return-only taken branch.
+// All locals and ordinary statements precede guards; branch-local objects
+// and suspension remain unsupported until path-sensitive cleanup is proven.
+struct GuardedReturn {
+    std::unique_ptr<Expression> lhs;
+    std::unique_ptr<Expression> rhs;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
     std::vector<Statement> statements;
+    std::vector<GuardedReturn> early_returns;
     bool returns_void = false;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
