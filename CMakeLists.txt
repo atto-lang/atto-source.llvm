@@ -487,4 +487,14 @@ if(BUILD_TESTING)
                  COMMAND oreslang-actor-trace-test)
         set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
     endif()
+    # Owned tagged v1 actor wire codec: canonical Java/Graal bytes and hostile
+    # frame rejection. This runtime substrate does not enable source sends.
+    add_executable(oreslang-native-actor-wire-v1-test
+        tests/native_actor_wire_v1_test.c
+        src/main/cpp/oreslang/runtime/ActorMessageWireV1.c)
+    target_include_directories(oreslang-native-actor-wire-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME native_actor_owned_tagged_wire_v1
+        COMMAND oreslang-native-actor-wire-v1-test)
+
 endif()
