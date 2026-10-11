@@ -78,6 +78,8 @@ public:
             std::lock_guard<std::mutex> guard(mutex_);
             ++undelivered_;
             failed_ = true;
+            undelivered_ += queue_.size();
+            queue_.clear();
         }
     }
 
@@ -104,11 +106,13 @@ private:
                 scheduled_ = false;
                 failed_ = true;
                 undelivered_ += queue_.size();
+                queue_.clear(); // CONTROL enqueue permanently failed.
             }
         } catch (...) {
             scheduled_ = false;
             failed_ = true;
             undelivered_ += queue_.size();
+            queue_.clear();
         }
     }
 
@@ -129,6 +133,7 @@ private:
                 std::lock_guard<std::mutex> guard(mutex_);
                 failed_ = true;
                 undelivered_ += queue_.size();
+                queue_.clear(); // No further delivery on a failed lane.
                 scheduled_ = false;
                 return;
             }
@@ -137,6 +142,7 @@ private:
                 std::lock_guard<std::mutex> guard(mutex_);
                 failed_ = true;
                 undelivered_ += queue_.size();
+                queue_.clear(); // No further delivery on a failed lane.
                 scheduled_ = false;
                 return;
             }
