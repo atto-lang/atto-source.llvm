@@ -1,3 +1,22 @@
+## Native tagged-message implementation update (2026-10-11)
+
+The canonical source syntax is now one qualified case **per line**, without `|`:
+```ores
+define enum Status as
+    Message1: Tuple[bool, string] = 1
+    Message2: string = 2
+end
+define pattern Messages as
+    Status.Message1
+    Status.Message2
+end
+```
+The Java/GraalVM compiler and source actor runtime implement this initial subset; [exact-source Maven run #38171602084](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38171602084) passed 45 JUnit tests over 79 verified blobs. **LLVM source-level enum/pattern declaration and typed actor `send`/`receive` lowering remain unimplemented**.
+
+The native C++17 `tests/tagged_message_wire_v2_test.cpp` independently calculates the compile-time closed-domain hash, nominal case identity `Status.Message2#2`, and the canonical typed MessagePack v2 frame. It passed [funded native run #38171435534](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38171435534), comparing exact bytes with `contracts/v1/design/tagged_message_vectors.json`; optional CMake target `native_tagged_enum_message_java_wire_parity` is registered but has not undergone a full LLVM CTest suite. This is **binary codec parity only**, not complete backend/actor-runtime parity. All enum tags must be monotonically increasing positive integers; schema hash is not a sender-authentication MAC.
+
+---
+
 # RFC: native enum and tagged message ABI parity
 
 **Status: proposal only; no new LLVM source behavior or test results are claimed.**
