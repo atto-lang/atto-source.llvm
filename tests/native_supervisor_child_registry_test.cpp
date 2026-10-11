@@ -39,6 +39,17 @@ int main() {
             9007, 42, first.child.logical_child_id});
     });
 
+    // Recreating a registry for the same supervisor/domain must NOT recycle
+    // logical child 1: a stale handle must not address a new child (ABA).
+    SupervisorChildRegistry another_registry{1107, 42};
+    const auto other_registry_child = another_registry.register_child(
+        OresNativeActorRef{42, 4, 1});
+    check(other_registry_child.child.logical_child_id
+              != first.child.logical_child_id,
+          "reinitialized registry reused stale logical child ID");
+    must_reject([&] { registry.snapshot(other_registry_child.child); });
+    must_reject([&] { another_registry.snapshot(first.child); });
+
     registry.finalized(first.child, first_actor, 1);
     must_reject([&] { registry.replace(first.child, first_actor, 1, first_actor); });
     const auto next_actor = OresNativeActorRef{42, 5, 1};
