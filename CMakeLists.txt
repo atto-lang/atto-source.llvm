@@ -58,7 +58,7 @@ if(BUILD_TESTING)
     # emitting verified IR, then link/run a native main. Cross-unit imports and
     # String contracts must reject without emitting any LLVM IR.
     oreslang_contract_test(native_i64_module_contract_valid native-contract-i64-valid.ores
-        --ir "ret i64 42" --run 42 --clang "${ORE_CLANG}")
+        --ir "call i64 @Math.add" --run 42 --entry-symbol "Math.main" --clang "${ORE_CLANG}")
     oreslang_contract_test(native_i64_module_contract_missing native-contract-i64-missing.ores
         --diagnostic "missing public native module contract method")
     oreslang_contract_test(native_i64_module_contract_private native-contract-i64-private.ores
