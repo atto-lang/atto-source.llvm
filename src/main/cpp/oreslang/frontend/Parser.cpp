@@ -40,7 +40,8 @@ bool reserved(std::string_view name) {
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
-        "static", "pub", "private", "return", "defer", "val", "const",
+        "static", "pub", "private", "return", "defer", "throw", "raise",
+        "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int"
     };
@@ -531,6 +532,18 @@ private:
                     "validated effects, ownership, device lowering and explicit "
                     "backend admission required; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
+        }
+        // Exception effects must not be parsed as ordinary calls or values:
+        // the native backend lacks guest unwind, typed catch and recover frames.
+        if (token_.text == "throw" || token_.text == "raise" ||
+            token_.text == "panic" || token_.text == "recover" ||
+            token_.text == "trap" || token_.text == "try" ||
+            token_.text == "catch" || token_.text == "finally" ||
+            token_.text == "defer") {
+            throw std::runtime_error(
+                "native exception/control effect unsupported: "
+                "typed unwinding, cleanup and supervision lowering required"
+                " at byte " + std::to_string(token_.offset));
         }
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
