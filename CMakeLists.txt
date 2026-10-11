@@ -84,6 +84,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unlowered_readable_pipe_actor
         unsupported-readable-pipe-actor.ores
         --diagnostic "source pipe actor declarations require typed role admission")
+    oreslang_contract_test(reject_unlowered_actor_pipe_expression
+        unsupported-actor-pipe-expression.ores
+        --diagnostic "native actor pipe expressions require compiler-checked stage roles")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
     if(ORE_CLANG)
