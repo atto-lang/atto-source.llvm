@@ -42,6 +42,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     oreslang_contract_test(shared_http_counter_kernel_ir http-shared-counter-kernel.ores --ir "call i64 @counter_value")
+    oreslang_contract_test(shared_http_guest_handler_ir http-guest-handler.ores --ir "call i64 @handle_request")
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
@@ -137,7 +138,7 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/http_actor_matrix_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor-owned-fields.ores"
-                --kernel-fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/http-shared-counter-kernel.ores"
+                --kernel-fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/http-guest-handler.ores"
                 --clang "${ORE_CLANG}"
                 --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
                 --arena-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorArena.c"
