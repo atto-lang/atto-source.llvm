@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <future>
 #include <mutex>
@@ -183,6 +184,8 @@ extern "C" int ores_actor_host_call_i64(
     if (!ctx.call_phase.compare_exchange_strong(expected, 1)) return -1;
     if (!ctx.actor_lane->post_data([&ctx, method, argument] {
         bool ok = ctx.worker->with_turn([&](auto* heap, auto turn, auto* fields) {
+            if (std::getenv("ORES_ACTOR_TEST_HANDLER_PANIC"))
+                throw std::runtime_error("controlled native actor handler panic");
             ctx.answer.store(method(heap, turn.domain, turn.epoch, fields, argument));
         });
         ctx.call_phase.store(ok ? 2 : -1);
@@ -245,8 +248,20 @@ int main() {
                     throw std::runtime_error("source actor lifecycle/result contract violated");
                 return 32;
             }
-            if (disposition < 0)
-                throw std::runtime_error("compiled guest continuation failed");
+            if (disposition < 0) {
+                if (!std::getenv("ORES_ACTOR_TEST_HANDLER_PANIC"))
+                    throw std::runtime_error("compiled guest continuation failed");
+                auto done = ctx.worker->ref().get_done();
+                if (done.wait_for(4s) != std::future_status::ready
+                    || !ctx.worker->physically_finalized())
+                    throw std::runtime_error("panic never finalized persistent heap");
+                bool propagated = false;
+                try { done.get(); }
+                catch (const std::runtime_error&) { propagated = true; }
+                if (!propagated)
+                    throw std::runtime_error("panic did not fail done observer");
+                return 79; // Assert the compiler enqueued cancel through CONTROL.
+            }
             if (pc == old) {
                 saw_pending_await = true;
                 if (!ctx.await_pulse(snapshot))
