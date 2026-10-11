@@ -539,6 +539,11 @@ int oreslang_source_actor_send_variant(void* opaque,
         return 0;
     return source_send_binary(actor, wire, size);
 }
+int64_t oreslang_source_actor_tagged_i64(const uint8_t* wire, size_t size) {
+    int64_t value = 0;
+    ensure(ores_mp2_extract_tagged_i64_trusted(wire, size, &value));
+    return value;
+}
 void oreslang_source_actor_send_variant_checked(
     void* opaque, const uint8_t* wire, size_t size) {
     // A one-way source-level send must have observable failure semantics.
