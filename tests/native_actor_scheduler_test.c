@@ -33,15 +33,18 @@ int main(void) {
     OresNativeActorScheduler* scheduler =
         ores_native_actor_scheduler_open(ACTORS, EACH, 8, run, &s);
     check(scheduler != NULL);
+    check(ores_native_actor_scheduler_started_workers(scheduler) == 0);
     OresNativeActorRef refs[ACTORS];
     for (int a = 0; a < ACTORS; ++a) {
         refs[a] = ores_native_actor_scheduler_spawn(scheduler, (size_t)a);
         check(refs[a].scheduler_domain && ores_native_actor_scheduler_poll_ready(scheduler, refs[a]));
         check(!ores_native_actor_scheduler_spawn(scheduler, (size_t)a).scheduler_domain);
     }
+    check(ores_native_actor_scheduler_started_workers(scheduler) == 0);
     for (int n = 0; n < EACH; ++n)
         for (size_t a = 0; a < ACTORS; ++a)
             check(ores_native_actor_scheduler_send(scheduler, refs[a], (uint64_t)n));
+    check(ores_native_actor_scheduler_started_workers(scheduler) == 8);
     check(ores_native_actor_scheduler_drain(scheduler));
     check(atomic_load(&s.total) == ACTORS * EACH);
     check(atomic_load(&s.errors) == 0);
@@ -63,6 +66,7 @@ int main(void) {
     atomic_store(&pressure.hold, 1);
     scheduler = ores_native_actor_scheduler_open(1, 1, 2, run, &pressure);
     check(scheduler != NULL);
+    check(ores_native_actor_scheduler_started_workers(scheduler) == 0);
     OresNativeActorRef one = ores_native_actor_scheduler_spawn(scheduler, 0);
     check(one.scheduler_domain != 0);
     check(ores_native_actor_scheduler_try_send(scheduler, refs[0], 0)
@@ -71,8 +75,10 @@ int main(void) {
     stale.generation++;
     check(ores_native_actor_scheduler_try_send(scheduler, stale, 0)
           == ORES_NATIVE_SEND_INVALID_REF);
+    check(ores_native_actor_scheduler_started_workers(scheduler) == 0);
     check(ores_native_actor_scheduler_try_send(scheduler, one, 0)
           == ORES_NATIVE_SEND_ACCEPTED);
+    check(ores_native_actor_scheduler_started_workers(scheduler) == 2);
     /* The admitted or queued first item consumes the full capacity. */
     check(ores_native_actor_scheduler_try_send(scheduler, one, 1)
           == ORES_NATIVE_SEND_MAILBOX_FULL);
