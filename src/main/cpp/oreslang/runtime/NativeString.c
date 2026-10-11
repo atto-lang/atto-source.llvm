@@ -102,3 +102,99 @@ void oreslang_string_drop(OreslangNativeString* p) {
     if (!p) return;
     free(p->data);p->data=NULL;p->byte_length=0;
 }
+
+
+/* Strict, bounded JSON string decoding into an owned UTF-8 buffer.
+ * The caller retains ownership of the input and must drop the output.
+ */
+static int json_hex_nibble(unsigned char c) {
+    if (c >= '0' && c <= '9') return (int)(c - '0');
+    if (c >= 'a' && c <= 'f') return (int)(c - 'a' + 10);
+    if (c >= 'A' && c <= 'F') return (int)(c - 'A' + 10);
+    return -1;
+}
+static int parse_json_hex4(const unsigned char* bytes, uint64_t length,
+                           uint64_t* offset, uint32_t* cp) {
+    if (length - *offset < 4) return 0;
+    uint32_t codepoint = 0;
+    for (unsigned k = 0; k < 4; ++k) {
+        int nibble = json_hex_nibble(bytes[(*offset)++]);
+        if (nibble < 0) return 0;
+        codepoint = (codepoint << 4) | (uint32_t)nibble;
+    }
+    *cp = codepoint;
+    return 1;
+}
+static void json_emit_utf8(uint32_t cp, unsigned char* output, uint64_t* n) {
+    if (cp < 0x80) output[(*n)++] = (unsigned char)cp;
+    else if (cp < 0x800) {
+        output[(*n)++] = (unsigned char)(0xc0 | (cp >> 6));
+        output[(*n)++] = (unsigned char)(0x80 | (cp & 0x3f));
+    } else if (cp < 0x10000) {
+        output[(*n)++] = (unsigned char)(0xe0 | (cp >> 12));
+        output[(*n)++] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
+        output[(*n)++] = (unsigned char)(0x80 | (cp & 0x3f));
+    } else {
+        output[(*n)++] = (unsigned char)(0xf0 | (cp >> 18));
+        output[(*n)++] = (unsigned char)(0x80 | ((cp >> 12) & 0x3f));
+        output[(*n)++] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
+        output[(*n)++] = (unsigned char)(0x80 | (cp & 0x3f));
+    }
+}
+OreslangStringStatus oreslang_string_json_unquote(const OreslangNativeString* json,
+                                                  OreslangNativeString* out) {
+    if (json == out || !empty(out)) return ORESLANG_STRING_INVALID;
+    OreslangStringStatus status = check(json);
+    if (status != ORESLANG_STRING_OK) return status;
+    const uint64_t length = json->byte_length;
+    const unsigned char* bytes = json->data;
+    if (length < 2 || bytes[0] != '"' || bytes[length - 1] != '"')
+        return ORESLANG_STRING_INVALID_JSON;
+    if (length == 2) return ORESLANG_STRING_OK;
+    /* Decoding never expands the JSON source length. An escaped surrogate
+       pair consumes 12 source bytes and emits four UTF-8 bytes. */
+    unsigned char* result = (unsigned char*)malloc((size_t)(length - 2));
+    if (!result) return ORESLANG_STRING_NO_MEMORY;
+    uint64_t written = 0;
+    for (uint64_t i = 1; i < length - 1; ++i) {
+        unsigned char c = bytes[i];
+        if (c < 0x20 || c == '"') goto invalid_json;
+        if (c != '\\') {result[written++] = c; continue;}
+        if (++i >= length - 1) goto invalid_json;
+        c = bytes[i];
+        switch (c) {
+        case '"': case '\\': case '/': result[written++] = c; break;
+        case 'b': result[written++] = '\b'; break;
+        case 'f': result[written++] = '\f'; break;
+        case 'n': result[written++] = '\n'; break;
+        case 'r': result[written++] = '\r'; break;
+        case 't': result[written++] = '\t'; break;
+        case 'u': {
+            uint32_t cp;
+            ++i;
+            if (!parse_json_hex4(bytes, length - 1, &i, &cp)) goto invalid_json;
+            --i;
+            if (cp >= 0xdc00 && cp <= 0xdfff) goto invalid_json;
+            if (cp >= 0xd800 && cp <= 0xdbff) {
+                if (length - 1 - (i + 1) < 6 || bytes[i + 1] != '\\'
+                    || bytes[i + 2] != 'u') goto invalid_json;
+                i += 3;
+                uint32_t low;
+                if (!parse_json_hex4(bytes, length - 1, &i, &low)) goto invalid_json;
+                --i;
+                if (low < 0xdc00 || low > 0xdfff) goto invalid_json;
+                cp = 0x10000 + ((cp - 0xd800) << 10) + low - 0xdc00;
+            }
+            json_emit_utf8(cp, result, &written);
+            break;
+        }
+        default: goto invalid_json;
+        }
+    }
+    out->data = result;
+    out->byte_length = written;
+    return ORESLANG_STRING_OK;
+invalid_json:
+    free(result);
+    return ORESLANG_STRING_INVALID_JSON;
+}
