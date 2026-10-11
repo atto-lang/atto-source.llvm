@@ -27,10 +27,10 @@ The canonical contract, effect-classification rules, alias checks and negative-t
 
 ## Ownership and borrow checker parity gate
 
-The LLVM frontend currently parses a deliberately narrow i64-only subset and
-does **not** lower Java's `rt borrow`, `rt borrow mut`, `rt take`,
-`rt copy`, `rt share`, borrowed parameters, structural read loans, or
-actor-owned memory. The native runtime's thread/arena helpers do not make this
+The LLVM frontend parses a deliberately narrow i64-only subset. It now
+lowers limited serial actor-owned i64 fields, but does **not** lower Java's
+`rt borrow`, `rt borrow mut`, `rt take`, `rt copy`, `rt share`, borrowed
+parameters, structural read loans, or general actor-owned object graphs. The native runtime's thread/arena helpers do not make this
 subset safe for move-only data or concurrent actors.
 
 Until the backend has explicit ownership provenance, lifetime scopes,
@@ -54,7 +54,7 @@ Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 | LLVM IR verification | Implemented |
 | Compile and execute native guest | Clang can link i64 main on supported host |
 | General target-specific ABI/object emission | Not implemented |
-| Actors/supervisors, async frames, channels | Not implemented |
+| Actors/supervisors, async frames, channels | i64 serial actor-field slice only; no spawn/supervision/async/channels |
 | Static select and reusable SelectPlan / DynamicSelectPlan | Not implemented; fail-closed fixtures and [parity contract](SELECT_PLAN_PARITY.md) |
 | Cycles/Ref/WeakRef, borrow checking, arenas | Not implemented |
 | HPC/HFT and isolation | Not implemented |
