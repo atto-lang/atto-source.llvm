@@ -65,3 +65,28 @@ free, as well as SIGABRT rejection of foreign actor identity, stale
 turn epochs, forged slot domains, drop-with-loan, duplicate loan release,
 concurrent reentry and access after retirement. The funded workflow verifies
 exact source Git blobs before running the full CTest matrix.
+
+
+## Experimental source-level actor fields (compiler fragment)
+
+LLVM now accepts a restricted define actor NAME as ... end fragment:
+up to 4096 let/const/val FIELD: int = pure-int-expression; fields, and
+fnc/routine methods with int arguments, simple self.FIELD assignments and
+one integer return expression. The compiler rejects unknown or duplicate
+fields, reserved lifecycle symbol collisions, and unsupported syntax.
+
+Generated ores_actor_NAME_init / ores_actor_NAME_METHOD /
+ores_actor_NAME_drop are trusted **host** entrypoints. They accept an opaque
+heap pointer and flattened scheduler-issued domain/epoch arguments. No
+Oreslang source can obtain or construct heap pointers, actor identities or
+turn credentials. The real native runtime verifies provenance and epochs.
+
+Tests now include compiled LLVM IR and a linked native host harness that
+creates fields, mutates them on a subsequent carrier, and explicitly drops
+the record before quiescent heap retirement. They must execute successfully
+on a funded runner before a passed validation claim is made.
+
+Remaining limitations: no spawn/ActorGroup integration, automatic
+panic/cancellation cleanup, await continuations, FFI completion fencing,
+arbitrary class/struct layouts, non-i64 field data or general actor grammar.
+Drop remains a host lifecycle obligation, not automatic all-exit cleanup.
