@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <stdexcept>
+#include <string_view>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -206,6 +207,57 @@ std::string emit_verified_llvm_ir(const Program& source) {
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::Function*> actorInitializers;
     std::unordered_map<std::string, llvm::Function*> actorMessageHandlers;
+    // Compiler-owned nominal metadata: source order fixes callback ordinal,
+    // while the SORTED domain fingerprint fixes Java-compatible wire identity.
+    std::unordered_map<std::string, std::vector<GuestNominalCase>> taggedCases;
+    std::unordered_map<std::string, llvm::Constant*> taggedContracts;
+    std::unordered_map<std::string, llvm::Constant*> taggedIdentities;
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, llvm::Constant*>> taggedFrames;
+    llvm::IRBuilder<> constants(context);
+    auto* i32 = llvm::Type::getInt32Ty(context);
+    auto* contractTy = llvm::StructType::get(context, {ptr, ptr, ptr});
+    auto* nominalTy = llvm::StructType::get(context, {ptr, i32});
+    for (const auto& actor : source.actors) {
+        auto cases = tagged_cases(source, actor);
+        if (cases.empty()) continue;
+        std::vector<llvm::Constant*> contracts, identities;
+        const auto prefix = actor.name + ".tagged.";
+        const auto shapePtr = constants.CreateGlobalStringPtr("T[S,I]",
+            prefix + "shape", 0, &module);
+        for (std::size_t i = 0; i < cases.size(); ++i) {
+            const auto& c = cases[i];
+            const std::string symbol = prefix + std::to_string(i);
+            const auto schema = constants.CreateGlobalStringPtr(c.schema,
+                symbol + ".schema", 0, &module);
+            const auto owner = constants.CreateGlobalStringPtr(c.owner,
+                symbol + ".owner", 0, &module);
+            auto* rawHash = llvm::ConstantDataArray::get(context,
+                llvm::ArrayRef<std::uint8_t>(c.shape_hash.data(),
+                                             c.shape_hash.size()));
+            auto* hashGlobal = new llvm::GlobalVariable(module, rawHash->getType(),
+                true, llvm::GlobalValue::PrivateLinkage, rawHash, symbol + ".sha");
+            contracts.push_back(llvm::ConstantStruct::get(contractTy,
+                {schema, shapePtr, hashGlobal}));
+            identities.push_back(llvm::ConstantStruct::get(nominalTy,
+                {owner, llvm::ConstantInt::get(i32, c.tag)}));
+            const std::string wire(reinterpret_cast<const char*>(c.wire.data()),
+                                   c.wire.size());
+            taggedFrames[actor.name].emplace(c.qualified,
+                constants.CreateGlobalStringPtr(wire, symbol + ".wire", 0, &module));
+        }
+        auto* contractArray = llvm::ConstantArray::get(
+            llvm::ArrayType::get(contractTy, contracts.size()), contracts);
+        auto* identityArray = llvm::ConstantArray::get(
+            llvm::ArrayType::get(nominalTy, identities.size()), identities);
+        taggedContracts[actor.name] = new llvm::GlobalVariable(module,
+            contractArray->getType(), true, llvm::GlobalValue::PrivateLinkage,
+            contractArray, prefix + "contracts");
+        taggedIdentities[actor.name] = new llvm::GlobalVariable(module,
+            identityArray->getType(), true, llvm::GlobalValue::PrivateLinkage,
+            identityArray, prefix + "identities");
+        taggedCases.emplace(actor.name, std::move(cases));
+    }
     const std::string actorSymbolPrefix = "oreslang_actor_"
         + (source.module.empty() ? "" : source.module + "_");
     std::unordered_map<std::string, std::size_t> actorFieldCounts;
@@ -222,7 +274,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
             [&](const Function& f) { return f.name ==
                 (actor.messages_type.empty() ? "on_message" : "receive"); });
         if (method != actor.methods.end() && method->parameters.size() == 1) {
-            auto* msgType = llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false);
+            auto* msgType = taggedCases.count(actor.name)
+                ? llvm::FunctionType::get(i64, {ptr, i64, i64, i64, ptr, i64}, false)
+                : llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false);
             actorMessageHandlers.emplace(actor.name, llvm::Function::Create(
                 msgType, llvm::Function::ExternalLinkage,
                 actorSymbolPrefix + actor.name + "_"
@@ -232,6 +286,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
     const auto sourceSpawn = module.getOrInsertFunction(
         "oreslang_source_actor_spawn",
         llvm::FunctionType::get(ptr, {ptr, ptr, i64}, false));
+    const auto sourceSpawnTagged = module.getOrInsertFunction(
+        "oreslang_source_actor_spawn_tagged_variants",
+        llvm::FunctionType::get(ptr, {ptr, ptr, i64, ptr, ptr, i64}, false));
+    const auto sourceSendTaggedChecked = module.getOrInsertFunction(
+        "oreslang_source_actor_send_variant_checked",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {ptr, ptr, i64}, false));
     const auto sourceStop = module.getOrInsertFunction(
         "oreslang_source_actor_stop",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
