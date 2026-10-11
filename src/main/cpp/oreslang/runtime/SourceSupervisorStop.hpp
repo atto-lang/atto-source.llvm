@@ -36,6 +36,13 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop(
     if (plan.name.empty()) {
         throw std::invalid_argument("missing compiled supervisor name");
     }
+    // A source-level logical-child projection requires a host registry
+    // snapshot. Merely placing nonzero IDs in a typed notice is not proof
+    // of ownership or finalization. Legacy host-only STOP is narrower.
+    if (plan.targets_logical_child) {
+        throw std::invalid_argument(
+            "Failure.child STOP requires the registry-verified installer");
+    }
     return std::make_shared<SupervisorProcess>(
         supervisor_id, runtime_id, capacity,
         std::move(enqueue),
