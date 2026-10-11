@@ -130,6 +130,20 @@ int main() {
               != before.child.logical_child_id,
           "new scheduler generation was not admitted independently");
 
+    // Admission rollback retires an ACTIVE child without pretending its
+    // physical actor finalized. Preserve the scheduler-generation fence.
+    const auto attempted_actor = OresNativeActorRef{42, 90, 1};
+    const auto attempted = registry.register_child(attempted_actor);
+    must_reject([&] {
+        registry.detach_active(attempted.child, OresNativeActorRef{42, 90, 2}, 1);
+    });
+    registry.detach_active(attempted.child, attempted_actor, 1);
+    must_reject([&] { registry.snapshot(attempted.child); });
+    must_reject([&] { registry.register_child(attempted_actor); });
+    const auto fresh = registry.register_child(OresNativeActorRef{42, 90, 2});
+    check(fresh.child.logical_child_id != attempted.child.logical_child_id,
+          "admission rollback recycled logical child ID");
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
