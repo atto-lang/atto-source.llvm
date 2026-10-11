@@ -66,8 +66,22 @@ struct ActorDecl {
     std::size_t offset = 0;
 };
 
+// Restricted source-level actor driver. The compiler produces a yielding
+// native continuation for the exact spawn/ready/call/stop/done sequence,
+// rather than a blocking thread-per-await. No general actor references,
+// nested function calls or source FFI escapes are supported yet.
+struct ActorScript {
+    std::string actor_name;
+    std::string worker_name;
+    std::string method;
+    std::unique_ptr<Expression> argument;
+    bool await_spawn = false;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::unique_ptr<ActorDecl> actor;
+    std::unique_ptr<ActorScript> script;
     std::string module;
     std::vector<Function> functions;
 };
