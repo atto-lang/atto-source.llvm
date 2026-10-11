@@ -168,6 +168,7 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     int64_t result;
+    int is_pipeline_backward = 0;
     if (instance->on_wire || instance->on_variant) {
         SourceWireDelivery* accepted = (SourceWireDelivery*)(uintptr_t)payload;
         ensure(accepted && accepted->packet.bytes && accepted->packet.size);
@@ -191,16 +192,7 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         size_t before = atomic_fetch_sub_explicit(
             &instance->wire_reserved, 1, memory_order_acq_rel);
         ensure(before > 0);
-        if (direction == 2) {
-            group_lock();
-            if (group.pipeline_source == instance) {
-                ensure(!group.pipeline_done);
-                group.pipeline_result = result;
-                group.pipeline_done = 1;
-                ensure(pthread_cond_signal(&group.pipeline_completed) == 0);
-            }
-            group_unlock();
-        }
+        is_pipeline_backward = direction == 2;
     } else {
         result = instance->on_message(instance->heap, turn.domain,
                                       turn.epoch, (int64_t)payload);
@@ -208,6 +200,18 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     }
     atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
+    /* Completion is published only AFTER the DATA finalizer, actor-state
+     * release, and processed-result publication have all completed. */
+    if (is_pipeline_backward) {
+        group_lock();
+        if (group.pipeline_source == instance) {
+            ensure(!group.pipeline_done);
+            group.pipeline_result = result;
+            group.pipeline_done = 1;
+            ensure(pthread_cond_signal(&group.pipeline_completed) == 0);
+        }
+        group_unlock();
+    }
 }
 /* Compiler contracts are stable for the duration of the construction
  * call, but not necessarily afterwards. Validate only our own immutable
@@ -715,6 +719,8 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
         ensure(status == 0);
     }
     ensure(group.pipeline_result == expected);
+    ensure(atomic_load_explicit(&actor->processed, memory_order_acquire) == 2);
+    ensure(atomic_load_explicit(&actor->last_result, memory_order_acquire) == expected);
     const uint64_t forwards = atomic_load_explicit(
         &group.pipeline_forward_count, memory_order_acquire);
     const uint64_t backwards = atomic_load_explicit(
