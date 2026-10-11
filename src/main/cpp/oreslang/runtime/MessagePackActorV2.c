@@ -321,6 +321,60 @@ int ores_mp2_validate_owned(const OresMp2Contract* c,
                          && *shape == 0 && r.at == owned->size;
     return valid;
 }
+/* A nominal Java enum case carries its *owner* and numeric tag inside
+ * the typed tuple. The SHA-256 tuple descriptor only verifies 'S,I,...';
+ * it cannot distinguish [Status,2,...] from [Status,3,...].
+ * Perform an independent shallow match AFTER the full, owned, typed decode.
+ * No caller-owned pointer, heap allocation or recursive re-decode is used. */
+int ores_mp2_tagged_identity_matches_validated(
+    const OresMp2Contract* c, const OresMp2Owned* frame,
+    const char* owner, uint32_t declared_tag) {
+    if (!c || !frame || !frame->bytes || !c->shape || !owner
+            || declared_tag == 0 || declared_tag > INT32_MAX
+            || frame->size > ORES_MP2_MAX_BYTES || frame->size < 40)
+        return 0;
+    if (strncmp(c->shape, "T[S,I", 5) != 0
+            || (c->shape[5] != ']' && c->shape[5] != ','))
+        return 0;
+    const size_t arity = c->shape[5] == ']' ? 2 : 3;
+    size_t owner_len = 0;
+    while (owner_len <= 256 && owner[owner_len]) ++owner_len;
+    if (!owner_len || owner_len > 256) return 0;
+    Reader r = {frame->bytes, frame->size, 0, 0};
+    size_t n, schema_len, actual_owner_len;
+    uint8_t version, kind;
+    const uint8_t* schema;
+    const uint8_t* digest;
+    const uint8_t* actual_owner;
+    if (!array_header(&r, &n) || n != 4
+            || !octet(&r, &version) || version != 2
+            || !string(&r, &schema, &schema_len)
+            || !octet(&r, &kind) || kind != 0xc4
+            || !octet(&r, &kind) || kind != 32
+            || !take(&r, 32, &digest)
+            || !array_header(&r, &n) || n != arity
+            || !string(&r, &actual_owner, &actual_owner_len)
+            || actual_owner_len != owner_len
+            || memcmp(actual_owner, owner, owner_len) != 0)
+        return 0;
+    /* Canonical MessagePack integer classes supported by Java's positive
+     * signed-32 enum tag encoder. Wider, negative, or non-minimal values are
+     * never valid declared enum tags even though the scalar I shape can
+     * represent them. */
+    uint8_t tag_class;
+    uint64_t number;
+    if (!octet(&r, &tag_class)) return 0;
+    if (tag_class >= 1 && tag_class <= 127) number = tag_class;
+    else if (tag_class == 0xcc) {
+        if (!uint_be(&r, 1, &number) || number <= 127) return 0;
+    } else if (tag_class == 0xcd) {
+        if (!uint_be(&r, 2, &number) || number <= 255) return 0;
+    } else if (tag_class == 0xce) {
+        if (!uint_be(&r, 4, &number)
+                || number <= 65535 || number > INT32_MAX) return 0;
+    } else return 0;
+    return number == declared_tag;
+}
 int ores_mp2_validate_copy(const OresMp2Contract* c,
                            const uint8_t* bytes, size_t size,
                            OresMp2Owned* out) {
