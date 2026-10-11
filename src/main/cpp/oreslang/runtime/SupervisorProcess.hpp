@@ -64,11 +64,17 @@ public:
     /**
      * Completes one suspended policy. Can be called from any completion
      * thread, but resolution and decision sink execute only in the scheduled
-     * continuation. A second resume is rejected until the first is admitted.
+     * continuation. A second/stale-epoch resume is rejected until the first
+     * is admitted. A caller must wait for suspension before calling resume.
      */
-    bool resume(Directive decision) noexcept {
+    bool resume(std::uint64_t expected_epoch, Directive decision) noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (!suspended_ || resume_enqueued_ || failed_ || closed_) return false;
+        // Every new failure callback owns a fresh continuation generation.
+        // Without this fence a late completion from a previous callback
+        // could resume the next child's failure with a stale decision.
+        if (!expected_epoch || expected_epoch != epoch_
+            || !suspended_ || resume_enqueued_ || failed_ || closed_)
+            return false;
         resume_enqueued_ = true;
         try {
             auto self = shared_from_this();
@@ -82,6 +88,12 @@ public:
             return false;
         }
         return true;
+    }
+
+    /** Capture during the current callback; pass unchanged to resume(). */
+    std::uint64_t current_epoch() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return active_ && !failed_ && !closed_ ? epoch_ : 0;
     }
 
     std::size_t pending() const {
@@ -115,6 +127,11 @@ public:
 private:
     void schedule_locked() {
         if (active_ || failed_ || closed_ || mailbox_.empty()) return;
+        if (epoch_ == UINT64_MAX) {
+            fail_locked();
+            return;
+        }
+        ++epoch_;
         active_ = true;
         try {
             auto self = shared_from_this();
@@ -202,6 +219,7 @@ private:
     bool resume_enqueued_ = false;
     bool failed_ = false;
     bool closed_ = false;
+    std::uint64_t epoch_ = 0;
     std::size_t resolved_ = 0;
     std::size_t undelivered_ = 0;
 };
