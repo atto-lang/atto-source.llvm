@@ -273,13 +273,24 @@ void validate_i64_ownership(const Program& program) {
                 check_call(*stmt.expression, locals, functions);
             }
         }
+        const Locals cfg_entry = locals;
+        // Analyze each taken return independently. Even an explicit scalar
+        // rt take in one return branch does not move that value in the
+        // fallthrough path, which has a different live ownership state.
+        for (const auto& guard : function.early_returns) {
+            check_pure_guard(*guard.lhs, locals, functions);
+            check_pure_guard(*guard.rhs, locals, functions);
+            Locals taken = locals;
+            check_value(*guard.result, taken, functions);
+        }
+        if (function.result) check_value(*function.result, locals, functions);
         // Build the real guarded-return edge graph and run the reusable
         // field-sensitive fixed-point verifier. This currently models the
         // admitted return-only source CFG. The lattice also handles general
         // diamonds and loops (tested separately), but does not admit new
         // branch-local constructors, exceptional edges or suspension yet.
         ownership::Graph cfg;
-        for (const auto& item : locals) {
+        for (const auto& item : cfg_entry) {
             const auto& name = item.first;
             const auto& owner = item.second;
             ownership::PlaceState state;
@@ -298,8 +309,8 @@ void validate_i64_ownership(const Program& program) {
         std::function<void(const Expression&, Ops&)> add_effects;
         add_effects = [&](const Expression& expr, Ops& operations) {
             if (expr.kind == Expression::Kind::Variable) {
-                const auto found = locals.find(expr.name);
-                const bool object = found != locals.end() && !found->second.class_name.empty();
+                const auto found = cfg_entry.find(expr.name);
+                const bool object = found != cfg_entry.end() && !found->second.class_name.empty();
                 operations.push_back({object ? OpKind::ReadObject : OpKind::Read, expr.name});
                 return;
             }
@@ -333,16 +344,7 @@ void validate_i64_ownership(const Program& program) {
             add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
         ownership::verify(cfg);
 
-        // Analyze each taken return independently. Even an explicit scalar
-        // rt take in one return branch does not move that value in the
-        // fallthrough path, which has a different live ownership state.
-        for (const auto& guard : function.early_returns) {
-            check_pure_guard(*guard.lhs, locals, functions);
-            check_pure_guard(*guard.rhs, locals, functions);
-            Locals taken = locals;
-            check_value(*guard.result, taken, functions);
-        }
-        if (function.result) check_value(*function.result, locals, functions);
+
     }
 }
 
