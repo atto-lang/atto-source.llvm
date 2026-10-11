@@ -430,15 +430,6 @@ int ores_mp2_group_contract(OresMp2ActorGroup* g, size_t slot,
     size_t shape_len = bounded_len(contract.shape, 4096);
     if (!schema_len || schema_len > 256 || !shape_len || shape_len > 4096)
         return 0;
-    for (size_t i = 0; i < schema_len; ++i) {
-        unsigned char c = (unsigned char)contract.schema_id[i];
-        if (c < 33 || c > 126) return 0;
-    }
-    const char* end = contract.shape;
-    if (!valid_shape(&end, 0) || *end) return 0;
-    uint8_t computed[32];
-    if (!canonical_shape_sha256(contract.shape, shape_len, computed)
-            || memcmp(computed, contract.shape_sha256, 32) != 0) return 0;
     char* schema = malloc(schema_len + 1);
     char* shape = malloc(shape_len + 1);
     if (!schema || !shape) {
@@ -447,8 +438,18 @@ int ores_mp2_group_contract(OresMp2ActorGroup* g, size_t slot,
     }
     memcpy(schema, contract.schema_id, schema_len + 1);
     memcpy(shape, contract.shape, shape_len + 1);
+    uint8_t pinned_sha[32];
+    memcpy(pinned_sha, contract.shape_sha256, sizeof(pinned_sha));
+    OresMp2Contract copied = {schema, shape, pinned_sha};
+    if (!ores_mp2_contract_valid(&copied)) {
+        free(schema);
+        free(shape);
+        memset(pinned_sha, 0, sizeof(pinned_sha));
+        return 0;
+    }
     OwnedContract* owner = &g->contracts[slot];
-    memcpy(owner->owned_sha, contract.shape_sha256, 32);
+    memcpy(owner->owned_sha, pinned_sha, sizeof(pinned_sha));
+    memset(pinned_sha, 0, sizeof(pinned_sha));
     owner->owned_schema = schema;
     owner->owned_shape = shape;
     owner->value = (OresMp2Contract){schema, shape, owner->owned_sha};
