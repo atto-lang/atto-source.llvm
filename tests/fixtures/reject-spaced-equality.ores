@@ -1,0 +1,9 @@
+// A Java-compatible equality operator is a single token.
+// 'x = = 1' must not be accepted as the '==' compatibility alias.
+pub fnc main(): int {
+  const value: int = 1;
+  if (value = = 1) {
+    return 42;
+  } fi
+  return 0;
+}
