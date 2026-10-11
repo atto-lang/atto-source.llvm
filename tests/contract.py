@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--clang")
     parser.add_argument("--native-runtime", action="append")
     parser.add_argument("--native-harness")
+    parser.add_argument("--native-harness-cxx")
     args = parser.parse_args()
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
@@ -45,6 +46,18 @@ def main():
             ])
         if args.native_harness:
             clang_args.extend(["-x", "c", args.native_harness, "-pthread"])
+        if args.native_harness_cxx:
+            assert args.native_runtime, "C++ harness needs native runtime includes"
+            native_source = pathlib.Path(args.native_runtime[0])
+            cxx_object = str(pathlib.Path(directory) / "actor-group-host.o")
+            host_build = subprocess.run(
+                [args.clang, "-x", "c++", "-std=c++17", "-c",
+                 args.native_harness_cxx, "-I", str(native_source.parents[2]),
+                 "-pthread", "-o", cxx_object],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            assert host_build.returncode == 0, host_build.stderr
+            clang_args.extend(["-x", "none", cxx_object, "-pthread", "-lstdc++"])
         clang_args.extend(["-o", executable])
         native = subprocess.run(
             clang_args, input=compile_result.stdout,
