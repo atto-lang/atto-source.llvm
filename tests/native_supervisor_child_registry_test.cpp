@@ -163,9 +163,27 @@ int main() {
     check(registry.snapshot(stop_child.child).phase
                   == SupervisorChildRegistry::Phase::stopping,
           "forged STOP acknowledgment released a lifecycle reservation");
+    using Receipt = SupervisorChildRegistry::StopReceiptStatus;
+    check(registry.stop_receipt(stop_child.child).status == Receipt::pending,
+          "STOP reservation did not create PENDING host receipt");
+    must_reject([&] { registry.commit_stop(stop_child.child, stop_actor, 1, 44); });
+    registry.record_stop_uncertain(stop_child.child, stop_actor, 1, 44);
+    check(registry.stop_receipt(stop_child.child).status == Receipt::uncertain,
+          "ambiguous native STOP callback was not recorded");
+    must_reject([&] { registry.begin_restart(stop_child.child, stop_actor, 1); });
+    // The trusted lifecycle owner independently confirms the old turn's
+    // external outcome; UNKNOWN alone is not a successful acknowledgment.
+    must_reject([&] {
+        registry.record_stop_applied(stop_child.child, stop_actor, 1, 45);
+    });
+    registry.record_stop_applied(stop_child.child, stop_actor, 1, 44);
+    check(registry.stop_receipt(stop_child.child).status == Receipt::applied,
+          "host proof did not advance exact reserved STOP receipt");
     auto committed = registry.commit_stop(stop_child.child, stop_actor, 1, 44);
     check(committed.phase == SupervisorChildRegistry::Phase::stopped,
           "authoritative STOP acknowledgment failed");
+    check(registry.stop_receipt(stop_child.child).status == Receipt::acknowledged,
+          "committed STOP lacks ACKNOWLEDGED host receipt");
     must_reject([&] { registry.commit_stop(stop_child.child, stop_actor, 1, 44); });
     must_reject([&] { registry.begin_restart(stop_child.child, stop_actor, 1); });
 
