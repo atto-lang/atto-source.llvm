@@ -149,6 +149,9 @@ struct Program {
 struct StopOnlySupervisor {
     std::string name;
     std::string module;
+    // True only when the source passes its own typed Failure binder to STOP.
+    // This does not expose an arbitrary ActorRef or stable logical child ID.
+    bool explicitly_bound_failure = false;
 };
 StopOnlySupervisor parse_stop_only_supervisor(std::string_view source);
 
