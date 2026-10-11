@@ -25,6 +25,11 @@ typedef struct {
 } OresMp2Owned;
 enum { ORES_MP2_MAX_BYTES=1048576, ORES_MP2_MAX_NODES=100000, ORES_MP2_MAX_DEPTH=64 };
 
+/* Recompute and check schema/shape digest independently of the caller.
+ * The declaration must come from trusted compiler-owned source metadata.
+ */
+int ores_mp2_contract_valid(const OresMp2Contract* contract);
+
 int ores_mp2_validate_copy(const OresMp2Contract* contract,
                            const uint8_t* bytes, size_t size, OresMp2Owned* out);
 void ores_mp2_owned_release(OresMp2Owned* value);
