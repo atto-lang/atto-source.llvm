@@ -31,12 +31,19 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 // can escape as a result:
 // native functions return only i64, and the ownership pass restricts rt borrow
 // to nonescaping call arguments.
+struct RegionMoveLowering {
+    llvm::Value* region = nullptr;
+    llvm::FunctionCallee drop;
+    const std::unordered_map<std::string, llvm::Value*>* live_flags = nullptr;
+};
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
                    const std::unordered_map<std::string, llvm::Value*>& storage,
                    const std::unordered_map<std::string, llvm::Value*>& field_storage,
-                   const std::unordered_map<std::string, llvm::Function*>& functions) {
+                   const std::unordered_map<std::string, llvm::Function*>& functions,
+                   const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
@@ -50,31 +57,46 @@ llvm::Value* lower(const Expression& expr,
             // Only addressable named parameters are admitted by OwnershipChecker.
             return storage.at(expr.left->name);
         case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions), "neg");
+            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
         case Expression::Kind::Copy:
-        case Expression::Kind::Take:
         case Expression::Kind::Share:
-            // These remain primitive value operations, never graph references.
-            return lower(*expr.left, builder, i64, storage, field_storage, functions);
+            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+        case Expression::Kind::Take: {
+            // Native owned-int transfer reads the scalar before destroying
+            // the old heap allocation. It then disables the exit-time drop.
+            // Field takes of trivially destructible i64 stay simple loads.
+            if (moves && moves->live_flags && expr.left &&
+                    expr.left->kind == Expression::Kind::Variable) {
+                const auto found = moves->live_flags->find(expr.left->name);
+                if (found != moves->live_flags->end()) {
+                    llvm::Value* value = lower(*expr.left, builder, i64,
+                        storage, field_storage, functions, moves);
+                    builder.CreateCall(moves->drop, {moves->region, storage.at(expr.left->name)});
+                    builder.CreateStore(builder.getFalse(), found->second);
+                    return value;
+                }
+            }
+            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+        }
         case Expression::Kind::Add: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
-                arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions));
+                arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
             llvm::Function* callee = functions.at(expr.name);
             return builder.CreateCall(callee, arguments,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
@@ -241,11 +263,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
         struct LocalSlot {
+            std::string name;
             llvm::Value* address;
             bool heap_owned;
             std::uint64_t bytes;
         };
         std::vector<LocalSlot> lexical_slots;
+        std::unordered_map<std::string, llvm::Value*> owned_live_flags;
         const auto heap_count = std::count_if(fn.locals.begin(), fn.locals.end(),
             [](const LocalBinding& b) { return b.heap_owned; });
         llvm::Value* region = nullptr;
@@ -253,6 +277,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             region = builder.CreateCall(regionOpen,
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
+        const RegionMoveLowering region_moves{region, regionDrop, &owned_live_flags};
         for (const auto& binding : fn.locals) {
             if (binding.new_class || binding.move_class) {
                 llvm::StructType* shape = class_types.at(binding.class_name);
@@ -276,30 +301,34 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     field_storage.emplace(field_key(binding.name, item.name), address);
                 }
                 storage.emplace(binding.name, slot);
-                lexical_slots.push_back({slot, false, bytes});
+                lexical_slots.push_back({binding.name, slot, false, bytes});
                 continue;
             }
-            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations);
+            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
                 slot = builder.CreateCall(regionNew, {region, initial}, binding.name + ".heap.owned");
+                llvm::Value* live = builder.CreateAlloca(builder.getInt1Ty(), nullptr,
+                    binding.name + ".owned.live");
+                builder.CreateStore(builder.getTrue(), live);
+                owned_live_flags.emplace(binding.name, live);
             } else {
                 slot = builder.CreateAlloca(i64, nullptr, binding.name + ".stack.owned");
                 builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
                 builder.CreateStore(initial, slot);
             }
             storage.emplace(binding.name, slot);
-            lexical_slots.push_back({slot, binding.heap_owned, 8});
+            lexical_slots.push_back({binding.name, slot, binding.heap_owned, 8});
         }
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
             if (effect.kind == Statement::Kind::FieldWrite) {
                 llvm::Value* updated = lower(*effect.expression, builder, i64,
-                    storage, field_storage, declarations);
+                    storage, field_storage, declarations, &region_moves);
                 builder.CreateStore(updated, field_storage.at(
                     field_key(effect.receiver, effect.field)));
             } else if (effect.kind == Statement::Kind::Call) {
-                lower(*effect.expression, builder, i64, storage, field_storage, declarations);
+                lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
             } else {
                 throw std::runtime_error("unsupported native conditional arm");
             }
@@ -311,9 +340,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             }
             if (stmt.kind == Statement::Kind::Conditional) {
                 llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
-                    storage, field_storage, declarations);
+                    storage, field_storage, declarations, &region_moves);
                 llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
-                    storage, field_storage, declarations);
+                    storage, field_storage, declarations, &region_moves);
                 llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "if.else.eq");
                 llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
                     context, "if.then", function);
@@ -341,7 +370,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         for (const auto& action : fn.actor_actions) {
             if (action.kind == ActorAction::Kind::Send) {
                 const auto& send = fn.actor_sends.at(action.index);
-                llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations);
+                llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
             } else {
                 builder.CreateCall(sourceStop, {actorRefs.at(fn.actor_stops.at(action.index))});
@@ -357,41 +386,58 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
                 const Statement& cleanup = **it;
                 if (cleanup.receiver.empty()) {
-                    lower(*cleanup.expression, builder, i64, storage, field_storage, declarations);
+                    lower(*cleanup.expression, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
                 } else {
-                    // The return value was lowered into an LLVM SSA value
-                    // before entering this cleanup block. Changing the
-                    // referent's field cannot replace that pending result.
+                    // The return value was evaluated into SSA before cleanup,
+                    // so modifying the referent cannot change its snapshot.
                     llvm::Value* updated = lower(*cleanup.expression, builder, i64,
-                        storage, field_storage, declarations);
+                        storage, field_storage, declarations, &region_moves);
                     builder.CreateStore(updated, field_storage.at(
                         field_key(cleanup.receiver, cleanup.field)));
                 }
             }
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
-                if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
-                else builder.CreateLifetimeEnd(it->address,
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
+                if (it->heap_owned) {
+                    // Conditional native destruction is backed by an actual
+                    // i1 live flag: moved allocations have already dropped.
+                    llvm::Value* flag = owned_live_flags.at(it->name);
+                    llvm::Value* live = builder.CreateLoad(builder.getInt1Ty(), flag,
+                        it->name + ".drop.if.live");
+                    llvm::BasicBlock* do_drop = llvm::BasicBlock::Create(
+                        context, it->name + ".drop.yes", function);
+                    llvm::BasicBlock* after_drop = llvm::BasicBlock::Create(
+                        context, it->name + ".drop.next", function);
+                    builder.CreateCondBr(live, do_drop, after_drop);
+                    builder.SetInsertPoint(do_drop);
+                    builder.CreateCall(regionDrop, {region, it->address});
+                    builder.CreateStore(builder.getFalse(), flag);
+                    builder.CreateBr(after_drop);
+                    builder.SetInsertPoint(after_drop);
+                } else {
+                    builder.CreateLifetimeEnd(it->address,
+                        llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
+                }
             }
             if (region != nullptr) builder.CreateCall(regionClose, {region});
             if (fn.returns_void) builder.CreateRetVoid();
             else builder.CreateRet(value);
         };
         for (const auto& guard : fn.early_returns) {
-            llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage, declarations);
-            llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage, declarations);
+            llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage, declarations, &region_moves);
+            llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage, declarations, &region_moves);
             llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
             llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
             llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
             builder.CreateCondBr(equal, taken, next);
             builder.SetInsertPoint(taken);
             llvm::Value* selected = lower(*guard.result, builder, i64,
-                storage, field_storage, declarations);
+                storage, field_storage, declarations, &region_moves);
             emit_cleanup_return(selected);
             builder.SetInsertPoint(next);
         }
         llvm::Value* result = fn.result
-            ? lower(*fn.result, builder, i64, storage, field_storage, declarations) : nullptr;
+            ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
         emit_cleanup_return(result);
     }
 

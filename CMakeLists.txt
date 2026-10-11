@@ -58,6 +58,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
+    # Field-wise native destruction verifier and concrete owner flags.
+    # Separate from unsupported source-level nontrivial class drop glue.
+    add_executable(oreslang-ownership-drop-plan-test
+        tests/ownership_drop_plan_test.cpp)
+    target_include_directories(oreslang-ownership-drop-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-ownership-drop-plan-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_cfg_exact_once_field_destruction
+        COMMAND oreslang-ownership-drop-plan-test)
     add_executable(oreslang-dop-kernel-test tests/dop_kernel_lowering_test.cpp)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -102,8 +112,7 @@ if(BUILD_TESTING)
         --diagnostic "native defer requires a direct function call")
     oreslang_contract_test(reject_native_defer_moved_return native-defer-moved-after-return.ores
         --diagnostic "borrow of explicitly moved int")
-    # Deferred mutation of an owned class field must run after the selected
-    # i64 return is captured, without changing its pending value.
+    # Native return snapshot is immutable under subsequent deferred field cleanup.
     if(ORE_CLANG)
         oreslang_contract_test(native_defer_field_return_snapshot native-defer-field-return.ores
             --ir "return.guard.eq" --run 222 --clang "${ORE_CLANG}")
@@ -114,8 +123,6 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_native_defer_field_moved_return
         native-defer-field-moved-after-return-reject.ores
         --diagnostic "not definitely initialized")
-    # Fail closed: native returns are snapshots, never mutable bindings.
-    # Unsupported finally is not silently lowered as a no-op cleanup.
     oreslang_contract_test(reject_native_deferred_return_rebinding
         native-defer-return-rebinding-reject.ores
         --diagnostic "native defer requires a direct function call or class field assignment")
@@ -374,6 +381,26 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_field_move_admission.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_field_and_region_move_admission PROPERTIES TIMEOUT 90)
+    # Executable transfer + exact-once conditional owned-region drop flags.
+    # Wasm has no native region ABI; unsafe transfers must reject with no IR.
+    if(ORE_CLANG)
+        add_test(NAME native_owned_region_conditional_drop_matrix
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/owned_region_conditional_drop_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        set_tests_properties(native_owned_region_conditional_drop_matrix PROPERTIES TIMEOUT 240)
+        add_test(NAME native_owned_region_conditional_drop_sanitized
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/owned_region_conditional_drop_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" --sanitize)
+        set_tests_properties(native_owned_region_conditional_drop_sanitized PROPERTIES TIMEOUT 240)
+    endif()
     oreslang_contract_test(class_reject_byvalue_mutation class-mutation-byvalue-reject.ores --diagnostic "ownership violation")
     # This is the *exact same Git blob* as the Java/Graal conformance
     # source (contracts/v1/semantics/fixtures/ownership.ores), not a
@@ -395,6 +422,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(class_reject_nonint_nested_field class-multifield-nonint-field-reject.ores --diagnostic "expected 'int'")
     oreslang_contract_test(class_reject_shared_write_secondary class-multifield-shared-write-reject.ores --diagnostic "ownership violation")
     oreslang_contract_test(class_reject_overlap_across_fields class-multifield-overlap-reject.ores --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(class_reject_immutable_exclusive_loan class-immutable-owner-mut-borrow-reject.ores --diagnostic "cannot mutably borrow immutable owner")
+    oreslang_contract_test(class_reject_immutable_owner_field_write class-immutable-owner-field-write-reject.ores --diagnostic "class mutation requires let mut owner")
     oreslang_contract_test(class_reject_unknown_secondary_field class-multifield-unknown-field-reject.ores --diagnostic "unknown class field")
     oreslang_contract_test(class_reject_byvalue_multifield_move class-multifield-byvalue-reject.ores --diagnostic "ownership violation")
     oreslang_contract_test(class_reject_taken_field_reuse class-field-use-after-take-reject.ores --diagnostic "ownership violation")

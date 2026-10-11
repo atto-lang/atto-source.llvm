@@ -19,6 +19,7 @@ struct LocalOwnership {
     Mode mode = Mode::Value;
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
+    bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -78,6 +79,9 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     // into a mutable one. Its new loan ends at that nested call's return.
     if (source.mode == Mode::Borrow && exclusive)
         reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
+    if (exclusive && source.mode == Mode::Value &&
+            !source.class_name.empty() && !source.mutable_owner)
+        reject(expr, "cannot mutably borrow immutable owner '" + expr.left->name + "'");
     if (source.moved)
         reject(expr, (source.class_name.empty()
             ? "borrow of explicitly moved int '" : "ownership violation: borrow of moved class '")
@@ -167,12 +171,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 LocalOwnership& source = local(*expr.left, locals);
                 if (source.mode != Mode::Value)
                     reject(expr, "cannot rt take through a borrowed parameter");
-                // A region-owned scalar is still dropped unconditionally on
-                // every CFG return edge. Until an ownership transfer ABI and
-                // path-local drop flags exist, taking it would silently run
-                // a destructor for a logically moved-out owned allocation.
-                if (source.heap_owned)
-                    reject(expr, "ownership violation: owned int take requires transfer/drop lowering");
+                // Experimental native owned-i64 values transfer the scalar,
+                // drop their old heap slot immediately and disarm the
+                // generated exit-time drop flag. The emitted native backend
+                // must keep that conditional flag in sync with this move.
                 if (source.exclusive_loan || source.shared_loans != 0)
                     reject(expr, "cannot move int while borrow is active");
                 source.moved = true;
@@ -267,6 +269,7 @@ void validate_i64_ownership(const Program& program) {
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
+            entry.mutable_owner = binding.owner_mutable;
             entry.class_name = binding.class_name;
             if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
@@ -294,6 +297,8 @@ void validate_i64_ownership(const Program& program) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
                 if (recv.mode == Mode::Borrow)
                     throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
+                if (recv.mode == Mode::Value && !recv.mutable_owner)
+                    throw std::runtime_error("ownership violation: class mutation requires let mut owner");
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
                 check_value(*stmt.expression, state, functions);
@@ -350,24 +355,20 @@ void validate_i64_ownership(const Program& program) {
         auto check_deferred_exit = [&](Locals& path) {
             for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
                 const Statement& cleanup = **it;
-                if (cleanup.receiver.empty()) check_call(*cleanup.expression, path, functions);
-                else {
-                    Statement field_write;
-                    field_write.kind = Statement::Kind::FieldWrite;
-                    field_write.offset = cleanup.offset;
-                    field_write.receiver = cleanup.receiver;
-                    field_write.field = cleanup.field;
-                    // Use the same field-write ownership rules as an ordinary
-                    // statement, without moving an owning return binding.
-                    auto& recv = checked_field(field_write.receiver,
-                        field_write.field, field_write.offset, path);
-                    if (recv.mode == Mode::Borrow)
-                        throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
-                    if (recv.exclusive_loan || recv.shared_loans != 0)
-                        throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
-                    check_value(*cleanup.expression, path, functions);
-                    recv.moved_fields.erase(field_write.field);
+                if (cleanup.receiver.empty()) {
+                    check_call(*cleanup.expression, path, functions);
+                    continue;
                 }
+                auto& recv = checked_field(cleanup.receiver, cleanup.field,
+                                           cleanup.offset, path);
+                if (recv.mode == Mode::Borrow)
+                    throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
+                if (recv.mode == Mode::Value && !recv.mutable_owner)
+                    throw std::runtime_error("ownership violation: class mutation requires let mut owner");
+                if (recv.exclusive_loan || recv.shared_loans != 0)
+                    throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
+                check_value(*cleanup.expression, path, functions);
+                recv.moved_fields.erase(cleanup.field);
             }
         };
         const Locals cfg_entry = locals;
@@ -443,11 +444,8 @@ void validate_i64_ownership(const Program& program) {
                 add_effects(*argument, operations);
         };
         auto add_cleanup_effects = [&](const Statement& cleanup, Ops& operations) {
-            if (!cleanup.receiver.empty()) {
-                // The deferred field's receiver must still be owned when the
-                // selected return value has already been evaluated.
+            if (!cleanup.receiver.empty())
                 operations.push_back({OpKind::Read, cleanup.receiver + "." + cleanup.field});
-            }
             add_effects(*cleanup.expression, operations);
         };
         const std::size_t guard_count = function.early_returns.size();
@@ -467,6 +465,15 @@ void validate_i64_ownership(const Program& program) {
             add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
         for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
             add_cleanup_effects(**it, cfg.blocks[guard_count * 2].operations);
+        // Every reachable terminal CFG path must end with an explicit
+        // conditional drop of the experimental heap-owned places. The
+        // emitter backs each DropIfOwned with a runtime live flag; scalar
+        // stack locals and trivially destructible class fields need none.
+        for (auto& block : cfg.blocks)
+            if (block.successors.empty())
+                for (const auto& entry : cfg_entry)
+                    if (entry.second.heap_owned)
+                        block.operations.push_back({OpKind::DropIfOwned, entry.first});
         ownership::verify(cfg);
 
     }

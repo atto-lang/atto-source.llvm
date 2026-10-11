@@ -3,7 +3,7 @@
 
 The bounded native class layout contains only trivially destructible i64
 fields. Explicit field moves invalidate their place until reassignment;
-unsafe whole-object borrows, double takes and region-owned transfers still
+unsafe whole-object borrows and double takes still
 fail with no LLVM IR.
 """
 import argparse
@@ -45,7 +45,7 @@ def main():
             decl = ("define class Record as\n" +
                     "".join(f"  pub let int f{i} = {i + 1};\n"
                             for i in range(count)) + "end\n")
-            head = "pub fnc main(): int {\n  let Record p = new Record();\n"
+            head = "pub fnc main(): int {\n  let mut Record p = new Record();\n"
             for result in (
                 "  return rt take p.f0 + 41;\n",
                 "  if (p.f0 eq 1) { return rt take p.f0 + 41; } fi\n"
@@ -85,8 +85,9 @@ def main():
             "  if (x eq 42) { return rt take x; } fi\n  return x;\n",
             "  const value: int = rt take x;\n  return value;\n",
         ):
-            check(owned + body + "}\n",
-                  "owned int take requires transfer/drop lowering", experimental=True)
+            # Native owned-int transfers now have checked conditional
+            # drop flags and release the moved-from region slot exactly once.
+            check(owned + body + "}\n", experimental=True)
         check(owned + "  return x;\n}\n", experimental=True)
         check("pub fnc main(): int {\n  const x: int = 42;\n"
               "  return rt take x;\n}\n")
