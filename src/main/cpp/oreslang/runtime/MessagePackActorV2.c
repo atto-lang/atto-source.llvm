@@ -375,6 +375,64 @@ int ores_mp2_tagged_identity_matches_validated(
     } else return 0;
     return number == declared_tag;
 }
+/* This helper may only consume wire bytes from a completed, pinned
+ * nominal contract validation. It never accepts an arbitrary schema in
+ * place of the registration gate. Re-check canonical scalar encodings and
+ * the complete outer layout to avoid making a guest binder from unchecked
+ * offsets. No heap allocation, recursion or retained pointer. */
+static int read_trusted_i64(Reader* r, int64_t* result) {
+    const size_t previous = r->at;
+    if (!signed_integer(r)) return 0;
+    Reader value = *r;
+    value.at = previous;
+    uint8_t t;
+    uint64_t bits = 0;
+    if (!octet(&value, &t)) return 0;
+    if (t <= 0x7f) *result = (int64_t)t;
+    else if (t >= 0xe0) *result = (int64_t)(int8_t)t;
+    else {
+        unsigned width = 0;
+        switch (t) {
+            case 0xcc: case 0xd0: width = 1; break;
+            case 0xcd: case 0xd1: width = 2; break;
+            case 0xce: case 0xd2: width = 4; break;
+            case 0xcf: case 0xd3: width = 8; break;
+            default: return 0;
+        }
+        if (!uint_be(&value, width, &bits)) return 0;
+        if (t == 0xd0) *result = (int8_t)bits;
+        else if (t == 0xd1) *result = (int16_t)bits;
+        else if (t == 0xd2) *result = (int32_t)bits;
+        else if (t == 0xd3) memcpy(result, &bits, sizeof(bits));
+        else *result = (int64_t)bits;
+    }
+    return value.at == r->at;
+}
+int ores_mp2_extract_tagged_i64_trusted(const uint8_t* wire, size_t size,
+                                        int64_t* out_payload) {
+    if (!wire || !out_payload || size < 40 || size > ORES_MP2_MAX_BYTES)
+        return 0;
+    Reader r = {wire, size, 0, 0};
+    size_t n, schema_len, owner_len;
+    uint8_t version, marker;
+    const uint8_t *schema, *owner, *digest;
+    int64_t tag, payload;
+    if (!array_header(&r, &n) || n != 4
+            || !octet(&r, &version) || version != 2
+            || !string(&r, &schema, &schema_len)
+            || !octet(&r, &marker) || marker != 0xc4
+            || !octet(&r, &marker) || marker != 32
+            || !take(&r, 32, &digest)
+            || !array_header(&r, &n) || n != 3
+            || !string(&r, &owner, &owner_len)
+            || !read_trusted_i64(&r, &tag)
+            || tag < 1 || tag > INT32_MAX
+            || !read_trusted_i64(&r, &payload)
+            || r.at != size)
+        return 0;
+    *out_payload = payload;
+    return 1;
+}
 int ores_mp2_validate_copy(const OresMp2Contract* c,
                            const uint8_t* bytes, size_t size,
                            OresMp2Owned* out) {
