@@ -124,5 +124,9 @@ or source `spawn`/`await` compiler lowering; `pin_continuation()`
 is a host hook for future await lowering. Host callbacks that bypass pin
 registration, arbitrary native FFI pointer escapes, process aborts, and
 uncaught foreign faults cannot be automatically reclaimed safely.
-The caller must keep the group/control dispatcher alive until all pinned
-callbacks finish and physical finalization has been acknowledged.
+The worker now retains a shared reference to the canonical group authority,
+so a pinned callback may outlive the group's public wrapper without a dangling
+ActorGroup pointer. The caller must still keep the CONTROL-dispatch callback
+and its external queue alive until all pinned callbacks finish and physical
+finalization has been acknowledged. A never-released loan cannot be forcibly
+reclaimed without violating memory safety.
