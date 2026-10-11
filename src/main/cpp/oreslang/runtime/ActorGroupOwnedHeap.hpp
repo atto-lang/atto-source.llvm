@@ -85,12 +85,12 @@ public:
         std::shared_ptr<NativeActorHeapWorker> owner_;
     };
 
-    NativeActorHeapWorker(NativeActorGroup& group,
+    NativeActorHeapWorker(std::shared_ptr<NativeActorGroup> group,
                           std::uint64_t actor_id, std::uint64_t generation,
                           std::uint64_t slot_capacity,
                           NativeActorFieldEntrypoints generated,
                           EnqueueControl enqueue_control)
-        : group_(group), actor_id_(actor_id), generation_(generation),
+        : group_(std::move(group)), actor_id_(actor_id), generation_(generation),
           slot_capacity_(slot_capacity), generated_(generated),
           enqueue_control_(std::move(enqueue_control)) {
         if (!actor_id_ || !generation_ || !slot_capacity_ || slot_capacity_ > 4096
@@ -147,7 +147,7 @@ public:
         }
         if (ready) {
             // Readiness callbacks are never invoked with the actor lane held.
-            (void) group_.mark_ready(ref());
+            (void) group_->mark_ready(ref());
         }
         if (requested_.load(std::memory_order_acquire) != NativeActorExit::running)
             enqueue_control_();
@@ -270,7 +270,7 @@ public:
         }
         // Resolve ready/done only after real heap retirement, outside lane
         // lock so notifications may safely enqueue further supervisor work.
-        if (!finalized_ref || !group_.finalized(*finalized_ref, error))
+        if (!finalized_ref || !group_->finalized(*finalized_ref, error))
             throw std::logic_error("native group rejected physical finalization");
         return true;
     }
@@ -308,7 +308,7 @@ private:
             enqueue_control_();
     }
 
-    NativeActorGroup& group_;
+    std::shared_ptr<NativeActorGroup> group_;
     const std::uint64_t actor_id_;
     const std::uint64_t generation_;
     const std::uint64_t slot_capacity_;
@@ -328,7 +328,8 @@ private:
 class NativeActorOwnedHeapGroup final {
 public:
     NativeActorOwnedHeapGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
-        : group_(runtime_id, maximum_workers), runtime_id_(runtime_id) {}
+        : group_(std::make_shared<NativeActorGroup>(runtime_id, maximum_workers)),
+          runtime_id_(runtime_id) {}
 
     NativeActorOwnedHeapGroup(const NativeActorOwnedHeapGroup&) = delete;
     NativeActorOwnedHeapGroup& operator=(const NativeActorOwnedHeapGroup&) = delete;
@@ -341,15 +342,15 @@ public:
             group_, actor_id, generation, slot_capacity, generated,
             std::move(enqueue_control));
         std::weak_ptr<NativeActorHeapWorker> weak = worker;
-        auto ref = group_.adopt(runtime_id_, actor_id, generation,
+        auto ref = group_->adopt(runtime_id_, actor_id, generation,
                                 [weak] { if (auto owner = weak.lock()) owner->request_cancel(); });
         worker->attach(ref);
         workers_.push_back(worker);
         return worker;
     }
 
-    void request_stop_all() { group_.stop_workers(); }
-    void close() { group_.close(); }
+    void request_stop_all() { group_->stop_workers(); }
+    void close() { group_->close(); }
 
     // Caller must invoke on the parent CONTROL lane. A pending loan or
     // continuation prevents success, rather than fabricating get_done().
@@ -360,10 +361,10 @@ public:
         return finalized;
     }
 
-    NativeActorGroup& lifecycle() noexcept { return group_; }
+    NativeActorGroup& lifecycle() noexcept { return *group_; }
 
 private:
-    NativeActorGroup group_;
+    std::shared_ptr<NativeActorGroup> group_;
     std::uint64_t runtime_id_;
     std::vector<std::shared_ptr<NativeActorHeapWorker>> workers_;
 };
