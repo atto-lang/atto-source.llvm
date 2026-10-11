@@ -176,6 +176,30 @@ int main() {
                   "closed group rejected late quiescent finalization");
             check(rejected(ref.get_done()), "closed actor incorrectly completed normally");
         }
+        {
+            // Group wrapper can detach its table while a callback pin retains
+            // the worker. The worker must retain canonical lifecycle authority,
+            // so a late parent CONTROL ack never uses a dangling group pointer.
+            std::shared_ptr<oreslang::runtime::NativeActorHeapWorker> survivor;
+            std::optional<oreslang::runtime::NativeActorHeapWorker::ContinuationPin> pin;
+            std::optional<oreslang::runtime::NativeActorRef> survivor_ref;
+            {
+                NativeActorOwnedHeapGroup group(516, 1);
+                survivor = group.spawn(61, 13, 16, generated, [&] { ++queued; });
+                check(survivor->initialize(), "detached group worker init failed");
+                survivor_ref = survivor->ref();
+                pin.emplace(survivor->pin_continuation());
+                group.close();
+                check(group.drain_control() == 0, "detached group freed pinned continuation");
+            }
+            check(survivor_ref->get_done().wait_for(0ms) == std::future_status::timeout,
+                  "detached group prematurely settled done");
+            pin.reset();
+            check(survivor->process_control(),
+                  "retained worker lost canonical group authority after wrapper close");
+            check(rejected(survivor_ref->get_done()),
+                  "detached-group cancellation did not propagate");
+        }
         return 0;
     } catch (const std::exception& failure) {
         std::fprintf(stderr, "actor group test failed: %s\n", failure.what());
