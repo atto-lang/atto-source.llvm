@@ -171,12 +171,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 LocalOwnership& source = local(*expr.left, locals);
                 if (source.mode != Mode::Value)
                     reject(expr, "cannot rt take through a borrowed parameter");
-                // A region-owned scalar is still dropped unconditionally on
-                // every CFG return edge. Until an ownership transfer ABI and
-                // path-local drop flags exist, taking it would silently run
-                // a destructor for a logically moved-out owned allocation.
-                if (source.heap_owned)
-                    reject(expr, "ownership violation: owned int take requires transfer/drop lowering");
+                // Experimental native owned-i64 values transfer the scalar,
+                // drop their old heap slot immediately and disarm the
+                // generated exit-time drop flag. The emitted native backend
+                // must keep that conditional flag in sync with this move.
                 if (source.exclusive_loan || source.shared_loans != 0)
                     reject(expr, "cannot move int while borrow is active");
                 source.moved = true;
@@ -447,6 +445,15 @@ void validate_i64_ownership(const Program& program) {
             add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
         for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
             add_effects(**it, cfg.blocks[guard_count * 2].operations);
+        // Every reachable terminal CFG path must end with an explicit
+        // conditional drop of the experimental heap-owned places. The
+        // emitter backs each DropIfOwned with a runtime live flag; scalar
+        // stack locals and trivially destructible class fields need none.
+        for (auto& block : cfg.blocks)
+            if (block.successors.empty())
+                for (const auto& entry : cfg_entry)
+                    if (entry.second.heap_owned)
+                        block.operations.push_back({OpKind::DropIfOwned, entry.first});
         ownership::verify(cfg);
 
     }
