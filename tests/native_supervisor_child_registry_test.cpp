@@ -144,6 +144,53 @@ int main() {
     check(fresh.child.logical_child_id != attempted.child.logical_child_id,
           "admission rollback recycled logical child ID");
 
+    // STOP and RESTART are competing terminal claims on one finalized
+    // generation. The STOP turn remains exclusive across external awaits.
+    const OresNativeActorRef stop_actor{42, 91, 1};
+    const auto stop_child = registry.register_child(stop_actor);
+    registry.finalized(stop_child.child, stop_actor, 1);
+    auto pending_stop = registry.begin_stop(stop_child.child, stop_actor, 1, 44);
+    check(pending_stop.phase == SupervisorChildRegistry::Phase::stopping,
+          "STOP did not hold a logical lifecycle reservation");
+    must_reject([&] { registry.begin_restart(stop_child.child, stop_actor, 1); });
+    must_reject([&] { registry.begin_stop(stop_child.child, stop_actor, 1, 45); });
+    must_reject([&] {
+        registry.commit_stop(stop_child.child, stop_actor, 1, 45);
+    });
+    must_reject([&] {
+        registry.commit_stop(stop_child.child, OresNativeActorRef{42, 91, 2}, 1, 44);
+    });
+    check(registry.snapshot(stop_child.child).phase
+                  == SupervisorChildRegistry::Phase::stopping,
+          "forged STOP acknowledgment released a lifecycle reservation");
+    auto committed = registry.commit_stop(stop_child.child, stop_actor, 1, 44);
+    check(committed.phase == SupervisorChildRegistry::Phase::stopped,
+          "authoritative STOP acknowledgment failed");
+    must_reject([&] { registry.commit_stop(stop_child.child, stop_actor, 1, 44); });
+    must_reject([&] { registry.begin_restart(stop_child.child, stop_actor, 1); });
+
+    const OresNativeActorRef racing_actor{42, 92, 1};
+    const auto racing = registry.register_child(racing_actor);
+    registry.finalized(racing.child, racing_actor, 1);
+    wins = 0;
+    rejects = 0;
+    std::thread stop_contender([&] {
+        try {
+            registry.begin_stop(racing.child, racing_actor, 1, 46);
+            ++wins;
+        } catch (const std::exception&) { ++rejects; }
+    });
+    std::thread restart_contender([&] {
+        try {
+            registry.begin_restart(racing.child, racing_actor, 1);
+            ++wins;
+        } catch (const std::exception&) { ++rejects; }
+    });
+    stop_contender.join();
+    restart_contender.join();
+    check(wins == 1 && rejects == 1,
+          "STOP and RESTART simultaneously claimed the same native generation");
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
