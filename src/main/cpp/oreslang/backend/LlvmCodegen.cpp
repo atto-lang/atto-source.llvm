@@ -1,11 +1,17 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <utility>
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/SHA256.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -19,6 +25,104 @@
 
 namespace oreslang {
 namespace {
+
+// Source-compiled nominal identity follows Java TaggedMessageCodec byte-for-
+// byte; schema hashes are SHA-256 over a SORTED closed domain, not declaration
+// order, and variant identity includes its declared wire tag.
+struct GuestNominalCase {
+    std::string qualified;
+    std::string owner;
+    std::string schema;
+    std::uint32_t tag;
+    std::array<std::uint8_t, 32> shape_hash;
+    std::vector<std::uint8_t> wire;
+};
+std::array<std::uint8_t, 32> sha(std::string_view text) {
+    return llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(text.data()), text.size()));
+}
+std::string hex(const std::array<std::uint8_t, 32>& bytes) {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (const auto b : bytes) {
+        result.push_back(digits[b >> 4]);
+        result.push_back(digits[b & 15]);
+    }
+    return result;
+}
+void mp_string(std::vector<std::uint8_t>& out, const std::string& value) {
+    if (value.size() <= 31)
+        out.push_back(static_cast<std::uint8_t>(0xa0 | value.size()));
+    else if (value.size() <= 255) {
+        out.push_back(0xd9);
+        out.push_back(static_cast<std::uint8_t>(value.size()));
+    } else throw std::runtime_error("enum name exceeds wire string budget");
+    out.insert(out.end(), value.begin(), value.end());
+}
+void mp_tag(std::vector<std::uint8_t>& out, std::uint32_t tag) {
+    if (tag <= 127) out.push_back(static_cast<std::uint8_t>(tag));
+    else if (tag <= 255) {
+        out.push_back(0xcc);
+        out.push_back(static_cast<std::uint8_t>(tag));
+    } else if (tag <= 65535) {
+        out.push_back(0xcd);
+        out.push_back(static_cast<std::uint8_t>(tag >> 8));
+        out.push_back(static_cast<std::uint8_t>(tag));
+    } else {
+        out.push_back(0xce);
+        for (int shift = 24; shift >= 0; shift -= 8)
+            out.push_back(static_cast<std::uint8_t>(tag >> shift));
+    }
+}
+std::vector<GuestNominalCase> tagged_cases(
+    const Program& program, const Actor& actor) {
+    if (actor.messages_type.empty()) return {};
+    std::vector<std::string> names;
+    for (const auto& p : program.tagged_patterns)
+        if (p.name == actor.messages_type) names = p.alternatives;
+    for (const auto& e : program.enums)
+        if (e.name == actor.messages_type)
+            for (const auto& c : e.cases)
+                names.push_back(e.name + "." + c.name);
+    if (names.empty()) return {};
+    if (names.size() > 64)
+        throw std::runtime_error("tagged actor exceeds native 64-case limit");
+    std::vector<std::string> sorted = names;
+    std::sort(sorted.begin(), sorted.end());
+    std::string fingerprint = "oreslang.tagged.domain.v1/"
+                            + actor.messages_type + "/";
+    for (const auto& name : sorted)
+        fingerprint += std::to_string(name.size()) + ":" + name + ";";
+    const std::string domain_hash = hex(sha(fingerprint));
+    const auto shape_hash = sha("oreslang.actor.shape.v2/T[S,I]");
+    std::vector<GuestNominalCase> result;
+    for (const auto& name : names) {
+        const auto dot = name.find('.');
+        const std::string owner = name.substr(0, dot);
+        const std::string variant = name.substr(dot + 1);
+        const auto decl = std::find_if(program.enums.begin(), program.enums.end(),
+            [&](const EnumDeclaration& d) { return d.name == owner; });
+        if (decl == program.enums.end())
+            throw std::runtime_error("unresolved enum identity while emitting LLVM");
+        const auto item = std::find_if(decl->cases.begin(), decl->cases.end(),
+            [&](const EnumCase& c) { return c.name == variant; });
+        if (item == decl->cases.end() || item->has_payload)
+            throw std::runtime_error("LLVM typed source subset requires payloadless cases");
+        const std::uint32_t tag = item->tag;
+        const std::string schema = "oreslang.enum." + domain_hash + "."
+                                  + hex(sha(name + "#" + std::to_string(tag)));
+        std::vector<std::uint8_t> wire{0x94, 0x02};
+        mp_string(wire, schema);
+        wire.push_back(0xc4); wire.push_back(32);
+        wire.insert(wire.end(), shape_hash.begin(), shape_hash.end());
+        wire.push_back(0x92); // [nominal enum owner, declared tag]
+        mp_string(wire, owner);
+        mp_tag(wire, tag);
+        result.push_back({name, owner, schema, tag, shape_hash, std::move(wire)});
+    }
+    return result;
+}
 
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
