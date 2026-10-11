@@ -175,6 +175,8 @@ public:
                 || resolution.turn_generation == 0
                 || notice.supervisor_id != process_->supervisor_id()
                 || notice.runtime_id != process_->runtime_id()
+                || notice.native_terminal_kind != ORES_NATIVE_CONTROL_PANIC
+                || !notice.actor_id || !notice.generation
                 || !notice.logical_child_id || !notice.logical_incarnation) {
             throw std::logic_error("unauthorized finalized supervisor STOP");
         }
