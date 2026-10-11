@@ -55,6 +55,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
     oreslang_contract_test(source_actor_field_ir actor-fields-counter.ores --ir "ores_actor_i64_fields_codegen_set")
+    oreslang_contract_test(source_actor_spawn_await_ir actor-spawn-await-source.ores --ir "ores_actor_host_poll_done")
+    oreslang_contract_test(source_actor_await_spawn_ir actor-await-spawn-source.ores --ir "ores_actor_host_poll_ready")
+    oreslang_contract_test(reject_spawn_foreign_actor actor-spawn-wrong-type.ores --diagnostic "source spawn actor must match enclosing actor declaration")
+    oreslang_contract_test(reject_spawn_without_done actor-spawn-missing-done.ores --diagnostic "expected 'await'")
     oreslang_contract_test(reject_actor_field_unknown actor-fields-unknown.ores --diagnostic "unknown or forbidden actor field")
     oreslang_contract_test(reject_actor_field_duplicate actor-fields-duplicate.ores --diagnostic "duplicate actor field")
     oreslang_contract_test(reject_actor_field_escape actor-fields-escape.ores --diagnostic "expected int expression")
@@ -95,6 +99,14 @@ if(BUILD_TESTING)
             --run 0 --clang "${ORE_CLANG}"
             --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_fields_generated_host.c")
+        oreslang_contract_test(native_exec_source_spawn_await actor-spawn-await-source.ores
+            --run 32 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
+        oreslang_contract_test(native_exec_source_await_spawn actor-await-spawn-source.ores
+            --run 32 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
         oreslang_contract_test(native_exec_actor_group_owned_fields actor-fields-counter.ores
             --run 0 --clang "${ORE_CLANG}"
             --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
