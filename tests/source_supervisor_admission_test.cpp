@@ -74,6 +74,18 @@ int main() {
     )");
     check(module.name == "Worker" && module.module == "Services",
           "native STOP plan module identity drift");
+    // CONTROL serialization belongs to the runtime. The source hook
+    // needs neither a lock declaration nor a special annotation to request
+    // the current failure\'s single terminal STOP decision.
+    const auto implicit = oreslang::parse_stop_only_supervisor(R"(
+        define supervisor Root as
+          pub on_panic(f: Failure): void {
+            self.stop();
+            return;
+          }
+        end
+    )");
+    check(implicit.name == "Root", "implicit supervisor CONTROL was not accepted");
     reject_supervisor(source); // default compiler remains fail-closed
 
     for (auto source_text : {
