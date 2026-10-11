@@ -23,6 +23,7 @@ def main():
         ("source-actor-spawn-stop.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
+        ("source-actor-pipe.ores", 2, 2, None),
     ]
     negatives = {
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
@@ -35,6 +36,9 @@ def main():
         "source-actor-send-missing-handler.ores": "native actor supports only on_message",
         "source-actor-send-unknown-ref.ores": "unknown actor message receiver",
         "source-actor-send-ref-as-payload.ores": "unknown parameter",
+        "source-actor-pipe-reject-sink-send.ores": "consumer must receive only forwarded",
+        "source-actor-pipe-reject-reverse-stop.ores": "requires producer stop before consumer stop",
+        "source-actor-pipe-reject-late.ores": "pipe must be formed before sends and stops",
     }
     for name, diagnostic in negatives.items():
         result = run([args.compiler, str(fixtures / name)])
@@ -50,6 +54,8 @@ def main():
             assert "oreslang_source_actor_stop" in guest.stdout, name
             if name != "source-actor-spawn-stop.ores":
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-pipe.ores":
+                assert "oreslang_source_actor_pipe" in guest.stdout, name
             ll = pathlib.Path(temp, name + ".ll")
             ll.write_text(guest.stdout)
             exe = pathlib.Path(temp, name + ".guest")
@@ -75,6 +81,10 @@ def main():
                 assert f"processed={count}" in line, line
                 if last is not None:
                     assert f"last={last}" in line, line
+            if name == "source-actor-pipe.ores":
+                # These are independently LLVM-generated on_message methods:
+                # Producer returns 2 then 6, Consumer accumulates 2 + 6 = 8.
+                assert sorted(int(line.split("last=")[-1]) for line in lines) == [6, 8], lines
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
