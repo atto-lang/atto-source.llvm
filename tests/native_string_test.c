@@ -5,6 +5,59 @@
 #include <stdlib.h>
 #include <string.h>
 #define CHECK(x) do {if (!(x)) {fprintf(stderr,"native String failure line %d: %s\n",__LINE__,#x);exit(1);}} while(0)
+
+static void check_json_unquote_fixture(const unsigned char* bytes, size_t n,
+                                       const unsigned char* expected, size_t expected_n) {
+    OreslangNativeString source={0}, decoded={0};
+    CHECK(oreslang_string_new_utf8(bytes,(uint64_t)n,&source)==ORESLANG_STRING_OK);
+    CHECK(oreslang_string_json_unquote(&source,&decoded)==ORESLANG_STRING_OK);
+    CHECK(decoded.byte_length==expected_n);
+    if (expected_n) CHECK(memcmp(decoded.data,expected,expected_n)==0);
+    CHECK(oreslang_string_json_unquote(&source,&decoded)==ORESLANG_STRING_INVALID);
+    CHECK(oreslang_string_json_unquote(&source,&source)==ORESLANG_STRING_INVALID);
+    oreslang_string_drop(&source);
+    oreslang_string_drop(&decoded);
+}
+static void check_json_rejected(const unsigned char* bytes, size_t n) {
+    OreslangNativeString source={0}, decoded={0};
+    CHECK(oreslang_string_new_utf8(bytes,(uint64_t)n,&source)==ORESLANG_STRING_OK);
+    CHECK(oreslang_string_json_unquote(&source,&decoded)==ORESLANG_STRING_INVALID_JSON);
+    CHECK(!decoded.data && decoded.byte_length==0);
+    oreslang_string_drop(&source);
+}
+static void test_strict_json_unquote(void) {
+    const unsigned char empty_json[]={'"','"'};
+    check_json_unquote_fixture(empty_json,sizeof(empty_json),(const unsigned char*)"",0);
+    const char* plain="\"hello\"";
+    check_json_unquote_fixture((const unsigned char*)plain,strlen(plain),
+                               (const unsigned char*)"hello",5);
+    const char* escapes="\"\\u0000\\n\\t\\\"\\\\/\"";
+    const unsigned char escaped_expected[]={0,'\n','\t','"','\\','/'};
+    check_json_unquote_fixture((const unsigned char*)escapes,strlen(escapes),
+                               escaped_expected,sizeof(escaped_expected));
+    const char* paired="\"\\ud83d\\ude00\"";
+    const unsigned char emoji[]={0xf0,0x9f,0x98,0x80};
+    check_json_unquote_fixture((const unsigned char*)paired,strlen(paired),emoji,sizeof(emoji));
+    const char* accent="\"\\u00e9\"";
+    const unsigned char utf8_accent[]={0xc3,0xa9};
+    check_json_unquote_fixture((const unsigned char*)accent,strlen(accent),
+                               utf8_accent,sizeof(utf8_accent));
+    const char* failures[]={
+        "unquoted", "\"unterminated", "\"bad\\z\"", "\"\\ud800\"",
+        "\"\\udc00\"", "\"\\ud800\\u0041\"", "\"\\u12zz\"",
+        "\"x\"x\"", "\"a\\", "\"\\u123\"", "\"line\nbreak\"",
+        "\"\\uDFFF\"", "\"\\uD800\\uD800\""
+    };
+    for (size_t i=0;i<sizeof(failures)/sizeof(failures[0]);++i)
+        check_json_rejected((const unsigned char*)failures[i],strlen(failures[i]));
+    OreslangNativeString oversized={NULL,UINT64_MAX}, output={0};
+    CHECK(oreslang_string_json_unquote(&oversized,&output)==ORESLANG_STRING_TOO_LARGE);
+    CHECK(!output.data && !output.byte_length);
+    const unsigned char bad_utf8[]={0xc0,0xaf};
+    OreslangNativeString invalid_utf8={(unsigned char*)bad_utf8,sizeof(bad_utf8)};
+    CHECK(oreslang_string_json_unquote(&invalid_utf8,&output)==ORESLANG_STRING_INVALID_UTF8);
+}
+
 int main(void) {
     CHECK(sizeof(void*)==8 && sizeof(OreslangNativeString)==16);
     CHECK(offsetof(OreslangNativeString,byte_length)==8);
@@ -40,6 +93,7 @@ int main(void) {
     oreslang_string_drop(&c);oreslang_string_drop(&raw);oreslang_string_drop(&quoted);
     oreslang_string_drop(&emoji);oreslang_string_drop(&quoted_emoji);
     CHECK(!a.data && !a.byte_length);
-    puts("native owned UTF-8 String ABI and bounded JSON codec: PASS");
+    test_strict_json_unquote();
+    puts("native owned UTF-8 String ABI and strict bounded JSON quote/unquote codec: PASS");
     return 0;
 }
