@@ -11,6 +11,10 @@ typedef struct {
     unsigned active;
     unsigned spawned, retired;
     uint64_t generation;
+    unsigned control_pending, control_inflight;
+    OresNativeActorControlKind control_kind;
+    OresNativeActorRef control_child;
+    uint64_t control_payload;
 } ActorLane;
 struct OresNativeActorScheduler {
     pthread_mutex_t lock;
@@ -23,6 +27,8 @@ struct OresNativeActorScheduler {
     size_t next_actor, outstanding;
     uint64_t domain;
     uint64_t accepted, rejected, completed;
+    uint64_t control_accepted, control_completed;
+    OresNativeActorControlFn control_callback;
     int retired;
     OresNativeActorTaskFn callback;
     void* context;
@@ -39,7 +45,7 @@ static void unlock(OresNativeActorScheduler* s) {
 static int find_ready(OresNativeActorScheduler* s, size_t* actor) {
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
-        if (s->actors[i].queued && !s->actors[i].active) {
+        if ((s->actors[i].control_pending || s->actors[i].queued) && !s->actors[i].active) {
             *actor = i;
             s->next_actor = (i + 1) % s->actor_count;
             return 1;
@@ -60,14 +66,28 @@ static void* carrier(void* raw) {
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
         }
         ActorLane* lane = &s->actors[i];
-        uint64_t payload = lane->messages[lane->head];
-        lane->head = (lane->head + 1) % s->per_actor_capacity;
-        lane->queued--;
+        const int is_control = lane->control_pending != 0;
+        uint64_t payload = 0;
+        OresNativeActorControlKind kind = ORES_ACTOR_CONTROL_READY;
+        OresNativeActorRef child = {0, 0, 0};
+        if (is_control) {
+            if (!s->control_callback || lane->control_inflight) abort();
+            kind = lane->control_kind;
+            child = lane->control_child;
+            payload = lane->control_payload;
+            lane->control_pending = 0;
+            lane->control_inflight = 1;
+        } else {
+            payload = lane->messages[lane->head];
+            lane->head = (lane->head + 1) % s->per_actor_capacity;
+            lane->queued--;
+        }
         lane->active = 1;
         unlock(s);
 
         executing = s;
-        s->callback(s->context, i, payload);
+        if (is_control) s->control_callback(s->context, i, kind, child, payload);
+        else s->callback(s->context, i, payload);
         executing = NULL;
 
         lock(s);
@@ -75,7 +95,12 @@ static void* carrier(void* raw) {
         lane->active = 0;
         s->outstanding--;
         s->completed++;
-        if (lane->queued) pthread_cond_signal(&s->ready);
+        if (is_control) {
+            if (!lane->control_inflight || s->control_completed == UINT64_MAX) abort();
+            lane->control_inflight = 0;
+            s->control_completed++;
+        }
+        if (lane->control_pending || lane->queued) pthread_cond_signal(&s->ready);
         if (!s->outstanding) {
             pthread_cond_broadcast(&s->drained);
             if (s->retired) pthread_cond_broadcast(&s->ready);
@@ -219,6 +244,59 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
     unlock(s);
     return done;
 }
+
+int ores_native_actor_scheduler_set_control_handler(
+    OresNativeActorScheduler* s, OresNativeActorControlFn callback) {
+    if (!s || !callback || executing == s) return 0;
+    lock(s);
+    int ok = !s->retired && !s->control_callback && !s->outstanding;
+    if (ok) s->control_callback = callback;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_post_control(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeActorControlKind kind, uint64_t payload) {
+    if (!s) return 0;
+    lock(s);
+    int valid = s->control_callback && !s->retired
+        && matching(s, parent) && matching(s, child)
+        && parent.actor_slot != child.actor_slot
+        && !s->actors[parent.actor_slot].retired
+        && kind >= ORES_ACTOR_CONTROL_READY && kind <= ORES_ACTOR_CONTROL_CANCELLED;
+    if (!valid) { unlock(s); return 0; }
+    ActorLane* lane = &s->actors[parent.actor_slot];
+    if (lane->control_pending || lane->control_inflight
+        || s->control_accepted == UINT64_MAX || s->accepted == UINT64_MAX) {
+        unlock(s);
+        return 0;
+    }
+    lane->control_pending = 1;
+    lane->control_kind = kind;
+    lane->control_child = child;
+    lane->control_payload = payload;
+    s->control_accepted++;
+    s->accepted++;
+    s->outstanding++;
+    pthread_cond_signal(&s->ready);
+    unlock(s);
+    return 1;
+}
+uint64_t ores_native_actor_scheduler_control_accepted(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    uint64_t result = s->control_accepted;
+    unlock(s);
+    return result;
+}
+uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    uint64_t result = s->control_completed;
+    unlock(s);
+    return result;
+}
+
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     if (!s) abort();
     lock(s);

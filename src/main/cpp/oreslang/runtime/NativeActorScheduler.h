@@ -32,6 +32,33 @@ int ores_native_actor_scheduler_poll_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
+
+/* Parent's reserved CONTROL lane, independent of the normal message ring.
+ * Callback executes exclusively on the parent's admitted logical lane, never
+ * directly from the child carrier that published the event.
+ * A single pending/in-flight CONTROL event per parent is reserved. If full,
+ * post returns 0; the publisher MUST retain and retry the owned event.
+ */
+typedef enum {
+    ORES_ACTOR_CONTROL_READY = 1,
+    ORES_ACTOR_CONTROL_DONE = 2,
+    ORES_ACTOR_CONTROL_PANIC = 3,
+    ORES_ACTOR_CONTROL_CANCELLED = 4
+} OresNativeActorControlKind;
+typedef void (*OresNativeActorControlFn)(
+    void* context, size_t parent_slot, OresNativeActorControlKind kind,
+    OresNativeActorRef child, uint64_t payload);
+/* Only configurable once, before any queued work or control events. */
+int ores_native_actor_scheduler_set_control_handler(
+    OresNativeActorScheduler* scheduler, OresNativeActorControlFn callback);
+/* Nonblocking event publication; accepts when parent's normal queue is full.
+ * No implicit acknowledgement, escalation or retry on an occupied slot.
+ */
+int ores_native_actor_scheduler_post_control(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeActorControlKind kind, uint64_t payload);
+uint64_t ores_native_actor_scheduler_control_accepted(OresNativeActorScheduler* scheduler);
+uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn callback, void* ctx);
