@@ -512,6 +512,14 @@ private:
         return &it->second;
     }
 
+    const Entry* find_active_locked(const NativeActorRef& ref) const {
+        if (ref.runtime_id() != runtime_id_) return nullptr;
+        const auto it = workers_.find(ref.actor_id());
+        if (it == workers_.end() || !(it->second.ref == ref)
+            || it->second.ref.ticket_ != ref.ticket_) return nullptr;
+        return &it->second;
+    }
+
     NativeActorRef adopt_impl(std::uint64_t runtime_id, std::uint64_t actor_id,
                               std::uint64_t generation, StopRequest stop_request,
                               const NativeActorRef* parent) {
