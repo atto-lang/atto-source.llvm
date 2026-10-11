@@ -108,6 +108,19 @@ if(BUILD_TESTING)
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
     find_package(Threads REQUIRED)
+    # Bounded logical actor / parent supervisor lanes: no carrier blocked
+    # on mailbox admission; CONTROL remains available during data saturation.
+    add_executable(oreslang-actor-exclusive-scheduler-test
+        tests/actor_exclusive_scheduler_test.cpp)
+    target_include_directories(oreslang-actor-exclusive-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-exclusive-scheduler-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-exclusive-scheduler-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_exclusive_scheduler_control_and_backpressure
+        COMMAND oreslang-actor-exclusive-scheduler-test)
+    set_tests_properties(native_actor_exclusive_scheduler_control_and_backpressure PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-actor-owned-heap-test
         tests/actor_owned_heap_lifecycle_test.c
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
