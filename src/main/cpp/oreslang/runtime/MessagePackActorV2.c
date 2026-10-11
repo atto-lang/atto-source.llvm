@@ -499,10 +499,8 @@ int ores_mp2_group_close_admission(OresMp2ActorGroup* g) {
     return 1;
 }
 static int send_under_producer_lease(OresMp2ActorGroup* g,
-                                    OresMp2ActorRef target,
-                                    const uint8_t* wire, size_t size) {
-
-                        const uint8_t* wire, size_t size) {
+                                     OresMp2ActorRef target,
+                                     const uint8_t* wire, size_t size) {
     if (!g || target.actor_slot >= g->actors
             || !g->contracts[target.actor_slot].value.schema_id) return 0;
     /* Reserve a bounded DATA slot BEFORE any allocation/hash/recursive
