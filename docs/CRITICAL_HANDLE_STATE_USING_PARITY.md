@@ -27,11 +27,30 @@ end
   function. User code may NOT define or override it. No redundant
   `critical self.handle_state(...)` prefix is required; the *intrinsic*
   itself is already marked critical in the compiler's function/effect metadata.
-- The sole argument **MUST** be an **inline** `critical |state| -> ...`
-  with exactly one state-access parameter,
-  lexical actor affinity and no capability escape. Unmarked `|s| -> ...`
-  MUST fail compilation. An unrelated `critical` lambda does not thereby
+- For an ordinary actor, the sole argument **MUST** be an **inline**
+  `critical |state| -> ...` with exactly one state-access parameter,
+  lexical actor affinity and no capability escape. Unmarked callbacks on
+  ordinary actors fail compilation. An unrelated `critical` lambda does not
   acquire actor-state authority.
+- `define serial actor A as ... end` and
+  `define actor A from serial actor as ... end` select the same builtin,
+  compiler-known serial actor base, not a user-overridable parent class.
+  Within either serial actor, the inline `self.handle_state(|s| -> ...)`
+  callback is **effectively critical** without spelling the keyword;
+  `critical |s| -> ...` remains valid. Actor methods may likewise omit
+  or explicitly use `critical`. The sealed `handle_state` intrinsic
+  cannot be overridden, and runtime ownership/effect rules are unchanged.
+- This inference is **only** safe when the trusted supervisor proves
+  one actor-wide active request/message lifetime (1 total, not 1 HTTP
+  plus 1 mailbox message), including a suspended handler. It calls the
+  next `receive()` only after that handler becomes idle. Yielding
+  releases a physical carrier, **not** the serial actor's lifetime lease.
+  A transport connection can stay open after its handler completes;
+  keep-alive lifetime alone does not occupy the actor.
+- This is a compiler shorthand, not carte-blanche to capture state:
+  callbacks remain inline/lexical/non-escaping, with checked `using`,
+  proven loan revocation, continuation generation fencing and no arbitrary
+  user override of core runtime admission methods.
 - `using` is a **reserved signature keyword**, not a reusable variable.
   It declares an **upper bound** on the effects performed by the function,
   including the invoked critical callback. A read callback requires
@@ -62,7 +81,7 @@ end
 
 ## Required compile-negative cases
 
-1. `self.handle_state(|s| -> s.count)`: missing critical callback.
+1. Ordinary actor: `self.handle_state(|s| -> s.count)`: missing critical callback. Unmarked callbacks must be accepted only for a trusted serial actor.
 2. `self.handle_state(critical || -> ...)`: missing state parameter.
 3. `self.handle_state(critical |a,b| -> ...)`: extra state parameter.
 4. `self.state.count` / returning or capturing `s`: state capability escape.
@@ -142,3 +161,24 @@ state loan authority or use an untrusted raw socket/FD.
   generation-fenced loans and no OS mutex held across suspension.
 - Run exactly the same source fixtures through Graal and LLVM on verified
   current HEADs; require full CI, native-image tests and concurrency fuzzing.
+
+## Serial actor implicit critical — implementation boundary (2026-10-11)
+
+- Java companion adds a typed serial actor AST property, recognizes both
+  `define serial actor` and `from serial actor`, preserves it through
+  annotation expansion/tree-shaking, and consistently applies it to the
+  sealed callback verifier, type checker and `using` checker. The source
+  can retain explicit `critical` on methods and inline callbacks.
+- LLVM companion adds a fail-closed native callback admission test
+  requiring both a compiler-proven serial actor declaration and a
+  supervisor-proven lifetime admission policy before accepting an
+  unmarked callback. Those bools are trusted native policy inputs; a
+  guest must not be able to forge them.
+- **Still not executable source parity:** Java source `state` initialization
+  intentionally rejects without arena-backed lowering, and the LLVM
+  frontend still rejects `state` declarations. The existing single-lane
+  source mailbox scheduler does not establish live HTTP/TCP/WebSocket
+  transport adapter support, and no native LLVM source serial-actor
+  scheduler has been integrated. No unproven runtime scheduling bypass
+  may be admitted. Both branches remain drafts until end-to-end
+  scheduler, state storage, `await`, and exact-head CI gates pass.
