@@ -29,6 +29,13 @@ int main() {
         auto c = group.adopt_child(b, 1206, 103, 1, [&] { ++stops; });
         check(group.mark_ready(c), "grandchild not ready");
         check(group.worker_count() == 3, "nested spawn created an extra group");
+        check(a.supervisor_id() == group.supervisor_id(),
+              "root supervisor identity differs from owning group");
+        check(b.supervisor_id() == a.supervisor_id()
+              && c.supervisor_id() == a.supervisor_id(),
+              "recursive spawn changed supervisor identity");
+        check(a.supervisor_id() != foreign_group.supervisor_id(),
+              "unrelated ActorGroups cannot impersonate one supervisor");
         check(!group.spawned_by(a).has_value(), "root has a fabricated parent");
         check(group.spawned_by(b) == a.actor_id(), "incorrect child lineage");
         check(group.spawned_by(c) == b.actor_id(), "incorrect grandchild lineage");
