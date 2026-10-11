@@ -66,7 +66,7 @@ public:
             Key key{failure.child.actor_slot, failure.child.generation};
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if (registered_.count(key) == 0 || delivered_.count(key) != 0) {
+                if (registered_.count(key) == 0) {
                     ++rejected_;
                     return false;
                 }
@@ -77,7 +77,10 @@ public:
                     ++rejected_;
                     return false;
                 }
-                delivered_.insert(key); // fence before async admission
+                // Consume the one-shot registration before async admission.
+                // An event rejected by the process must not be replayed, and
+                // keeping every completed generation forever leaks memory.
+                registered_.erase(key);
             }
             SupervisorFailureNotice copied{
                 process_->supervisor_id(),
@@ -101,6 +104,10 @@ public:
         }
     }
 
+    std::size_t registered_children() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return registered_.size();
+    }
     std::size_t accepted() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return accepted_;
@@ -139,7 +146,6 @@ private:
     const std::shared_ptr<SupervisorProcess> process_;
     mutable std::mutex mutex_;
     std::unordered_set<Key, KeyHash> registered_;
-    std::unordered_set<Key, KeyHash> delivered_;
     std::size_t accepted_ = 0;
     std::size_t rejected_ = 0;
 };
