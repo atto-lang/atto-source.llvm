@@ -20,7 +20,6 @@ void ores_actor_Counter_drop(OresActorI64Heap*, uint64_t, uint64_t, void*);
 static void require(bool test, const char* why) {
     if (!test) throw std::runtime_error(why);
 }
-static GeneratedActorFieldWorker make_unused(); // no implicit actor cloning
 
 int main() {
     {
