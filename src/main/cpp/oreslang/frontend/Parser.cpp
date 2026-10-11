@@ -261,7 +261,7 @@ private:
             require(";");
             value.locals.push_back(std::move(binding));
         }
-        while (token_.text != "return") {
+        while (token_.text != "return" && token_.text != "if") {
             if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
             Statement statement;
             statement.offset = token_.offset;
@@ -279,6 +279,29 @@ private:
             }
             require(";");
             value.statements.push_back(std::move(statement));
+        }
+        // First CFG milestone: return-only equality guards after all locals
+        // are initialized and all ordinary statements have completed.
+        // No branch-local object construction or exceptional edges.
+        while (token_.text == "if") {
+            if (value.returns_void) fail("guarded early return requires int result");
+            if (value.early_returns.size() == 8)
+                fail("native guarded return limit exceeded (8)");
+            GuardedReturn guard;
+            guard.offset = token_.offset;
+            require("if");
+            require("(");
+            guard.lhs = expression();
+            require("eq");
+            guard.rhs = expression();
+            require(")");
+            require("{");
+            require("return");
+            guard.result = expression();
+            require(";");
+            require("}");
+            require("fi");
+            value.early_returns.push_back(std::move(guard));
         }
         require("return");
         if (!value.returns_void) value.result = expression();
@@ -491,6 +514,11 @@ private:
                         throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
                 }
                 validate_expression(*stmt.expression, params, functions);
+            }
+            for (const auto& guard : fn.early_returns) {
+                validate_expression(*guard.lhs, params, functions);
+                validate_expression(*guard.rhs, params, functions);
+                validate_expression(*guard.result, params, functions);
             }
             if (fn.result) validate_expression(*fn.result, params, functions);
         }
