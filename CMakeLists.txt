@@ -188,6 +188,16 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-async-io-operation-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_async_io_completion_generation_races COMMAND oreslang-async-io-operation-test)
     set_tests_properties(native_async_io_completion_generation_races PROPERTIES TIMEOUT 20)
+    # Pre-source-lowering safety gate: prevents stale continuation wakeups,
+    # premature actor-heap retirement, duplicate resumes and live-loan drops.
+    add_executable(oreslang-pinned-continuation-gate-test tests/pinned_continuation_gate_test.cpp)
+    target_include_directories(oreslang-pinned-continuation-gate-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-pinned-continuation-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-pinned-continuation-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_pinned_continuation_loan_cancel_quiescence
+             COMMAND oreslang-pinned-continuation-gate-test)
+    set_tests_properties(native_pinned_continuation_loan_cancel_quiescence PROPERTIES TIMEOUT 30)
+
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
     oreslang_contract_test(reject_duplicates duplicate-function.ores --diagnostic "duplicate function")
     oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
