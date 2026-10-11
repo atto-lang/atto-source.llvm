@@ -29,6 +29,25 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_package(OpenSSL QUIET COMPONENTS Crypto)
+    if(OpenSSL_FOUND)
+        add_executable(oreslang-messagepack-wire-v2-test
+            tests/messagepack_wire_v2_test.cpp)
+        target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-messagepack-wire-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-messagepack-wire-v2-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_messagepack_wire_v2_java_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/messagepack_wire_v2_matrix.py"
+                --binary "$<TARGET_FILE:oreslang-messagepack-wire-v2-test>"
+                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/messagepack_collection_vectors.json")
+        set_tests_properties(native_messagepack_wire_v2_java_parity PROPERTIES TIMEOUT 30)
+    else()
+        message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
+    endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)
     if(ORE_CLANG AND ORE_NODE)
