@@ -173,7 +173,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
     llvm::IntegerType* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Type* ptr = llvm::Type::getInt8PtrTy(context);
+    llvm::Type* ptr = llvm::PointerType::get(context, 0);
     llvm::FunctionCallee heapOpen = module.getOrInsertFunction(
             "oreslang_owned_i64_region_open",
             llvm::FunctionType::get(ptr, {i64}, false));
