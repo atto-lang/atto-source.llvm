@@ -376,6 +376,73 @@ private:
         return value;
     }
 
+    std::int64_t parse_dispatch_case() {
+        const bool negative = accept("-");
+        if (token_.kind != Kind::Integer)
+            fail("native match/switch supports integer literal cases only");
+        std::string digits(token_.text);
+        digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        std::uint64_t raw = 0;
+        auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), raw);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()
+                || raw > (negative ? UINT64_C(9223372036854775808)
+                                   : UINT64_C(9223372036854775807)))
+            fail("dispatch integer case out of signed 64-bit range");
+        advance();
+        if (negative && raw == UINT64_C(9223372036854775808)) return INT64_MIN;
+        return negative ? -static_cast<std::int64_t>(raw)
+                        : static_cast<std::int64_t>(raw);
+    }
+
+    std::unique_ptr<Expression> dispatch(bool procedural) {
+        const auto offset = token_.offset;
+        const bool is_match = accept("match");
+        if (!is_match) require("switch");
+        auto expr = make_expression(
+                is_match ? Expression::Kind::Match : Expression::Kind::Switch, offset);
+        expr->left = expression();
+        if (is_match) require("over");
+        std::unordered_set<std::int64_t> distinct;
+        bool fallback = false;
+        while (token_.text != "end" && token_.kind != Kind::End) {
+            Expression::Arm arm;
+            if (is_match) {
+                require("on");
+                (void)accept("is");
+                if (accept("_")) arm.fallback = true;
+                else arm.cases.push_back(parse_dispatch_case());
+            } else {
+                if (accept("default")) arm.fallback = true;
+                else {
+                    require("case");
+                    do { arm.cases.push_back(parse_dispatch_case()); }
+                    while (accept(","));
+                }
+            }
+            if (fallback) fail("dispatch arm after catch-all is unreachable");
+            if (arm.fallback) fallback = true;
+            for (const auto number : arm.cases)
+                if (!distinct.insert(number).second)
+                    fail("duplicate dispatch integer case");
+            (void)accept("->");
+            require("{");
+            if (accept("return")) {
+                arm.value = expression();
+                require(";");
+            } else if (!procedural) {
+                fail("value match/switch arm must return a value");
+            }
+            require("}");
+            expr->arms.push_back(std::move(arm));
+            if (expr->arms.size() > 256) fail("dispatch arm count exceeds 256");
+        }
+        require("end");
+        if (expr->arms.empty()) fail("match/switch needs at least one arm");
+        if (!procedural && !fallback)
+            fail("non-exhaustive value match/switch: add catch-all");
+        return expr;
+    }
+
     Function function() {
         Function value;
         value.offset = token_.offset;
