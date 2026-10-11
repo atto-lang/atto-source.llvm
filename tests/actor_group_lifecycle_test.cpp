@@ -17,6 +17,30 @@ static void check(bool yes, const char* error) {
 
 int main() {
     {
+        NativeActorGroup implicit(12, 1);
+        check(implicit.supervisor_id() == NativeActorGroup::root_supervisor_id,
+              "legacy ActorGroup must be root-supervised from construction");
+        NativeActorGroup explicit_group(12, 1, 303);
+        check(explicit_group.supervisor_id() == 303,
+              "explicit supervisor identity lost at construction");
+        explicit_group.close();
+        check(explicit_group.supervisor_id() == 303,
+              "closed group reassigned its supervisor");
+
+        bool rejects_missing = false;
+        try { NativeActorGroup invalid(12, 1, 0); }
+        catch (const std::invalid_argument&) { rejects_missing = true; }
+        check(rejects_missing, "unsupervised ActorGroup constructor admitted");
+        bool rejects_zero_runtime = false;
+        try { NativeActorGroup invalid(0, 1, 303); }
+        catch (const std::invalid_argument&) { rejects_zero_runtime = true; }
+        check(rejects_zero_runtime, "supervisor binding hid invalid runtime");
+        bool rejects_zero_capacity = false;
+        try { NativeActorGroup invalid(12, 0, 303); }
+        catch (const std::invalid_argument&) { rejects_zero_capacity = true; }
+        check(rejects_zero_capacity, "supervisor binding hid zero capacity");
+    }
+    {
         NativeActorGroup group(100, 2);
         int stop_count = 0;
         NativeActorRef ref = group.adopt(100, 7, 1, [&] { ++stop_count; });
