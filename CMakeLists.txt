@@ -68,6 +68,14 @@ if(BUILD_TESTING)
         --diagnostic "duplicate dispatch integer case")
     oreslang_contract_test(reject_value_switch_duplicate_default value-switch-duplicate-default.ores
         --diagnostic "duplicate switch default")
+    oreslang_contract_test(reject_value_switch_malformed_case value-switch-malformed-case.ores
+        --diagnostic "malformed dispatch integer separator")
+    oreslang_contract_test(reject_value_match_unreachable_catchall value-match-unreachable-catchall.ores
+        --diagnostic "dispatch arm after catch-all is unreachable")
+    oreslang_contract_test(reject_value_switch_grouped_duplicate value-switch-grouped-duplicate.ores
+        --diagnostic "duplicate dispatch integer case")
+    oreslang_contract_test(source_value_switch_default_first_grouped_ir value-switch-default-first-grouped.ores
+        --ir "dispatch.collected.value")
     oreslang_contract_test(reject_unsupported_finally_source unsupported-finally-source.ores
         --diagnostic "expected 'return' or a supported 'do match/switch' statement")
     oreslang_contract_test(source_actor_field_ir actor-fields-counter.ores --ir "ores_actor_i64_fields_codegen_set")
@@ -129,6 +137,8 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_value_switch_default_before_cases value-switch-default-first.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_switch_default_first_grouped value-switch-default-first-grouped.ores
             --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_return_do_switch_default_before_cases return-do-switch-default-first.ores
             --run 42 --clang "${ORE_CLANG}")
