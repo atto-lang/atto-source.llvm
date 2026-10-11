@@ -279,3 +279,44 @@ https://github.com/zed-pkg-test/java-app/actions/runs/38103218616
 This exercises a deliberate stop/turn overlap, but does not certify every
 adversarial force-kill, concurrent cancellation, or independent native
 scheduler race. No LLVM source-level actor codegen parity is claimed.
+
+
+## October 10: real native carrier and inherited restart validation
+
+**JVM/Graal source/runtime:** restart-candidate immutable factory metadata now
+follows an escalated descendant event into the next live supervisor. A parent
+handler failure/retry retains ownership, and stopping supervisors transfer the
+candidate with queued failure metadata before clearing local references.
+Grandparent `RESTART` creates a new actor identity and fresh state, not a
+revival of the previously finalized child actor. Source policy remains
+explicit `escalate/acknowledge`; guest-source restart syntax is still not
+lowered.
+
+**Latest funded exact-source GraalVM 25:** 120/120 tests passed, zero
+failures, errors or skips:
+https://github.com/zed-pkg-test/java-app/actions/runs/38106610733
+
+**Native LLVM runtime integration:** `HungryCarrier` accepts an optional
+externally owned `SupervisorControlTurn` and typed `Hooks` pair at
+construction. Its lifetime-gated `ProducerHandle::try_wake_control()` notifies
+the parent's actual native carrier only after a pre-reserved event is
+published. The native actor loop admits pending CONTROL before ordinary mail
+or pending I/O completion. A typed `EffectUnwind` primary effect can be
+published directly with `EffectSupervisorBridge::publish_terminal`.
+The new two-carrier test proves the parent's `on_panic` runs on its own
+carrier, ahead of queued user mail; never on the child's thread. Handles
+reject new sends/control wakes after shutdown.
+
+**Native funded exact-source validation:** C++17 strict -Werror build and
+execution, 30 repeated native carrier integration runs, followed by an
+ASan/UBSan instrumented compile/execution all passed:
+https://github.com/zed-pkg-test/java-app/actions/runs/38106747752
+
+These improvements are **not LLVM guest actor codegen**. The current LLVM
+front-end still rejects Oreslang actor declarations and guest effects it
+cannot lower. `HungryCarrier` currently has a dedicated native carrier
+thread rather than the final shared continuation pool. Complete actor-lane
+scheduling, automatic CONTROL redirection upon native parent shutdown,
+cross-await typed effect propagation, and source-driven actor lifecycle
+remain release blockers. Full Maven/CMake/CTest/AOT and independent review
+remain outstanding, so both PRs stay **draft/unmerged**.
