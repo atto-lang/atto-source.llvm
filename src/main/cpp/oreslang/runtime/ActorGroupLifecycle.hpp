@@ -183,8 +183,16 @@ public:
             ActorReadyResult rejected{false,
                 failure.empty() ? "actor terminated before ready" : failure};
             callbacks = settle_ticket(ref, std::move(rejected));
-            // Settle the done promise ONLY on this acknowledged finalization.
-            // A failed on_start propagates to both observers.
+            // A cancelled or failed startup is also a terminal failure,
+            // even when its physical cleanup acknowledgment has no separate
+            // error argument. Inspect readiness under the ticket mutex:
+            // close() may have rejected startup on another thread.
+            if (failure.empty()) {
+                std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
+                if (!ref.ticket_->result.ready)
+                    failure = ref.ticket_->result.error;
+            }
+            // Settle done ONLY on acknowledged physical finalization.
             settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
