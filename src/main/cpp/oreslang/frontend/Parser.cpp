@@ -91,7 +91,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=.").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){}<> ,:;+-*=.").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -207,26 +207,19 @@ private:
             require(")");
             require(";");
         }
-        if (!accept("const") && !accept("val"))
-            fail("expected const awaited actor result");
-        const std::string result = identifier();
-        if (result == script.worker_name)
-            fail("actor result shadows worker ref");
+        // Actor references expose only transport and lifecycle operations,
+        // never arbitrary actor class methods.
+        require(script.worker_name);
+        require(".");
+        require("send");
+        require("(");
+        require("infer");
+        require("struct");
+        require("{");
+        script.message_field = identifier();
         require(":");
-        require("int");
-        require("=");
-        require("await");
-        require(script.worker_name);
-        require(".");
-        script.method = identifier();
-        require("(");
         script.argument = expression();
-        require(")");
-        require(";");
-        require(script.worker_name);
-        require(".");
-        require("stop");
-        require("(");
+        require("}");
         require(")");
         require(";");
         require("await");
@@ -237,16 +230,74 @@ private:
         require(")");
         require(";");
         require("return");
-        require(result);
+        require("0");
         require(";");
         require("}");
+        script.method = "receive";
         return script;
     }
 
     ActorMethod actor_method() {
         ActorMethod value;
         value.offset = token_.offset;
-        accept("pub");
+        const bool public_method = accept("pub");
+        if (token_.text == "receive") {
+            if (public_method) fail("receive is actor-local and must not be public");
+            advance();
+            value.name = "receive";
+            require("(");
+            require("ActorMail");
+            require("<");
+            require("{");
+            value.accepted_message_field = identifier();
+            require(":");
+            require("int");
+            require("}");
+            require(">");
+            const std::string envelope = identifier();
+            require(")");
+            require(":");
+            require("void");
+            require("{");
+            // The i64 field is the single typed message payload in this
+            // pilot. ActorMail<{by:int}> guarantees mail.value.by at compile
+            // time; source cannot access other keys or a native heap pointer.
+            current_mail_envelope_ = envelope;
+            current_mail_field_ = value.accepted_message_field;
+            value.parameters.push_back(value.accepted_message_field);
+            while (token_.text == "self") {
+                // A receive handler may mutate its owned i64 fields; the
+                // terminal self.end() is mandatory in this one-shot pilot.
+                const auto offset = token_.offset;
+                advance();
+                require(".");
+                const std::string target = identifier();
+                if (target == "end") {
+                    require("(");
+                    require(")");
+                    require(";");
+                    value.ends_after_receive = true;
+                    break;
+                }
+                ActorAssignment assignment;
+                assignment.offset = offset;
+                assignment.field = target;
+                require("=");
+                assignment.value = expression();
+                require(";");
+                value.assignments.push_back(std::move(assignment));
+            }
+            if (!value.ends_after_receive)
+                fail("typed receive pilot requires self.end() after state handling");
+            require("return");
+            require(";");
+            require("}");
+            current_mail_envelope_.clear();
+            current_mail_field_.clear();
+            value.result = make_expression(Expression::Kind::Integer, value.offset);
+            value.result->integer = 0;
+            return value;
+        }
         if (!accept("fnc") && !accept("routine")) fail("expected actor method");
         value.name = identifier();
         require("(");
@@ -393,6 +444,14 @@ private:
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
+        if (!current_mail_envelope_.empty() && expr->name == current_mail_envelope_
+            && accept(".")) {
+            require("value");
+            require(".");
+            require(current_mail_field_);
+            expr->name = current_mail_field_;
+            return expr;
+        }
         if (accept("(")) {
             expr->kind = Expression::Kind::Call;
             if (!accept(")")) {
@@ -514,9 +573,12 @@ private:
             if (program.script) {
                 const auto& script = *program.script;
                 const auto method = std::find_if(actor.methods.begin(), actor.methods.end(),
-                    [&](const ActorMethod& entry) { return entry.name == script.method; });
-                if (method == actor.methods.end() || method->parameters.size() != 1)
-                    throw std::runtime_error("source actor await method requires exactly one int parameter");
+                    [&](const ActorMethod& entry) { return entry.name == "receive"; });
+                if (method == actor.methods.end() || method->parameters.size() != 1
+                        || !method->ends_after_receive)
+                    throw std::runtime_error("actor must declare receive(ActorMail<{field: int}> mail) that terminates after delivery");
+                if (method->accepted_message_field != script.message_field)
+                    throw std::runtime_error("ActorRef.send mailbox value does not match declared receive payload field");
                 validate_expression(*script.argument, empty, no_calls);
             }
             return;
@@ -558,6 +620,8 @@ private:
 
     Lexer lexer_;
     Token token_;
+    std::string current_mail_envelope_;
+    std::string current_mail_field_;
 };
 
 } // namespace
