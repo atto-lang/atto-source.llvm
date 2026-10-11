@@ -106,6 +106,11 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open(
 /* Host diagnostic only. No guest pointer or scheduler internals are exposed. */
 /* Zero at open, one after the first successfully spawned actor. This is a
  * dedicated blocking scheduler CONTROL thread, never a carrier. */
+/* Host CONTROL-only wakeup. Does not enqueue a user message or call guest
+ * code; the owning scheduler observes it on its blocking condition wait.
+ * Caller must own/fence the scheduler lifetime. Returns zero after retire.
+ */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
 size_t ores_native_actor_scheduler_started_control_threads(OresNativeActorScheduler* scheduler);
 size_t ores_native_actor_scheduler_started_workers(OresNativeActorScheduler* scheduler);
 /* Legacy index admission requires an already-spawned host actor.\n * New hosts should use the generation-checked actor ref send API.\n * O(1), nonblocking admission. Returns 1 on accepted, 0 on capacity or retirement.
