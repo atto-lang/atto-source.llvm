@@ -444,6 +444,10 @@ private:
                 fail("value match/switch arm must return a value");
             }
             require("}");
+            // Braced arms may be separated by commas/semicolons (or whitespace).
+            // These are delimiters, never additional empty cases or fallthrough.
+            // The formatter canonicalizes them away; both backends must admit them.
+            while (accept(";") || accept(",")) {}
             expr->arms.push_back(std::move(arm));
             if (expr->arms.size() > 256) fail("dispatch arm count exceeds 256");
         }
