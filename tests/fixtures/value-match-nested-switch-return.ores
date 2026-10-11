@@ -1,0 +1,12 @@
+// Nested value dispatch: an inner arm return yields only to its switch.
+pub fnc main(): int {
+  return match 2 over
+    on 2 {
+      return switch 7
+        default { return 0; },
+        case 7 { return 42; };
+      end;
+    };
+    on _ { return 1; };
+  end
+}
