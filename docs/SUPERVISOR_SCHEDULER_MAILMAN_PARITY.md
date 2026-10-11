@@ -47,3 +47,22 @@ admission, nonblocking scheduler-owned await/resumption, one serialized
 bounded cooperative Mailman per ActorGroup, and closed-group/cancel fencing.
 
 **Do not claim source-language parity from native host constructors.**
+
+## Hierarchical supervisor actor direction (October 11 update)
+
+The canonical source declaration is `define supervisor actor Name as ... end`.
+An optional shorter `define supervisor Name as ... end` spelling can be
+normalized only once nominal source lowering exists. `define proxy actor`
+is a typed remote endpoint rather than a direct cross-process heap pointer.
+
+`NativeSupervisorRegistry.hpp` now establishes a root, immutable parent/child
+supervisor hierarchy, runtime-affine opaque handles, bounded native group
+construction, weakly held group observation and direct/transitive group snapshots.
+Its CTest `native_supervisor_hierarchy_group_binding` also rejects foreign
+handles even when their raw numeric IDs collide. New source syntax is
+explicitly rejected until compiler-checked CONTROL semantics exist.
+
+See Java's detailed [OTP-inspired architecture proposal](https://github.com/ores-truffle-oreslang/oreslang-source.java/blob/main/docs/OTP_SUPERVISION_TREE_HOT_RELOAD.md)
+(the linked path will exist on Java main after its accompanying PR merges).
+In-place policy code replacement with safepoints, state migration, pinned
+continuations and rollback is **not** implemented by this native registry.
