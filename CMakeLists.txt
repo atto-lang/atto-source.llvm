@@ -129,6 +129,44 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
     set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
+    # Pinned native Future<void> lifecycle frame: host callbacks only record
+    # completion; resumption is admitted on a parent actor's CONTROL lane.
+    # Guest-source await remains compiler-rejected pending typed MIR lowering.
+    add_executable(oreslang-actor-lifecycle-await-test tests/actor_lifecycle_await_test.cpp)
+    target_include_directories(oreslang-actor-lifecycle-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-lifecycle-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-lifecycle-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_pinned_actor_future_control_continuation
+        COMMAND oreslang-actor-lifecycle-await-test)
+    set_tests_properties(native_pinned_actor_future_control_continuation PROPERTIES TIMEOUT 15)
+    add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
+    target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    # Prove control-plane stop requests honor existing loan-gated native heaps.
+    add_executable(oreslang-actor-group-heap-quiescence-test
+        tests/actor_group_heap_quiescence_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-group-heap-quiescence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-group-heap-quiescence-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-group-heap-quiescence-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_heap_loan_quiescence
+        COMMAND oreslang-actor-group-heap-quiescence-test)
+    set_tests_properties(native_actor_group_heap_loan_quiescence PROPERTIES TIMEOUT 15)
+    oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
+    oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
+    oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
+    add_executable(oreslang-dop-layout-test tests/dop_layout_test.cpp)
+    target_include_directories(oreslang-dop-layout-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME dop_layout_checked_geometry COMMAND oreslang-dop-layout-test)
+    # Nonescaping int loans are supported at checked call boundaries only;
+    # a reference still cannot be returned or stored, or cross suspension.
+
     add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
