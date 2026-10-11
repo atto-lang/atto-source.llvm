@@ -153,9 +153,23 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
                 runtime_id, n.actor_id, n.generation};
             children->begin_stop(
                 child, actor, n.logical_incarnation, resolution.turn_generation);
-            sink(resolution);
-            // The sink's normal return is an authoritative STOP receipt by
-            // host contract. No registry mutex is held across the callback.
+            try {
+                sink(resolution);
+            } catch (...) {
+                // A throwing host effect may already have applied STOP.
+                // Never erase the reservation or retry its side effect.
+                try {
+                    children->record_stop_uncertain(
+                        child, actor, n.logical_incarnation, resolution.turn_generation);
+                } catch (...) {
+                    // Preserve the original host failure for CONTROL accounting.
+                }
+                throw;
+            }
+            // The sink's normal return is the authoritative host receipt.
+            // No registry lock is held across this external callback.
+            children->record_stop_applied(
+                child, actor, n.logical_incarnation, resolution.turn_generation);
             children->commit_stop(
                 child, actor, n.logical_incarnation, resolution.turn_generation);
         });
