@@ -36,7 +36,7 @@ bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
 bool reserved(std::string_view name) {
     // Keep these reserved even while their grammar is unsupported.
     static constexpr std::string_view words[] = {
-        "define", "class", "module", "contract", "conforms", "namespace",
+        "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
