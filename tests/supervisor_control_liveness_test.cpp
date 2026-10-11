@@ -55,8 +55,8 @@ struct SaturatedActorCarriers {
 };
 
 int main() {
-    constexpr int families = 96;
-    auto control = std::make_shared<SupervisorControlScheduler>(2, 512);
+    constexpr int families = 192;
+    auto control = std::make_shared<SupervisorControlScheduler>(2, 1024);
     auto enqueue = control->adapter();
 
     SaturatedActorCarriers busyActors(2);
