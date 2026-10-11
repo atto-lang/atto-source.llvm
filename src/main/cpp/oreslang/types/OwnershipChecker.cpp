@@ -273,6 +273,64 @@ void validate_i64_ownership(const Program& program) {
                 check_call(*stmt.expression, locals, functions);
             }
         }
+        // Build the real guarded-return edge graph and run the reusable
+        // field-sensitive fixed-point verifier. This currently models the
+        // admitted return-only source CFG. The lattice also handles general
+        // diamonds and loops (tested separately), but does not admit new
+        // branch-local constructors, exceptional edges or suspension yet.
+        ownership::Graph cfg;
+        for (const auto& item : locals) {
+            const auto& name = item.first;
+            const auto& owner = item.second;
+            ownership::PlaceState state;
+            state.possible = owner.moved ? ownership::kMoved : ownership::kOwned;
+            state.shared_loans = static_cast<unsigned>(owner.shared_loans);
+            state.exclusive_loan = owner.exclusive_loan;
+            if (owner.class_name.empty()) {
+                cfg.entry.emplace(name, state);
+            } else {
+                for (const auto& field : owner.class_fields)
+                    cfg.entry.emplace(name + "." + field, state);
+            }
+        }
+        using OpKind = ownership::Operation::Kind;
+        using Ops = std::vector<ownership::Operation>;
+        std::function<void(const Expression&, Ops&)> add_effects;
+        add_effects = [&](const Expression& expr, Ops& operations) {
+            if (expr.kind == Expression::Kind::Variable) {
+                operations.push_back({OpKind::Read, expr.name});
+                return;
+            }
+            if (expr.kind == Expression::Kind::Field) {
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                    reject(expr, "native CFG requires named field receiver");
+                operations.push_back({OpKind::Read, expr.left->name + "." + expr.name});
+                return;
+            }
+            if (expr.kind == Expression::Kind::Take && expr.left &&
+                    expr.left->kind == Expression::Kind::Variable) {
+                operations.push_back({OpKind::Move, expr.left->name});
+                return;
+            }
+            if (expr.left) add_effects(*expr.left, operations);
+            if (expr.right) add_effects(*expr.right, operations);
+            for (const auto& argument : expr.arguments)
+                add_effects(*argument, operations);
+        };
+        const std::size_t guard_count = function.early_returns.size();
+        cfg.blocks.resize(guard_count * 2 + 1);
+        for (std::size_t i = 0; i < guard_count; ++i) {
+            const auto& guard = function.early_returns[i];
+            auto& condition = cfg.blocks[2 * i];
+            add_effects(*guard.lhs, condition.operations);
+            add_effects(*guard.rhs, condition.operations);
+            condition.successors = {2 * i + 1, 2 * i + 2};
+            add_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
+        }
+        if (function.result)
+            add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
+        ownership::verify(cfg);
+
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the
         // fallthrough path, which has a different live ownership state.
