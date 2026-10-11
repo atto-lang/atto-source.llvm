@@ -58,6 +58,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_field_unknown actor-fields-unknown.ores --diagnostic "unknown or forbidden actor field")
     oreslang_contract_test(reject_actor_field_duplicate actor-fields-duplicate.ores --diagnostic "duplicate actor field")
     oreslang_contract_test(reject_actor_field_escape actor-fields-escape.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_actor_readonly_field actor-fields-immutable.ores --diagnostic "cannot assign immutable actor field")
     oreslang_contract_test(reject_actor_lifecycle_collision actor-fields-method-collision.ores --diagnostic "reserved actor lifecycle method")
     oreslang_contract_test(reject_actor_without_fields unsupported-actor.ores --diagnostic "actor requires at least one int field")
     # Ownership remains Java-only. Reject all source ownership forms before
