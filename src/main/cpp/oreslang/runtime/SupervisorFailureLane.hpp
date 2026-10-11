@@ -91,9 +91,16 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         Slot& slot = require(actor);
         if (slot.has_event) return false;
+        // Invalid enum tags can arrive from native FFI/casts. Never accept
+        // them as legitimate terminal events or acknowledge them silently.
+        switch (kind) {
+            case Kind::Throw: case Kind::Raise: case Kind::Panic:
+            case Kind::Cancel: case Kind::HostFailure: break;
+            default: throw std::invalid_argument("invalid supervisor failure kind");
+        }
         slot.kind = kind;
-        store(slot.summary, slot.summary_length, summary);
-        store(slot.parent_id, slot.parent_length, parent_id);
+        store_utf8(slot.summary, slot.summary_length, summary);
+        store_utf8(slot.parent_id, slot.parent_length, parent_id);
         slot.has_event = true;
         enqueue(slot);
         return true;
@@ -184,11 +191,51 @@ private:
         Slot* next = nullptr;
     };
 
+    // Allocation-free UTF-8 validation and boundary-aware truncation into
+    // pre-reserved CONTROL storage. Invalid bytes become ASCII '?' individually.
+    // No code point, overlong encoding, surrogate or out-of-range scalar
+    // crosses the actor isolation boundary.
     template <std::size_t N>
-    static void store(std::array<char, N>& buffer, std::size_t& length,
-                      std::string_view text) {
-        length = std::min(N, text.size());
-        if (length != 0) std::memcpy(buffer.data(), text.data(), length);
+    static void store_utf8(std::array<char, N>& buffer, std::size_t& length,
+                           std::string_view text) noexcept {
+        length = 0;
+        for (std::size_t i = 0; i < text.size();) {
+            const auto first = static_cast<unsigned char>(text[i]);
+            std::size_t width = 0;
+            if (first <= 0x7f) width = 1;
+            else if (first >= 0xc2 && first <= 0xdf) width = 2;
+            else if (first >= 0xe0 && first <= 0xef) width = 3;
+            else if (first >= 0xf0 && first <= 0xf4) width = 4;
+            bool valid = width != 0 && width <= text.size() - i;
+            if (valid) {
+                for (std::size_t j = 1; j < width; ++j) {
+                    if ((static_cast<unsigned char>(text[i + j]) & 0xc0) != 0x80) {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if (valid && width == 3) {
+                const auto second = static_cast<unsigned char>(text[i + 1]);
+                if ((first == 0xe0 && second < 0xa0)
+                        || (first == 0xed && second >= 0xa0)) valid = false;
+            }
+            if (valid && width == 4) {
+                const auto second = static_cast<unsigned char>(text[i + 1]);
+                if ((first == 0xf0 && second < 0x90)
+                        || (first == 0xf4 && second > 0x8f)) valid = false;
+            }
+            const std::size_t bytes = valid ? width : 1;
+            if (bytes > N - length) break;
+            if (valid) {
+                std::memcpy(buffer.data() + length, text.data() + i, bytes);
+                i += bytes;
+            } else {
+                buffer[length] = '?';
+                ++i;
+            }
+            length += bytes;
+        }
     }
 
     Slot& require(const ActorKey& actor) {
