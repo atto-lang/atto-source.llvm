@@ -129,10 +129,27 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int)
-        : lexer_(source), token_(lexer_.next()),
+        : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int) {}
 
     Program parse() {
+        // The native compiler must not parse a `pipe` expression as a
+        // sequence of unrelated actor spawns. Tokenize it separately so
+        // quoted strings and comments containing "pipe" do not trigger.
+        // This gate is replaced by typed PipelineExpr lowering.
+        if (source_.find("pipe") != std::string_view::npos) {
+            Lexer preview(source_);
+            Token prior = preview.next();
+            for (Token next = preview.next(); next.kind != Kind::End;
+                    prior = next, next = preview.next()) {
+                if (next.text == "pipe" && prior.text == ")") {
+                    throw std::runtime_error(
+                        "native actor pipe expressions require compiler-checked stage roles, "
+                        "supervisor exclusion, bounded data transport and continuation lowering "
+                        "at byte " + std::to_string(next.offset));
+                }
+            }
+        }
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
@@ -855,6 +872,7 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::string_view source_;
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
