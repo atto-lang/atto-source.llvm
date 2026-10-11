@@ -179,6 +179,14 @@ int main() {
           "supervisor guest policy ran on child actor's carrier");
     check(s.process->callback_active() && s.process->resolved() == 0,
           "supervisor await lost logical single-flight lease");
+    // Callback entry is not the same as a completed suspension. resume()
+    // deliberately rejects early completion until the policy relinquishes
+    // its CONTROL carrier; avoid a scheduler-dependent false timeout here.
+    const auto suspend_deadline = std::chrono::steady_clock::now() + 5s;
+    while (!s.process->suspended()
+            && std::chrono::steady_clock::now() < suspend_deadline)
+        std::this_thread::yield();
+    check(s.process->suspended(), "native guest policy never suspended");
     const std::uint64_t epoch = s.process->current_epoch();
     check(epoch != 0, "supervisor await generation missing");
     OresNativeActorTerminalFailure forged{
@@ -389,6 +397,11 @@ int main() {
             std::this_thread::yield();
         check(entered.load() == 1 && process->callback_active(),
               "suspended native callback never acquired its logical lease");
+        const auto suspend_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!process->suspended()
+                && std::chrono::steady_clock::now() < suspend_deadline)
+            std::this_thread::yield();
+        check(process->suspended(), "native close test never reached suspension");
         const auto epoch = process->current_epoch();
         check(epoch != 0, "suspended native callback lost generation");
         process->close();
