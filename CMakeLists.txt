@@ -69,6 +69,20 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-gpu-dispatch-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-gpu-dispatch-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_bounded_gpu_async_device_fences COMMAND oreslang-gpu-dispatch-test)
+    # Optional real device conformance. A missing driver never produces a
+    # fabricated pass; CTest reports a skip (77) for that selected type.
+    find_package(OpenCL QUIET)
+    if(OpenCL_FOUND)
+        add_executable(oreslang-opencl-device-test tests/opencl_f32_device_test.cpp)
+        target_include_directories(oreslang-opencl-device-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-opencl-device-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_link_libraries(oreslang-opencl-device-test PRIVATE OpenCL::OpenCL)
+        add_test(NAME native_real_opencl_gpu COMMAND oreslang-opencl-device-test)
+        set_tests_properties(native_real_opencl_gpu PROPERTIES SKIP_RETURN_CODE 77)
+        add_test(NAME native_real_opencl_cpu_explicit COMMAND oreslang-opencl-device-test)
+        set_tests_properties(native_real_opencl_cpu_explicit
+            PROPERTIES ENVIRONMENT "ORESLANG_OPENCL_DEVICE=cpu" SKIP_RETURN_CODE 77)
+    endif()
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
