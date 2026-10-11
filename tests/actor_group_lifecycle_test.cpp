@@ -63,7 +63,8 @@ int main() {
                 ++entered;
                 ++active;
                 maximum = std::max(maximum, active);
-                if (n.actor_id == 3) return std::nullopt; // logical await
+                if (n.actor_id == 3 || n.actor_id == 4)
+                    return std::nullopt; // two distinct logical awaits
                 return oreslang::runtime::SupervisorProcess::Directive::stop;
             },
             [&](const oreslang::runtime::SupervisorProcess::Resolution& d) {
@@ -108,9 +109,21 @@ int main() {
         run_one(); // C's continuation: sink and schedule D
         check(decisions.size() == 1 && entered == 1,
               "first resolution crossed the await boundary incorrectly");
-        run_one(); // D's new exclusive admitted turn
+        run_one(); // D's new exclusive admitted turn, also suspended
+        check(decisions.size() == 1 && entered == 2 && process->callback_active(),
+              "second supervisor turn incorrectly escaped its logical lease");
+        const auto d_epoch = process->current_epoch();
+        check(d_epoch != c_epoch && d_epoch != 0,
+              "new child failure reused stale supervisor invocation epoch");
+        check(!process->resume(c_epoch,
+              oreslang::runtime::SupervisorProcess::Directive::restart),
+              "late completion from C resumed D's unrelated CONTROL turn");
+        check(process->resume(d_epoch,
+              oreslang::runtime::SupervisorProcess::Directive::stop),
+              "current invocation continuation could not be admitted");
+        run_one();
         check(decisions.size() == 2 && entered == 2,
-              "second supervisor turn did not follow first");
+              "second supervisor continuation failed");
         check(maximum == 1 && active == 0,
               "supervisor policies overlapped on logical lane");
         check(decisions[0].requested
