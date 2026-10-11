@@ -217,15 +217,38 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     unlock(s);
     return ref;
 }
+OresNativeSendStatus ores_native_actor_scheduler_try_send(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+    if (!s) return ORES_NATIVE_SEND_INVALID_REF;
+    lock(s);
+    OresNativeSendStatus status;
+    if (!matching(s, actor)) {
+        status = ORES_NATIVE_SEND_INVALID_REF;
+    } else {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        if (s->retired || lane->retired) {
+            status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (lane->queued + lane->active >= s->per_actor_capacity) {
+            status = ORES_NATIVE_SEND_MAILBOX_FULL;
+        } else if (s->accepted == UINT64_MAX) {
+            status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        } else {
+            /* enqueue_locked and stop() arbitrate under this same lock.
+             * A successful admission precedes stop, even if processing later
+             * fails; a stop that wins first is always rejected. */
+            if (!enqueue_locked(s, (size_t)actor.actor_slot, payload)) abort();
+            status = ORES_NATIVE_SEND_ACCEPTED;
+        }
+    }
+    if (status != ORES_NATIVE_SEND_ACCEPTED && s->rejected != UINT64_MAX)
+        s->rejected++;
+    unlock(s);
+    return status;
+}
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
-    if (!s) return 0;
-    lock(s);
-    int ok = matching(s, actor)
-        ? enqueue_locked(s, (size_t)actor.actor_slot, payload) : 0;
-    if (!matching(s, actor) && s->rejected != UINT64_MAX) s->rejected++;
-    unlock(s);
-    return ok;
+    return ores_native_actor_scheduler_try_send(s, actor, payload)
+        == ORES_NATIVE_SEND_ACCEPTED;
 }
 int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
                                        size_t i, uint64_t message) {

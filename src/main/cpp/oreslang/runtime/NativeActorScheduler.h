@@ -29,6 +29,23 @@ typedef void (*OresNativeActorPanicFn)(
  */
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
+/* Send succeeds only after atomic admission to a live, generation-matched
+ * actor mailbox. It does NOT promise execution or successful processing.
+ * No guest callback, blocking wait, or memory allocation occurs here.
+ * Cross-process admission cannot be inferred from an IPC write: callers must
+ * obtain a remote mailbox receipt before reporting ACCEPTED.
+ */
+typedef enum {
+    ORES_NATIVE_SEND_ACCEPTED = 0,
+    ORES_NATIVE_SEND_INVALID_REF = 1,
+    ORES_NATIVE_SEND_TERMINATED = 2,
+    ORES_NATIVE_SEND_MAILBOX_FULL = 3,
+    ORES_NATIVE_SEND_RESOURCE_EXHAUSTED = 4,
+    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5
+} OresNativeSendStatus;
+OresNativeSendStatus ores_native_actor_scheduler_try_send(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
 int ores_native_actor_scheduler_stop(

@@ -65,14 +65,23 @@ int main(void) {
     check(scheduler != NULL);
     OresNativeActorRef one = ores_native_actor_scheduler_spawn(scheduler, 0);
     check(one.scheduler_domain != 0);
-    check(!ores_native_actor_scheduler_send(scheduler, refs[0], 0)); /* foreign domain */
-    check(ores_native_actor_scheduler_send(scheduler, one, 0));
+    check(ores_native_actor_scheduler_try_send(scheduler, refs[0], 0)
+          == ORES_NATIVE_SEND_INVALID_REF); /* foreign domain */
+    OresNativeActorRef stale = one;
+    stale.generation++;
+    check(ores_native_actor_scheduler_try_send(scheduler, stale, 0)
+          == ORES_NATIVE_SEND_INVALID_REF);
+    check(ores_native_actor_scheduler_try_send(scheduler, one, 0)
+          == ORES_NATIVE_SEND_ACCEPTED);
     /* The admitted or queued first item consumes the full capacity. */
-    check(!ores_native_actor_scheduler_send(scheduler, one, 1));
+    check(ores_native_actor_scheduler_try_send(scheduler, one, 1)
+          == ORES_NATIVE_SEND_MAILBOX_FULL);
     check(!ores_native_actor_scheduler_submit(scheduler, 9, 1));
     check(ores_native_actor_scheduler_accepted(scheduler) == 1);
-    check(ores_native_actor_scheduler_rejected(scheduler) == 3);
+    check(ores_native_actor_scheduler_rejected(scheduler) == 4);
     check(ores_native_actor_scheduler_stop(scheduler, one));
+    check(ores_native_actor_scheduler_try_send(scheduler, one, 2)
+          == ORES_NATIVE_SEND_TERMINATED);
     check(!ores_native_actor_scheduler_poll_ready(scheduler, one));
     check(!ores_native_actor_scheduler_poll_done(scheduler, one));
     ores_native_actor_scheduler_retire(scheduler);
