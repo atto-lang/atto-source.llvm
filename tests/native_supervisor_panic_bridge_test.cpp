@@ -32,6 +32,7 @@ struct State {
     OresNativeActorRef parent{}, child{}, sibling{};
     std::shared_ptr<SupervisorControlScheduler> control;
     std::shared_ptr<SupervisorProcess> process;
+    std::shared_ptr<oreslang::runtime::SupervisorChildRegistry> children;
     std::unique_ptr<NativeSupervisorPanicBridge> bridge;
     std::mutex mutex;
     std::condition_variable wake;
@@ -108,6 +109,8 @@ int main() {
           && s.sibling.scheduler_domain, "native actor spawn failed");
 
     s.control = std::make_shared<SupervisorControlScheduler>(2, 32);
+    s.children = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
+        1107, s.parent.scheduler_domain);
     s.process = std::make_shared<SupervisorProcess>(
         1107, s.parent.scheduler_domain, 8, s.control->adapter(),
         [&](const SupervisorFailureNotice& n)
@@ -210,11 +213,27 @@ int main() {
         });
 
     s.bridge = std::make_unique<NativeSupervisorPanicBridge>(
-        s.scheduler, s.parent, s.process);
+        s.scheduler, s.parent, s.process, s.children);
+    check(s.bridge->trusted_child_registry() == s.children,
+          "panic bridge and verified lifecycle policy do not share registry");
+    {
+        bool rejected = false;
+        try {
+            auto foreign = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
+                9999, s.parent.scheduler_domain);
+            NativeSupervisorPanicBridge invalid{
+                s.scheduler, s.parent, s.process, foreign};
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        check(rejected, "panic bridge accepted a foreign-owner child registry");
+    }
     s.bridge->register_child(s.child);
     s.bridge->register_child(s.sibling); // This child exits normally via STOP.
     check(s.bridge->registered_children() == 2,
           "child generations were not tracked for terminal notification");
+    check(s.children->tracked_children() == 2,
+          "shared host registry did not receive bridge child admissions");
     check(!s.bridge->retire_normally_finalized_child(s.sibling),
           "active child registration retired before physical finalization");
     check(s.bridge->registered_children() == 2,
