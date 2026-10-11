@@ -40,6 +40,11 @@ public:
     std::shared_future<void> get_ready() const { return ticket_->ready_future; }
     std::shared_future<void> get_done() const { return ticket_->done_future; }
 
+    /** Host supervisor can detect cancelled/dropped reserved CONTROL events. */
+    bool control_delivery_lost() const noexcept {
+        return ticket_->control_dropped.load(std::memory_order_acquire);
+    }
+
     bool operator==(const NativeActorRef& other) const noexcept {
         return runtime_id_ == other.runtime_id_
             && actor_id_ == other.actor_id_
@@ -78,6 +83,9 @@ private:
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
         std::atomic<bool> physically_done{false};
+        std::atomic<bool> control_active{false};
+        std::atomic<bool> control_reserved{false};
+        std::atomic<bool> control_dropped{false};
     };
 
     friend class NativeActorGroup;
@@ -100,7 +108,59 @@ private:
  */
 class NativeActorGroup final {
 public:
+    using ActorRef = NativeActorRef;
     using StopRequest = std::function<void()>;
+
+    enum class ControlTurn { idle, executed, busy, retired };
+
+    /** Enqueue-only reserved CONTROL slot. A GPU callback posts here but
+     * cannot execute actor/user handlers on its carrier thread. */
+    bool enqueue_control(const NativeActorRef& ref, std::function<void()> handler) {
+        if (!handler) throw std::invalid_argument("CONTROL handler required");
+        std::lock_guard<std::mutex> guard(mutex_);
+        Entry* worker = find_active_locked(ref);
+        if (!worker || closed_ || worker->phase == Phase::starting
+            || worker->pending_control) return false;
+        worker->pending_control = std::move(handler);
+        worker->ref.ticket_->control_reserved.store(true, std::memory_order_release);
+        return true;
+    }
+
+    bool has_pending_control(const NativeActorRef& ref) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (closed_) return false;
+        auto it = workers_.find(ref.actor_id());
+        return it != workers_.end() && it->second.ref == ref
+            && bool(it->second.pending_control);
+    }
+
+    /**
+     * Runtime scheduler ONLY. Single-flight group CONTROL across physical
+     * carrier migrations; busy returns immediately without blocking carrier.
+     * Pending tickets prevent finalization until the turn retires.
+     */
+    ControlTurn run_control_turn(const NativeActorRef& ref) {
+        std::unique_lock<std::mutex> lane(control_lane_mutex_, std::try_to_lock);
+        if (!lane.owns_lock()) return ControlTurn::busy;
+        std::function<void()> handler;
+        std::shared_ptr<NativeActorRef::Ticket> ticket;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            Entry* worker = find_active_locked(ref);
+            if (closed_ || !worker) return ControlTurn::retired;
+            if (!worker->pending_control) return ControlTurn::idle;
+            handler = std::move(worker->pending_control);
+            worker->pending_control = {};
+            ticket = worker->ref.ticket_;
+            ticket->control_reserved.store(false, std::memory_order_release);
+            ticket->control_active.store(true, std::memory_order_release);
+        }
+        std::exception_ptr failure;
+        try { handler(); } catch (...) { failure = std::current_exception(); }
+        ticket->control_active.store(false, std::memory_order_release);
+        if (failure) std::rethrow_exception(failure);
+        return ControlTurn::executed;
+    }
 
     explicit NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
         : runtime_id_(runtime_id), maximum_workers_(maximum_workers),
@@ -134,7 +194,7 @@ public:
             throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
-        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting});
+        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
         try {
             owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
         } catch (...) {
@@ -192,6 +252,11 @@ public:
                 if (!ref.ticket_->result.ready)
                     failure = ref.ticket_->result.error;
             }
+            // Physical finalization must not overtake an admitted or queued
+            // CONTROL turn, including device-result and panic reporting.
+            if (ref.ticket_->control_active.load(std::memory_order_acquire)
+                || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                return false;
             // Settle done ONLY on acknowledged physical finalization.
             settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
@@ -270,6 +335,11 @@ public:
         }
         for (auto& item : detached) {
             Entry& worker = item.second;
+            if (worker.pending_control) {
+                worker.pending_control = {};
+                worker.ref.ticket_->control_reserved.store(false, std::memory_order_release);
+                worker.ref.ticket_->control_dropped.store(true, std::memory_order_release);
+            }
             if (worker.phase == Phase::starting) {
                 try {
                     ActorReadyResult rejected{false, "ActorGroup closed before ready"};
@@ -320,6 +390,7 @@ private:
         NativeActorRef ref;
         StopRequest stop_request;
         Phase phase;
+        std::function<void()> pending_control;
     };
 
     Entry* find_active_locked(const NativeActorRef& ref) {
@@ -384,6 +455,7 @@ private:
     const std::size_t maximum_workers_;
     const std::uint64_t group_id_;
     mutable std::mutex mutex_;
+    std::mutex control_lane_mutex_; // runtime-only exclusive group CONTROL turns
     bool closed_ = false;
     std::unordered_map<std::uint64_t, Entry> workers_;
 };
