@@ -1,5 +1,10 @@
 #include "oreslang/types/OwnershipCfg.hpp"
 
+// Ownership safety test assertions must remain executable under Release
+// (NDEBUG otherwise removes rejection probes and triggers -Werror unused).
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <functional>
 #include <stdexcept>
