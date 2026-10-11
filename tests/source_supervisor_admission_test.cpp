@@ -108,7 +108,9 @@ int main() {
             "self.stop(self); return;",
             "self.stop(problem.child); return;",
             "self.stop(problem.actor); return;",
-            "self.stop(problem, problem); return;",
+            "using self.control { self.stop(); } return;",
+            "using supervisor.control { self.stop(); } return;",
+            "self.stop(problem, problem); return;"
             "self.stop(1); return;",
             "self.stop(problem); self.stop(problem); return;"
     }) {
