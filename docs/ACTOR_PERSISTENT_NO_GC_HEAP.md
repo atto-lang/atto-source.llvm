@@ -248,3 +248,52 @@ long-lived `shared_ptr` host/controller. The host must not destroy
 the scheduler, actor registry or control queue before all terminal
 observers settle. Arbitrary FFI pointer escape and C-level abort
 remain outside this resource-safety proof.
+
+
+## Typed actor messaging: only ActorRef.send crosses the mailbox (October 11)
+
+The earlier source-pilot syntax `await worker.add(20)` was removed: a
+source-level actor reference cannot invoke arbitrary actor instance methods.
+The only approved guest user-message transport in this pilot is
+`worker.send(infer struct{by: 20})`, delivered to the actor-local
+`receive(ActorMail<{by: int}> mail)` handler. The receive parameter
+**declares the accepted payload shape**, and the compiler rejects mismatched
+keys, direct `worker.increment(...)` calls, and missing `get_done()`.
+The generated native `ores_actor_Counter_receive` entrypoint is a
+trusted *mailbox dispatcher* called only from an admitted actor DATA lane,
+not a callable guest ActorRef method. The guest is never given the native
+entrypoint address.
+
+Example supported typed-message source fixture:
+```ores
+define actor Counter as
+  let count: int = 5;
+  receive(ActorMail<{by: int}> mail): void {
+    self.count = self.count + mail.value.by;
+    self.end();
+    return;
+  }
+end
+fnc main(): int {
+  const worker = spawn Counter();
+  await worker.get_ready();
+  worker.send(infer struct{by: 20});
+  await worker.get_done();
+  return 0;
+}
+```
+
+This first LLVM fragment supports **one i64 field in one structural
+message type**, a one-shot `receive` that invokes `self.end()`, and a
+single worker in its compiled `main`. It is not general tagged unions,
+multiple typed messages, arbitrary multi-actor source statements, or a
+general result channel. The separately tested multi-worker native
+scheduler adapter remains available but has not yet been connected to a
+general multi-worker typed source compiler. The C++ host callback
+implements the post-receive terminal request for the one-shot fixture.
+
+Exact-blob funded CI [38153797830](https://github.com/zed-pkg-test/java-app/actions/runs/38153797830):
+66 native CTests passed with no failures, including the positive typed
+mail source programs, direct-method rejection and mismatched payload
+rejection, original multi-worker CONTROL coverage, native sanitizers,
+scheduler/panic repeat gates and the Java layout hash smoke checker.
