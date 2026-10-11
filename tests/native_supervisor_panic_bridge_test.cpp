@@ -127,6 +127,9 @@ int main() {
                 ++s.unexpected;
             if (!ores_native_actor_scheduler_stop(s.scheduler, s.sibling))
                 ++s.unexpected;
+            // A real lifecycle STOP can close its own supervisor from inside
+            // the admitted CONTROL decision. The effect must still commit.
+            s.process->close();
             ++s.decisions;
             {
                 std::lock_guard<std::mutex> guard(s.mutex);
@@ -206,8 +209,9 @@ int main() {
           "terminal failure delivered or resolved more than once");
     check(s.bridge->accepted() == 1 && s.bridge->rejected() == 3,
           "native supervisor bridge replay/forgery accounting drift");
-    check(s.process->resolved() == 1 && s.process->healthy(),
-          "supervisor process did not commit exactly one decision");
+    check(s.process->resolved() == 1 && !s.process->healthy()
+          && s.process->undelivered() == 0,
+          "self-closing supervisor lost or duplicated a committed decision");
     check(ores_native_actor_scheduler_poll_done(s.scheduler, s.child)
           && ores_native_actor_scheduler_poll_done(s.scheduler, s.sibling),
           "finalized child or stopped sibling is still executing");
