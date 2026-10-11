@@ -541,6 +541,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
             for (const auto& name : method.parameters) {
                 parameters.emplace(name, &*args++);
             }
+            llvm::Value* nominalWire = nullptr;
+            llvm::Value* nominalWireSize = nullptr;
+            if (method.is_receiver && taggedCases.count(actor.name)) {
+                nominalWire = &*args++;
+                nominalWireSize = &*args++;
+            }
             std::unordered_map<std::string, llvm::Value*> locals;
             for (std::size_t index = 0; index < actor.fields.size(); ++index) {
                 llvm::Value* value = builder.CreateCall(fieldRead,
@@ -591,6 +597,19 @@ std::string emit_verified_llvm_ir(const Program& source) {
                         "match.nominal." + std::to_string(ordinal), fn);
                     dispatch->addCase(llvm::ConstantInt::get(i64, ordinal), armBlock);
                     builder.SetInsertPoint(armBlock);
+                    auto armParameters = parameters;
+                    if (selected->i64_payload && arm.binds_payload) {
+                        if (arm.binders.size() != 1 || arm.tuple_destructure)
+                            throw std::runtime_error("invalid int payload binder");
+                        if (arm.binders.front() != "_") {
+                            const auto reader = module.getOrInsertFunction(
+                                "oreslang_source_actor_tagged_i64",
+                                llvm::FunctionType::get(i64, {ptr, i64}, false));
+                            llvm::Value* bound = builder.CreateCall(reader,
+                                {nominalWire, nominalWireSize}, "tagged.int.bound");
+                            armParameters.emplace(arm.binders.front(), bound);
+                        }
+                    }
                     for (const auto& assignment : arm.assignments) {
                         const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
                             [&](const LocalBinding& f) {
@@ -599,7 +618,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                         if (field == actor.fields.end() || !field->field_mutable)
                             throw std::runtime_error("invalid tagged actor field mutation");
                         auto* updated = lower(*assignment.value, builder, i64,
-                                              parameters, locals, declarations);
+                                              armParameters, locals, declarations);
                         builder.CreateCall(fieldWrite,
                             {heap, currentDomain, currentEpoch,
                              llvm::ConstantInt::get(i64,
