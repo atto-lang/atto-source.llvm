@@ -189,8 +189,10 @@ int main() {
                 check(survivor->initialize(), "detached group worker init failed");
                 survivor_ref = survivor->ref();
                 pin.emplace(survivor->pin_continuation());
-                group.close();
-                check(group.drain_control() == 0, "detached group freed pinned continuation");
+                // Deliberately rely on wrapper destructor's cancel request;
+                // finalization still must wait for the retained callback pin.
+                check(group.drain_control() == 0,
+                      "untouched running group unexpectedly finalized");
             }
             check(survivor_ref->get_done().wait_for(0ms) == std::future_status::timeout,
                   "detached group prematurely settled done");
