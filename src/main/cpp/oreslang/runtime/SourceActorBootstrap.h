@@ -11,7 +11,14 @@ extern "C" {
  * actor carrier. Later await must use scheduler-admitted continuations.
  */
 typedef void (*OresSourceActorInit)(OresActorI64Heap*, uint64_t, uint64_t);
-void* oreslang_source_actor_spawn(OresSourceActorInit initializer, uint64_t fields);
+typedef int64_t (*OresSourceActorMessage)(OresActorI64Heap*, uint64_t, uint64_t, int64_t);
+void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
+                                  OresSourceActorMessage on_message,
+                                  uint64_t fields);
+/* Nonblocking bounded one-way send. Overload currently fails closed with a
+ * host error; a typed guest overload result still needs compiler lowering.
+ */
+void oreslang_source_actor_send(void* actor, int64_t payload);
 void oreslang_source_actor_stop(void* actor);
 #ifdef __cplusplus
 }
