@@ -20,6 +20,32 @@
 namespace oreslang {
 namespace {
 
+/* Versioned shared Java/Graal + LLVM layout fingerprint. Not a capability,
+ * security token or memory allocator identity. All names in this compiler
+ * subset are ASCII lexer identifiers, and each field's type is i64. */
+std::uint64_t actor_layout_v1(const ActorDecl& actor) {
+    std::uint64_t hash = UINT64_C(14695981039346656037);
+    auto octet = [&](unsigned char ch) {
+        hash ^= ch;
+        hash *= UINT64_C(1099511628211);
+    };
+    auto name = [&](const std::string& value) {
+        for (unsigned char ch : value) octet(ch);
+        octet(0);
+    };
+    for (unsigned char ch : std::string("ores.actor.fields.v1"))
+        octet(ch);
+    octet(0);
+    name(actor.name);
+    for (const ActorField& field : actor.fields) {
+        name(field.name);
+        name("i64");
+        octet(field.mutable_field ? 1 : 0);
+    }
+    return hash;
+}
+
+
 struct ActorContext {
     llvm::Value* heap;
     llvm::Value* domain;
@@ -190,6 +216,18 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 llvm::FunctionType::get(result, params, false),
                 llvm::Function::ExternalLinkage, prefix + name, module);
         };
+        llvm::Function* version = entrypoint("layout_version", i32, {});
+        {
+            llvm::IRBuilder<> builder(
+                llvm::BasicBlock::Create(context, "entry", version));
+            builder.CreateRet(builder.getInt32(1));
+        }
+        llvm::Function* layout_hash = entrypoint("layout_hash", i64, {});
+        {
+            llvm::IRBuilder<> builder(
+                llvm::BasicBlock::Create(context, "entry", layout_hash));
+            builder.CreateRet(llvm::ConstantInt::get(i64, actor_layout_v1(actor)));
+        }
         auto params = [](llvm::Function* function) {
             std::vector<llvm::Value*> result;
             for (auto& arg : function->args()) result.push_back(&arg);
