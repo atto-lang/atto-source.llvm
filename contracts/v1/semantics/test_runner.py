@@ -102,9 +102,14 @@ class ComparatorParityProof(unittest.TestCase):
         from contextlib import redirect_stdout, redirect_stderr
         import io
         import compare
+        selected = suite or self.suite
+        ids = {case["id"] for case in selected["cases"]}
+        reports = {backend: dict(report, results=[
+            record for record in report["results"] if record["id"] in ids])
+            for backend, report in self.reports.items()}
         with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
-            status = compare.compare(suite or self.suite, self.digest,
-                                     self.reports["llvm"], self.reports["graal"],
+            status = compare.compare(selected, self.digest,
+                                     reports["llvm"], reports["graal"],
                                      require_suite_parity=strict, expected_revisions=revisions)
         return status, out.getvalue()
 
