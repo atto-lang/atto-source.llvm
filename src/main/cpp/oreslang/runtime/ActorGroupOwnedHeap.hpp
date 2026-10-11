@@ -244,7 +244,10 @@ public:
         std::optional<NativeActorRef> finalized_ref;
         std::string error;
         {
-            std::lock_guard<std::mutex> guard(lane_);
+            // CONTROL runs on the parent's lane. Never park that carrier
+            // behind an in-flight child turn; its completion re-enqueues.
+            std::unique_lock<std::mutex> guard(lane_, std::try_to_lock);
+            if (!guard.owns_lock()) return false;
             const NativeActorExit reason = requested_.load(std::memory_order_acquire);
             if (reason == NativeActorExit::running || finalized_) return false;
             if (heap_) {
@@ -287,17 +290,14 @@ public:
 
 private:
     void release_continuation_pin() noexcept {
-        bool stopped = false;
-        {
-            std::lock_guard<std::mutex> guard(lane_);
-            if (continuation_pins_.fetch_sub(1, std::memory_order_acq_rel) == 0)
-                std::terminate();
-            stopped = requested_.load(std::memory_order_acquire)
-                      != NativeActorExit::running;
-        }
-        if (stopped) {
+        // A continuation may complete inline while its actor's logical lane
+        // is still held. Reacquiring lane_ here self-deadlocks the scheduler.
+        // The pin count and stop reason are independent atomics.
+        if (continuation_pins_.fetch_sub(1, std::memory_order_acq_rel) == 0)
+            std::terminate();
+        if (requested_.load(std::memory_order_acquire) != NativeActorExit::running) {
             try { enqueue_control_(); }
-            catch (...) { /* scheduler must supply a reliable enqueue callback */ }
+            catch (...) { /* runtime must supply a reliable CONTROL enqueue */ }
         }
     }
 
