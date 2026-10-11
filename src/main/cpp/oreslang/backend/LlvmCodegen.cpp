@@ -30,42 +30,46 @@ llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
                    const std::unordered_map<std::string, llvm::Value*>& storage,
+                   const std::unordered_map<std::string, llvm::Value*>& field_storage,
                    const std::unordered_map<std::string, llvm::Function*>& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable:
             return builder.CreateLoad(i64, storage.at(expr.name), expr.name + ".read");
+        case Expression::Kind::Field:
+            return builder.CreateLoad(i64, field_storage.at(expr.left->name),
+                                      expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             // Only addressable named parameters are admitted by OwnershipChecker.
             return storage.at(expr.left->name);
         case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, functions), "neg");
+            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions), "neg");
         case Expression::Kind::Copy:
         case Expression::Kind::Take:
         case Expression::Kind::Share:
             // These remain primitive value operations, never graph references.
-            return lower(*expr.left, builder, i64, storage, functions);
+            return lower(*expr.left, builder, i64, storage, field_storage, functions);
         case Expression::Kind::Add: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions);
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions);
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, functions);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, functions);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions);
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
-                arguments.push_back(lower(*arg, builder, i64, storage, functions));
+                arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions));
             return builder.CreateCall(functions.at(expr.name), arguments, "call");
         }
     }
@@ -90,6 +94,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
     auto regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
     std::unordered_map<std::string, llvm::Function*> declarations;
+    std::unordered_map<std::string, llvm::StructType*> class_types;
+    std::unordered_map<std::string, std::int64_t> class_defaults;
+    for (const auto& cls : source.classes) {
+        class_types.emplace(cls.name, llvm::StructType::create(context, {i64}, cls.name));
+        class_defaults.emplace(cls.name, cls.initial);
+    }
 
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
@@ -98,8 +108,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
             ? fn.name : source.module + "." + fn.name;
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
-            argument_types.push_back(param.mode == Parameter::Mode::Value ? i64 : loan_ptr);
-        llvm::FunctionType* signature = llvm::FunctionType::get(i64, argument_types, false);
+            argument_types.push_back(param.class_name.empty()
+                ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                : class_types.at(param.class_name)->getPointerTo());
+        llvm::FunctionType* signature = llvm::FunctionType::get(
+            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
+            argument_types, false);
         declarations.emplace(fn.name, llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module));
     }
@@ -108,11 +122,17 @@ std::string emit_verified_llvm_ir(const Program& source) {
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         std::unordered_map<std::string, llvm::Value*> storage;
+        std::unordered_map<std::string, llvm::Value*> field_storage;
         std::size_t index = 0;
         for (auto& arg : function->args()) {
             const Parameter& param = fn.parameters[index++];
             arg.setName(param.name);
-            if (param.mode == Parameter::Mode::Value) {
+            if (!param.class_name.empty()) {
+                storage.emplace(param.name, &arg);
+                field_storage.emplace(param.name,
+                    builder.CreateStructGEP(class_types.at(param.class_name), &arg, 0,
+                                            param.name + ".field"));
+            } else if (param.mode == Parameter::Mode::Value) {
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
                 builder.CreateStore(&arg, slot);
                 storage.emplace(param.name, slot);
@@ -132,7 +152,20 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         for (const auto& binding : fn.locals) {
-            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, declarations);
+            if (binding.new_class) {
+                llvm::StructType* shape = class_types.at(binding.class_name);
+                llvm::Value* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record");
+                builder.CreateLifetimeStart(slot,
+                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+                llvm::Value* field = builder.CreateStructGEP(shape, slot, 0, binding.name + ".field");
+                builder.CreateStore(llvm::ConstantInt::getSigned(i64,
+                    class_defaults.at(binding.class_name)), field);
+                storage.emplace(binding.name, slot);
+                field_storage.emplace(binding.name, field);
+                lexical_slots.push_back({slot, false});
+                continue;
+            }
+            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations);
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
                 slot = builder.CreateCall(regionNew, {region, initial}, binding.name + ".heap.owned");
@@ -144,14 +177,24 @@ std::string emit_verified_llvm_ir(const Program& source) {
             storage.emplace(binding.name, slot);
             lexical_slots.push_back({slot, binding.heap_owned});
         }
-        llvm::Value* result = lower(*fn.result, builder, i64, storage, declarations);
+        for (const auto& stmt : fn.statements) {
+            if (stmt.kind == Statement::Kind::FieldWrite) {
+                llvm::Value* updated = lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
+                builder.CreateStore(updated, field_storage.at(stmt.receiver));
+            } else {
+                lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
+            }
+        }
+        llvm::Value* result = fn.result
+            ? lower(*fn.result, builder, i64, storage, field_storage, declarations) : nullptr;
         for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
             if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
             else builder.CreateLifetimeEnd(it->address,
                 llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
         }
         if (region != nullptr) builder.CreateCall(regionClose, {region});
-        builder.CreateRet(result);
+        if (fn.returns_void) builder.CreateRetVoid();
+        else builder.CreateRet(result);
     }
 
     std::string diagnostics;
