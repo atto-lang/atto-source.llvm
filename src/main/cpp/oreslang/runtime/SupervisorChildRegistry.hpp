@@ -54,6 +54,9 @@ public:
             throw std::invalid_argument("invalid supervisor child registry");
     }
 
+    std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
+
     Snapshot register_child(OresNativeActorRef actor) {
         std::lock_guard<std::mutex> guard(mutex_);
         validate_actor(actor);
