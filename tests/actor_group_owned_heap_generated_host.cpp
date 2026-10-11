@@ -213,16 +213,15 @@ int main() {
                 }));
             });
             bool entered = admitted.get_future().wait_for(5s) == std::future_status::ready;
+            // Stop after the actor has demonstrably entered the turn;
+            // otherwise an early CONTROL poll proves nothing about blocking.
+            if (entered) worker->request_normal_stop();
             std::promise<std::size_t> control_result;
             auto settled = control_result.get_future();
             std::thread parent([&] {
                 try { control_result.set_value(group.drain_control()); }
                 catch (...) { control_result.set_exception(std::current_exception()); }
             });
-            // Request stop after the native actor has demonstrably entered.
-            // Parent may perform an early no-op CONTROL drain; either way it
-            // must return immediately instead of parking behind the child.
-            if (entered) worker->request_normal_stop();
             auto responsiveness = settled.wait_for(500ms);
             finish_turn.set_value();
             child.join();
