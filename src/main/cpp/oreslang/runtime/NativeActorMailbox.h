@@ -17,6 +17,8 @@ void ores_native_actor_mailbox_retire(OresNativeActorMailbox* mailbox);
 /* Scheduler must join/fence every caller before trying physical destroy. */
 int ores_native_actor_mailbox_try_destroy(OresNativeActorMailbox* mailbox);
 uint64_t ores_native_actor_mailbox_rejected(OresNativeActorMailbox* mailbox);
+/* Diagnostic count includes the admitted turn and FIFO waiters. */
+size_t ores_native_actor_mailbox_pending(OresNativeActorMailbox* mailbox);
 #ifdef __cplusplus
 }
 #endif
