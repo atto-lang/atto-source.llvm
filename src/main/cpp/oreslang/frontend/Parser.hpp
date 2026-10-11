@@ -11,7 +11,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ActorField };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ActorField, Match, Switch };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -19,6 +19,12 @@ struct Expression {
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
+    struct Arm {
+        bool fallback = false;
+        std::vector<std::int64_t> cases;
+        std::unique_ptr<Expression> value; // null only for a procedural do arm
+    };
+    std::vector<Arm> arms;
 };
 
 // A trivially owned, immutable i64 local. The first LLVM lexical-storage
@@ -35,6 +41,11 @@ struct Function {
     std::vector<std::string> parameters;
     std::vector<LocalBinding> locals;
     std::unique_ptr<Expression> result;
+    struct DoDispatch {
+        std::unique_ptr<Expression> dispatch;
+        bool terminal = false;
+    };
+    std::vector<DoDispatch> procedural;
     std::size_t offset = 0;
     bool exported = false;
 };
