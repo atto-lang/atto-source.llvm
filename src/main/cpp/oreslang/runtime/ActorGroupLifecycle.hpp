@@ -194,7 +194,7 @@ public:
             throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
-        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting});
+        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
         try {
             owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
         } catch (...) {
