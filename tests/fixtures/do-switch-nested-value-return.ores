@@ -1,0 +1,13 @@
+// The inner match collects a value; the enclosing do arm returns from main.
+pub fnc main(): int {
+  do switch 1
+    default { return 0; };
+    case 1 {
+      return match 5 over
+        on 5 { return 42; };
+        on _ { return 0; };
+      end;
+    };
+  end
+  return 3;
+}
