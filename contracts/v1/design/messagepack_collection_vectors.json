@@ -1,0 +1,111 @@
+{
+  "schema": "oreslang.messagepack.collections.v1",
+  "format": "MessagePack",
+  "status": "Java standalone codec added; actor mailbox/runtime transport integration and native parity pending",
+  "envelope": [
+    "wire_format_version_i64_1",
+    "schema_id_utf8",
+    "schema_guided_payload"
+  ],
+  "spec": "https://github.com/msgpack/msgpack/blob/master/spec.md",
+  "scalar_subset": [
+    "bool",
+    "signed_i64",
+    "finite_float64",
+    "utf8_string"
+  ],
+  "limits": {
+    "max_bytes": 1048576,
+    "max_nodes": 100000,
+    "max_depth": 64,
+    "max_sequence_elements": 100000,
+    "max_schema_id_ascii_bytes": 256
+  },
+  "kind_rule": "Container identity and expected fixed arity are determined by compiler-owned schema descriptor; the MessagePack payload alone encodes each container as an array.",
+  "ownership_rule": "Serialize at send call; snapshot immutable mailbox value; no writable aliases. rt copy is an optional semantically equivalent local optimization after executable benchmarks.",
+  "vectors": [
+    {
+      "schema_id": "demo.TupleBoolString.v1",
+      "kind": "Tuple",
+      "shape": [
+        "bool",
+        "string"
+      ],
+      "input": [
+        true,
+        "foo"
+      ],
+      "hex": "9301b764656d6f2e5475706c65426f6f6c537472696e672e763192c3a3666f6f"
+    },
+    {
+      "schema_id": "demo.FixedArrayInts.v1",
+      "kind": "FixedArray",
+      "shape": [
+        "int64",
+        "int64",
+        "int64"
+      ],
+      "input": [
+        1,
+        2,
+        3
+      ],
+      "hex": "9301b664656d6f2e46697865644172726179496e74732e763193010203"
+    },
+    {
+      "schema_id": "demo.FixedListNested.v1",
+      "kind": "FixedList",
+      "shape": [
+        {
+          "List": "string"
+        },
+        "bool"
+      ],
+      "input": [
+        [
+          "a",
+          "b"
+        ],
+        false
+      ],
+      "hex": "9301b764656d6f2e46697865644c6973744e65737465642e76319292a161a162c2"
+    },
+    {
+      "schema_id": "demo.ArrayStrings.v1",
+      "kind": "Array",
+      "shape": {
+        "element": "string"
+      },
+      "input": [
+        "a",
+        "b"
+      ],
+      "hex": "9301b464656d6f2e4172726179537472696e67732e763192a161a162"
+    },
+    {
+      "schema_id": "demo.ListStrings.v1",
+      "kind": "List",
+      "shape": {
+        "element": "string"
+      },
+      "input": [
+        "a",
+        "b"
+      ],
+      "hex": "9301b364656d6f2e4c697374537472696e67732e763192a161a162"
+    },
+    {
+      "schema_id": "demo.String.v1",
+      "kind": "string",
+      "shape": "string",
+      "input": "foo",
+      "hex": "9301ae64656d6f2e537472696e672e7631a3666f6f"
+    }
+  ],
+  "notes": [
+    "Byte vectors produced independently with Python msgpack 1.1.2.",
+    "The example schema ids are test contracts, not type-identity hashing or a schema registry.",
+    "Text JSON only for authoring test metadata; actual transport bytes are the MessagePack hex vectors.",
+    "No class/enum/Option/Result arbitrary codecs or actor serializer integration are claimed."
+  ]
+}
