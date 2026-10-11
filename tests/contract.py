@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--scheduler-runtime")
     parser.add_argument("--source-actor-runtime")
     parser.add_argument("--stderr")
+    parser.add_argument("--stderr-count", type=int)
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     compile_result = subprocess.run(
@@ -85,6 +86,9 @@ def main():
         )
         if args.stderr:
             assert args.stderr in result.stderr, result.stderr
+        if args.stderr_count is not None:
+            assert args.stderr, "--stderr-count needs --stderr"
+            assert result.stderr.count(args.stderr) == args.stderr_count, result.stderr
 
 
 if __name__ == "__main__":
