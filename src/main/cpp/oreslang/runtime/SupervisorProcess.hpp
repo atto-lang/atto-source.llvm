@@ -127,6 +127,10 @@ public:
         std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return;
+        if (committing_decision_ && !failed_) {
+            close_after_commit_ = true;
+            return;
+        }
         closed_ = true;
         if (!failed_) undelivered_ += mailbox_.size();
         mailbox_.clear();
@@ -189,23 +193,35 @@ private:
             fail_locked();
             return;
         }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            committing_decision_ = true;
+        }
         try {
-            // The directive is a host REQUEST; no restart/escalation occurs
-            // until the lifecycle owner explicitly applies the decision.
+            // A host effect may close its owning supervisor reentrantly.
+            // Defer closure until this successfully applied decision commits.
             sink_(resolution);
         } catch (...) {
             std::lock_guard<std::mutex> guard(mutex_);
+            committing_decision_ = false;
             fail_locked();
             return;
         }
         {
             std::lock_guard<std::mutex> guard(mutex_);
+            committing_decision_ = false;
             if (failed_ || closed_) return;
             mailbox_.pop_front();
             ++resolved_;
             active_ = false;
             resume_enqueued_ = false;
-            schedule_locked();
+            if (close_after_commit_) {
+                closed_ = true;
+                undelivered_ += mailbox_.size();
+                mailbox_.clear();
+            } else {
+                schedule_locked();
+            }
         }
     }
 
@@ -228,6 +244,8 @@ private:
     bool active_ = false;
     bool suspended_ = false;
     bool resume_enqueued_ = false;
+    bool committing_decision_ = false;
+    bool close_after_commit_ = false;
     bool failed_ = false;
     bool closed_ = false;
     std::uint64_t epoch_ = 0;
