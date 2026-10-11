@@ -16,7 +16,8 @@ typedef enum OreslangStringStatus {
     ORESLANG_STRING_INVALID = 1,
     ORESLANG_STRING_INVALID_UTF8 = 2,
     ORESLANG_STRING_TOO_LARGE = 3,
-    ORESLANG_STRING_NO_MEMORY = 4
+    ORESLANG_STRING_NO_MEMORY = 4,
+    ORESLANG_STRING_INVALID_JSON = 5
 } OreslangStringStatus;
 #define ORESLANG_STRING_MAX_BYTES UINT64_C(16777216)
 // Strings may contain NUL; byte_length is authoritative, not strlen.
@@ -25,6 +26,9 @@ OreslangStringStatus oreslang_string_new_utf8(const unsigned char*, uint64_t, Or
 OreslangStringStatus oreslang_string_clone(const OreslangNativeString*, OreslangNativeString*);
 OreslangStringStatus oreslang_string_concat(const OreslangNativeString*, const OreslangNativeString*, OreslangNativeString*);
 OreslangStringStatus oreslang_string_json_quote(const OreslangNativeString*, OreslangNativeString*);
+// Decodes exactly one JSON string (not an object or a string token prefix).
+// Rejects lone surrogates, malformed escapes, raw controls, and invalid UTF-8.
+OreslangStringStatus oreslang_string_json_unquote(const OreslangNativeString*, OreslangNativeString*);
 void oreslang_string_drop(OreslangNativeString*);
 #ifdef __cplusplus
 }
