@@ -25,7 +25,7 @@ def main():
                       f"fnc change(borrow mut Record target): void {{\n"
                       f"  target.field{count-1} = 42;\n  return;\n}}\n"
                       f"pub fnc main(): int {{\n"
-                      f"  let Record record = new Record();\n"
+                      f"  let mut Record record = new Record();\n"
                       f"  change(rt borrow mut record);\n"
                       f"  return record.field{count-1};\n}}\n")
             file = directory / f"layout-{count}.ores"
