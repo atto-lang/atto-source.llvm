@@ -93,10 +93,12 @@ int ores_native_actor_scheduler_publish_failure(
     OresNativeActorTerminalFailure failure);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
-/* Native scheduler construction configures queues and capacity, but creates
- * ZERO pthread carriers. First successfully admitted user or CONTROL work
- * activates one worker, then grows up to the configured maximum as outstanding work accumulates, before publishing that message. A failed
- * first activation fails closed, without publishing an unserviceable item. */
+/* Native scheduler construction eagerly allocates its bounded metadata but
+ * creates ZERO pthreads. First actor spawn starts the ONE dedicated pool
+ * scheduler CONTROL thread; it never executes callbacks. The first accepted
+ * user/CONTROL event starts one worker. Physical workers scale with runnable
+ * demand up to five, even if a legacy host requests more than five.
+ * A failed activation fails closed without publishing unserviceable work. */
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn callback, void* ctx);
