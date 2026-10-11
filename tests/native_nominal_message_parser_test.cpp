@@ -70,6 +70,26 @@ int main() {
     rejects("define enum Bad as A B A end", "duplicate enum case");
     rejects("define enum Bad as A: List[bool, int] end",
             "variable enum message collection must have exactly one element type");
+    rejects("define enum Bad as A: Tuple[int, List[bool, bool]] end",
+            "variable enum message collection must have exactly one element type");
+    rejects("define enum Bad as A: FixedArray[List[int, int], string] end",
+            "variable enum message collection must have exactly one element type");
+    rejects("define enum Bad as A: Array[Tuple[string, Array[int, bool]]] end",
+            "variable enum message collection must have exactly one element type");
+    // One bad descriptor can be partitioned into individually legal
+    // 4096-slot tuples. Quota the TOTAL tree rather than each subtree.
+    std::string huge = "define enum Huge as Payload: Tuple[";
+    for (int group = 0; group < 26; ++group) {
+        if (group) huge += ",";
+        huge += "Tuple[";
+        for (int n = 0; n < 4096; ++n) {
+            if (n) huge += ",";
+            huge += "int";
+        }
+        huge += "]";
+    }
+    huge += "] end";
+    rejects(huge, "message shape exceeds total descriptor node budget");
     rejects("define pattern Missing as Events.Nope end",
             "unknown enum in tagged pattern");
     rejects("define enum E as A end define pattern P as E.Missing end",
