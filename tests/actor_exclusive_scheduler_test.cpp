@@ -118,8 +118,17 @@ int main() {
     check(errors == 0, "user handler unexpectedly failed");
     lane->close();
     check(!lane->post_data([] {}), "closed lane accepted new user data");
+    // A handler's promise can resolve before the carrier's post-handler
+    // turn_completed() acknowledgment. Finalize is nonblocking: wait until
+    // that exact logical-lane release, never treat the promise as ownership
+    // retirement by itself.
+    const auto quiescent_by = std::chrono::steady_clock::now() + 5s;
+    while (!lane->finalize() && std::chrono::steady_clock::now() < quiescent_by)
+        std::this_thread::yield();
     check(lane->finalize(), "quiescent actor scheduler refused terminal fence");
     check(!lane->post_control([] {}), "physically finalized lane accepted CONTROL");
+    while (!parent->finalize() && std::chrono::steady_clock::now() < quiescent_by)
+        std::this_thread::yield();
     check(parent->finalize(), "idle parent scheduler refused retirement");
 
     // User exceptions cannot strand the logical lane; host receives failure
