@@ -261,13 +261,60 @@ std::string emit_verified_llvm_ir(const Program& source) {
         }
         std::unordered_map<std::string, llvm::Function*> generated_methods;
         for (const auto& method : actor.methods) {
+            const bool union_receiver = method.name == "receive"
+                    && method.accepted_message_variants.size() > 1;
             std::vector<llvm::Type*> signature = {ptr, i64, i64, ptr};
-            signature.insert(signature.end(), method.parameters.size(), i64);
+            if (union_receiver) {
+                // Transport tag is a native host capability: guest source
+                // cannot invoke this generated receive pointer directly.
+                signature.push_back(i32);
+                signature.push_back(i64);
+            } else {
+                signature.insert(signature.end(), method.parameters.size(), i64);
+            }
             llvm::Function* function = entrypoint(method.name, i64, signature);
             generated_methods.emplace(method.name, function);
             llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", function));
             const auto args = params(function);
             ActorContext owned{args[0], args[1], args[2], args[3], fieldGet, &field_indices};
+            if (union_receiver) {
+                // An invalid tag has no access to actor-owned state. Distinct
+                // variants have distinct block labels and a finite exhaustive
+                // case map established by parser/typechecker.
+                auto* rejected = llvm::BasicBlock::Create(context, "invalid_variant", function);
+                llvm::IRBuilder<> invalid(rejected);
+                invalid.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
+                auto* decision = builder.CreateSwitch(args[4], rejected,
+                        static_cast<unsigned>(method.accepted_message_variants.size()));
+                for (std::size_t i = 0; i < method.accepted_message_variants.size(); ++i) {
+                    const auto& field = method.accepted_message_variants[i];
+                    const auto& arm = *std::find_if(method.variant_arms.begin(),
+                            method.variant_arms.end(),
+                            [&](const ActorVariantArm& candidate) {
+                                return candidate.field == field;
+                            });
+                    auto* selected = llvm::BasicBlock::Create(
+                            context, "message_" + field, function);
+                    decision->addCase(builder.getInt32(static_cast<std::uint32_t>(i)), selected);
+                    llvm::IRBuilder<> emit(selected);
+                    std::unordered_map<std::string, llvm::Value*> input{{field, args[5]}};
+                    for (const auto& assignment : arm.assignments) {
+                        llvm::Value* v = lower(*assignment.value, emit, i64,
+                                               input, none, no_functions, &owned);
+                        emit.CreateCall(fieldSet, {
+                            owned.heap, owned.domain, owned.epoch, owned.fields,
+                            emit.getInt32(field_indices.at(assignment.field)), v
+                        });
+                    }
+                    // Host-only result can be forwarded through a separate
+                    // output port; public send(...) never returns it.
+                    emit.CreateRet(emit.CreateCall(fieldGet, {
+                        owned.heap, owned.domain, owned.epoch, owned.fields,
+                        emit.getInt32(0)
+                    }));
+                }
+                continue;
+            }
             std::unordered_map<std::string, llvm::Value*> inputs;
             for (std::size_t i = 0; i < method.parameters.size(); ++i) {
                 args[4 + i]->setName(method.parameters[i]);
