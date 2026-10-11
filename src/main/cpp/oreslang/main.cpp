@@ -29,14 +29,14 @@ int main(int argc, char** argv) {
             } else {
                 try {
                     (void)oreslang::TargetAbi::parse(target);
-                    std::cerr << "target has no certified IR/ABI lowering: " << target << '\\n';
+                    std::cerr << "target has no certified IR/ABI lowering: " << target << '\n';
                 } catch (const std::invalid_argument&) {
-                    std::cerr << "unknown target triple: " << target << '\\n';
+                    std::cerr << "unknown target triple: " << target << '\n';
                 }
                 return 2;
             }
         } else if (arg.rfind("--cpu=", 0) == 0) {
-            std::cerr << "explicit CPU feature selection not implemented: " << arg << '\\n';
+            std::cerr << "explicit CPU feature selection not implemented: " << arg << '\n';
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
