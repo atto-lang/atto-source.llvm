@@ -61,16 +61,24 @@ public:
             throw std::logic_error("native actor already bound to a logical child");
         ChildRef child{supervisor_id_, runtime_id_, fresh_child_id()};
         Snapshot first{child, actor, 1, Phase::active};
-        // Commit both indexes or neither. A map allocation failure must
-        // never leave an apparently active child without its actor index.
-        auto [active_it, inserted] =
-            active_actors_.emplace(actor_key(actor), child.logical_child_id);
-        if (!inserted)
-            throw std::logic_error("actor already belongs to a logical child");
+        // A previously retired native actor slot+generation cannot be
+        // republished as a fresh incarnation (A -> B -> A). Remember only
+        // the highest generation for each slot, not every old actor.
+        require_fresh_generation(actor);
+        auto [seen_it, new_slot] = highest_generation_.try_emplace(
+            actor.actor_slot, 0);
         try {
+            auto [active_it, inserted] =
+                active_actors_.emplace(actor_key(actor), child.logical_child_id);
+            (void) active_it;
+            if (!inserted)
+                throw std::logic_error("actor already belongs to a logical child");
             children_.emplace(child.logical_child_id, first);
+            seen_it->second = actor.generation;
         } catch (...) {
-            active_actors_.erase(active_it);
+            children_.erase(child.logical_child_id);
+            active_actors_.erase(actor_key(actor));
+            if (new_slot) highest_generation_.erase(seen_it);
             throw;
         }
         return first;
@@ -121,16 +129,27 @@ public:
         if (same_actor(replacement, permit.failed_actor)
             || active_actors_.count(actor_key(replacement)))
             throw std::logic_error("native replacement actor is not fresh");
-        // Insert the reverse index before mutating the prior snapshot:
-        // allocation failure leaves the reservation intact for abort.
-        auto [active_it, inserted] = active_actors_.emplace(
-            actor_key(replacement), permit.child.logical_child_id);
-        (void) active_it;
-        if (!inserted) throw std::logic_error("replacement actor already registered");
+        require_fresh_generation(replacement);
+        // Stage both the slot replay fence and live actor index before
+        // changing the child state. An allocation failure preserves the
+        // reservation so the host can stop and roll back the spawned actor.
+        auto [seen_it, new_slot] = highest_generation_.try_emplace(
+            replacement.actor_slot, 0);
+        try {
+            auto [active_it, inserted] = active_actors_.emplace(
+                actor_key(replacement), permit.child.logical_child_id);
+            (void) active_it;
+            if (!inserted)
+                throw std::logic_error("replacement actor already registered");
+        } catch (...) {
+            if (new_slot) highest_generation_.erase(seen_it);
+            throw;
+        }
         auto& stored = children_.at(permit.child.logical_child_id);
         stored.actor = replacement;
         stored.incarnation = permit.incarnation + 1;
         stored.phase = Phase::active;
+        seen_it->second = replacement.generation;
         pending_restarts_.erase(permit.child.logical_child_id);
         return stored;
     }
@@ -205,6 +224,16 @@ private:
         return a.scheduler_domain == b.scheduler_domain
             && a.actor_slot == b.actor_slot && a.generation == b.generation;
     }
+    void require_fresh_generation(OresNativeActorRef actor) const {
+        const auto slot = highest_generation_.find(actor.actor_slot);
+        if (slot != highest_generation_.end()
+            && actor.generation <= slot->second)
+            throw std::logic_error("native actor slot generation was already used");
+        const auto live = active_actors_.lower_bound({actor.actor_slot, 0});
+        if (live != active_actors_.end()
+            && live->first.first == actor.actor_slot)
+            throw std::logic_error("native actor slot already has a live incarnation");
+    }
     static std::pair<std::uint64_t, std::uint64_t>
     actor_key(OresNativeActorRef actor) noexcept {
         return {actor.actor_slot, actor.generation};
@@ -238,6 +267,8 @@ private:
     inline static std::atomic<std::uint64_t> next_restart_nonce_{0};
     std::unordered_map<std::uint64_t, std::uint64_t> pending_restarts_;
     std::unordered_map<std::uint64_t, Snapshot> children_;
+    // Bounded by distinct native scheduler slots, not restart count.
+    std::map<std::uint64_t, std::uint64_t> highest_generation_;
     std::map<std::pair<std::uint64_t, std::uint64_t>,
              std::uint64_t> active_actors_;
 };
