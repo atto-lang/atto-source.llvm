@@ -456,6 +456,20 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_i64_region_drop_and_provenance
         COMMAND oreslang-native-owned-i64-region-test)
 
+    # Supervisor declarations are source-visible in Java, but native
+    # lowering must fail closed until compiler-generated CONTROL hooks exist.
+    add_executable(oreslang-source-supervisor-admission-test
+        tests/source_supervisor_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-source-supervisor-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-source-supervisor-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_source_supervisor_fail_closed
+        COMMAND oreslang-source-supervisor-admission-test)
+    set_tests_properties(native_source_supervisor_fail_closed PROPERTIES TIMEOUT 15)
+
     # Host-only deterministic actor arena; no source actor lowering implied.
     add_executable(oreslang-native-actor-arena-test
         tests/native_actor_arena_test.c
