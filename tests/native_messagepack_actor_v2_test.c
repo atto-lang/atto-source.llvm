@@ -169,13 +169,28 @@ int main(void) {
     wait_atomic(&state.finished[1], 1);
     wire[0][sizes[0] - 1] ^= 0xff; /* mutate sender after acceptance */
     atomic_store(&state.release, 1);
+    wait_atomic(&state.finished[0], 1);
+    wire[0][sizes[0] - 1] ^= 0xff; /* restore canonical sender input */
+    /* The completed DATA turn must release its admission quota. Retry
+     * only while the carrier is finishing the post-callback cleanup.
+     */
+    int second_admitted = 0;
+    for (int attempt = 0; attempt < 1000000; ++attempt) {
+        if (ores_mp2_group_send(group, a, wire[0], sizes[0])) {
+            second_admitted = 1;
+            break;
+        }
+        sched_yield();
+    }
+    assert(second_admitted);
+    wait_atomic(&state.finished[0], 2);
     assert(ores_mp2_group_stop(group, a));
     assert(ores_mp2_group_stop(group, b));
     assert(ores_mp2_group_wait_done(group, a));
     assert(ores_mp2_group_wait_done(group, b));
     assert(!ores_mp2_group_send(group, a, wire[0], sizes[0]));
     assert(ores_mp2_group_destroy(group));
-    assert(atomic_load(&state.finished[0]) == 1);
+    assert(atomic_load(&state.finished[0]) == 2);
     assert(atomic_load(&state.finished[1]) == 1);
     assert(atomic_load(&state.max_active[0]) == 1);
     assert(atomic_load(&state.max_active[1]) == 1);
