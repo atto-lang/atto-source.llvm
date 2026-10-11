@@ -254,7 +254,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         for (const auto& binding : fn.locals) {
-            if (binding.new_class) {
+            if (binding.new_class || binding.move_class) {
                 llvm::StructType* shape = class_types.at(binding.class_name);
                 llvm::Value* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record");
                 const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
@@ -266,7 +266,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     const ClassField& item = cls->fields[i];
                     llvm::Value* address = builder.CreateStructGEP(shape, slot,
                         static_cast<unsigned>(i), binding.name + "." + item.name);
-                    builder.CreateStore(llvm::ConstantInt::getSigned(i64, item.initial), address);
+                    // The admitted stack class contains only trivially movable i64 fields.
+                    llvm::Value* initial = binding.new_class
+                        ? static_cast<llvm::Value*>(llvm::ConstantInt::getSigned(i64, item.initial))
+                        : builder.CreateLoad(i64,
+                            field_storage.at(field_key(binding.move_source, item.name)),
+                            binding.move_source + "." + item.name + ".take");
+                    builder.CreateStore(initial, address);
                     field_storage.emplace(field_key(binding.name, item.name), address);
                 }
                 storage.emplace(binding.name, slot);

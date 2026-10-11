@@ -97,6 +97,19 @@ if(BUILD_TESTING)
                 --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         set_tests_properties(native_owned_scalar_cfg_generated_stress PROPERTIES TIMEOUT 240)
     endif()
+    # Class moves are compiled and exercised through real native guests.
+    if(ORE_CLANG)
+        add_test(NAME native_class_move_source_execution
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        add_test(NAME native_class_move_source_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_class_move_source_execution
+            native_class_move_source_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
     oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_close")
@@ -122,6 +135,8 @@ if(BUILD_TESTING)
         --diagnostic "ActorRef<T> requires spawn initializer")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
+
+
 
 
 
@@ -510,6 +525,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+
+    # Stop one child without waiting for an unrelated actor's busy turn.
+    add_executable(oreslang-native-child-wait-test
+        tests/native_actor_group_wait_done_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-child-wait-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-child-wait-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-child-wait-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actorgroup_per_child_wait_done
+        COMMAND oreslang-native-child-wait-test)
+    set_tests_properties(native_actorgroup_per_child_wait_done PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-native-supervisor-control-test
         tests/native_supervisor_control_test.c
