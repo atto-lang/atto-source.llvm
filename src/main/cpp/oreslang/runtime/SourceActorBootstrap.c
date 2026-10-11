@@ -343,44 +343,100 @@ void oreslang_source_actor_send(void* opaque, int64_t payload) {
     ensure(ores_native_actor_scheduler_send(
         group.scheduler, instance->ref, (uint64_t)payload));
 }
-int oreslang_source_actor_send_wire(void* opaque,
-                                   const uint8_t* wire, size_t size) {
-    SourceActor* instance = opaque;
-    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC
-            || !instance->on_wire || !wire || size > ORES_MP2_MAX_BYTES)
-        return 0;
-    /* Bound bytes being prepared BEFORE allocating. The reservation survives
-     * admission and is returned only after the admitted actor's callback.
-     * All messages share this actor's original single-flight DATA lane.
-     */
-    size_t pending = atomic_load_explicit(&instance->wire_reserved,
+/* Peek the *canonical* envelope schema only to select a compiler-pinned
+ * alternative. The selected contract then validates the entire copied
+ * MessagePack frame including version, SHA and recursively typed payload.
+ * This first read is NEVER authorization: if the sender mutates its frame
+ * before snapshot creation, post-copy full validation will fail closed.
+ */
+static int source_select_variant(const SourceActor* actor,
+                                 const uint8_t* wire, size_t size,
+                                 size_t* selected) {
+    if (!wire || size < 5 || wire[0] != 0x94 || wire[1] != 2) return 0;
+    size_t pos = 3;
+    size_t schema_bytes;
+    uint8_t head = wire[2];
+    if ((head & 0xe0) == 0xa0) {
+        schema_bytes = (size_t)(head & 31);
+    } else if (head == 0xd9) {
+        if (pos >= size) return 0;
+        schema_bytes = wire[pos++];
+        if (schema_bytes <= 31) return 0;
+    } else if (head == 0xda) {
+        if (size - pos < 2) return 0;
+        schema_bytes = ((size_t)wire[pos] << 8) | wire[pos+1];
+        pos += 2;
+        if (schema_bytes <= 255) return 0;
+    } else return 0;
+    if (schema_bytes == 0 || schema_bytes > 256
+            || schema_bytes > size - pos) return 0;
+    for (size_t i = 0; i < actor->variant_count; ++i) {
+        const char* name = actor->variants[i].value.schema_id;
+        if (strlen(name) == schema_bytes
+                && memcmp(name, wire + pos, schema_bytes) == 0) {
+            *selected = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+static int source_send_binary(SourceActor* actor,
+                              const uint8_t* wire, size_t size) {
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
+            || (!actor->on_wire && !actor->on_variant) || !wire
+            || size > ORES_MP2_MAX_BYTES) return 0;
+    /* Every variant shares one admission counter and one actor scheduler
+     * lane. Reserve BEFORE snapshot allocation or recursive typed parsing. */
+    size_t pending = atomic_load_explicit(&actor->wire_reserved,
                                           memory_order_relaxed);
     do {
         if (pending >= SOURCE_GROUP_MAILBOX) return 0;
     } while (!atomic_compare_exchange_weak_explicit(
-        &instance->wire_reserved, &pending, pending + 1,
+        &actor->wire_reserved, &pending, pending + 1,
         memory_order_acq_rel, memory_order_relaxed));
-    OresMp2Owned* snapshot = calloc(1, sizeof(*snapshot));
-    if (!snapshot) {
-        atomic_fetch_sub_explicit(&instance->wire_reserved, 1,
+    size_t index = 0;
+    if (!source_select_variant(actor, wire, size, &index)) {
+        atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
                                   memory_order_acq_rel);
         return 0;
     }
-    if (!ores_mp2_validate_copy(&instance->wire_contract, wire, size, snapshot)) {
-        free(snapshot);
-        atomic_fetch_sub_explicit(&instance->wire_reserved, 1,
+    SourceWireDelivery* accepted = calloc(1, sizeof(*accepted));
+    if (!accepted) {
+        atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
                                   memory_order_acq_rel);
         return 0;
     }
-    if (!ores_native_actor_scheduler_send(group.scheduler, instance->ref,
-                                           (uint64_t)(uintptr_t)snapshot)) {
-        ores_mp2_owned_release(snapshot);
-        free(snapshot);
-        atomic_fetch_sub_explicit(&instance->wire_reserved, 1,
+    accepted->variant_index = index;
+    if (!ores_mp2_validate_copy(&actor->variants[index].value, wire, size,
+                                &accepted->packet)) {
+        free(accepted);
+        atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
+                                  memory_order_acq_rel);
+        return 0;
+    }
+    if (!ores_native_actor_scheduler_send(group.scheduler, actor->ref,
+                                           (uint64_t)(uintptr_t)accepted)) {
+        ores_mp2_owned_release(&accepted->packet);
+        free(accepted);
+        atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
                                   memory_order_acq_rel);
         return 0;
     }
     return 1;
+}
+int oreslang_source_actor_send_wire(void* opaque,
+                                   const uint8_t* wire, size_t size) {
+    SourceActor* actor = opaque;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
+            || !actor->on_wire || actor->variant_count != 1) return 0;
+    return source_send_binary(actor, wire, size);
+}
+int oreslang_source_actor_send_variant(void* opaque,
+                                      const uint8_t* wire, size_t size) {
+    SourceActor* actor = opaque;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !actor->on_variant)
+        return 0;
+    return source_send_binary(actor, wire, size);
 }
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
