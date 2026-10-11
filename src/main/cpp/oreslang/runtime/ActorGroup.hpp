@@ -34,6 +34,8 @@ class ActorGroup final {
         bool stop_requested = false;  // guarded by ActorGroup::mutex_
         bool ready_settled = false;   // close/stop can settle readiness first
         bool initialized = false;     // on_start succeeded (distinct from settled)
+        bool control_active = false;  // runtime CONTROL turn owns this actor
+        std::function<void()> pending_control; // one reserved terminal/control slot
 
         WorkerState(std::uint64_t group_id, std::uint64_t worker_id,
                     std::function<void()> stop)
@@ -87,6 +89,64 @@ public:
 
     std::uint64_t id() const noexcept { return group_id_; }
 
+    enum class ControlTurn { idle, executed, busy, retired };
+
+    /**
+     * Device-provider and child-terminal callbacks may post exactly one
+     * reserved CONTROL message per actor. Posting never runs user code.
+     * Returns false for stale/foreign/retired refs or an occupied slot.
+     *
+     * Only trusted runtime callbacks receive this C++ API; actor guests
+     * cannot forge the ActorRef or invoke host CONTROL admission.
+     */
+    bool enqueue_control(const ActorRef& ref, std::function<void()> handler) {
+        if (!handler) throw std::invalid_argument("CONTROL handler required");
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = find_locked(ref);
+        if (!state || state->phase == Phase::terminal || state->pending_control)
+            return false;
+        state->pending_control = std::move(handler);
+        return true;
+    }
+
+    bool has_pending_control(const ActorRef& ref) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = find_locked(ref);
+        return state && bool(state->pending_control);
+    }
+
+    /**
+     * Scheduler-only CONTROL admission. A mutex enforces one active logical
+     * group CONTROL turn even if worker carrier threads change. Busy turns
+     * are retried by the scheduler; no carrier blocks on the logical lane.
+     * Exceptions propagate to the runtime supervisor, after retiring turn.
+     */
+    ControlTurn run_control_turn(const ActorRef& ref) {
+        std::unique_lock<std::mutex> lane(control_turn_mutex_, std::try_to_lock);
+        if (!lane.owns_lock()) return ControlTurn::busy;
+        std::shared_ptr<WorkerState> state;
+        std::function<void()> handler;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            state = find_locked(ref);
+            if (!state || state->phase == Phase::terminal)
+                return ControlTurn::retired;
+            if (!state->pending_control)
+                return ControlTurn::idle;
+            state->control_active = true;
+            handler = std::move(state->pending_control);
+            state->pending_control = {};
+        }
+        std::exception_ptr failure;
+        try { handler(); } catch (...) { failure = std::current_exception(); }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            state->control_active = false;
+        }
+        if (failure) std::rethrow_exception(failure);
+        return ControlTurn::executed;
+    }
+
     // Called by the supervisor BEFORE worker startup can race completion.
     // Returns immediately with an unready ref (the equivalent of 'spawn').
     ActorRef register_spawn(std::function<void()> stop) {
@@ -124,7 +184,7 @@ public:
         // exceptionally before on_start reports its own failure. The latter
         // must still finalize this entry after physical cleanup, without
         // double-fulfilling the readiness promise or stranding get_done().
-        if (!state || state->initialized) return false;
+        if (!state || state->initialized || state->control_active || state->pending_control) return false;
         if (!state->ready_settled) {
             state->ready_settled = true;
             state->ready_promise.set_exception(error);
@@ -140,7 +200,7 @@ public:
     bool finalized(const ActorRef& ref, std::exception_ptr failure = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = find_locked(ref);
-        if (!state || state->phase == Phase::terminal) return false;
+        if (!state || state->phase == Phase::terminal || state->control_active || state->pending_control) return false;
         if (!state->ready_settled) {
             state->ready_settled = true;
             state->ready_promise.set_exception(std::make_exception_ptr(
@@ -232,6 +292,7 @@ private:
     const std::uint64_t group_id_;
     const std::size_t max_workers_;
     mutable std::mutex mutex_;
+    std::mutex control_turn_mutex_; // group-wide exclusive logical CONTROL lane
     std::unordered_map<std::uint64_t, std::shared_ptr<WorkerState>> workers_;
     std::uint64_t next_worker_id_ = 1;
     bool closed_ = false;
