@@ -17,7 +17,10 @@ int main() {
     const auto first = gate.submit(Kind::Http, 1);
     CHECK(first.status == Status::Admitted && first.lease);
     const auto held = *first.lease;
+    CHECK(gate.may_execute(held));
     CHECK(gate.suspend(held));
+    CHECK(gate.admitted(held));
+    CHECK(!gate.may_execute(held));
     CHECK(!gate.suspend(held));
     const auto msg = gate.submit(Kind::Message, 2);
     const auto req = gate.submit(Kind::Http, 3);
@@ -25,6 +28,7 @@ int main() {
     CHECK(gate.busy() && gate.queued() == 2);
     CHECK(gate.admitted(held));
     CHECK(gate.resume(held));
+    CHECK(gate.may_execute(held));
     CHECK(!gate.resume(held));
     CHECK(gate.submit(Kind::Message, 2).status == Status::Duplicate);
     CHECK(gate.cancel_pending(3));
@@ -37,6 +41,7 @@ int main() {
     CHECK(finished.next->event_id == 2);
     CHECK(finished.next->generation > held.generation);
     CHECK(!gate.admitted(held));
+    CHECK(!gate.may_execute(held));
     CHECK(!gate.finish(held).accepted);
     CHECK(!gate.suspend(held));
     CHECK(gate.finish(*finished.next).accepted);
@@ -48,11 +53,14 @@ int main() {
     // Other incarnations cannot reuse a prior incarnation's ticket.
     SerialActorLifetimeGate fresh(42, 10, 1000);
     CHECK(!fresh.admitted(held));
+    CHECK(!fresh.may_execute(held));
     const auto newTicket = fresh.submit(Kind::Message, 1);
     CHECK(newTicket.status == Status::Admitted && newTicket.lease);
     CHECK(newTicket.lease->incarnation == 10);
     CHECK(!fresh.finish(held).accepted);
+    CHECK(fresh.may_execute(*newTicket.lease));
     CHECK(fresh.finish(*newTicket.lease).accepted);
+    CHECK(!fresh.may_execute(*newTicket.lease));
 
     // Mixed concurrent enqueuers: exactly one actor-wide lifetime token.
     SerialActorLifetimeGate many(700, 1, 1000);
