@@ -50,6 +50,32 @@ public:
     }
 
     /**
+     * Retire a normally terminated child generation.
+     *
+     * Only the trusted actor lifecycle owner may call this after physical
+     * finalization AND after establishing that no terminal CONTROL failure
+     * notification will be emitted for this incarnation. poll_done alone
+     * proves finalization, not the absence of a pending panic notification.
+     *
+     * A generation-scoped one-shot erase cannot remove a replacement child,
+     * even if the native scheduler reuses the same actor slot.
+     * Return false for an active/stale/foreign/unregistered generation.
+     * Never accept this API as a guest-visible capability.
+     */
+    bool retire_normally_finalized_child(OresNativeActorRef child) noexcept {
+        if (!valid(child) || child.scheduler_domain != parent_.scheduler_domain
+                || child.actor_slot == parent_.actor_slot
+                || !ores_native_actor_scheduler_poll_done(scheduler_, child))
+            return false;
+        try {
+            std::lock_guard<std::mutex> lock(mutex_);
+            return registered_.erase(Key{child.actor_slot, child.generation}) == 1;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    /**
      * Invoked only from the C scheduler's typed CONTROL callback. Fail
      * closed on stale/foreign/replayed child events or premature delivery.
      * Return false instead of throwing through a C ABI callback boundary.
