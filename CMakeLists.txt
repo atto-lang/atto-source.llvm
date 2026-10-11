@@ -82,6 +82,10 @@ if(BUILD_TESTING)
         --diagnostic "malformed dispatch integer separator")
     oreslang_contract_test(source_value_match_default_first value-match-default-first.ores
         --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_default_first_miss value-match-default-first-miss.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_value_match_duplicate_case value-match-duplicate-case.ores
+        --diagnostic "duplicate dispatch integer case")
     oreslang_contract_test(source_value_match_bare_default_first value-match-bare-default-first.ores
         --ir "dispatch.collected.value")
     oreslang_contract_test(source_value_match_on_default_first value-match-on-default-first.ores
@@ -145,6 +149,8 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_exec_value_match_return value-match-return.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_value_match_default_first value-match-default-first.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_match_default_first_miss value-match-default-first-miss.ores
             --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_value_match_bare_default_first value-match-bare-default-first.ores
             --run 42 --clang "${ORE_CLANG}")
