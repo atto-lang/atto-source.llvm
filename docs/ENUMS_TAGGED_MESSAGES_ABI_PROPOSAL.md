@@ -7,7 +7,7 @@ Canonical design source (Java repo):
 
 ## Native requirements
 
-Oreslang should distinguish nominal enums, optional typed-payload variants, and transparent structural unions. `match` is a value inspection expression/statement rather than a type declaration. A match expression may infer its result or constrain its result with `match<R>`; no per-pattern result annotation is needed. `do match` is statement-only. Integrate with the existing `over/on` proposal and do not unilaterally change match ordering/exclusivity during the enum work.
+Oreslang should support two **separate declaration kinds**: `define pattern P as A | B | ... end` is a transparent, type-only domain with **no constructors or values**, and `define enum E as ... end` is a nominal type with a namespace of constructible named case values. A pattern can include an enum type, but an enum (including payload types through imported aliases, nested generics, or transitive references) cannot reference any named pattern. Existing `type T = A | B` aliases continue to work and must not erase the source declaration kind used to enforce that prohibition. `match` is an expression/statement that tests values, not a type declaration. A match expression may infer its result or constrain its result with `match<R>`; no per-pattern result annotation is needed. `do match` is statement-only. Integrate with the existing `over/on` proposal and do not unilaterally change match ordering/exclusivity during the enum work.
 
 Proposed source fixture (NOT admitted by current LLVM source frontend):
 
@@ -17,6 +17,15 @@ define enum WorkerMessage as
   Progress(done: int, total: int)
   Stop
 end
+
+define pattern AcceptedMessages as
+    WorkerMessage
+  | Tuple[bool, string]
+  | string
+end
+
+// AcceptedMessages is type-only, never a runtime case namespace.
+// Invalid: enum case payload of type AcceptedMessages.
 
 define actor Worker<messages=WorkerMessage> as
   receive(WorkerMessage m): void {
@@ -29,7 +38,19 @@ define actor Worker<messages=WorkerMessage> as
 end
 
 worker.send(WorkerMessage.Start("job-123"));
+
+// A separately declared actor may take <messages=AcceptedMessages>.
+// A pattern accepts enum *types*, not singleton values as type expressions.
 ```
+
+## Type-system invariants
+
+- `pattern` is a declaration kind, not a runtime value. Do not generate an enum-like constructor, tag, symbol, UUID, or first-class runtime object for a pattern name. A pattern domain is statically closed but alternatives like `string` have unbounded values.
+- Use explicit `|` alternative separators; the current frontends generally ignore source newlines and must not infer union boundaries from layout.
+- The enum declaration is a type and an **owner of case values**; it is not itself a runtime value. `WorkerMessage.Stop` is a value while `WorkerMessage` is a type.
+- `pattern` may reference `enum`. Reject enum payloads that transitively depend on any named pattern, even if a `type` alias or generic wrapper obscures the reference. Reject dependency cycles.
+- `on E.Case` is a constant value match; `on is E value` is a type pattern. A bare `E.Case` is **not** a type alternative in a named pattern declaration for v1.
+- A pattern declaration never has a result type. `match<R>` optionally constrains the whole match expression result; `do match` is statement-only. Actor receive signatures independently specify their callback return types.
 
 ## ABI constraints
 
@@ -43,7 +64,7 @@ worker.send(WorkerMessage.Start("job-123"));
 
 ## Implementation and parity gates
 
-1. Align a single cross-backend grammar: `define enum`, nullary and typed payload variants, `type T = A | B`, `match<R>` and `do match`, and `Actor<messages=T>` metadata. Ensure rejected syntax emits no IR. Do not conflate parser acceptance with feature support.
+1. Align a single cross-backend grammar: distinct `define pattern` (type only) and `define enum` (type plus variants), nullary and typed payload variants, `type T = A | B`, `match<R>` and `do match`, and `Actor<messages=T>` metadata. Add static tests for pattern includes enum, direct/indirect enum -> pattern rejection, and type-only names being nonconstructible. Ensure rejected syntax emits no IR. Do not conflate parser acceptance with feature support.
 2. Introduce typed sum layout descriptors at the compiler/ABI boundary. Define nominal type identity, constant case tags, payload field ordering, alignments and ownership/drop semantics. Avoid a second actor registry or independent message executor.
 3. Lower source constructors, tag comparisons, payload extraction, exhaustive pattern decision tables and arm result type checks into verified LLVM IR; compile, link and execute real Oreslang fixtures with Clang.
 4. Integrate typed actor-message send/receive with the unified native ActorGroup, mailbox admission and CONTROL lane; test lifecycle, cancellation, panic and resource finalization with payloads.
