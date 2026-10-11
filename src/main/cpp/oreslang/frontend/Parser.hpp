@@ -13,6 +13,8 @@ struct GpuTarget;
 struct OpenClArtifact;
 }
 
+namespace oreslang::pipeline_source { struct Plan; }
+
 namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
@@ -61,6 +63,11 @@ struct Program {
 dop::OpenClArtifact compile_gpu_source(
         std::string_view source, dop::Plan layout, dop::GpuTarget target);
 std::string compile_quantum_source_openqasm3(std::string_view source);
+
+// Trusted source-compiled actor graph: only audited builtin roles and a pure
+// f32 GPU transform are executable. Arbitrary actor methods remain rejected.
+pipeline_source::Plan compile_pipeline_source(
+        std::string_view source, dop::Plan layout, dop::GpuTarget target);
 
 // Parse and statically validate a strict Java-compatible subset: int functions,
 // int parameters, return expressions and same-module calls. Reject everything else.
