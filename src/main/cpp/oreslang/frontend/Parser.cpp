@@ -896,6 +896,10 @@ public:
             // and ordinary values until general typed CONTROL lowering.
             require(failure_binding);
             result.explicitly_bound_failure = true;
+            if (accept(".")) {
+                require("child");
+                result.targets_logical_child = true;
+            }
         }
         require(")");
         require(";");
