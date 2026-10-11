@@ -208,6 +208,8 @@ private:
                 require("int");
             }
             require("=");
+            if (token_.text == "await")
+                fail("await requires native compiler continuation lowering");
             if (accept("spawn")) {
                 if (actor_method || scalar_local_seen || scalar_type)
                     fail("actor spawn requires untyped reference before scalar locals in main");
