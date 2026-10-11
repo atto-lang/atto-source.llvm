@@ -83,6 +83,21 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
+    find_program(ORE_CLANGXX NAMES clang++ clang++-19 clang++-18 clang++-17 clang++-16 clang++-15 clang++-14)
+    if(ORE_CLANG AND ORE_CLANGXX)
+        add_test(NAME native_generated_actor_group_lifecycle
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/generated_actor_group_contract.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor-fields-counter.ores"
+                --cc "${ORE_CLANG}"
+                --cxx "${ORE_CLANGXX}"
+                --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/generated_actor_group_host.cpp"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        set_tests_properties(native_generated_actor_group_lifecycle PROPERTIES TIMEOUT 35)
+    endif()
+
     if(ORE_CLANG)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
