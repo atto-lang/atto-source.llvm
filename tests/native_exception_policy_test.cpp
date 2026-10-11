@@ -1,7 +1,11 @@
 #include "oreslang/runtime/ExceptionPolicy.hpp"
 
 #include <array>
-// These conformance checks must execute even in CMake Release (-DNDEBUG).\n#ifdef NDEBUG\n#undef NDEBUG\n#endif\n#include <cassert>
+// These conformance checks must execute even in CMake Release (-DNDEBUG).
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+#include <cassert>
 #include <optional>
 #include <string>
 #include <utility>
