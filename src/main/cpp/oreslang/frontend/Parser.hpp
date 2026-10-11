@@ -56,6 +56,11 @@ struct ActorSpawnBinding {
     std::string actor_type;
     std::size_t offset = 0;
 };
+struct ActorPipe {
+    std::string producer;
+    std::string consumer;
+    std::size_t offset = 0;
+};
 struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
@@ -94,6 +99,7 @@ struct Function {
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
+    std::vector<ActorPipe> actor_pipes; // one forward-only checked native i64 link
     std::vector<std::string> actor_stops;
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
