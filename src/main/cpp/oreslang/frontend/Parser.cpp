@@ -126,6 +126,7 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
+                if (token_.text != "class") fail("expected 'module'");
                 require("class");
                 program.classes.push_back(class_declaration());
             }
