@@ -15,7 +15,7 @@ define actor Counter as
         stdio.println(next);
         if (next == 3) {
             self.end();
-        }
+        } fi
         return;
     }
 end
