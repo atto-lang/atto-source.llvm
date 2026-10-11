@@ -35,6 +35,7 @@ struct LocalBinding {
     bool heap_owned = false;
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
+    bool field_mutable = false; // actor-owned fields only
     std::size_t offset = 0;
 };
 
@@ -48,6 +49,22 @@ struct ClassDecl {
     // The initial typed class subset admits up to 16 i64 fields.
     // This vector is ordered: it defines the native LLVM struct layout.
     std::vector<ClassField> fields;
+};
+
+struct ActorSpawnBinding {
+    std::string name;
+    std::string actor_type;
+    std::size_t offset = 0;
+};
+struct ActorSend {
+    std::string reference;
+    std::unique_ptr<Expression> payload;
+    std::size_t offset = 0;
+};
+struct ActorFieldWrite {
+    std::string field;
+    std::unique_ptr<Expression> expression;
+    std::size_t offset = 0;
 };
 
 struct Statement {
@@ -75,20 +92,33 @@ struct Function {
     std::vector<LocalBinding> locals;
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
+    std::vector<ActorSpawnBinding> actor_spawns;
+    std::vector<ActorSend> actor_sends;
+    std::vector<std::string> actor_stops;
+    std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
 };
 
+struct ActorDecl {
+    std::string name;
+    std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
+    Function on_message; // exactly one synchronous pub on_message(int): int
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::string module;
     std::vector<ClassDecl> classes;
+    std::vector<ActorDecl> actors;
     std::vector<Function> functions;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
-// bounded multi-field i64 classes. No escaping class pointers, GC, or suspension.
+// bounded multi-field i64 classes and trusted, synchronous actor send/stop.
+// Actors remain incompatible with wasm32 and source-level await/suspension.
 Program parse_program(std::string_view source, bool experimental_owned_int = false);
 
 } // namespace oreslang

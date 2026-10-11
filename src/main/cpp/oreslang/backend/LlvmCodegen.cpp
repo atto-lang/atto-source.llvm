@@ -95,6 +95,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         module.setTargetTriple("wasm32-unknown-unknown");
         module.setDataLayout("e-m:e-p:32:32-i64:64-n32:64-S128");
     }
+    if (wasm32_target && !source.actors.empty())
+        throw std::runtime_error("native actor scheduler/heap ABI unavailable for wasm32");
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
@@ -122,6 +124,38 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, native_ptr}, false));
         regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
+    }
+
+    // Only generated source actors resolve this native scheduler/heap ABI.
+    // No actor imports appear in ordinary scalar/class compilation.
+    llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
+    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
+    std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
+    if (!source.actors.empty()) {
+        auto* voidTy = llvm::Type::getVoidTy(context);
+        fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
+        fieldInitMutable = module.getOrInsertFunction("ores_actor_i64_heap_field_init_mutable",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
+        fieldRead = module.getOrInsertFunction("ores_actor_i64_heap_field_read",
+            llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
+        fieldWrite = module.getOrInsertFunction("ores_actor_i64_heap_field_write",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
+        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
+            llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
+        sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        for (const auto& actor : source.actors) {
+            const std::string prefix = "oreslang_actor_" + actor.name + "_";
+            actorInits.emplace(actor.name, llvm::Function::Create(
+                llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false),
+                llvm::Function::ExternalLinkage, prefix + "init", module));
+            actorHandlers.emplace(actor.name, llvm::Function::Create(
+                llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
+                llvm::Function::ExternalLinkage, prefix + "on_message", module));
+        }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::StructType*> class_types;
@@ -175,6 +209,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             } else {
                 storage.emplace(param.name, &arg);
             }
+        }
+
+        // Every source actor ref is an opaque, unique capability owned by
+        // trusted top-level main; it cannot enter scalar values or calls.
+        std::unordered_map<std::string, llvm::Value*> actorRefs;
+        for (const auto& spawn : fn.actor_spawns) {
+            llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
+                native_ptr);
+            llvm::Value* handler = builder.CreatePointerCast(actorHandlers.at(spawn.actor_type),
+                native_ptr);
+            const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
+                [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
+            llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
+                llvm::ConstantInt::get(i64, actor->fields.size())}, spawn.name + ".actor.ref");
+            actorRefs.emplace(spawn.name, ref);
         }
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
@@ -231,6 +280,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
             }
         }
+
+        for (const auto& send : fn.actor_sends) {
+            llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations);
+            builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
+        }
+        for (const auto& name : fn.actor_stops)
+            builder.CreateCall(sourceStop, {actorRefs.at(name)});
         // Each taken return terminates in its own reverse-order cleanup
         // block. All bindings were initialized before the first guard, so
         // every return owns the same lexical slots and native region.
@@ -261,6 +317,66 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::Value* result = fn.result
             ? lower(*fn.result, builder, i64, storage, field_storage, declarations) : nullptr;
         emit_cleanup_return(result);
+    }
+
+
+    // Generated actor methods execute *only* from the admitted native
+    // scheduler turn, with persistent actor-owned heap and fresh turn tokens.
+    for (const auto& actor : source.actors) {
+        auto* ctor = actorInits.at(actor.name);
+        llvm::BasicBlock* initial = llvm::BasicBlock::Create(context, "entry", ctor);
+        llvm::IRBuilder<> init(initial);
+        auto a = ctor->arg_begin();
+        llvm::Value* heap = &*a++;
+        llvm::Value* domain = &*a++;
+        llvm::Value* epoch = &*a++;
+        const std::unordered_map<std::string, llvm::Value*> noStorage;
+        const std::unordered_map<std::string, llvm::Function*> noFunctions;
+        for (std::size_t i=0; i<actor.fields.size(); ++i) {
+            const auto& field=actor.fields[i];
+            llvm::Value* initialValue = lower(*field.initializer, init, i64,
+                noStorage, noStorage, noFunctions);
+            init.CreateCall(field.field_mutable ? fieldInitMutable : fieldInit,
+                {heap, domain, epoch, llvm::ConstantInt::get(i64, i), initialValue});
+        }
+        init.CreateRetVoid();
+
+        auto* handler = actorHandlers.at(actor.name);
+        llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", handler);
+        llvm::IRBuilder<> builder(entry);
+        auto args = handler->arg_begin();
+        llvm::Value* actorHeap = &*args++;
+        llvm::Value* currentDomain = &*args++;
+        llvm::Value* currentEpoch = &*args++;
+        llvm::Value* incoming = &*args++;
+        std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+        const std::string param = actor.on_message.parameters[0].name;
+        llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
+        builder.CreateStore(incoming, pslot);
+        values.emplace(param, pslot);
+        for (std::size_t i=0; i<actor.fields.size(); ++i) {
+            const auto& field = actor.fields[i];
+            llvm::Value* value = builder.CreateCall(fieldRead, {
+                actorHeap, currentDomain, currentEpoch, llvm::ConstantInt::get(i64,i)},
+                field.name + ".read");
+            llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
+            builder.CreateStore(value, slot);
+            values.emplace(field.name, slot);
+        }
+        for (const auto& write : actor.on_message.actor_field_writes) {
+            auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                [&](const LocalBinding& f) { return f.name == write.field; });
+            if (field == actor.fields.end() || !field->field_mutable)
+                throw std::runtime_error("invalid actor field write lowering");
+            llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
+            const std::size_t index = std::distance(actor.fields.begin(), field);
+            builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
+                llvm::ConstantInt::get(i64, index), value});
+            builder.CreateStore(value, values.at(write.field));
+        }
+        llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
+            emptyFields, declarations);
+        builder.CreateRet(result);
     }
 
     std::string diagnostics;
