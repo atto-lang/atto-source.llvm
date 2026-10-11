@@ -20,6 +20,48 @@ The exact-source run verified source Git object hashes and passed GCC -Wall -Wex
 Implementation: src/main/cpp/oreslang/runtime/SourceActorBootstrap.c and .h.
 Regression: tests/native_source_actor_variants_v2_test.c and registered native CTest.
 
+## Additional nominal-identity security audit (same day)
+
+**Severity: release-critical type-admission bypass, fixed in the new API.**
+The original native variant envelope pinned only the SHA-256 *shape* of
+`T[S,I,S]`. A sender could retain the legitimate Java `Status.Message2`
+schema/digest but change the inner enum owner (`Status`) or declared
+numeric tag (`2`). Both remained structurally valid strings/integers.
+Java's `TaggedMessageCodec` rejects these combinations.
+
+The native implementation now provides
+`oreslang_source_actor_spawn_tagged_variants(..., contracts, identities, n)`.
+Each `OresSourceNominalCase` pins a trusted enum owner and positive signed-32
+tag alongside its schema. Contract metadata are copied before verification.
+Once `ores_mp2_validate_owned` passes, the native decoder independently
+checks the owner and positive canonical tag in the *same owned snapshot*;
+incorrect values fail before actor callback admission.
+
+The older `oreslang_source_actor_spawn_variants` is explicitly
+structural-only. It now rejects `oreslang.enum.*` registrations outright:
+a compiler cannot silently substitute an unverified shape-only variant
+entrypoint for a typed source enum. This is an intentional API admission
+restriction; existing scalar, one-schema, and structurally named native
+message APIs remain valid for their documented purposes.
+
+Latest exact-source native regression:
+https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38177885872
+
+This green run covers:
+- three structural variants using a common actor lane and mailbox capacity,
+  with eight producers and 195 admitted messages, plus the rejection of a
+  fourth Java enum schema through structural-only registration;
+- a separately registered pinned `Status.Message2` nominal actor, genuine
+  Java wire acceptance, and rejection of payloads mutated to a different
+  owner or tag while preserving a valid schema, shape digest and value types;
+- native GCC ASan/UBSan, scalar compatibility, Java golden and generic actor
+  group compatibility tests, and optimized Clang repeats.
+
+Java #645 has a matching independently compiled JUnit test for identical
+invalid-owner and invalid-tag mutations. Source compiler parity is STILL NOT
+claimed: LLVM must emit this new pinned nominal ABI itself, then execute
+actual guest `.ores` programs before release.
+
 ## Outstanding release blockers
 
 1. LLVM currently parses nominal enum/pattern declarations, but compilation of typed guest sends, receive match, typed tuple destructuring, and exhaustive matches into the native variant ABI is not yet demonstrated. Direct C callback conformance is not a guest-source parity claim.
