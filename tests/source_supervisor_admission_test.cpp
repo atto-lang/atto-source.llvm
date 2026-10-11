@@ -329,7 +329,7 @@ int main() {
 
     // Trusted registry-bound STOP: an identity in the envelope is not
     // authority without a live, exactly-finalized registry snapshot.
-    for (int case_id = 0; case_id < 6; ++case_id) {
+    for (int case_id = 0; case_id < 7; ++case_id) {
         const auto supervisor = static_cast<std::uint64_t>(700 + case_id);
         const auto domain = static_cast<std::uint64_t>(900 + case_id);
         auto children = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
@@ -362,6 +362,22 @@ int main() {
             children,
             [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
                 ++sink_calls;
+                if (case_id == 0 || case_id == 6) {
+                    check(children->snapshot(admitted_child.child).phase
+                              == oreslang::runtime::SupervisorChildRegistry::Phase::stopping,
+                          "verified native STOP sink invoked without exclusive STOP reservation");
+                    bool restart_rejected = false;
+                    try {
+                        (void) children->begin_restart(
+                            admitted_child.child, actor, 1);
+                    } catch (const std::exception&) {
+                        restart_rejected = true;
+                    }
+                    check(restart_rejected,
+                          "host STOP callback raced with an admitted RESTART");
+                }
+                if (case_id == 6)
+                    throw std::runtime_error("ambiguous native host STOP effect");
             });
         if (case_id == 5) {
             // A partial logical-child envelope is invalid at the process
@@ -393,6 +409,20 @@ int main() {
             check(children->snapshot(admitted_child.child).phase
                     == oreslang::runtime::SupervisorChildRegistry::Phase::stopped,
                   "verified STOP effect did not retire logical incarnation");
+        } else if (case_id == 6) {
+            check(sink_calls == 1 && verified->resolved() == 0
+                    && verified->undelivered() == 1 && !verified->healthy(),
+                  "throwing native STOP sink was counted as committed");
+            check(children->snapshot(admitted_child.child).phase
+                      == oreslang::runtime::SupervisorChildRegistry::Phase::stopping,
+                  "unknown STOP effect reopened RESTART or falsely committed STOP");
+            bool retry_rejected = false;
+            try {
+                (void) children->begin_restart(admitted_child.child, actor, 1);
+            } catch (const std::exception&) {
+                retry_rejected = true;
+            }
+            check(retry_rejected, "ambiguous STOP incorrectly authorized RESTART");
         } else {
             check(sink_calls == 0 && verified->resolved() == 0
                     && verified->undelivered() == 1 && !verified->healthy(),
