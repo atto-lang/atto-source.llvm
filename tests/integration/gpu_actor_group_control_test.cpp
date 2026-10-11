@@ -2,6 +2,9 @@
 #include "oreslang/runtime/GpuActorControlBridge.hpp"
 
 #include <atomic>
+#ifdef NDEBUG
+#undef NDEBUG // Execute all lifecycle assertions under Release builds
+#endif
 #include <cassert>
 #include <chrono>
 #include <exception>
@@ -13,6 +16,7 @@ using Group = oreslang::runtime::ActorGroup;
 using Bridge = oreslang::gpu::GpuActorControlBridge<Group>;
 
 struct Provider final : oreslang::gpu::GpuDispatchCoordinator::Provider {
+    using Completion = oreslang::gpu::GpuDispatchCoordinator::Completion;
     Completion event, release_event;
     void launch(const oreslang::dop::OpenClArtifact&,
                 const oreslang::gpu::Identity&, oreslang::gpu::Ticket,
