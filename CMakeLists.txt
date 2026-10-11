@@ -101,6 +101,16 @@ if(BUILD_TESTING)
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
     oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "native async/channel/select boundary unsupported")
+    # Explicit source ActorRef<Actor> checked as a non-Copy capability.
+    # Generic Future<T> cannot be constructed until compiler-generated resume exists.
+    oreslang_contract_test(source_actor_typed_ref_admit source-actor-typed-ref.ores
+        --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(source_actor_typed_ref_mismatch source-actor-typed-ref-mismatch.ores
+        --diagnostic "ActorRef<T> type mismatch")
+    oreslang_contract_test(source_actor_typed_ref_nonspawn source-actor-typed-ref-nonspawn.ores
+        --diagnostic "ActorRef<T> requires spawn initializer")
+    oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
+        --diagnostic "Future<T> requires native continuation lowering")
 
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.

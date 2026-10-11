@@ -22,11 +22,15 @@ def main():
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-interleaved-stop.ores", 2, None, None),
     ]
     negatives = {
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
+        "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
+        "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
+        "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
