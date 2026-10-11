@@ -198,19 +198,23 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
+    /* A thread pool has at most five physical carriers, irrespective of
+     * larger legacy host configuration requests. The scheduler CONTROL
+     * thread is separate and never counts as a carrier. */
+    const size_t effective_workers = workers > 5 ? 5 : workers;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
-    s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    s->dispatches = (SchedulerDispatch*)calloc(workers, sizeof(SchedulerDispatch));
+    s->threads = (pthread_t*)calloc(effective_workers, sizeof(pthread_t));
+    s->dispatches = (SchedulerDispatch*)calloc(effective_workers, sizeof(SchedulerDispatch));
     if (!s->actors || !s->slots || !s->threads || !s->dispatches)
         goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
     s->per_actor_capacity = capacity;
-    s->worker_count = workers;
+    s->worker_count = effective_workers;
     s->callback = callback;
     s->control_callback = control_callback;
     s->panic_callback = panic_callback;
