@@ -149,6 +149,9 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (token_.text == "supervisor" || token_.text == "mailman"
+                    || token_.text == "scheduler" || token_.text == "proxy")
+                    fail("source supervisor actor/mailman/scheduler/proxy declarations require compiler-checked CONTROL lowering and native parity");
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'class' or 'actor'");
