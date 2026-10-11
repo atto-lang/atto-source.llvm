@@ -426,6 +426,27 @@ int main() {
         control->close();
     }
 
+
+    // A direct/synchronous adapter is forbidden for CONTROL admission.
+    // Reject the callback before execution and discard its owned envelope.
+    {
+        auto lane = std::make_shared<oreslang::runtime::SupervisorFailureControl>(
+            4407, 1);
+        std::atomic<unsigned> called{0};
+        lane->install(
+            [&](const SupervisorFailureNotice&) { ++called; },
+            [](std::function<void()> fn) {
+                fn(); // Illegal inline attempt: enqueue guard suppresses work.
+                return true;
+            });
+        lane->publish(SupervisorFailureNotice{
+            4407, 54, 1, 1, std::nullopt, "inline not allowed"});
+        check(called.load() == 0, "inline CONTROL callback executed");
+        check(!lane->healthy() && lane->undelivered() == 1
+              && lane->pending() == 0,
+              "inline CONTROL rejection retained a pending notice");
+    }
+
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
               " await=1 replay=0 native_stop=1 throwing_self_close=1"
               " terminal_cleanup=1 suspended_close=1");
