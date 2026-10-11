@@ -53,8 +53,10 @@ def compare(suite, digest, llvm, graal, *, require_suite_parity=False, expected_
             else:
                 if status != "pass":
                     defects.append(f"{case['id']} {backend}: required test status {status}")
-                elif case["kind"] == "native_exit" and record.get("observed_exit") != case["expected_exit"]:
-                    defects.append(f"{case['id']} {backend}: unexpected observed native exit")
+                elif case["kind"] == "native_exit" and (
+                        record.get("observed_exit") != case["expected_exit"]
+                        or "diagnostic_class" in record):
+                    defects.append(f"{case['id']} {backend}: wrong native execution evidence")
                 elif case["kind"] == "diagnostic" and (record.get("diagnostic_class") != case["diagnostic_class"]
                         or "observed_exit" in record):
                     defects.append(f"{case['id']} {backend}: wrong diagnostic evidence")
