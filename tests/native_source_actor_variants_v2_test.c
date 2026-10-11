@@ -32,7 +32,7 @@ static int64_t receive_variant(OresActorI64Heap* heap, uint64_t d,
                                uint64_t e, size_t variant,
                                const uint8_t* bytes, size_t size) {
     assert(atomic_fetch_add(&active, 1) == 0);
-    assert(variant < 4 && size == lengths[variant]);
+    assert(variant < 3 && size == lengths[variant]);
     assert(memcmp(bytes, expected[variant], size) == 0);
     int64_t n = ores_actor_i64_heap_field_read(heap, d, e, 0);
     ores_actor_i64_heap_field_write(heap, d, e, 0, n + 1);
@@ -117,8 +117,12 @@ int main(void) {
     forged[1].shape_sha256 = wrong_sha;
     assert(!oreslang_source_actor_spawn_variants(
         actor_init, receive_variant, 1, forged, 2));
+    /* A structural-only registry cannot admit the nominal Java enum
+     * entry: it lacks trusted owner and case-tag expectations. */
+    assert(!oreslang_source_actor_spawn_variants(
+        actor_init, receive_variant, 1, contracts, 4));
     void* actor = oreslang_source_actor_spawn_variants(
-        actor_init, receive_variant, 1, contracts, 4);
+        actor_init, receive_variant, 1, contracts, 3);
     assert(actor);
     /* Guest immutable compiler descriptors have been completely copied. */
     memset(schema_0, 'z', strlen(schema_0));
@@ -140,7 +144,7 @@ int main(void) {
     memcpy(wrong, expected[0], lengths[0]);
     wrong[3 + strlen("demo.String.v1") + 2] ^= 1;
     assert(!oreslang_source_actor_send_variant(actor, wrong, lengths[0]));
-    for (size_t i = 0; i < 4; ++i) {
+    for (size_t i = 0; i < 3; ++i) {
         uint8_t sender[512];
         memcpy(sender, expected[i], lengths[i]);
         assert(oreslang_source_actor_send_variant(actor, sender, lengths[i]));
@@ -152,15 +156,17 @@ int main(void) {
     pthread_t workers[8];
     Producer producers[8];
     for (size_t i = 0; i < 8; ++i) {
-        producers[i] = (Producer){actor, i % 4};
+        producers[i] = (Producer){actor, i % 3};
         assert(pthread_create(&workers[i], NULL, send_many, &producers[i]) == 0);
     }
     for (size_t i = 0; i < 8; ++i) {
         assert(pthread_join(workers[i], NULL) == 0);
     }
     oreslang_source_actor_stop(actor);
-    for (size_t i = 0; i < 4; ++i) assert(atomic_load(&calls[i]) == 49);
+    for (size_t i = 0; i < 3; ++i)
+        assert(atomic_load(&calls[i]) == (i == 2 ? 49 : 73));
+    assert(atomic_load(&calls[3]) == 0);
     assert(atomic_load(&active) == 0);
-    puts("SOURCE_ACTOR_CLOSED_VARIANTS_PASS same_lane=1 nominal_tags=1 single_budget=1 java_tagged_wire=1 producers=8 messages=196");
+    puts("SOURCE_ACTOR_CLOSED_VARIANTS_PASS same_lane=1 nominal_tags=1 single_budget=1 nominal_requires_pinned_tag=1 producers=8 messages=195");
     return 0;
 }
