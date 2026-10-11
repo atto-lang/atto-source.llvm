@@ -209,6 +209,19 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_i64_region_drop_and_provenance
         COMMAND oreslang-native-owned-i64-region-test)
 
+    # Host-only deterministic actor arena; no source actor lowering implied.
+    add_executable(oreslang-native-actor-arena-test
+        tests/native_actor_arena_test.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-arena-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_arena_persistent_scratch
+        COMMAND oreslang-native-actor-arena-test)
+    set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
+
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
