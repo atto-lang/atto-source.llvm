@@ -1,0 +1,18 @@
+define actor Counter as
+  let count: int = 0;
+  let offset: int = 7;
+  receive(ActorMail<{delta: int} | {reset: int}> mail): void {
+    match mail.value
+      is {delta: int} -> {
+        self.count = self.count + mail.value.delta;
+      }
+      is {delta: int} -> {
+        self.count = self.count + mail.value.delta;
+      }
+      is {reset: int} -> {
+        self.count = mail.value.reset;
+      }
+    end
+    return;
+  }
+end
