@@ -98,6 +98,22 @@ std::string emit_verified_llvm_ir(const Program& source) {
                                     {ptr, i64, i64, i64, i64}, false));
 
     std::unordered_map<std::string, llvm::Function*> declarations;
+    std::unordered_map<std::string, llvm::Function*> actorInitializers;
+    std::unordered_map<std::string, std::size_t> actorFieldCounts;
+    for (const auto& actor : source.actors) {
+        auto* ctorType = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(context), {ptr, i64, i64}, false);
+        actorInitializers.emplace(actor.name, llvm::Function::Create(
+            ctorType, llvm::Function::ExternalLinkage,
+            "oreslang_actor_" + actor.name + "_init", module));
+        actorFieldCounts.emplace(actor.name, actor.fields.size());
+    }
+    const auto sourceSpawn = module.getOrInsertFunction(
+        "oreslang_source_actor_spawn",
+        llvm::FunctionType::get(ptr, {ptr, i64}, false));
+    const auto sourceStop = module.getOrInsertFunction(
+        "oreslang_source_actor_stop",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
 
     // Declare all functions first, enabling forward calls and recursion.
     for (const auto& fn : source.functions) {
@@ -119,6 +135,14 @@ std::string emit_verified_llvm_ir(const Program& source) {
             arg.setName(fn.parameters[index]);
             parameters.emplace(fn.parameters[index], &arg);
             ++index;
+        }
+        std::unordered_map<std::string, llvm::Value*> actorRefs;
+        for (const auto& spawn : fn.actor_spawns) {
+            auto* ref = builder.CreateCall(sourceSpawn,
+                {actorInitializers.at(spawn.actor_type),
+                 llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
+                spawn.name + ".native.actor.ref");
+            actorRefs.emplace(spawn.name, ref);
         }
         // Scalar locals are either stack owned ('int') or explicitly backed
         // by a bounded native lexical heap region ('owned int'). The latter
@@ -153,6 +177,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
         }
         llvm::Value* result = lower(*fn.result, builder, i64, parameters,
                                     locals, declarations);
+        for (const auto& name : fn.actor_stops) {
+            builder.CreateCall(sourceStop, {actorRefs.at(name)});
+        }
         for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
             if (iter->heap) {
                 builder.CreateCall(heapDrop, {region, iter->address});
@@ -171,8 +198,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
         const std::string symbol = "oreslang_actor_" + actor.name;
         auto* initTy = llvm::FunctionType::get(
                 llvm::Type::getVoidTy(context), {ptr, i64, i64}, false);
-        auto* initialize = llvm::Function::Create(
-                initTy, llvm::Function::ExternalLinkage, symbol + "_init", module);
+        auto* initialize = actorInitializers.at(actor.name);
+        if (initialize->getFunctionType() != initTy)
+            throw std::runtime_error("generated actor initializer ABI mismatch");
         auto* initBlock = llvm::BasicBlock::Create(context, "entry", initialize);
         llvm::IRBuilder<> initBuilder(initBlock);
         auto arg = initialize->arg_begin();
@@ -296,7 +324,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_init"
                             && name != "ores_actor_i64_heap_field_read"
                             && name != "ores_actor_i64_heap_field_init_mutable"
-                            && name != "ores_actor_i64_heap_field_write") {
+                            && name != "ores_actor_i64_heap_field_write"
+                            && name != "oreslang_source_actor_spawn"
+                            && name != "oreslang_source_actor_stop") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }
