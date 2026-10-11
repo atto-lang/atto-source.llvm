@@ -90,3 +90,39 @@ Remaining limitations: no spawn/ActorGroup integration, automatic
 panic/cancellation cleanup, await continuations, FFI completion fencing,
 arbitrary class/struct layouts, non-i64 field data or general actor grammar.
 Drop remains a host lifecycle obligation, not automatic all-exit cleanup.
+
+
+## Supervisor-owned persistent source fields and async pins
+
+The new `ActorGroupOwnedHeap.hpp` bridge **composes** the canonical
+`ActorGroupLifecycle.hpp` from LLVM main; it does not add another
+worker registry. One managed worker owns its opaque native heap, generated
+record and the host-only `get_ready()` / `get_done()` tickets.
+
+Under the limited i64 actor compiler fragment, generated host-only
+`init` runs in an admitted exclusive turn, `with_turn` gates method
+reads/writes, and normal stop, cancellation or caught C++ host exceptions
+queue a parent CONTROL request. The parent's `process_control` must
+execute on its exclusive logical lane. It waits for BOTH native field
+loans and host continuation/FFI callback pins, performs generated
+reverse-order field drop during a dedicated admitted turn, then retires
+and physically frees the actor heap before issuing `finalized()`.
+Foreign completion threads only release pins and enqueue a wake.
+Neither pending `get_ready()` nor `get_done()` is treated as a stop
+capability, and `get_done()` cannot be fulfilled by stop/close alone.
+
+A generated layout version and FNV64 fingerprint for
+`contracts/v1/ACTOR_FIELD_LAYOUT_V1.md` are validated **before**
+ActorGroup adoption. The same byte-level contract is verified by the
+Java/Graal `NativeActorFieldLayoutV1` class. Mismatched order, names,
+mutability or versions fail closed.
+
+**Integration limits:** This native bridge serializes host calls with
+a mutex and requires an external CONTROL dispatcher to run
+`process_control`. It is not the carrier-releasing production scheduler
+or source `spawn`/`await` compiler lowering; `pin_continuation()`
+is a host hook for future await lowering. Host callbacks that bypass pin
+registration, arbitrary native FFI pointer escapes, process aborts, and
+uncaught foreign faults cannot be automatically reclaimed safely.
+The caller must keep the group/control dispatcher alive until all pinned
+callbacks finish and physical finalization has been acknowledged.
