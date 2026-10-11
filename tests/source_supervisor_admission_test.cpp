@@ -102,15 +102,29 @@ int main() {
           "typed current Failure was not bound to STOP");
     check(!plan.explicitly_bound_failure,
           "zero-argument STOP incorrectly claims an explicit Failure binding");
+    constexpr std::string_view with_child = R"(
+        define supervisor Root as
+          on_panic(problem: Failure): void {
+            self.stop(problem.child);
+            return;
+          }
+        end
+    )";
+    const auto child_plan = oreslang::parse_stop_only_supervisor(with_child);
+    check(child_plan.explicitly_bound_failure && child_plan.targets_logical_child,
+          "checked Failure.child did not lower to a restricted child target");
+    check(!targeted.targets_logical_child,
+          "direct typed Failure unexpectedly requires a child projection");
+    reject_supervisor(with_child); // normal compiler remains closed
     reject_supervisor(with_failure); // general native compiler remains closed
     for (const auto forged : {
             "self.stop(other); return;",
             "self.stop(self); return;",
-            "self.stop(problem.child); return;",
+            "self.stop(problem.child.actor); return;",
             "self.stop(problem.actor); return;",
             "using self.control { self.stop(); } return;",
             "using supervisor.control { self.stop(); } return;",
-            "self.stop(problem, problem); return;"
+            "self.stop(problem, problem); return;",
             "self.stop(1); return;",
             "self.stop(problem); self.stop(problem); return;"
     }) {
@@ -193,6 +207,50 @@ int main() {
               && targeted_process->undelivered() == 0,
           "typed Failure STOP did not commit exactly once");
 
+
+
+    // The restricted f.child projection must come from the exact verified
+    // logical-child binding in the host terminal PANIC envelope.
+    unsigned child_applied = 0;
+    auto child_process = oreslang::runtime::install_source_supervisor_stop(
+        with_child, 107, 72, 2, enqueue,
+        [&](const oreslang::runtime::SupervisorProcess::Resolution& decision) {
+            check(decision.notice.actor_id == 29
+                      && decision.notice.generation == 11
+                      && decision.notice.logical_child_id == 7001
+                      && decision.notice.logical_incarnation == 3,
+                  "checked child STOP lost its exact logical/physical identity");
+            ++child_applied;
+        });
+    child_process->accept(oreslang::runtime::SupervisorFailureNotice{
+        107, 72, 29, 11, std::nullopt, "logical child failure",
+        ORES_NATIVE_CONTROL_PANIC, 49, 20261011, 7001, 3});
+    while (!queued.empty()) {
+        check(++ticks < 70, "runaway logical child CONTROL");
+        auto task = std::move(queued.front());
+        queued.pop_front();
+        task();
+    }
+    check(child_applied == 1 && child_process->resolved() == 1,
+          "bound f.child STOP failed exactly once");
+
+    auto missing_child = oreslang::runtime::install_source_supervisor_stop(
+        with_child, 108, 73, 2, enqueue,
+        [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
+            throw std::runtime_error("unbound Failure.child was applied");
+        });
+    missing_child->accept(oreslang::runtime::SupervisorFailureNotice{
+        108, 73, 30, 12, std::nullopt, "unbound logical child",
+        ORES_NATIVE_CONTROL_PANIC, 50, 20261011});
+    while (!queued.empty()) {
+        check(++ticks < 90, "runaway missing logical child CONTROL");
+        auto task = std::move(queued.front());
+        queued.pop_front();
+        task();
+    }
+    check(missing_child->resolved() == 0 && missing_child->undelivered() == 1
+              && !missing_child->healthy(),
+          "f.child projection accepted missing trusted identity");
 
     // A legacy untyped host notice may use the historical no-argument
     // STOP compatibility form, but must not impersonate a typed Failure
