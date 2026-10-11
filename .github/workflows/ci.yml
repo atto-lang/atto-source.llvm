@@ -20,6 +20,24 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Verify parser, IR and native execution
         run: ctest --test-dir build --output-on-failure
+      - name: ASan/UBSan generation-handle and concurrency regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test in tests/native_owned_region_test.c \
+                      tests/native_owned_region_security_test.c \
+                      tests/native_owned_region_handles_test.c \
+                      tests/native_owned_region_concurrency_test.c; do
+            output="/tmp/$(basename "$test" .c)-san"
+            clang -std=c11 -O1 -g -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -DORESLANG_NATIVE_TEST_REGION_GENERATION=1 \
+              -I src/main/cpp \
+              "$test" src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c \
+              -o "$output"
+            ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+              UBSAN_OPTIONS=halt_on_error=1 "$output"
+          done
       - name: Repeat actor stress and cancellation races
         run: ctest --test-dir build -R hungry_carrier_async_bounded_cancel --repeat until-fail:12 --output-on-failure
       - name: ASan and UBSan native actor memory and concurrency smoke

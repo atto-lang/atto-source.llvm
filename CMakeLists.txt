@@ -53,6 +53,17 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_generation_handles
         COMMAND oreslang-native-region-handles-test)
     set_tests_properties(native_owned_region_generation_handles PROPERTIES TIMEOUT 30)
+    add_executable(oreslang-native-region-host-test
+        tests/native_owned_region_test.c
+        src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+    target_include_directories(oreslang-native-region-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-region-host-test PRIVATE NDEBUG)
+    target_compile_options(oreslang-native-region-host-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_region_host_abi
+        COMMAND oreslang-native-region-host-test)
+    set_tests_properties(native_owned_region_host_abi PROPERTIES TIMEOUT 30)
     if(UNIX)
         find_package(Threads REQUIRED)
         add_executable(oreslang-native-region-concurrency-test
