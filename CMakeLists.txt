@@ -78,6 +78,9 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-llvmc>"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
+    oreslang_contract_test(reject_unlowered_supervisor_actor
+        unsupported-supervisor-actor.ores
+        --diagnostic "source supervisor actor/mailman/scheduler/proxy declarations require compiler-checked CONTROL lowering and native parity")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
     if(ORE_CLANG)
