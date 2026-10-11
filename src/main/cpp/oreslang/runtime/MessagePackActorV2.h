@@ -47,6 +47,13 @@ int ores_mp2_validate_owned(const OresMp2Contract* contract,
 int ores_mp2_tagged_identity_matches_validated(
     const OresMp2Contract* contract, const OresMp2Owned* validated,
     const char* enum_name, uint32_t declared_tag);
+/* Trusted callback-side extractor for a fully validated tagged tuple
+ * [enumOwner, declaredTag, int64Payload]. This DOES NOT authenticate or
+ * validate the schema itself: only call after owned frame admission using
+ * the compiler-pinned nominal contract. Returns zero on malformed data.
+ */
+int ores_mp2_extract_tagged_i64_trusted(const uint8_t* wire, size_t size,
+                                        int64_t* out_payload);
 int ores_mp2_validate_copy(const OresMp2Contract* contract,
                            const uint8_t* bytes, size_t size, OresMp2Owned* out);
 void ores_mp2_owned_release(OresMp2Owned* value);
