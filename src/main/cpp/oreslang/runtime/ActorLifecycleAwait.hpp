@@ -59,7 +59,7 @@ public:
         return frame;
     }
 
-    Phase phase() const noexcept {
+    Phase phase() const {
         std::lock_guard<std::mutex> guard(mutex_);
         return phase_;
     }
@@ -90,8 +90,8 @@ public:
                     {
                         std::lock_guard<std::mutex> lock(self->mutex_);
                         if (self->phase_ != Phase::scheduled) return;
-                        self->phase_ = Phase::completed;
                         outcome = self->result_;
+                        self->phase_ = Phase::completed;
                     }
                     resume(outcome);
                 })) return false;
