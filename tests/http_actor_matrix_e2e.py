@@ -8,6 +8,7 @@ PRIVATE vs LLVM isoactor overhead.
 import argparse
 import asyncio
 import pathlib
+import re
 import statistics
 import subprocess
 import tempfile
@@ -76,15 +77,24 @@ async def sweep(port, mode, round_number):
 
 def main():
     parser = argparse.ArgumentParser()
-    for field in ("compiler", "fixture", "clang", "actor_runtime", "arena_runtime", "native_runtime", "mailbox_runtime", "harness", "include"):
+    for field in ("compiler", "fixture", "kernel_fixture", "clang", "actor_runtime", "arena_runtime", "native_runtime", "mailbox_runtime", "harness", "include"):
         parser.add_argument("--"+field.replace("_","-"), required=True)
     args = parser.parse_args()
     ir = subprocess.run([args.compiler, args.fixture], check=True, capture_output=True, text=True, timeout=25).stdout
     assert "oreslang_actor_Counter_add" in ir
     assert "gc.statepoint" not in ir and "gc.relocate" not in ir
+    kernel_ir = subprocess.run([args.compiler, args.kernel_fixture],
+                               check=True, capture_output=True, text=True, timeout=25).stdout
+    assert "@counter_value(" in kernel_ir
+    # Two independent source programs both expose a main() entry. Avoid a
+    # collision while retaining the public counter_value guest ABI.
+    assert "@main(" in kernel_ir
+    kernel_ir = kernel_ir.replace("@main(", "@oreslang_http_kernel_main(")
     with tempfile.TemporaryDirectory(prefix="ores-llvm-matrix-") as output:
         binary = str(pathlib.Path(output) / "http-matrix")
-        command = [args.clang, "-O2", "-x", "ir", "-", "-x", "c", args.actor_runtime,
+        kernel_path = str(pathlib.Path(output) / "shared-kernel.ll")
+        pathlib.Path(kernel_path).write_text(kernel_ir)
+        command = [args.clang, "-O2", "-x", "ir", "-", kernel_path, "-x", "c", args.actor_runtime,
                    args.arena_runtime, args.native_runtime, args.mailbox_runtime, args.harness, "-std=c11",
                    "-pthread", "-I", args.include, "-o", binary]
         compiled = subprocess.run(command, input=ir, capture_output=True, text=True, timeout=60)
