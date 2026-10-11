@@ -1,6 +1,7 @@
 #include "oreslang/runtime/ActorResourceRegistry.hpp"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 // Release CTest builds set NDEBUG; contract assertions must still execute.
 #ifdef NDEBUG
 #undef NDEBUG
@@ -111,6 +112,37 @@ int main() {
     borrower.join();
     assert(concurrent.try_reclaim().status == Reclaim::complete);
     assert(finishes == 1);
+
+    // In-flight trusted close must be observed as CLOSING by concurrent
+    // reclaimers. Only one thread may invoke the registered closer.
+    for (std::uint64_t incarnation = 1; incarnation <= 32; ++incarnation) {
+        ActorResourceRegistry racing(31, incarnation);
+        std::atomic<bool> entered{false};
+        std::atomic<bool> released{false};
+        std::atomic<int> called{0};
+        racing.register_resource(Kind::file, [&] {
+            entered.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!released.load(std::memory_order_acquire)
+                    && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            ++called;
+        });
+        racing.retire();
+        std::thread winner([&] { assert(racing.try_reclaim().status == Reclaim::complete); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!entered.load(std::memory_order_acquire)
+                && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        assert(entered.load(std::memory_order_acquire));
+        assert(racing.try_reclaim().status == Reclaim::closing);
+        released.store(true, std::memory_order_release);
+        winner.join();
+        assert(racing.try_reclaim().status == Reclaim::complete);
+        assert(called == 1);
+    }
 
     ActorResourceRegistry bounded(17, 1, 1);
     bounded.register_resource(Kind::socket, [] {});
