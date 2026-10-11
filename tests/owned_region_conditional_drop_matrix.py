@@ -54,7 +54,11 @@ def main():
         ),
         "defer-after-take": (
             "const x: owned int = 42; defer inspect(rt borrow x); return rt take x;",
-            "borrow of explicitly moved int",
+            "native owned int borrow requires handle loan lowering",
+        ),
+        "borrow-handle-as-pointer": (
+            "const x: owned int = 42; return inspect(rt borrow x);",
+            "native owned int borrow requires handle loan lowering",
         ),
     }
     prelude = (
@@ -71,6 +75,10 @@ def main():
                 label, compiled.stderr, compiled.stdout)
             assert ".drop.if.live" in compiled.stdout and "br i1" in compiled.stdout, (
                 label, "runtime conditional drop flag missing")
+            assert "@oreslang_owned_i64_region_read_handle" in compiled.stdout, label
+            assert "@oreslang_owned_i64_region_drop_handle" in compiled.stdout, label
+            assert "@oreslang_owned_i64_region_new_handle" in compiled.stdout, label
+            assert "@oreslang_owned_i64_region_new(" not in compiled.stdout, label
             ll = root / (label + ".ll")
             ll.write_text(compiled.stdout)
             guest = root / (label + ".bin")
