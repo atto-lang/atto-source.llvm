@@ -28,7 +28,8 @@ static std::pair<Shape, Value> specimen(const std::string& name) {
     throw std::invalid_argument("unknown golden fixture " + name);
 }
 
-static void rejection(const char* label, const auto& fn) {
+template<typename Fn>
+static void rejection(const char* label, const Fn& fn) {
     try { fn(); } catch (const std::invalid_argument&) { return; }
     throw std::runtime_error(std::string("accepted invalid wire: ") + label);
 }
