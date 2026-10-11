@@ -22,6 +22,8 @@ def main():
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-method-keyword.ores", 1, 2, 3),
+        ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-interleaved-stop.ores", 2, None, None),
@@ -29,6 +31,9 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-static-method-reject.ores": "static method is invalid",
+        "source-actor-suspend-method-reject.ores": "native suspended actor methods require continuation lowering",
+        "source-actor-typed-field-reject.ores": "native actor member field requires int",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
