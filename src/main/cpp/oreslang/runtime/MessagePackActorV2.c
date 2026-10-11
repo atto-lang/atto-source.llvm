@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <sched.h>
 
 /* Fail closed: any malformed byte or unsupported shape rejects before a
  * queue slot is reserved. No allocation based on untrusted encoded lengths. */
@@ -359,6 +360,11 @@ struct OresMp2ActorGroup {
     OwnedContract* contracts;
     unsigned char* spawned;
     atomic_size_t* reserved; /* active + queued + preparing per actor */
+    /* One atomic word makes admission-close and producer-entry indivisible:
+     * high bit = terminal close, low bits = API send calls still preparing.
+     * This fences admitted in-flight callers; external caller-thread joining
+     * is STILL required before freeing the opaque group pointer. */
+    atomic_uint_fast64_t producer_gate;
     size_t actors;
     size_t capacity;
     OresMp2OnMessage callback;
@@ -402,6 +408,7 @@ OresMp2ActorGroup* ores_mp2_group_open(size_t actors, size_t capacity,
         return NULL;
     }
     for (size_t i = 0; i < actors; ++i) atomic_init(&g->reserved[i], 0);
+    atomic_init(&g->producer_gate, 0);
     g->actors = actors; g->capacity = capacity;
     g->callback = callback; g->callback_context = context;
     g->scheduler = ores_native_actor_scheduler_open(actors, capacity, carriers,
@@ -462,7 +469,39 @@ OresMp2ActorRef ores_mp2_group_spawn(OresMp2ActorGroup* g, size_t slot) {
     if (ref.generation) g->spawned[slot] = 1;
     return ref;
 }
-int ores_mp2_group_send(OresMp2ActorGroup* g, OresMp2ActorRef target,
+#define MP2_GATE_CLOSED (UINT64_C(1) << 63)
+#define MP2_GATE_COUNT (MP2_GATE_CLOSED - 1)
+static int enter_producer(OresMp2ActorGroup* g) {
+    uint_fast64_t state = atomic_load_explicit(
+        &g->producer_gate, memory_order_acquire);
+    for (;;) {
+        if ((state & MP2_GATE_CLOSED) || (state & MP2_GATE_COUNT) == MP2_GATE_COUNT)
+            return 0;
+        if (atomic_compare_exchange_weak_explicit(
+                &g->producer_gate, &state, state + 1,
+                memory_order_acq_rel, memory_order_acquire)) return 1;
+    }
+}
+static void leave_producer(OresMp2ActorGroup* g) {
+    uint_fast64_t prior = atomic_fetch_sub_explicit(
+        &g->producer_gate, 1, memory_order_acq_rel);
+    if ((prior & MP2_GATE_COUNT) == 0) abort();
+}
+int ores_mp2_group_close_admission(OresMp2ActorGroup* g) {
+    if (!g) return 0;
+    atomic_fetch_or_explicit(&g->producer_gate, MP2_GATE_CLOSED,
+                             memory_order_acq_rel);
+    while ((atomic_load_explicit(&g->producer_gate, memory_order_acquire)
+            & MP2_GATE_COUNT) != 0) {
+        /* Only a terminal shutdown barrier; no per-message polling. */
+        sched_yield();
+    }
+    return 1;
+}
+static int send_under_producer_lease(OresMp2ActorGroup* g,
+                                    OresMp2ActorRef target,
+                                    const uint8_t* wire, size_t size) {
+
                         const uint8_t* wire, size_t size) {
     if (!g || target.actor_slot >= g->actors
             || !g->contracts[target.actor_slot].value.schema_id) return 0;
@@ -498,6 +537,13 @@ int ores_mp2_group_send(OresMp2ActorGroup* g, OresMp2ActorRef target,
     /* A successful send transfers its reservation and frame to DATA deliver. */
     return 1;
 }
+int ores_mp2_group_send(OresMp2ActorGroup* g, OresMp2ActorRef target,
+                        const uint8_t* wire, size_t size) {
+    if (!g || !enter_producer(g)) return 0;
+    const int accepted = send_under_producer_lease(g, target, wire, size);
+    leave_producer(g);
+    return accepted;
+}
 int ores_mp2_group_stop(OresMp2ActorGroup* g, OresMp2ActorRef target) {
     return g && ores_native_actor_scheduler_stop(g->scheduler, unwrap(target));
 }
@@ -506,6 +552,10 @@ int ores_mp2_group_wait_done(OresMp2ActorGroup* g, OresMp2ActorRef target) {
 }
 int ores_mp2_group_destroy(OresMp2ActorGroup* g) {
     if (!g) return 0;
+    /* After this closure no new producer can hold an admission lease, and
+     * all send calls admitted before closure have returned their leases.
+     * Joining threads that might call the group later remains a host duty. */
+    if (!ores_mp2_group_close_admission(g)) return 0;
     ores_native_actor_scheduler_retire(g->scheduler);
     if (!ores_native_actor_scheduler_drain(g->scheduler)
             || !ores_native_actor_scheduler_try_destroy(g->scheduler)) return 0;
