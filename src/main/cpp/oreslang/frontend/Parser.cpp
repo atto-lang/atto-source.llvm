@@ -392,8 +392,10 @@ private:
         bool return_guards_started = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
-            if (token_.kind == Kind::End || token_.text == "}")
+            if (token_.kind == Kind::End || token_.text == "}") {
+                if (return_guards_started) fail("expected 'return'");
                 fail("missing final return");
+            }
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
