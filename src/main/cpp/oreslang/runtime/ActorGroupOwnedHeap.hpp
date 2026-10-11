@@ -5,6 +5,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <exception>
+#include <limits>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -198,19 +200,28 @@ public:
     // Create only while an actor is running and admitted; the returned
     // move-only pin must live until callback/waker/continuation release.
     ContinuationPin pin_continuation() {
-        std::lock_guard<std::mutex> guard(lane_);
-        if (!initialized_ || finalized_ || !heap_
+        // Independent host-only atomic pin avoids trying to reacquire the
+        // actor lane from inside its own executing method/await lowering.
+        if (!initialized_.load(std::memory_order_acquire)
+            || finalized_.load(std::memory_order_acquire)
             || requested_.load(std::memory_order_acquire) != NativeActorExit::running)
             throw std::logic_error("continuation admission after actor stop");
-        if (continuation_pins_ == UINT32_MAX)
-            throw std::overflow_error("too many pinned actor continuations");
-        ++continuation_pins_;
+        std::uint32_t current = continuation_pins_.load(std::memory_order_acquire);
+        do {
+            if (current == UINT32_MAX)
+                throw std::overflow_error("too many pinned actor continuations");
+        } while (!continuation_pins_.compare_exchange_weak(
+            current, current + 1, std::memory_order_acq_rel));
+        if (requested_.load(std::memory_order_acquire) != NativeActorExit::running
+            || finalized_.load(std::memory_order_acquire)) {
+            continuation_pins_.fetch_sub(1, std::memory_order_acq_rel);
+            throw std::logic_error("actor stopped while pinning continuation");
+        }
         return ContinuationPin(shared_from_this());
     }
 
     std::uint32_t pending_continuations() const {
-        std::lock_guard<std::mutex> guard(lane_);
-        return continuation_pins_;
+        return continuation_pins_.load(std::memory_order_acquire);
     }
 
     // A suspended loan is held by the future/FFI operation. Releasing it
@@ -237,7 +248,7 @@ public:
             const NativeActorExit reason = requested_.load(std::memory_order_acquire);
             if (reason == NativeActorExit::running || finalized_) return false;
             if (heap_) {
-                if (continuation_pins_ != 0
+                if (continuation_pins_.load(std::memory_order_acquire) != 0
                     || ores_actor_i64_heap_loan_count(heap_) != 0) return false;
                 if (fields_) {
                     const OresActorTurn turn =
@@ -279,8 +290,8 @@ private:
         bool stopped = false;
         {
             std::lock_guard<std::mutex> guard(lane_);
-            if (continuation_pins_ == 0) std::terminate();
-            --continuation_pins_;
+            if (continuation_pins_.fetch_sub(1, std::memory_order_acq_rel) == 0)
+                std::terminate();
             stopped = requested_.load(std::memory_order_acquire)
                       != NativeActorExit::running;
         }
@@ -307,10 +318,10 @@ private:
     std::optional<NativeActorRef> ref_;
     OresActorI64Heap* heap_ = nullptr;
     OresActorI64Fields* fields_ = nullptr;
-    bool initialized_ = false;
-    bool finalized_ = false;
+    std::atomic<bool> initialized_{false};
+    std::atomic<bool> finalized_{false};
     std::string failure_;
-    std::uint32_t continuation_pins_ = 0;
+    std::atomic<std::uint32_t> continuation_pins_{0};
     std::atomic<NativeActorExit> requested_{NativeActorExit::running};
 };
 
