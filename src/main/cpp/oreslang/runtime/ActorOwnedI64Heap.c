@@ -213,6 +213,12 @@ uint32_t ores_actor_i64_heap_active_loans(OresActorI64Heap* heap) {
     unlock_heap(heap);
     return count;
 }
+int ores_actor_i64_heap_quiescent(OresActorI64Heap* heap) {
+    lock_heap(heap);
+    int safe = !heap->turn_active && !heap->active_loans;
+    unlock_heap(heap);
+    return safe;
+}
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap) {
     lock_heap(heap);
     heap->retiring = 1; /* no subsequent actor turn may enter */
