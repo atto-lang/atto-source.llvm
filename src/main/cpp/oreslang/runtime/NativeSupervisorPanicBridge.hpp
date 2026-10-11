@@ -30,12 +30,19 @@ public:
     NativeSupervisorPanicBridge(
             OresNativeActorScheduler* scheduler,
             OresNativeActorRef parent,
-            std::shared_ptr<SupervisorProcess> process)
+            std::shared_ptr<SupervisorProcess> process,
+            std::shared_ptr<SupervisorChildRegistry> children = nullptr)
         : scheduler_(scheduler), parent_(parent), process_(std::move(process)),
-          child_registry_(process_ ? process_->supervisor_id() : 0,
-                          parent.scheduler_domain) {
+          child_registry_(children
+              ? std::move(children)
+              : std::make_shared<SupervisorChildRegistry>(
+                    process_ ? process_->supervisor_id() : 0,
+                    parent.scheduler_domain)) {
         if (!scheduler_ || !process_ || !valid(parent_)
-            || process_->runtime_id() != parent_.scheduler_domain)
+            || process_->runtime_id() != parent_.scheduler_domain
+            || !child_registry_
+            || child_registry_->supervisor_id() != process_->supervisor_id()
+            || child_registry_->runtime_id() != parent_.scheduler_domain)
             throw std::invalid_argument("supervisor bridge domain mismatch");
         if (!ores_native_actor_scheduler_poll_ready(scheduler_, parent_))
             throw std::invalid_argument("supervisor parent must be live");
@@ -51,11 +58,11 @@ public:
         const Key key{child.actor_slot, child.generation};
         if (registered_.count(key) != 0)
             throw std::logic_error("child generation already registered");
-        const auto snapshot = child_registry_.register_child(child);
+        const auto snapshot = child_registry_->register_child(child);
         try {
             registered_.emplace(key, snapshot);
         } catch (...) {
-            child_registry_.detach_active(snapshot.child, child,
+            child_registry_->detach_active(snapshot.child, child,
                                           snapshot.incarnation);
             throw;
         }
@@ -90,9 +97,9 @@ public:
             if (!ores_native_actor_scheduler_seal_normal_exit(scheduler_, child))
                 return false;
             const auto admitted = registered_.at(key);
-            child_registry_.finalized(admitted.child, child, admitted.incarnation);
-            child_registry_.stop(admitted.child, child, admitted.incarnation);
-            child_registry_.retire_stopped(admitted.child);
+            child_registry_->finalized(admitted.child, child, admitted.incarnation);
+            child_registry_->stop(admitted.child, child, admitted.incarnation);
+            child_registry_->retire_stopped(admitted.child);
             registered_.erase(key);
             return true;
         } catch (...) {
@@ -133,7 +140,7 @@ public:
                 // Finalization must be established while the scheduler has
                 // confirmed physical child teardown. Capture the exact
                 // logical identity before the one-shot key is consumed.
-                child_registry_.finalized(
+                child_registry_->finalized(
                     admitted.child, failure.child, admitted.incarnation);
                 registered_.erase(key);
             }
@@ -161,10 +168,20 @@ public:
         }
     }
 
+    /**
+     * Trusted host wiring for the verified source installer. A source STOP
+     * policy must share this exact registry with its scheduler panic bridge:
+     * another registry for the same owner cannot validate its child IDs.
+     * This host-only handle is never exported to guest code.
+     */
+    std::shared_ptr<SupervisorChildRegistry> trusted_child_registry() const {
+        return child_registry_;
+    }
+
     /** Host-only immutable view; neither ID alone grants guest authority. */
     SupervisorChildRegistry::Snapshot child_snapshot(
             SupervisorChildRegistry::ChildRef child) const {
-        return child_registry_.snapshot(child);
+        return child_registry_->snapshot(child);
     }
 
     /** Secure a generation-scoped STOP lease before any host side effect. */
@@ -174,7 +191,7 @@ public:
         OresNativeActorRef actor{resolution.notice.runtime_id,
                                  resolution.notice.actor_id,
                                  resolution.notice.generation};
-        return child_registry_.begin_stop(
+        return child_registry_->begin_stop(
             key, actor, resolution.notice.logical_incarnation,
             resolution.turn_generation);
     }
@@ -186,7 +203,7 @@ public:
         OresNativeActorRef actor{resolution.notice.runtime_id,
                                  resolution.notice.actor_id,
                                  resolution.notice.generation};
-        return child_registry_.commit_stop(
+        return child_registry_->commit_stop(
             key, actor, resolution.notice.logical_incarnation,
             resolution.turn_generation);
     }
@@ -209,7 +226,7 @@ public:
     }
 
     std::size_t tracked_logical_children() const {
-        return child_registry_.tracked_children();
+        return child_registry_->tracked_children();
     }
 
     std::size_t registered_children() const {
@@ -252,7 +269,7 @@ private:
     OresNativeActorScheduler* const scheduler_; // borrowed, externally fenced
     const OresNativeActorRef parent_;
     const std::shared_ptr<SupervisorProcess> process_;
-    SupervisorChildRegistry child_registry_;
+    std::shared_ptr<SupervisorChildRegistry> child_registry_;
     mutable std::mutex mutex_;
     std::unordered_map<Key, SupervisorChildRegistry::Snapshot, KeyHash> registered_;
     std::size_t accepted_ = 0;
