@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -37,6 +38,19 @@ public:
         std::uint64_t generation = 0;
         std::uint64_t event_id = 0;
         Kind kind = Kind::Message;
+
+        Lease() = default;
+    private:
+        friend class SerialActorLifetimeGate;
+        // A generation+incarnation tuple is not sufficient: two gates may be
+        // created with equal public identities during recovery. Preserve
+        // issuer identity for the lifetime of every outstanding ticket.
+        std::shared_ptr<const std::uint8_t> issuer_;
+        Lease(std::uint64_t actor, std::uint64_t epoch, std::uint64_t gen,
+                std::uint64_t event, Kind type,
+                const std::shared_ptr<const std::uint8_t>& issuer)
+            : actor_id(actor), incarnation(epoch), generation(gen),
+              event_id(event), kind(type), issuer_(issuer) {}
     };
     struct SubmitResult {
         SubmitStatus status;
@@ -78,7 +92,7 @@ public:
             if (generation_ == std::numeric_limits<std::uint64_t>::max()) {
                 return {SubmitStatus::Exhausted, std::nullopt};
             }
-            Lease next{actor_id_, incarnation_, ++generation_, event_id, kind};
+            Lease next{actor_id_, incarnation_, ++generation_, event_id, kind, issuer_};
             active_ = next;
             suspended_ = false;
             return {SubmitStatus::Admitted, next};
@@ -133,7 +147,7 @@ public:
         }
         const auto next = pending_.front();
         pending_.pop_front();
-        Lease ticket{actor_id_, incarnation_, ++generation_, next.event_id, next.kind};
+        Lease ticket{actor_id_, incarnation_, ++generation_, next.event_id, next.kind, issuer_};
         active_ = ticket;
         return {true, ticket, {}};
     }
@@ -182,6 +196,7 @@ private:
     using Pending = QueuedEvent;
     bool matches_locked(const Lease& lease) const noexcept {
         return !stopped_ && active_
+                && lease.issuer_ == issuer_
                 && active_->actor_id == lease.actor_id
                 && active_->incarnation == lease.incarnation
                 && active_->generation == lease.generation
@@ -194,6 +209,8 @@ private:
                 [event_id](const Pending& p) { return p.event_id == event_id; });
     }
     mutable std::mutex lock_;
+    const std::shared_ptr<const std::uint8_t> issuer_ =
+            std::make_shared<const std::uint8_t>(0);
     const std::uint64_t actor_id_;
     const std::uint64_t incarnation_;
     const std::size_t capacity_;
