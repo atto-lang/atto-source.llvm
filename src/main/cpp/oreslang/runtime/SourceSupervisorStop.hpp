@@ -15,8 +15,9 @@ namespace oreslang::runtime {
 
 /**
  * First opt-in native guest-source-to-CONTROL binding.
- * Compiles the exact typed `on_panic(Failure) { self.stop(); return; }`
- * subset, then installs the resulting immutable decision policy on the
+ * Compiles the restricted `on_panic(f: Failure)` hook with either
+ * `self.stop()` or `self.stop(f)` followed by `return;`, then installs the
+ * resulting immutable decision policy on the
  * existing host-owned supervisor CONTROL process.
  *
  * The host sink must acknowledge STOP for an already finalized child; this
