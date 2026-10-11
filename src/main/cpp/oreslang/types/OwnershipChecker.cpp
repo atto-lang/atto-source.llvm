@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -18,7 +19,7 @@ struct LocalOwnership {
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
-    std::string field_name;
+    std::unordered_set<std::string> class_fields;
 };
 using Locals = std::unordered_map<std::string, LocalOwnership>;
 
@@ -39,7 +40,7 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
                                std::size_t offset, Locals& locals) {
     auto found = locals.find(receiver);
     if (found == locals.end() || found->second.class_name.empty() ||
-            found->second.field_name != field)
+            found->second.class_fields.count(field) == 0)
         throw std::runtime_error("unknown class field or receiver at byte " + std::to_string(offset));
     if (found->second.moved)
         throw std::runtime_error("ownership violation: use-after-move class field at byte " +
@@ -182,9 +183,12 @@ void validate_i64_ownership(const Program& program) {
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(function.name, &function);
-    std::unordered_map<std::string, std::string> class_fields;
-    for (const auto& cls : program.classes)
-        class_fields.emplace(cls.name, cls.field);
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
+    for (const auto& cls : program.classes) {
+        std::unordered_set<std::string> fields;
+        for (const auto& field : cls.fields) fields.insert(field.name);
+        class_fields.emplace(cls.name, std::move(fields));
+    }
     for (const auto& function : program.functions) {
         Locals locals;
         for (const auto& param : function.parameters) {
@@ -198,7 +202,7 @@ void validate_i64_ownership(const Program& program) {
             LocalOwnership entry;
             entry.mode = param.mode;
             entry.class_name = param.class_name;
-            if (!param.class_name.empty()) entry.field_name = class_fields.at(param.class_name);
+            if (!param.class_name.empty()) entry.class_fields = class_fields.at(param.class_name);
             locals.emplace(param.name, std::move(entry));
         }
         for (const auto& binding : function.locals) {
@@ -207,7 +211,7 @@ void validate_i64_ownership(const Program& program) {
             LocalOwnership entry;
             entry.class_name = binding.class_name;
             if (binding.new_class)
-                entry.field_name = class_fields.at(binding.class_name);
+                entry.class_fields = class_fields.at(binding.class_name);
             locals.emplace(binding.name, std::move(entry));
         }
         for (const auto& stmt : function.statements) {
