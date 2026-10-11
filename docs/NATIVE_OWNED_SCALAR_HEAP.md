@@ -42,6 +42,14 @@ source actors have a separate bounded i64 field ABI. Guest `await`,
 cancellation, exception unwind, FFI lease quiescence and arbitrary
 graph/class destructors are **not** covered by this region fixture.
 
+## Equality token parity
+
+Java/Graal accepts both `eq` and one contiguous `==` token. LLVM now
+admits the same alternatives in the bounded guarded-return subset, while
+rejecting spaced `= =` and `===` as malformed syntax. These cases execute
+in the generated stress corpus; acceptance is not inferred from lexical
+text matching alone.
+
 ## Verification and the old PR stack
 
 The mainline already implements default opt-in gating, accepted ordinary
