@@ -8,15 +8,26 @@
 #include <string>
 
 int main(int argc, char** argv) {
-    const bool experimental_owned_int =
-        argc == 3 && std::string(argv[1]) == "--experimental-owned-int";
-    if (argc != 2 && !experimental_owned_int) {
-        std::cerr << "usage: oreslang-llvmc [--experimental-owned-int] <source.ores>\n"
+    bool experimental_owned_int = false;
+    bool wasm32_target = false;
+    const char* path = nullptr;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg == "--experimental-owned-int") {
+            if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
+            experimental_owned_int = true;
+        } else if (arg == "--target=wasm32") {
+            if (wasm32_target) { std::cerr << "duplicate wasm target option\n"; return 2; }
+            wasm32_target = true;
+        } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
+        else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    if (path == nullptr) {
+        std::cerr << "usage: oreslang-llvmc [--target=wasm32] [--experimental-owned-int] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
     try {
-        const char* path = experimental_owned_int ? argv[2] : argv[1];
         std::ifstream source(path, std::ios::binary);
         if (!source.is_open()) {
             throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
@@ -31,7 +42,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
         auto ast = oreslang::parse_program(text, experimental_owned_int);
-        std::cout << oreslang::emit_verified_llvm_ir(ast);
+        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';

@@ -85,9 +85,16 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
+    // The wasm32 environment is an explicit code-generation target. This
+    // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
+    // Never infer browser capabilities from the target triple alone.
+    if (wasm32_target) {
+        module.setTargetTriple("wasm32-unknown-unknown");
+        module.setDataLayout("e-m:e-p:32:32-i64:64-n32:64-S128");
+    }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
