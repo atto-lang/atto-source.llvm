@@ -81,6 +81,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unlowered_supervisor_actor
         unsupported-supervisor-actor.ores
         --diagnostic "source supervisor actor/mailman/scheduler/proxy declarations require compiler-checked CONTROL lowering and native parity")
+    oreslang_contract_test(reject_unlowered_readable_pipe_actor
+        unsupported-readable-pipe-actor.ores
+        --diagnostic "source pipe actor declarations require typed role admission")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
     if(ORE_CLANG)
@@ -214,6 +217,14 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_hierarchy_group_binding
         COMMAND oreslang-native-supervisor-registry-test)
     set_tests_properties(native_supervisor_hierarchy_group_binding PROPERTIES TIMEOUT 15)
+    add_executable(oreslang-native-actor-pipe-contract-test
+        tests/native_actor_pipe_contract_test.cpp)
+    target_include_directories(oreslang-native-actor-pipe-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pipe-contract-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_pipe_role_and_type_contract
+        COMMAND oreslang-native-actor-pipe-contract-test)
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
