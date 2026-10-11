@@ -85,8 +85,13 @@ public:
     NativeActorScheduledGroup& operator=(const NativeActorScheduledGroup&) = delete;
 
     WorkerRef spawn(std::uint64_t actor_id, std::uint64_t generation,
+                    std::uint64_t slots, NativeActorFieldEntrypoints descriptor) {
+        return spawn(actor_id, generation, slots, descriptor, MailContract{});
+    }
+
+    WorkerRef spawn(std::uint64_t actor_id, std::uint64_t generation,
                     std::uint64_t slots, NativeActorFieldEntrypoints descriptor,
-                    MailContract mail_contract = {}) {
+                    MailContract mail_contract) {
         if ((mail_contract.schema_hash == 0) != (mail_contract.case_count == 0)
                 || mail_contract.case_count > 16)
             throw std::invalid_argument("incomplete or invalid typed actor mailbox contract");
