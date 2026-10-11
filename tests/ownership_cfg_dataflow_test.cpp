@@ -145,6 +145,20 @@ int main() {
     assert(rejected([&] { verify(bad_entry); }));
     bad_entry.entry.at("x") = {kOwned, 1, true};
     assert(rejected([&] { verify(bad_entry); }));
+    // Loan provenance cannot coexist with maybe-moved or dropped places,
+    // even when a later release would otherwise hide the illegal state.
+    bad_entry.entry.at("x") = {static_cast<ValueMask>(kOwned | kMoved), 1, false};
+    bad_entry.blocks = {{{op(Kind::ReleaseShared, "x")}, {}}};
+    assert(rejected([&] { verify(bad_entry); }));
+    bad_entry.entry.at("x") = {kDropped, 0, true};
+    bad_entry.blocks = {{{op(Kind::ReleaseExclusive, "x")}, {}}};
+    assert(rejected([&] { verify(bad_entry); }));
+    bad_entry.entry.at("x") = {kOwned, 65536, false};
+    bad_entry.blocks = {{{}, {}}};
+    assert(rejected([&] { verify(bad_entry); }));
+    bad_entry.entry.at("x") = {kOwned, 1, false};
+    bad_entry.blocks = {{{op(Kind::ReleaseShared, "x"), op(Kind::Read, "x")}, {}}};
+    verify(bad_entry);
 
     assert(rejected([&] {
         Graph invalid;
