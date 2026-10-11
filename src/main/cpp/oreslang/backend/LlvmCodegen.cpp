@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -89,7 +90,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::Module module("oreslang-source", context);
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
+    // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
+    // pointers on modern LLVM while preserving pre-18 typed-pointer support.
+#if LLVM_VERSION_MAJOR >= 18
+    llvm::Type* native_ptr = llvm::PointerType::get(context, 0);
+#else
     llvm::Type* native_ptr = llvm::Type::getInt8PtrTy(context);
+#endif
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
