@@ -498,4 +498,19 @@ if(BUILD_TESTING)
     add_test(NAME native_messagepack_v2_owned_actor_dispatch
         COMMAND oreslang-native-messagepack-v2-test)
 
+    # Compiler-facing source actor ABI: scalar/wire callbacks share one
+    # exclusive NativeActorScheduler lane and common actor-owned field heap.
+    add_executable(oreslang-source-messagepack-v2-test
+        tests/native_source_actor_msgpack_v2_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-source-messagepack-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-messagepack-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_messagepack_v2_scheduler
+        COMMAND oreslang-source-messagepack-v2-test)
+
 endif()
