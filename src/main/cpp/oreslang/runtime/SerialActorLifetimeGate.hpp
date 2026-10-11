@@ -25,6 +25,9 @@ namespace oreslang {
 class SerialActorLifetimeGate final {
 public:
     enum class Kind : std::uint8_t { Http, Message };
+    // Mirrors Java SerialActorAdmission.Lifecycle without storing a second
+    // mutable state alongside active_/suspended_/stopped_.
+    enum class Lifecycle : std::uint8_t { Idle, Running, Suspended, Stopped };
     enum class SubmitStatus : std::uint8_t {
         Admitted, Queued, Full, Stopped, Duplicate, Exhausted
     };
@@ -157,6 +160,13 @@ public:
         suspended_ = false;
         result.rejected.swap(pending_);
         return result;
+    }
+
+    Lifecycle lifecycle() const {
+        std::lock_guard<std::mutex> guard(lock_);
+        if (stopped_) return Lifecycle::Stopped;
+        if (!active_) return Lifecycle::Idle;
+        return suspended_ ? Lifecycle::Suspended : Lifecycle::Running;
     }
 
     bool busy() const {
