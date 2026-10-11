@@ -1,0 +1,10 @@
+// First source-level persistent actor record: host owns heap/turn tokens.
+define actor Counter as
+  let count: int = 5;
+  let offset: int = 7;
+
+  pub fnc add(int by): int {
+    self.count = self.count + by;
+    return self.count + self.offset;
+  }
+end
