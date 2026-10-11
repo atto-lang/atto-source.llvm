@@ -658,6 +658,27 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-supervisor-panic-bridge-test)
     set_tests_properties(native_typed_panic_supervisor_process_bridge PROPERTIES TIMEOUT 30)
 
+    # Real scheduler typed PANIC -> native bridge -> registry-verified
+    # compiler-owned self.stop(f.child) -> acknowledged / ambiguous STOP.
+    # This is the opt-in source STOP slice, not arbitrary guest on_panic.
+    add_executable(oreslang-native-source-supervisor-bridge-e2e-test
+        tests/native_source_supervisor_bridge_e2e_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-source-supervisor-bridge-e2e-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-source-supervisor-bridge-e2e-test
+        PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(oreslang-native-source-supervisor-bridge-e2e-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-source-supervisor-bridge-e2e-test
+        PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_source_supervisor_bridge_verified_stop_e2e
+        COMMAND oreslang-native-source-supervisor-bridge-e2e-test)
+    set_tests_properties(native_source_supervisor_bridge_verified_stop_e2e
+        PROPERTIES TIMEOUT 30)
+
     # Register the runtime-wide host CONTROL saturation/safe-shutdown proof
     # in the same native test graph as the source compiler. This does not
     # represent guest on_panic lowering or implicit source supervisor syntax.
