@@ -168,3 +168,45 @@ provide supervisor failure delivery.
 - These changes improve actor-failure containment, but do **not** establish
   end-to-end parent priority scheduling, compiler-enforced guest handlers or
   crash-proof operation for a host VM/native process.
+
+
+## Parent CONTROL admission + source contract (October 10 follow-up)
+
+The Java/Graal runtime now reserves **two independent bounded slots at child
+admission**: a parent-local urgent CONTROL slot and a root escalation slot.
+The child finalizer completes the child readiness/done barriers, then enqueues
+a failure on the parent slot and schedules the parent's existing single-flight
+actor lane. That lane polls failures before continuations and user mail, even
+when an ordinary `receive` is suspended. The child finalizer never invokes
+guest handlers. Parent `ACKNOWLEDGE` retires the unused root reservation;
+`ESCALATE`, parent shutdown or handler failure publish to the root lane.
+A stopped parent also drains orphaned queued failures to root.
+
+Host `SupervisionHandler` covers all five typed terminal effect kinds;
+`onRestarted(failure, replacement)` is optional. Host `RESTART` launches a
+new actor with a fresh UUID and fresh initialization, **never** reuses the
+failed actor's state/arena or replays its mailbox. Each parent has at most
+three restart attempts. Exhaustion or spawn failure escalates to root.
+The new reference is passed to the host hook on the parent's own lane.
+
+For guest Oreslang actor classes, the TypeChecker rejects partial
+`on_throw/on_raise/on_panic` hook sets, enforces private synchronous
+`(String summary): void` method signatures, or accepts explicit
+`supervision_policy(): String`. The evaluator invokes typed hook names on
+its own actor turn, or consults the policy for `"escalate"` and
+`"acknowledge"`. Guest actors without either contract may remain leaf
+actors but are denied nested actor spawn at runtime. Guest-language
+`"restart"` policy, first-class typed Failure payload and guest
+`on_restarted` ActorRef lowering are not yet supported; restart is currently
+host/native-ABI only.
+
+`ActorGroup` remains a separate cooperation domain. It is **not** the
+supervision parent, and its Mailman is not allowed to borrow an actor's
+single-flight execution authority.
+
+The LLVM branch has `SupervisorControlTurn.hpp`: a native runtime admission
+ABI for typed CONTROL events, checked single-flight lease, restart budget,
+escalation and retry. Its unit tests prove priority over ordinary mail, but
+the native LLVM source compiler still rejects actor/exception language
+features that cannot be lowered, and has no integrated production actor
+scheduler. These substrate tests do not prove complete backend parity.
