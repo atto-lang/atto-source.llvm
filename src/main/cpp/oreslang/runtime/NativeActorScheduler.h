@@ -40,6 +40,11 @@ int ores_native_actor_scheduler_poll_ready(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 int ores_native_actor_scheduler_poll_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Trusted external supervisor barrier: block only the host caller until
+ * the selected stopped actor drains. This is NOT a guest await/Future;
+ * never invoke it on a scheduler worker/actor carrier. */
+int ores_native_actor_scheduler_wait_done(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Handler runs on the scheduler worker pool, never on the submitting carrier.
  * At most one callback executes per actor, across all worker threads.
  * The actor index is a scheduler-local slot, not a cross-tenant capability.

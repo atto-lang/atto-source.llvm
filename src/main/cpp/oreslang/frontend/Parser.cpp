@@ -309,21 +309,28 @@ private:
             LocalBinding binding;
             binding.offset = token_.offset;
             if (accept("let")) {
-                // Explicit mutable owner marker matches Java/Graal source.
-                // The native class subset still admits legacy unmarked locals;
-                // enforcing mutability for every field write is a later gate.
+                // Match the Java/Graal explicit mutable owner marker.
+                // The restricted native subset still allows legacy unmarked.
                 accept("mut");
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
                 binding.class_name = identifier();
                 binding.name = identifier();
                 require("=");
-                require("new");
-                const std::string ctor = identifier();
-                if (ctor != binding.class_name) fail("class constructor type mismatch");
-                require("(");
-                require(")");
-                binding.new_class = true;
+                if (accept("new")) {
+                    const std::string ctor = identifier();
+                    if (ctor != binding.class_name) fail("class constructor type mismatch");
+                    require("(");
+                    require(")");
+                    binding.new_class = true;
+                } else {
+                    require("rt");
+                    require("take");
+                    const bool parenthesized = accept("(");
+                    binding.move_source = identifier();
+                    if (parenthesized) require(")");
+                    binding.move_class = true;
+                }
             } else {
                 advance();
                 binding.name = identifier();
@@ -663,9 +670,11 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.new_class) {
+                if (binding.new_class || binding.move_class) {
                     if (classes.count(binding.class_name) == 0)
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
+                    if (binding.move_class && !params.count(binding.move_source))
+                        throw std::runtime_error("unknown class move source '" + binding.move_source + "'");
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }

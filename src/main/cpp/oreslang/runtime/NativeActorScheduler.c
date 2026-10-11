@@ -102,6 +102,8 @@ static void* carrier(void* raw) {
         s->completed++;
         if (control) ++s->control_completed;
         if (lane->queued || lane->has_control) pthread_cond_signal(&s->ready);
+        if (lane->retired && !lane->active && !lane->queued && !lane->has_control)
+            pthread_cond_broadcast(&s->drained);
         if (!s->outstanding) {
             pthread_cond_broadcast(&s->drained);
             if (s->retired) pthread_cond_broadcast(&s->ready);
@@ -313,6 +315,21 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
         && !s->actors[actor.actor_slot].active;
     unlock(s);
     return done;
+}
+int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
+                                          OresNativeActorRef actor) {
+    if (!s || executing == s) return 0;
+    lock(s);
+    if (!matching(s, actor) || !s->actors[actor.actor_slot].retired) {
+        unlock(s);
+        return 0;
+    }
+    ActorLane* lane = &s->actors[actor.actor_slot];
+    while (lane->queued || lane->has_control || lane->active) {
+        if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
+    }
+    unlock(s);
+    return 1;
 }
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     if (!s) abort();

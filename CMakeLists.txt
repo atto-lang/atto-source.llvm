@@ -50,6 +50,14 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    add_executable(oreslang-ownership-cfg-dataflow-test
+        tests/ownership_cfg_dataflow_test.cpp)
+    target_include_directories(oreslang-ownership-cfg-dataflow-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-ownership-cfg-dataflow-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_cfg_dataflow_fixed_point
+        COMMAND oreslang-ownership-cfg-dataflow-test)
     add_executable(oreslang-dop-kernel-test tests/dop_kernel_lowering_test.cpp)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -81,7 +89,7 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/http-guest-counter-handler.ores")
     endif()
-    # First real synchronous guest-defer CFG lowering (no throw/unwind yet).
+    # Bounded synchronous defer: LIFO calls on taken/fallthrough return CFG edges.
     if(ORE_CLANG)
         oreslang_contract_test(native_defer_lifo_guarded_execution native-defer-lifo-cfg.ores
             --ir "call void @multiply_ten" --run 111 --clang "${ORE_CLANG}")
@@ -105,6 +113,19 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         set_tests_properties(native_owned_scalar_cfg_generated_stress PROPERTIES TIMEOUT 240)
+    endif()
+    # Class moves are compiled and exercised through real native guests.
+    if(ORE_CLANG)
+        add_test(NAME native_class_move_source_execution
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        add_test(NAME native_class_move_source_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_class_move_source_execution
+            native_class_move_source_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
@@ -505,6 +526,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+
+    # Stop one child without waiting for an unrelated actor's busy turn.
+    add_executable(oreslang-native-child-wait-test
+        tests/native_actor_group_wait_done_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-child-wait-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-child-wait-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-child-wait-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actorgroup_per_child_wait_done
+        COMMAND oreslang-native-child-wait-test)
+    set_tests_properties(native_actorgroup_per_child_wait_done PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-native-supervisor-control-test
         tests/native_supervisor_control_test.c
