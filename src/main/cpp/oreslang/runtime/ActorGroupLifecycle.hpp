@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/SupervisorFailureControl.hpp"
+#include "oreslang/runtime/SupervisorProcess.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -289,6 +290,31 @@ public:
 
     std::size_t undelivered_supervisor_failures() const {
         return supervisor_control_->undelivered();
+    }
+
+    /**
+     * Install one host supervisor PROCESS on the runtime's existing CONTROL
+     * scheduler. The process owns its own exclusive callback lease and can
+     * cooperatively suspend by returning nullopt from its policy. This is
+     * NOT compiler lowering for source-level define supervisor/on_panic.
+     */
+    std::shared_ptr<SupervisorProcess> install_supervisor_process(
+            std::size_t capacity, SupervisorProcess::Enqueue enqueue,
+            SupervisorProcess::Policy policy,
+            SupervisorProcess::DecisionSink decisions) {
+        if (!enqueue || !policy || !decisions)
+            throw std::invalid_argument("supervisor process callbacks required");
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (closed_)
+            throw std::logic_error("closed group cannot create supervisor process");
+        auto process = std::make_shared<SupervisorProcess>(
+            group_id_, runtime_id_, capacity, enqueue, std::move(policy),
+            std::move(decisions));
+        supervisor_control_->install(
+            [process](const SupervisorFailureNotice& notice) {
+                process->accept(notice);
+            }, enqueue);
+        return process;
     }
 
     /** Root/host adoption: exactly one exclusive lifecycle manager. */
