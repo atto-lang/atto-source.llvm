@@ -80,15 +80,25 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
     llvm::Type* native_ptr = llvm::Type::getInt8PtrTy(context);
-    // Audited non-tracing-GC C ABI. Each allocation is function-scoped.
-    auto regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
-        llvm::FunctionType::get(native_ptr, {i64}, false));
-    auto regionNew = module.getOrInsertFunction("oreslang_owned_i64_region_new",
-        llvm::FunctionType::get(native_ptr, {native_ptr, i64}, false));
-    auto regionDrop = module.getOrInsertFunction("oreslang_owned_i64_region_drop",
-        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, native_ptr}, false));
-    auto regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
-        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
+    // The test-only native owned-int experiment must never leak declarations
+    // or allocations into ordinary int code. Resolve the ABI only when a
+    // program actually contains a gated experimental heap-owned local.
+    const bool has_region_bindings = std::any_of(source.functions.begin(), source.functions.end(),
+        [](const Function& fn) {
+            return std::any_of(fn.locals.begin(), fn.locals.end(),
+                [](const LocalBinding& binding) { return binding.heap_owned; });
+        });
+    llvm::FunctionCallee regionOpen, regionNew, regionDrop, regionClose;
+    if (has_region_bindings) {
+        regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
+            llvm::FunctionType::get(native_ptr, {i64}, false));
+        regionNew = module.getOrInsertFunction("oreslang_owned_i64_region_new",
+            llvm::FunctionType::get(native_ptr, {native_ptr, i64}, false));
+        regionDrop = module.getOrInsertFunction("oreslang_owned_i64_region_drop",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, native_ptr}, false));
+        regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
+    }
     std::unordered_map<std::string, llvm::Function*> declarations;
 
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
