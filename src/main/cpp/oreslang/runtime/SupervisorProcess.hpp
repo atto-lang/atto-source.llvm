@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -127,7 +128,7 @@ public:
 private:
     void schedule_locked() {
         if (active_ || failed_ || closed_ || mailbox_.empty()) return;
-        if (epoch_ == UINT64_MAX) {
+        if (epoch_ == std::numeric_limits<std::uint64_t>::max()) {
             fail_locked();
             return;
         }
