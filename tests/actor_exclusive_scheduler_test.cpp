@@ -1,5 +1,6 @@
 #include "oreslang/runtime/ActorExclusiveScheduler.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -138,5 +139,37 @@ int main() {
     while (!crashing->finalize() && std::chrono::steady_clock::now() < until)
         std::this_thread::yield();
     check(crashing->finalize(), "panic scheduler never quiesced");
+
+    // Shutdown has to notify the futures of DATA already admitted but
+    // still queued. Those handlers must NOT run after close.
+    auto shutdown_lane = std::make_shared<ActorExclusiveScheduler>(2, executor);
+    std::promise<void> busy_started, release_busy, busy_finished;
+    const auto release_wait = release_busy.get_future().share();
+    std::atomic<int> abandoned{0}, incorrectly_run{0};
+    check(shutdown_lane->post_data([&] {
+        busy_started.set_value();
+        release_wait.wait();
+        busy_finished.set_value();
+    }), "failed to admit cancellation fixture's running turn");
+    check(busy_started.get_future().wait_for(5s) == std::future_status::ready,
+          "cancellation fixture never began");
+    check(shutdown_lane->post_data(
+        [&] { ++incorrectly_run; }, [&] { ++abandoned; }),
+        "failed to admit first cancellable queued DATA");
+    check(shutdown_lane->post_data(
+        [&] { ++incorrectly_run; }, [&] { ++abandoned; }),
+        "failed to admit second cancellable queued DATA");
+    shutdown_lane->close();
+    check(abandoned == 2, "closed mailbox failed to reject both pending futures");
+    check(incorrectly_run == 0, "shutdown executed abandoned DATA handler");
+    check(!shutdown_lane->post_data([] {}), "cancelled lane admitted late DATA");
+    release_busy.set_value();
+    check(busy_finished.get_future().wait_for(5s) == std::future_status::ready,
+          "shutdown failed to release current carrier");
+    const auto end = std::chrono::steady_clock::now() + 5s;
+    while (!shutdown_lane->finalize() && std::chrono::steady_clock::now() < end)
+        std::this_thread::yield();
+    check(shutdown_lane->finalize(), "shutdown failed physical terminal fence");
+    check(incorrectly_run == 0, "cancelled DATA executed after close");
     return 0;
 }
