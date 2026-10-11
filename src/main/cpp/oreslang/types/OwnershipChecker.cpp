@@ -288,7 +288,7 @@ void validate_i64_ownership(const Program& program) {
             }
             locals.emplace(binding.name, std::move(entry));
         }
-        std::vector<const Expression*> deferred_calls;
+        std::vector<const Statement*> deferred_effects;
         auto check_effect = [&](const Statement& stmt, Locals& state) {
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
@@ -308,7 +308,7 @@ void validate_i64_ownership(const Program& program) {
         };
         for (const auto& stmt : function.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
-                deferred_calls.push_back(stmt.expression.get());
+                deferred_effects.push_back(&stmt);
                 continue;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
@@ -348,8 +348,27 @@ void validate_i64_ownership(const Program& program) {
             }
         }
         auto check_deferred_exit = [&](Locals& path) {
-            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
-                check_call(**it, path, functions);
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
+                const Statement& cleanup = **it;
+                if (cleanup.receiver.empty()) check_call(*cleanup.expression, path, functions);
+                else {
+                    Statement field_write;
+                    field_write.kind = Statement::Kind::FieldWrite;
+                    field_write.offset = cleanup.offset;
+                    field_write.receiver = cleanup.receiver;
+                    field_write.field = cleanup.field;
+                    // Use the same field-write ownership rules as an ordinary
+                    // statement, without moving an owning return binding.
+                    auto& recv = checked_field(field_write.receiver,
+                        field_write.field, field_write.offset, path);
+                    if (recv.mode == Mode::Borrow)
+                        throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
+                    if (recv.exclusive_loan || recv.shared_loans != 0)
+                        throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
+                    check_value(*cleanup.expression, path, functions);
+                    recv.moved_fields.erase(field_write.field);
+                }
+            }
         };
         const Locals cfg_entry = locals;
         // Analyze each taken return independently. Even an explicit scalar
@@ -423,6 +442,14 @@ void validate_i64_ownership(const Program& program) {
             for (const auto& argument : expr.arguments)
                 add_effects(*argument, operations);
         };
+        auto add_cleanup_effects = [&](const Statement& cleanup, Ops& operations) {
+            if (!cleanup.receiver.empty()) {
+                // The deferred field's receiver must still be owned when the
+                // selected return value has already been evaluated.
+                operations.push_back({OpKind::Read, cleanup.receiver + "." + cleanup.field});
+            }
+            add_effects(*cleanup.expression, operations);
+        };
         const std::size_t guard_count = function.early_returns.size();
         cfg.blocks.resize(guard_count * 2 + 1);
         for (std::size_t i = 0; i < guard_count; ++i) {
@@ -433,13 +460,13 @@ void validate_i64_ownership(const Program& program) {
             condition.successors = {2 * i + 1, 2 * i + 2};
             add_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
             // Preserve deferred call inputs after each early-return value.
-            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
-                add_effects(**it, cfg.blocks[2 * i + 1].operations);
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
+                add_cleanup_effects(**it, cfg.blocks[2 * i + 1].operations);
         }
         if (function.result)
             add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
-        for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
-            add_effects(**it, cfg.blocks[guard_count * 2].operations);
+        for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
+            add_cleanup_effects(**it, cfg.blocks[guard_count * 2].operations);
         ownership::verify(cfg);
 
     }
