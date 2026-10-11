@@ -1,0 +1,28 @@
+name: Full native LLVM CMake CTest parity gate
+on:
+  push:
+    branches: [ci/full-native-parity-20261010]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/full-native-parity-ctest.yml'
+permissions:
+  contents: read
+jobs:
+  cmake-ctest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-14-dev clang-14 ninja-build
+      - name: Configure full native compiler and CTest graph
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm -DBUILD_TESTING=ON
+      - name: Build native compiler and all CTest targets
+        run: cmake --build build --parallel 2
+      - name: Execute complete current-head native test graph
+        run: ctest --test-dir build --output-on-failure --parallel 2 --timeout 90
