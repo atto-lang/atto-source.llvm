@@ -141,6 +141,7 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
+                reject_unlowered_runtime_entity();
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'module', 'class' or 'actor'");
@@ -149,9 +150,7 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
-                if (token_.text == "supervisor" || token_.text == "mailman"
-                    || token_.text == "scheduler" || token_.text == "proxy")
-                    fail("source supervisor actor/mailman/scheduler/proxy declarations require compiler-checked CONTROL lowering and native parity");
+                reject_unlowered_runtime_entity();
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'class' or 'actor'");
@@ -167,6 +166,18 @@ public:
     }
 
 private:
+    void reject_unlowered_runtime_entity() {
+        if (token_.text == "supervisor" || token_.text == "mailman"
+                || token_.text == "scheduler" || token_.text == "proxy") {
+            fail("source supervisor actor/mailman/scheduler/proxy declarations require compiler-checked CONTROL lowering and native parity");
+        }
+        if (token_.text == "readable" || token_.text == "transform"
+                || token_.text == "writable" || token_.text == "duplex"
+                || token_.text == "pipe") {
+            fail("source pipe actor declarations require typed role admission, bounded edge transport and native lowering");
+        }
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
