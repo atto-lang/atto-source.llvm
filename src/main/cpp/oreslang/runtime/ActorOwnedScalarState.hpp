@@ -3,6 +3,7 @@
 #include "oreslang/runtime/CriticalStateLoan.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,9 @@ namespace oreslang {
  */
 class ActorOwnedScalarState final {
 public:
+    static constexpr std::size_t kMaxFields = 256;
+    static constexpr std::size_t kMaxStringBytes = 64 * 1024;
+    static constexpr std::size_t kMaxTotalStringBytes = 1024 * 1024;
     using Value = std::variant<std::int64_t, bool, std::string>;
     enum class Type : std::uint8_t { Int, Bool, String };
     struct Field {
@@ -32,7 +36,7 @@ public:
     explicit ActorOwnedScalarState(std::uint64_t actor_id,
                                    const std::map<std::string, Field>& schema)
             : actor_id_(actor_id) {
-        if (actor_id == 0 || schema.empty()) {
+        if (actor_id == 0 || schema.empty() || schema.size() > kMaxFields) {
             throw std::invalid_argument("actor state requires owner and typed fields");
         }
         scope_.owner_actor_id = actor_id;
@@ -40,7 +44,14 @@ public:
             if (name.empty() || !fits(field.type, field.initial)) {
                 throw std::invalid_argument("actor state initializer does not match field type");
             }
-            fields_.emplace(name, Field{field.type, field.initial});
+            const auto next_bytes = string_bytes(field.initial);
+            if (next_bytes > kMaxTotalStringBytes - total_string_bytes_) {
+                throw std::invalid_argument("actor state exceeds aggregate string byte budget");
+            }
+            if (!fields_.emplace(name, Field{field.type, field.initial}).second) {
+                throw std::invalid_argument("duplicate actor state key");
+            }
+            total_string_bytes_ += next_bytes;
         }
     }
 
@@ -61,7 +72,15 @@ public:
             if (!fits(slot.type, value)) {
                 throw std::invalid_argument("actor state field type mismatch");
             }
+            const auto old_size = string_bytes(slot.initial);
+            const auto next_size = string_bytes(value);
+            if (next_size > kMaxTotalStringBytes
+                    - (owner_->total_string_bytes_ - old_size)) {
+                throw std::invalid_argument("actor state aggregate string byte quota");
+            }
             slot.initial = std::move(value);
+            owner_->total_string_bytes_ =
+                    owner_->total_string_bytes_ - old_size + next_size;
         }
     private:
         friend class ActorOwnedScalarState;
@@ -121,15 +140,25 @@ public:
         }
         retired_ = true;
         fields_.clear();
+        total_string_bytes_ = 0;
     }
 
 private:
+    static std::size_t string_bytes(const Value& value) {
+        if (!std::holds_alternative<std::string>(value)) return 0;
+        const auto length = std::get<std::string>(value).size();
+        if (length > kMaxStringBytes) {
+            throw std::invalid_argument("actor state string exceeds per-field byte quota");
+        }
+        return length;
+    }
     static bool fits(Type type, const Value& value) {
         return Access::fits(type, value);
     }
     std::uint64_t actor_id_;
     ores_actor_state_scope scope_{};
     std::map<std::string, Field> fields_;
+    std::size_t total_string_bytes_ = 0;
     bool retired_ = false;
 };
 
