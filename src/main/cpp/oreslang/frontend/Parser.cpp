@@ -614,6 +614,43 @@ private:
         throw std::runtime_error("internal invalid expression kind");
     }
 
+    static bool contains_callable_invocation(const Expression* expr) {
+        if (!expr) return false;
+        if (expr->kind == Expression::Kind::Call) return true;
+        if (contains_callable_invocation(expr->left.get()) ||
+            contains_callable_invocation(expr->right.get())) return true;
+        for (const auto& item : expr->arguments)
+            if (contains_callable_invocation(item.get())) return true;
+        return false;
+    }
+
+    static void validate_declared_effects(const Function& fn) {
+        if (!fn.has_declared_effects) return;
+        if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
+                || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
+            throw std::runtime_error(
+                "using effects on actor actions requires trusted actor effect summaries");
+        }
+        for (const auto& local : fn.locals) {
+            if (local.heap_owned && !fn.declared_effects.has(FunctionEffect::Alloc))
+                throw std::runtime_error(
+                    "owned allocation violates using signature without alloc");
+            if (contains_callable_invocation(local.initializer.get()))
+                throw std::runtime_error(
+                    "using effects require transitive call summaries");
+        }
+        for (const auto& stmt : fn.statements)
+            if (contains_callable_invocation(stmt.expression.get()))
+                throw std::runtime_error("using effects require transitive call summaries");
+        for (const auto& guard : fn.early_returns)
+            if (contains_callable_invocation(guard.lhs.get()) ||
+                contains_callable_invocation(guard.rhs.get()) ||
+                contains_callable_invocation(guard.result.get()))
+                throw std::runtime_error("using effects require transitive call summaries");
+        if (contains_callable_invocation(fn.result.get()))
+            throw std::runtime_error("using effects require transitive call summaries");
+    }
+
     static void validate(const Program& program) {
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
@@ -622,6 +659,7 @@ private:
         }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
+            validate_declared_effects(fn);
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
                 throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
                                          + std::to_string(fn.offset));
