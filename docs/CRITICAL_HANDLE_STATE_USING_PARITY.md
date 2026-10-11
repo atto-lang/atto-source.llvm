@@ -28,7 +28,7 @@ end
   `critical self.handle_state(...)` prefix is required; the *intrinsic*
   itself is already marked critical in the compiler's function/effect metadata.
 - The sole argument **MUST** be an **inline** `critical |state| -> ...`
-  (also `critical (state) -> ...`), with exactly one state-access parameter,
+  with exactly one state-access parameter,
   lexical actor affinity and no capability escape. Unmarked `|s| -> ...`
   MUST fail compilation. An unrelated `critical` lambda does not thereby
   acquire actor-state authority.
