@@ -128,6 +128,10 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-llvmc>")
     oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
+    # Until typed descriptor ownership and atomic selection land, source
+    # SelectPlan factories and persistent case writes must fail closed.
+    oreslang_contract_test(reject_select_plan_factory unsupported-select-plan-constructor.ores --diagnostic "expected ':'")
+    oreslang_contract_test(reject_reusable_case_write unsupported-select-case-write.ores --diagnostic "expected ':'")
     oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
 
     # Native i64 is a Copy value: rt copy/rt share are scalar value copies,
