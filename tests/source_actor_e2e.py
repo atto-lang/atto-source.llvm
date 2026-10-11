@@ -26,6 +26,7 @@ def main():
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
+        ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
@@ -44,6 +45,11 @@ def main():
         "source-actor-send-ref-as-payload.ores": "unknown parameter",
         "source-actor-send-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-borrow-reject.ores": "borrowed reference may only be passed",
+        "source-actor-send-return-after-take-reject.ores": "use of explicitly moved int",
+        "source-actor-send-expression-after-take-reject.ores": "use of explicitly moved int",
+        "source-actor-send-class-value-reject.ores": "ownership violation: class is non-Copy",
+        "source-actor-send-moved-class-field-reject.ores": "ownership violation: use-after-move class field",
+        "source-actor-send-field-take-reject.ores": "ownership violation: use-after-move class field",
     }
     for name, diagnostic in negatives.items():
         result = run([args.compiler, str(fixtures / name)])
