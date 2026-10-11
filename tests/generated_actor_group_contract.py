@@ -30,10 +30,14 @@ def main():
         native = tmp / "actor_heap.o"
         run([p.cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
              "-I", p.include, "-c", p.runtime, "-o", str(native)])
+        compiled_ir = tmp / "actor_generated.o"
+        # Clang may warn when the emitter omits a target triple. Build IR as
+        # a separate native object, while keeping all host C++ warnings fatal.
+        run([p.cc, "-Wno-override-module", "-x", "ir", "-c", str(module),
+             "-o", str(compiled_ir)])
         executable = tmp / "test_actor"
         run([p.cxx, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-pthread",
-             "-I", p.include, "-x", "ir", str(module),
-             "-x", "c++", p.harness, "-x", "none", str(native),
+             "-I", p.include, p.harness, str(compiled_ir), str(native),
              "-o", str(executable)])
         run([str(executable)])
     print("GENERATED_ACTOR_GROUP_LIFECYCLE_PASS source_ir=1 migration=1 loans=1 cancel=1 panic=1 startup_stop=1")
