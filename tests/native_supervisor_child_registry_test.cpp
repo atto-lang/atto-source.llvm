@@ -246,6 +246,14 @@ int main() {
     check(proof_calls == 1, "forged turn invoked external STOP verifier");
     const auto accepted_proof = [&](const SupervisorChildRegistry::StopReceipt& receipt) {
         ++proof_calls;
+        // The external verifier must never run while holding the registry
+        // lock. Reentrant introspection would deadlock otherwise.
+        check(registry.snapshot(uncertain_child.child).phase
+                    == SupervisorChildRegistry::Phase::stopping,
+              "STOP verifier executed under a blocked registry mutex");
+        check(registry.stop_receipt(uncertain_child.child).status
+                    == SupervisorChildRegistry::StopReceiptStatus::uncertain,
+              "STOP verifier observed a fabricated applied receipt");
         return receipt.child == uncertain_child.child
             && receipt.failed_actor.generation == uncertain_actor.generation
             && receipt.incarnation == 1 && receipt.turn_generation == 72;
