@@ -28,6 +28,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(oreslang-owned-i64-region-security-test
+        tests/native_owned_region_security_test.c
+        src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+    target_include_directories(oreslang-owned-i64-region-security-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-owned-i64-region-security-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_region_slot_security
+        COMMAND oreslang-owned-i64-region-security-test)
+    set_tests_properties(native_owned_region_slot_security PROPERTIES TIMEOUT 25)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)

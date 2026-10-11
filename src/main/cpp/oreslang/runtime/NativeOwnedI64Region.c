@@ -17,6 +17,14 @@ struct OresOwnedI64Region {
 
 static void fail_closed(void) { abort(); }
 
+/* An ordinary memset immediately before free can be elided by optimization.
+ * Volatile writes are observable and wipe all remaining region metadata and
+ * former payload bytes before returning storage to the allocator. */
+static void erase_bytes(void* address, size_t length) {
+    volatile unsigned char* const bytes = (volatile unsigned char*) address;
+    for (size_t i = 0; i < length; ++i) bytes[i] = 0;
+}
+
 OresOwnedI64Region* oreslang_owned_i64_region_open(uint64_t slots) {
     if (slots == 0 || slots > 4096) fail_closed();
     if (slots > (SIZE_MAX - offsetof(OresOwnedI64Region, slots)) / sizeof(OwnedI64Slot))
@@ -55,7 +63,7 @@ void oreslang_owned_i64_region_drop(OresOwnedI64Region* region, int64_t* value) 
     if (index >= region->capacity) fail_closed();
     OwnedI64Slot* slot = &region->slots[index];
     if (!slot->alive || &slot->value != value) fail_closed();
-    slot->value = 0; /* erase guest contents before physical region release */
+    erase_bytes(&slot->value, sizeof(slot->value));
     slot->alive = 0;
     region->live_count--;
 }
@@ -64,6 +72,6 @@ void oreslang_owned_i64_region_close(OresOwnedI64Region* region) {
     if (!region || region->live_count != 0) fail_closed();
     const size_t bytes = offsetof(OresOwnedI64Region, slots)
                        + (size_t) region->capacity * sizeof(OwnedI64Slot);
-    memset(region, 0, bytes);
+    erase_bytes(region, bytes);
     free(region); /* Native allocator only; no collector/statepoints. */
 }
