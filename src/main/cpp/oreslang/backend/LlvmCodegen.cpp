@@ -311,6 +311,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
             auto result_poll = host("ores_actor_host_poll_i64", i32, {ptr, ptr});
             auto request_stop = host("ores_actor_host_stop", i32, {ptr});
             auto done_poll = host("ores_actor_host_poll_done", i32, {ptr});
+            auto cancel = host("ores_actor_host_cancel", i32, {ptr});
 
             llvm::Function* step = entrypoint("program_step", i32, {ptr, ptr, ptr});
             auto arguments = params(step);
@@ -333,6 +334,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
             decision->addCase(entry.getInt32(4), phase4);
             decision->addCase(entry.getInt32(5), phase5);
             llvm::IRBuilder<> bad(invalid);
+            bad.CreateCall(cancel, {host_ctx});
             bad.CreateRet(bad.getInt32(-1));
 
             auto finish_phase = [&](llvm::IRBuilder<>& builder,
@@ -350,6 +352,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 test.CreateCondBr(test.CreateICmpSLT(status, test.getInt32(0)),
                                   failed, succeeded);
                 llvm::IRBuilder<> failure(failed);
+                // All host-failure paths request terminal cleanup through
+                // supervisor CONTROL. The child never finalizes itself.
+                failure.CreateCall(cancel, {host_ctx});
                 failure.CreateRet(failure.getInt32(-1));
                 llvm::IRBuilder<> success(succeeded);
                 success.CreateStore(success.getInt32(next), state);
@@ -433,7 +438,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_host_call_i64"
                             && name != "ores_actor_host_poll_i64"
                             && name != "ores_actor_host_stop"
-                            && name != "ores_actor_host_poll_done") {
+                            && name != "ores_actor_host_poll_done"
+                            && name != "ores_actor_host_cancel") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }
