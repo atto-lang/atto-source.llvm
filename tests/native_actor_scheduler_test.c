@@ -28,6 +28,33 @@ static void run(void* raw, size_t actor, uint64_t msg) {
     atomic_fetch_sub(&s->active[actor], 1);
     atomic_fetch_add(&s->total, 1);
 }
+/* When all carriers are busy, CONTROL work must outrank normal work
+ * that has not physically started. No speculative normal dispatch tickets. */
+typedef struct {
+    atomic_int entered, release, delivered;
+    int order[3]; /* written by the only carrier thread */
+} PriorityState;
+static void priority_normal(void* raw, size_t actor, uint64_t payload) {
+    PriorityState* p = (PriorityState*)raw;
+    check((actor == 0 && payload == 10) || (actor == 1 && payload == 20));
+    int slot = atomic_fetch_add(&p->delivered, 1);
+    check(slot < 3);
+    p->order[slot] = (actor == 0 ? 1 : 2);
+    if (actor == 0) {
+        atomic_store(&p->entered, 1);
+        while (!atomic_load(&p->release)) {
+            struct timespec pause = {0, 1000000};
+            nanosleep(&pause, NULL);
+        }
+    }
+}
+static void priority_control(void* raw, size_t actor, uint64_t payload) {
+    PriorityState* p = (PriorityState*)raw;
+    check(actor == 2 && payload == 30);
+    int slot = atomic_fetch_add(&p->delivered, 1);
+    check(slot < 3);
+    p->order[slot] = 3;
+}
 int main(void) {
     /* Even a configured scheduler with actors is entirely thread-free before
      * its first accepted runnable item. Retirement of a dormant scheduler
@@ -141,6 +168,35 @@ int main(void) {
     check(ores_native_actor_scheduler_completed(scheduler) == 1);
     check(ores_native_actor_scheduler_poll_done(scheduler, one));
     check(ores_native_actor_scheduler_try_destroy(scheduler));
+    /* One busy carrier, one ready normal actor, then a supervisor CONTROL
+     * event. CONTROL must be the very next issued turn after the busy actor. */
+    PriorityState priority = {0};
+    OresNativeActorScheduler* ordered =
+        ores_native_actor_scheduler_open_control(
+            3, 2, 1, priority_normal, priority_control, &priority);
+    check(ordered != NULL);
+    OresNativeActorRef pa = ores_native_actor_scheduler_spawn(ordered, 0);
+    OresNativeActorRef pb = ores_native_actor_scheduler_spawn(ordered, 1);
+    OresNativeActorRef pc = ores_native_actor_scheduler_spawn(ordered, 2);
+    check(pa.scheduler_domain && pb.scheduler_domain && pc.scheduler_domain);
+    check(ores_native_actor_scheduler_send(ordered, pa, 10));
+    int saw_first = 0;
+    for (int retry = 0; retry < 3000; ++retry) {
+        if (atomic_load(&priority.entered)) { saw_first = 1; break; }
+        struct timespec nap = {0, 1000000};
+        nanosleep(&nap, NULL);
+    }
+    check(saw_first);
+    check(ores_native_actor_scheduler_send(ordered, pb, 20));
+    check(ores_native_actor_scheduler_publish_control(ordered, pc, 30));
+    atomic_store(&priority.release, 1);
+    check(ores_native_actor_scheduler_drain(ordered));
+    check(atomic_load(&priority.delivered) == 3);
+    check(priority.order[0] == 1);
+    check(priority.order[1] == 3);
+    check(priority.order[2] == 2);
+    ores_native_actor_scheduler_retire(ordered);
+    check(ores_native_actor_scheduler_try_destroy(ordered));
     puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 max_active=1 rejected=3");
     return 0;
 }
