@@ -1,5 +1,6 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include "oreslang/runtime/NativeActorFuture.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -10,6 +11,7 @@
 #define SOURCE_GROUP_SLOTS 64u
 #define SOURCE_GROUP_CARRIERS 4u
 #define SOURCE_GROUP_MAILBOX 128u
+#define SOURCE_GROUP_ROOT_SLOT (SOURCE_GROUP_SLOTS - 1u)
 
 typedef struct {
     uint64_t magic;
@@ -24,8 +26,19 @@ typedef struct {
 } SourceActor;
 
 typedef struct {
+    pthread_cond_t completed;
+    OresNativeActorFuture* ready_future;
+    OresSourceActorContinuation continuation;
+    SourceActor* actor;
+    int done;
+    int64_t result;
+} ReadyAwaitFrame;
+
+typedef struct {
     pthread_mutex_t mutex;
     OresNativeActorScheduler* scheduler;
+    OresNativeActorRef root_ref;
+    ReadyAwaitFrame* pending_ready;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     size_t next_slot;
     size_t live;
@@ -49,12 +62,46 @@ static SourceActor* lookup(size_t index) {
     return actor;
 }
 static void initialize(void* raw, size_t slot, uint64_t payload) {
-    ensure(raw == &group && payload == 0);
+    ensure(raw == &group);
+    if (slot == SOURCE_GROUP_ROOT_SLOT) {
+        /* Root continuation is admitted as its own exclusive CONTROL turn.
+         * It cannot run on the child constructor's carrier inline. */
+        ensure(payload == 1);
+        group_lock();
+        ReadyAwaitFrame* frame = group.pending_ready;
+        ensure(frame && !frame->done && frame->ready_future);
+        ensure(ores_native_actor_future_status(frame->ready_future)
+            == ORES_NATIVE_FUTURE_READY);
+        OresSourceActorContinuation continuation = frame->continuation;
+        SourceActor* actor = frame->actor;
+        group_unlock();
+        const int64_t result = continuation(actor);
+        group_lock();
+        frame->result = result;
+        frame->done = 1;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        fputs("SOURCE_AWAIT_READY_CONTINUATION_PASS root_lane=1 real_future=1\n",
+            stderr);
+#endif
+        ensure(pthread_cond_signal(&frame->completed) == 0);
+        group_unlock();
+        return;
+    }
+    ensure(payload == 0);
     SourceActor* instance = lookup(slot);
     OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     instance->constructor(instance->heap, turn.domain, turn.epoch);
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(&instance->initialized, 1, memory_order_release);
+    group_lock();
+    /* Registration may race with initialization. Both paths serialize via
+     * group.mutex and settle exactly once through NativeActorFuture. */
+    ReadyAwaitFrame* frame = group.pending_ready;
+    if (frame && frame->actor == instance) {
+        ensure(ores_native_actor_future_complete(
+            frame->ready_future, ORES_NATIVE_FUTURE_READY));
+    }
+    group_unlock();
 }
 static void deliver(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group);
@@ -74,13 +121,17 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
     group_lock();
     if (!group.scheduler) {
-        ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
+        ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0
+            && group.pending_ready == NULL);
         group.scheduler = ores_native_actor_scheduler_open_control(
             SOURCE_GROUP_SLOTS, SOURCE_GROUP_MAILBOX, SOURCE_GROUP_CARRIERS,
             deliver, initialize, &group);
         ensure(group.scheduler != NULL);
+        group.root_ref = ores_native_actor_scheduler_spawn(
+            group.scheduler, SOURCE_GROUP_ROOT_SLOT);
+        ensure(group.root_ref.scheduler_domain != 0);
     }
-    ensure(group.next_slot < SOURCE_GROUP_SLOTS);
+    ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
     const size_t slot = group.next_slot++;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
@@ -101,6 +152,39 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
         group.scheduler, instance->ref, 0));
     group_unlock();
     return instance;
+}
+int64_t oreslang_source_actor_await_ready(
+    void* opaque, OresSourceActorContinuation continuation) {
+    SourceActor* actor = (SourceActor*)opaque;
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC && continuation);
+    group_lock();
+    ensure(group.scheduler && !group.pending_ready);
+    const size_t slot = (size_t)actor->ref.actor_slot;
+    ensure(slot < group.next_slot && group.actors[slot] == actor);
+    ReadyAwaitFrame frame = {0};
+    ensure(pthread_cond_init(&frame.completed, NULL) == 0);
+    frame.actor = actor;
+    frame.continuation = continuation;
+    frame.ready_future = ores_native_actor_future_open(
+        group.scheduler, group.root_ref, 1);
+    ensure(frame.ready_future != NULL);
+    group.pending_ready = &frame;
+    if (atomic_load_explicit(&actor->initialized, memory_order_acquire)) {
+        ensure(ores_native_actor_future_complete(
+            frame.ready_future, ORES_NATIVE_FUTURE_READY));
+    }
+    /* External entrypoint barrier only. This caller is never a scheduler
+     * worker; pending Future waits consume no ActorGroup carrier thread. */
+    while (!frame.done) {
+        ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
+    }
+    ensure(group.pending_ready == &frame);
+    group.pending_ready = NULL;
+    const int64_t result = frame.result;
+    ores_native_actor_future_destroy(frame.ready_future);
+    ensure(pthread_cond_destroy(&frame.completed) == 0);
+    group_unlock();
+    return result;
 }
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
@@ -136,8 +220,11 @@ void oreslang_source_actor_stop(void* opaque) {
     ensure(group.live > 0);
     group.live--;
     if (group.live == 0) {
-        /* The original group owner has joined every individual actor turn,
-         * so no worker can retain an actor heap before pool destruction. */
+        ensure(group.pending_ready == NULL);
+        /* The root also lives on the shared pool, with an exclusive lane. */
+        ensure(ores_native_actor_scheduler_stop(group.scheduler, group.root_ref));
+        ensure(ores_native_actor_scheduler_wait_done(group.scheduler, group.root_ref));
+        /* All children and root continuations are quiescent. */
         ores_native_actor_scheduler_retire(group.scheduler);
         ensure(ores_native_actor_scheduler_try_destroy(group.scheduler));
         group.scheduler = NULL;
