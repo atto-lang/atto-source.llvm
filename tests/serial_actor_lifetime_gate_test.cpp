@@ -46,7 +46,9 @@ int main() {
     CHECK(!gate.suspend(held));
     CHECK(gate.finish(*finished.next).accepted);
     CHECK(!gate.busy());
-    gate.stop();
+    const auto stopped = gate.stop();
+    CHECK(!stopped.revoked);
+    CHECK(stopped.rejected.empty());
     CHECK(!gate.admitted(*finished.next));
     CHECK(gate.submit(Kind::Http, 4).status == Status::Stopped);
 
@@ -101,6 +103,22 @@ int main() {
     CHECK(count == 1002); // 1 leader + 1000 queued + final loop iteration
     CHECK(!many.busy() && many.queued() == 0);
     many.stop();
+
+    // Stop returns both in-flight and pending tokens so the scheduler may
+    // notify every waiter instead of silently dropping queued HTTP requests.
+    SerialActorLifetimeGate notify(801, 6, 3);
+    const auto owned = notify.submit(Kind::Message, 11);
+    CHECK(owned.lease);
+    CHECK(notify.submit(Kind::Http, 12).status == Status::Queued);
+    CHECK(notify.submit(Kind::Message, 13).status == Status::Queued);
+    auto rejected = notify.stop();
+    CHECK(rejected.revoked);
+    CHECK(rejected.revoked->event_id == 11);
+    CHECK(rejected.rejected.size() == 2);
+    CHECK(rejected.rejected[0].event_id == 12);
+    CHECK(rejected.rejected[1].event_id == 13);
+    CHECK(!notify.may_execute(*owned.lease));
+    CHECK(!notify.stop().revoked);
 
     // Stop must revoke leases atomically against concurrent submission.
     for (int trial = 0; trial < 100; ++trial) {
