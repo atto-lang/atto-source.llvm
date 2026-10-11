@@ -35,6 +35,14 @@ public:
         }
     };
     enum class Phase { active, finalized, restarting, stopping, stopped };
+    enum class StopReceiptStatus { pending, applied, acknowledged, uncertain };
+    struct StopReceipt {
+        ChildRef child;
+        OresNativeActorRef failed_actor;
+        std::uint64_t incarnation;
+        std::uint64_t turn_generation;
+        StopReceiptStatus status;
+    };
     struct RestartReservation {
         ChildRef child;
         OresNativeActorRef failed_actor;
@@ -194,9 +202,53 @@ public:
             child.logical_child_id, turn_generation);
         (void) it;
         if (!inserted) throw std::logic_error("duplicate STOP turn reservation");
+        try {
+            stop_receipts_.emplace(child.logical_child_id,
+                StopReceipt{child, failed_actor, incarnation, turn_generation,
+                            StopReceiptStatus::pending});
+        } catch (...) {
+            pending_stops_.erase(child.logical_child_id);
+            throw;
+        }
         auto& state = children_.at(child.logical_child_id);
         state.phase = Phase::stopping;
         return state;
+    }
+
+    /** Observability is immutable and keyed to the same physical generation. */
+    StopReceipt stop_receipt(ChildRef child) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_current(child);
+        auto found = stop_receipts_.find(child.logical_child_id);
+        if (found == stop_receipts_.end())
+            throw std::logic_error("no STOP receipt for logical child");
+        return found->second;
+    }
+
+    /** Host has independently acknowledged successful STOP application. */
+    StopReceipt record_stop_applied(
+            ChildRef child, OresNativeActorRef actor,
+            std::uint64_t incarnation, std::uint64_t turn_generation) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        auto& receipt = require_stop_receipt(child, actor, incarnation, turn_generation);
+        if (receipt.status != StopReceiptStatus::pending
+                && receipt.status != StopReceiptStatus::uncertain)
+            throw std::logic_error("STOP receipt cannot be applied twice");
+        receipt.status = StopReceiptStatus::applied;
+        return receipt;
+    }
+
+    /** Outcome unknown: retain STOPPING and deny lifecycle retry. */
+    StopReceipt record_stop_uncertain(
+            ChildRef child, OresNativeActorRef actor,
+            std::uint64_t incarnation, std::uint64_t turn_generation) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        auto& receipt = require_stop_receipt(child, actor, incarnation, turn_generation);
+        if (receipt.status == StopReceiptStatus::applied
+                || receipt.status == StopReceiptStatus::acknowledged)
+            return receipt;
+        receipt.status = StopReceiptStatus::uncertain;
+        return receipt;
     }
 
     Snapshot commit_stop(ChildRef child, OresNativeActorRef failed_actor,
@@ -207,8 +259,13 @@ public:
         if (!turn_generation || found == pending_stops_.end()
             || found->second != turn_generation)
             throw std::logic_error("stale or foreign STOP turn");
+        auto& receipt = require_stop_receipt(child, failed_actor, incarnation,
+                                             turn_generation);
+        if (receipt.status != StopReceiptStatus::applied)
+            throw std::logic_error("STOP lacks authoritative host acknowledgment");
         auto& state = children_.at(child.logical_child_id);
         state.phase = Phase::stopped;
+        receipt.status = StopReceiptStatus::acknowledged;
         pending_stops_.erase(found);
         return state;
     }
@@ -228,6 +285,7 @@ public:
         if (current.phase != Phase::stopped)
             throw std::logic_error("cannot retire active/restartable child");
         children_.erase(child.logical_child_id);
+        stop_receipts_.erase(child.logical_child_id);
     }
 
     std::size_t tracked_children() const {
@@ -236,6 +294,23 @@ public:
     }
 
 private:
+    StopReceipt& require_stop_receipt(
+            ChildRef child, OresNativeActorRef actor,
+            std::uint64_t incarnation, std::uint64_t turn_generation) {
+        require_expected(child, actor, incarnation, Phase::stopping);
+        const auto pending = pending_stops_.find(child.logical_child_id);
+        if (!turn_generation || pending == pending_stops_.end()
+                || pending->second != turn_generation)
+            throw std::logic_error("wrong STOP turn generation");
+        auto found = stop_receipts_.find(child.logical_child_id);
+        if (found == stop_receipts_.end()
+            || found->second.turn_generation != turn_generation
+            || found->second.incarnation != incarnation
+            || !same_actor(found->second.failed_actor, actor))
+            throw std::logic_error("missing or forged STOP receipt");
+        return found->second;
+    }
+
     void check_reservation(const RestartReservation& permit) const {
         require_expected(permit.child, permit.failed_actor,
                          permit.incarnation, Phase::restarting);
@@ -316,6 +391,7 @@ private:
     inline static std::atomic<std::uint64_t> next_restart_nonce_{0};
     std::unordered_map<std::uint64_t, std::uint64_t> pending_restarts_;
     std::unordered_map<std::uint64_t, std::uint64_t> pending_stops_;
+    std::unordered_map<std::uint64_t, StopReceipt> stop_receipts_;
     std::unordered_map<std::uint64_t, Snapshot> children_;
     // Bounded by distinct native scheduler slots, not restart count.
     std::map<std::uint64_t, std::uint64_t> highest_generation_;
