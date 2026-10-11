@@ -65,6 +65,7 @@ private:
         std::mutex lock;
         bool cancelled = false;
         bool event_observed = false;
+        bool release_observed = false;
         std::promise<void> ready_promise, done_promise;
         std::shared_future<void> ready, done;
 
@@ -170,6 +171,13 @@ private:
         try {
             state->core->provider->release(state->identity, state->reserved_bytes,
                     [state, cancelled, error](std::exception_ptr release_error) {
+                {
+                    std::lock_guard<std::mutex> guard(state->lock);
+                    // A faulty/native driver might invoke a completion
+                    // callback twice. Resource accounting is exactly once.
+                    if (state->release_observed) return;
+                    state->release_observed = true;
+                }
                 if (release_error) {
                     state->fail(release_error); // Credits intentionally retained.
                     return;
