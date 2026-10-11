@@ -171,5 +171,9 @@ int main() {
     parent.join();
     REQUIRE(child.stats().completed == 1);
     REQUIRE(parent.stats().completed == 2);
+    REQUIRE(!childProducer.try_send({99, 99}),
+            "a copied producer must not reach a stopped child");
+    REQUIRE(!parentProducer.try_wake_control(),
+            "stale CONTROL wake handle must fail closed after parent join");
     return 0;
 }
