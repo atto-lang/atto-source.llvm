@@ -57,6 +57,9 @@ if(BUILD_TESTING)
 
     # Strict i64 fields: immutable const/val, mutable let, synchronous method writes.
     oreslang_contract_test(actor_source_field_layout actor-owned-fields.ores --ir "oreslang_actor_Counter_read")
+    oreslang_contract_test(source_shared_actor_abi_mode actor-shared-mode.ores --ir "oreslang_actor_SharedCounter_isolation_kind")
+    oreslang_contract_test(source_trusted_isoactor_abi_mode actor-isolated-mode.ores --ir "oreslang_actor_IsolatedCounter_isolation_kind")
+    oreslang_contract_test(reject_isoactor_non_scalar_field actor-isolated-unsupported-field.ores --diagnostic "expected 'int'")
     oreslang_contract_test(actor_source_mutable_field actor-owned-fields.ores --ir "ores_actor_i64_heap_field_write")
     oreslang_contract_test(reject_actor_immutable_write actor-immutable-write.ores --diagnostic "cannot assign immutable or unknown actor field")
     oreslang_contract_test(reject_actor_unknown_write actor-unknown-write.ores --diagnostic "cannot assign immutable or unknown actor field")

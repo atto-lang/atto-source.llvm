@@ -1,0 +1,8 @@
+// Restrictive subset of canonical GraalVM 'shared actor' mode.
+shared actor SharedCounter as {
+  let total: int = 0;
+  pub fnc increment(int n): int {
+    total = total + n;
+    return total;
+  }
+}

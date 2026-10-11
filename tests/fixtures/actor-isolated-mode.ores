@@ -1,0 +1,8 @@
+// Trusted isolated actor. No cross-actor pointers or untrusted pool.
+isoactor IsolatedCounter as {
+  let total: int = 0;
+  pub fnc increment(int n): int {
+    total = total + n;
+    return total;
+  }
+}

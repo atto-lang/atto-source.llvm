@@ -1,0 +1,7 @@
+// Isolated native actor fields must remain scalar until typed ownership works.
+isoactor UnsafeState as {
+  let shared_mutable: object = 0;
+  pub fnc read(): int {
+    return 1;
+  }
+}

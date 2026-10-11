@@ -125,16 +125,37 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else if (accept("actor")) {
-                program.actors.push_back(actor());
+                program.actors.push_back(actor(false));
+            } else if (accept("isoactor")) {
+                program.actors.push_back(actor(true));
+            } else if (accept("shared")) {
+                require("actor");
+                program.actors.push_back(actor(false));
             } else {
-                fail("expected 'module' or 'actor'");
+                fail("expected 'module', 'actor', 'shared actor' or 'isoactor'");
             }
+        } else if (accept("shared")) {
+            require("actor");
+            program.actors.push_back(actor(false));
+        } else if (accept("isoactor")) {
+            program.actors.push_back(actor(true));
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("isoactor")) program.actors.push_back(actor(true));
+                else if (accept("shared")) {
+                    require("actor");
+                    program.actors.push_back(actor(false));
+                } else {
+                    require("actor");
+                    program.actors.push_back(actor(false));
+                }
+            } else if (accept("shared")) {
                 require("actor");
-                program.actors.push_back(actor());
+                program.actors.push_back(actor(false));
+            } else if (accept("isoactor")) {
+                program.actors.push_back(actor(true));
             } else {
                 program.functions.push_back(function());
             }
@@ -148,8 +169,9 @@ public:
     }
 
 private:
-    Actor actor() {
+    Actor actor(bool isolated) {
         Actor value;
+        value.isolated = isolated;
         value.offset = token_.offset;
         value.name = identifier();
         require("as");
@@ -409,6 +431,7 @@ private:
             }
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             reserveGenerated(prefix + "init");
+            reserveGenerated(prefix + "isolation_kind");
             std::unordered_set<std::string> fields;
             std::unordered_set<std::string> mutableFields;
             // Deliberately restrict initializers to closed arithmetic:

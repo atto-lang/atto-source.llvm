@@ -49,6 +49,7 @@ struct Function {
 
 struct Actor {
     std::string name;
+    bool isolated = false; // Trusted isoactor, never untrusted.
     std::vector<LocalBinding> fields;
     std::vector<Function> methods;
     std::size_t offset = 0;
