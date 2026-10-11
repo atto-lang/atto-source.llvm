@@ -53,7 +53,7 @@ The canonical tagged format is documented in
   tagged messages, a 384-alternative closed registry, forbidden schema and
   version mutations, ownership, envelope canonicalization and typed transport.
 - LLVM native: [funded exact-source C
-  #38175301651](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38175301651):
+  #38175456858](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38175456858):
   source-actor wire ABI with GCC ASan+UBSan, legacy scalar actor compatibility,
   the byte-identical Java tagged enum golden, and generic actor-group
   adversarial tests under GCC sanitizers; also Clang optimized repeats.
