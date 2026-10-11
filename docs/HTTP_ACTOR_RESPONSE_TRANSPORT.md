@@ -116,7 +116,7 @@ define actor PageWorker<messages=PageRequest> as
             PageRequest.Home(req) => {
                 // output is request-scoped; direct writer on trusted actors,
                 // serialized supervisor relay on untrusted actors.
-                const out = req.response;
+                const out = rt.http_response(req.request_id);
                 await out.headers(200, {"content-type": "text/html; charset=utf-8"});
                 await out.write("<main>Hello</main>");
                 await out.end();
@@ -137,13 +137,13 @@ define actor PageWorker<messages=PageRequest> as
 end
 ```
 
-**Note:** The above `req.response` is conceptual. The response writer is a
-scoped, non-serializable **trusted capability** or an **untrusted proxy object
-that only emits serialized frames**, never a live socket passed inside the
-message. If `PageRequest` is serialized across actor boundaries, carry
-`request_id` and immutable HTTP request data instead of a writer object;
-the actor resolves its ambient request-scoped output proxy within its own
-execution domain.
+**Note:** The proposed `rt.http_response(req.request_id)` resolves an
+ambient request-scoped writer/proxy in the actor's own execution domain; it is
+not yet compiler-enabled. The message contains only `request_id` and
+immutable serializable request data. A trusted actor resolves a generation-
+fenced, non-serializable direct writer; an untrusted actor resolves a proxy
+that *only* emits serialized frames. No live socket is transported by
+`ActorRef<T>.send`.
 
 ### Cancellation and supervision
 
