@@ -57,6 +57,8 @@ struct ActorMethod {
     std::vector<std::string> parameters;
     std::vector<ActorAssignment> assignments;
     std::unique_ptr<Expression> result;
+    std::string accepted_message_field;
+    bool ends_after_receive = false;
     std::size_t offset = 0;
 };
 struct ActorDecl {
@@ -67,14 +69,15 @@ struct ActorDecl {
 };
 
 // Restricted source-level actor driver. The compiler produces a yielding
-// native continuation for the exact spawn/ready/call/stop/done sequence,
+// native continuation for spawn/ready/typed send/done (NO guest method calls),
 // rather than a blocking thread-per-await. No general actor references,
 // nested function calls or source FFI escapes are supported yet.
 struct ActorScript {
     std::string actor_name;
     std::string worker_name;
-    std::string method;
-    std::unique_ptr<Expression> argument;
+    std::string method; // always the actor-local receive handler
+    std::string message_field;
+    std::unique_ptr<Expression> argument; // structurally typed message field
     bool await_spawn = false;
     std::size_t offset = 0;
 };
