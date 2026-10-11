@@ -154,14 +154,28 @@ private:
         ClassDecl result;
         result.name = identifier();
         require("as");
-        accept("pub");
-        require("let");
-        require("int");
-        result.field = identifier();
-        require("=");
-        if (token_.kind != Kind::Integer) fail("class field requires i64 literal initializer");
-        result.initial = integer_literal();
-        require(";");
+        std::unordered_set<std::string> seen;
+        // Only plain, ordered i64 fields are admitted: no nested objects,
+        // pointers, destructors, user initializers or implicit heap storage.
+        while (token_.text != "end") {
+            if (token_.kind == Kind::End) fail("expected 'end'");
+            if (result.fields.size() == 16)
+                fail("native class field limit exceeded (16)");
+            accept("pub");
+            require("let");
+            require("int");
+            ClassField field;
+            field.name = identifier();
+            if (!seen.insert(field.name).second)
+                fail("duplicate class field '" + field.name + "'");
+            require("=");
+            if (token_.kind != Kind::Integer)
+                fail("class field requires i64 literal initializer");
+            field.initial = integer_literal();
+            require(";");
+            result.fields.push_back(std::move(field));
+        }
+        if (result.fields.empty()) fail("native class requires at least one i64 field");
         require("end");
         return result;
     }

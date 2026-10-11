@@ -19,6 +19,10 @@
 namespace oreslang {
 namespace {
 
+std::string field_key(const std::string& receiver, const std::string& field) {
+    return receiver + "." + field;
+}
+
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
 // caller-owned slot pointers: passing them to nested borrowed parameters is
@@ -38,7 +42,7 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Variable:
             return builder.CreateLoad(i64, storage.at(expr.name), expr.name + ".read");
         case Expression::Kind::Field:
-            return builder.CreateLoad(i64, field_storage.at(expr.left->name),
+            return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
@@ -107,10 +111,14 @@ std::string emit_verified_llvm_ir(const Program& source) {
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::StructType*> class_types;
-    std::unordered_map<std::string, std::int64_t> class_defaults;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::size_t>> field_indices;
     for (const auto& cls : source.classes) {
-        class_types.emplace(cls.name, llvm::StructType::create(context, {i64}, cls.name));
-        class_defaults.emplace(cls.name, cls.initial);
+        std::vector<llvm::Type*> layout(cls.fields.size(), i64);
+        class_types.emplace(cls.name, llvm::StructType::create(context, layout, cls.name));
+        std::unordered_map<std::string, std::size_t> indices;
+        for (std::size_t i = 0; i < cls.fields.size(); ++i)
+            indices.emplace(cls.fields[i].name, i);
+        field_indices.emplace(cls.name, std::move(indices));
     }
 
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
@@ -141,9 +149,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
             arg.setName(param.name);
             if (!param.class_name.empty()) {
                 storage.emplace(param.name, &arg);
-                field_storage.emplace(param.name,
-                    builder.CreateStructGEP(class_types.at(param.class_name), &arg, 0,
-                                            param.name + ".field"));
+                for (const auto& [field, field_index] : field_indices.at(param.class_name)) {
+                    field_storage.emplace(field_key(param.name, field),
+                        builder.CreateStructGEP(class_types.at(param.class_name), &arg,
+                            static_cast<unsigned>(field_index), param.name + "." + field));
+                }
             } else if (param.mode == Parameter::Mode::Value) {
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
                 builder.CreateStore(&arg, slot);
@@ -154,7 +164,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
         }
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
-        struct LocalSlot { llvm::Value* address; bool heap_owned; };
+        struct LocalSlot {
+            llvm::Value* address;
+            bool heap_owned;
+            std::uint64_t bytes;
+        };
         std::vector<LocalSlot> lexical_slots;
         const auto heap_count = std::count_if(fn.locals.begin(), fn.locals.end(),
             [](const LocalBinding& b) { return b.heap_owned; });
@@ -167,14 +181,20 @@ std::string emit_verified_llvm_ir(const Program& source) {
             if (binding.new_class) {
                 llvm::StructType* shape = class_types.at(binding.class_name);
                 llvm::Value* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record");
+                const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
                 builder.CreateLifetimeStart(slot,
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
-                llvm::Value* field = builder.CreateStructGEP(shape, slot, 0, binding.name + ".field");
-                builder.CreateStore(llvm::ConstantInt::getSigned(i64,
-                    class_defaults.at(binding.class_name)), field);
+                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                for (std::size_t i = 0; i < cls->fields.size(); ++i) {
+                    const ClassField& item = cls->fields[i];
+                    llvm::Value* address = builder.CreateStructGEP(shape, slot,
+                        static_cast<unsigned>(i), binding.name + "." + item.name);
+                    builder.CreateStore(llvm::ConstantInt::getSigned(i64, item.initial), address);
+                    field_storage.emplace(field_key(binding.name, item.name), address);
+                }
                 storage.emplace(binding.name, slot);
-                field_storage.emplace(binding.name, field);
-                lexical_slots.push_back({slot, false});
+                lexical_slots.push_back({slot, false, bytes});
                 continue;
             }
             llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations);
@@ -187,12 +207,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 builder.CreateStore(initial, slot);
             }
             storage.emplace(binding.name, slot);
-            lexical_slots.push_back({slot, binding.heap_owned});
+            lexical_slots.push_back({slot, binding.heap_owned, 8});
         }
         for (const auto& stmt : fn.statements) {
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 llvm::Value* updated = lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
-                builder.CreateStore(updated, field_storage.at(stmt.receiver));
+                builder.CreateStore(updated, field_storage.at(field_key(stmt.receiver, stmt.field)));
             } else {
                 lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
             }
@@ -202,7 +222,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
         for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
             if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
             else builder.CreateLifetimeEnd(it->address,
-                llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+                llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
         }
         if (region != nullptr) builder.CreateCall(regionClose, {region});
         if (fn.returns_void) builder.CreateRetVoid();
