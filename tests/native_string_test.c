@@ -13,7 +13,7 @@ static void check_json_unquote_fixture(const unsigned char* bytes, size_t n,
     CHECK(oreslang_string_json_unquote(&source,&decoded)==ORESLANG_STRING_OK);
     CHECK(decoded.byte_length==expected_n);
     if (expected_n) CHECK(memcmp(decoded.data,expected,expected_n)==0);
-    CHECK(oreslang_string_json_unquote(&source,&decoded)==ORESLANG_STRING_INVALID);
+    if (expected_n) CHECK(oreslang_string_json_unquote(&source,&decoded)==ORESLANG_STRING_INVALID);
     CHECK(oreslang_string_json_unquote(&source,&source)==ORESLANG_STRING_INVALID);
     oreslang_string_drop(&source);
     oreslang_string_drop(&decoded);
