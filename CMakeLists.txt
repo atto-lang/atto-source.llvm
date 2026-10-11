@@ -167,13 +167,13 @@ if(BUILD_TESTING)
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "processed=2 last=3")
         oreslang_contract_test(native_exec_source_actor_spawn source-actor-spawn-stop.ores
-            --run 43 --clang "${ORE_CLANG}"
+            --run 43 --clang "${ORE_CLANG}" --runs 40
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "SOURCE_ACTOR_SPAWN_STOP_VERIFIED")
         oreslang_contract_test(native_asan_source_actor_spawn source-actor-spawn-stop.ores
-            --run 43 --clang "${ORE_CLANG}" --sanitize
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 10
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
