@@ -99,6 +99,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
 
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::Function*> actorInitializers;
+    std::unordered_map<std::string, llvm::Function*> actorMessageHandlers;
     std::unordered_map<std::string, std::size_t> actorFieldCounts;
     for (const auto& actor : source.actors) {
         auto* ctorType = llvm::FunctionType::get(
@@ -107,13 +108,24 @@ std::string emit_verified_llvm_ir(const Program& source) {
             ctorType, llvm::Function::ExternalLinkage,
             "oreslang_actor_" + actor.name + "_init", module));
         actorFieldCounts.emplace(actor.name, actor.fields.size());
+        const auto method = std::find_if(actor.methods.begin(), actor.methods.end(),
+            [](const Function& f) { return f.name == "on_message"; });
+        if (method != actor.methods.end() && method->parameters.size() == 1) {
+            auto* msgType = llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false);
+            actorMessageHandlers.emplace(actor.name, llvm::Function::Create(
+                msgType, llvm::Function::ExternalLinkage,
+                "oreslang_actor_" + actor.name + "_on_message", module));
+        }
     }
     const auto sourceSpawn = module.getOrInsertFunction(
         "oreslang_source_actor_spawn",
-        llvm::FunctionType::get(ptr, {ptr, i64}, false));
+        llvm::FunctionType::get(ptr, {ptr, ptr, i64}, false));
     const auto sourceStop = module.getOrInsertFunction(
         "oreslang_source_actor_stop",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
+    const auto sourceSend = module.getOrInsertFunction(
+        "oreslang_source_actor_send",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr, i64}, false));
 
     // Declare all functions first, enabling forward calls and recursion.
     for (const auto& fn : source.functions) {
@@ -138,8 +150,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
         }
         std::unordered_map<std::string, llvm::Value*> actorRefs;
         for (const auto& spawn : fn.actor_spawns) {
+            auto found = actorMessageHandlers.find(spawn.actor_type);
+            llvm::Value* handler = found == actorMessageHandlers.end()
+                ? static_cast<llvm::Value*>(llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(ptr)))
+                : static_cast<llvm::Value*>(found->second);
             auto* ref = builder.CreateCall(sourceSpawn,
-                {actorInitializers.at(spawn.actor_type),
+                {actorInitializers.at(spawn.actor_type), handler,
                  llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
                 spawn.name + ".native.actor.ref");
             actorRefs.emplace(spawn.name, ref);
@@ -177,6 +194,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
         }
         llvm::Value* result = lower(*fn.result, builder, i64, parameters,
                                     locals, declarations);
+        for (const auto& send : fn.actor_sends) {
+            llvm::Value* payload = lower(*send.payload, builder, i64,
+                                          parameters, locals, declarations);
+            builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
+        }
         for (const auto& name : fn.actor_stops) {
             builder.CreateCall(sourceStop, {actorRefs.at(name)});
         }
@@ -222,9 +244,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
             std::vector<llvm::Type*> types{ptr, i64, i64};
             types.insert(types.end(), method.parameters.size(), i64);
             auto* signature = llvm::FunctionType::get(i64, types, false);
-            auto* fn = llvm::Function::Create(
-                    signature, llvm::Function::ExternalLinkage,
-                    symbol + "_" + method.name, module);
+            auto existing = actorMessageHandlers.find(actor.name);
+            auto* fn = method.name == "on_message" && existing != actorMessageHandlers.end()
+                    ? existing->second
+                    : llvm::Function::Create(signature, llvm::Function::ExternalLinkage,
+                                             symbol + "_" + method.name, module);
+            if (fn->getFunctionType() != signature)
+                throw std::runtime_error("generated actor message ABI mismatch");
             auto* block = llvm::BasicBlock::Create(context, "entry", fn);
             llvm::IRBuilder<> builder(block);
             auto args = fn->arg_begin();
@@ -326,7 +352,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_init_mutable"
                             && name != "ores_actor_i64_heap_field_write"
                             && name != "oreslang_source_actor_spawn"
-                            && name != "oreslang_source_actor_stop") {
+                            && name != "oreslang_source_actor_stop"
+                            && name != "oreslang_source_actor_send") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }
