@@ -171,7 +171,8 @@ private:
         require("as");
         const bool braced = accept("{");
         std::unordered_set<std::string> names;
-        while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+        while (token_.text == "let" || token_.text == "const" ||
+               token_.text == "val" || token_.text == "final") {
             if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
             LocalBinding field;
             field.offset = token_.offset;
@@ -180,7 +181,10 @@ private:
             field.name = identifier();
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
             require(":");
-            require("int");
+            if (token_.text != "int") {
+                fail("native actor member field requires int; Map and actor-group fields need typed native lowering");
+            }
+            advance();
             require("=");
             field.initializer = expression();
             require(";");
@@ -191,7 +195,16 @@ private:
         method.offset = token_.offset;
         method.exported = accept("pub");
         if (!method.exported) fail("native actor requires pub on_message(int)");
-        require("fnc");
+        // Instance method spellings are synonymous in source. The native subset
+        // lowers only the on_message(int) entrypoint, never implicit callbacks.
+        if (accept("suspend") || accept("suspends")) {
+            fail("native suspended actor methods require continuation lowering");
+        }
+        if (accept("static")) {
+            if (accept("method")) fail("static method is invalid; use static fnc");
+            fail("native actor static fnc requires separate member lowering");
+        }
+        if (!accept("fnc")) accept("method");
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
