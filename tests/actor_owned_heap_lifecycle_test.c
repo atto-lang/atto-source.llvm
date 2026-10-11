@@ -84,10 +84,18 @@ int main(void) {
     OresActorTurn first = ores_actor_i64_heap_enter(heap, 29, 7);
     OresActorSlot saved = ores_actor_i64_heap_new(heap, first, 40);
     CHECK(ores_actor_i64_heap_read(heap, first, saved) == 40);
+    const int64_t initial_fields[] = {3, 7, 11};
+    OresActorI64Fields* record = ores_actor_i64_fields_create(
+        heap, first, initial_fields, 3);
+    CHECK(ores_actor_i64_fields_get(heap, first, record, 0) == 3);
+    CHECK(ores_actor_i64_fields_get(heap, first, record, 2) == 11);
     OresActorLoan suspended = ores_actor_i64_heap_borrow(heap, first, saved);
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
     OresActorTurn next = ores_actor_i64_heap_enter(heap, 29, 7);
     CHECK(ores_actor_i64_heap_read(heap, next, saved) == 40);
+    CHECK(ores_actor_i64_fields_get(heap, next, record, 1) == 7);
+    ores_actor_i64_fields_set(heap, next, record, 1, 42);
+
     ores_actor_i64_heap_write(heap, next, saved, 42);
     ores_actor_i64_heap_leave(heap, next);
     /* A different native thread executes the next actor turn. */
@@ -99,6 +107,9 @@ int main(void) {
     CHECK(exit_status == 0 && !carrier.failed);
     OresActorTurn after = ores_actor_i64_heap_enter(heap, 29, 7);
     CHECK(ores_actor_i64_heap_read(heap, after, saved) == 42);
+    CHECK(ores_actor_i64_fields_get(heap, after, record, 1) == 42);
+    ores_actor_i64_fields_drop(heap, after, record);
+
     ores_actor_i64_heap_leave(heap, after);
     ores_actor_i64_heap_retire(heap);
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 0); /* outstanding loan */
