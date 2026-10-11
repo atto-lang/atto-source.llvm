@@ -59,3 +59,99 @@ A reduction budget is charged at region boundaries, not every instruction. Once 
 9. Benchmarks: tight loop throughput vs uninstrumented baseline, p50/p99 scheduling latency, throughput under actor contention.
 
 **Release gate:** neither backend claims preemptive fairness until a real runaway synchronous loop is demonstrably suspended and resumed, with exact-tree CI evidence. 
+
+## Real-time scheduling extension (draft v1)
+
+The objective is **hard-real-time-capable execution where the complete target
+platform can substantiate it**, not a blanket claim that an ordinary JVM,
+general-purpose OS, or unbounded FFI meets hard deadlines. A reduction budget
+is a work-accounting unit, **not** a wall-clock worst-case bound.
+
+### Region certification
+
+Every region carries a classification:
+
+| Class | Meaning | Strict RT admission |
+| --- | --- | --- |
+| BOUNDED | Proven finite work and resource bounds | Allowed if target WCET is certified |
+| BUDGETED | Compiler partitions potentially unbounded work into bounded chunks | Allowed if every chunk has certified WCET |
+| UNBOUNDED | Cannot prove an upper bound or reach a guaranteed boundary | Rejected |
+| BLOCKING | Depends on potentially unbounded external operation | Rejected unless isolated and bounded |
+
+The compiler must reject any cycle in the control-flow graph that can bypass
+all executable, yield-safe boundaries indefinitely. This includes recursive
+cycles, loops with live conflicting state loans, and calls into unknown code.
+A finite number of *static* reentrancy sites is sufficient only when every
+unbounded dynamic execution path reaches one within a bounded work interval.
+
+### Timing metadata (conceptual)
+
+```text
+RealtimeRegion {
+  region_id
+  classification: BOUNDED | BUDGETED | UNBOUNDED | BLOCKING
+  target_triple
+  max_uninterrupted_work
+  wcet_bound_ns?        // only present with target-specific evidence
+  stack_bound_bytes?
+  allocation_bound_bytes?
+  preemption_boundary_ids[]
+  blocking_effects[]
+  proof_or_measurement_reference?
+}
+ActorSchedulingPolicy {
+  period_ns?
+  relative_deadline_ns?
+  execution_budget_ns?
+  max_uninterrupted_ns?
+  priority?
+  criticality?
+}
+```
+
+All values are optional until verified; **never synthesize a WCET from average
+latency, profiling, or reduction counts**. The metadata must survive backend
+optimization with a verifier ensuring that no transformation removes the
+required boundaries or invalidates proof assumptions.
+
+### Admission and runtime behavior
+
+Strict RT admission requires target-specific WCET evidence, bounded scheduler
+and context-switch overhead, capacity/schedulability analysis, bounded memory
+and finalization, bounded critical-section blocking, and explicit FFI effects.
+Deadline, execution budget, and maximum uninterrupted interval are distinct.
+A failed admission must return a diagnostic, not silently downgrade to a
+hard-real-time claim. Priorities must account for inversion; a practical first
+profile uses dedicated cores, fixed-capacity queues, preallocated continuation
+frames, and an RT-capable OS configuration.
+
+`critical handle_state` is single-flight between verified boundaries, not an
+uninterruptible callback-wide transaction. Mutable state loans cannot be
+carried across a reentrancy boundary that admits another state mutation.
+Continuation-owned mutable locals can be saved and restored. Any path that
+holds a conflicting loan across an unbounded region fails strict RT admission.
+
+### Backend guarantees
+
+- **LLVM/native:** Candidate for strict RT certification with suitable OS,
+  hardware, memory, and toolchain assumptions. Native code alone does not
+  establish a hard deadline.
+- **GraalVM/JVM:** Default to best-effort/soft RT; JIT, GC, safepoints and
+  deoptimization need explicit bounding evidence before a strict RT claim.
+- **GraalVM Native Image:** May be eligible for a separately certified profile
+  after accounting for its memory management and runtime behavior.
+
+### Mandatory tests before advertising strict RT
+
+1. Reject an unbounded loop or recursive cycle with no bounded yield path.
+2. Reject an unbounded mutable state loan and unbounded/blocking FFI.
+3. Preserve scheduling boundaries through optimized GraalVM and LLVM lowering.
+4. Verify deadline admission failure under oversubscribed workloads.
+5. Measure worst observed interruption and scheduling latency under CPU,
+   memory, cancellation, and actor-contention stress; these measurements
+   **support** but do not by themselves prove WCET.
+6. Verify preallocated continuations, bounded queues, cancellation cleanup,
+   and no unbounded allocation on certified execution paths.
+
+**Status:** Specification only; no RT scheduler, WCET verifier, admission
+controller, or cross-backend conformance evidence is asserted by this document.
