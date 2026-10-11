@@ -13,8 +13,12 @@ extend [the admission suite](../README.md) with stronger oracles.
   exact case inventory, diagnostic classes, runtime values and backend readiness.
 - A missing compiler, signal, timeout, linker failure, wrong result, or
   infrastructure error **always fails a required case**.
-- Pending indicates missing implementation or missing verification; it is
-  *not* conformance. Graal runtime-result support remains explicitly pending.
+- Graal native-result fixtures first pass Java/Graal `--check`, then run the
+  same source through real `OresMain` and verify its exit status and empty
+  stdout/stderr. The `--run-command` must be configured explicitly; missing
+  guest execution is a failure, never a pass.
+- Pending indicates missing implementation or verification, *not* conformance.
+  Ownership and actor/async feature parity remain separately gated.
 - TypeSpec defines portable interchange models; JSON Schema 2020-12 validates
   constrained cases. TypeSpec and schemas are both compiled/validated in CI.
 
@@ -40,6 +44,7 @@ mvn -B -ntp -DskipTests package
 mvn -B -ntp -q dependency:build-classpath -Dmdep.outputFile=target/conformance-classpath.txt
 python3 contracts/v1/semantics/run.py \
   --backend graal --command 'python3 contracts/v1/java_probe.py {source}' \
+  --run-command 'python3 contracts/v1/java_probe.py {source} --execute' \
   --revision "$(git rev-parse HEAD)" --report target/semantics-graal.json
 ```
 
@@ -51,7 +56,7 @@ python3 contracts/v1/semantics/compare.py \
 ```
 
 **Current limitations:** no shared runtime value ABI beyond a small native
-process exit code; no validated Java native result adapter; LLVM has only a
+process exit code; the Graal native-exit adapter only covers bounded 0–125 process exit values; LLVM has only a
 restricted i64 ownership checker; no automatic source-level actor/preemption conformance yet. Proposed functionality
 is recorded as pending instead of turned into false passing tests.
 
