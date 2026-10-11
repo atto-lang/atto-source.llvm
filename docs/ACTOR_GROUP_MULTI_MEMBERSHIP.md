@@ -82,15 +82,26 @@ into zero-copy group events.
 
 ## Current backend state
 
-Java/GraalVM host runtime: `ActorRuntime.ActorGroup` already implements
-multi-group cooperative membership; `managedWorkers` is a separate, exclusive
-lifecycle registry. `ActorGroupMultiMembershipTest` adds explicit two-room
-regression coverage. Source-language lowering remains a separate gate.
+Java/GraalVM host runtime: `ActorRuntime.ActorGroup` now maintains a bounded,
+reverse-indexed, per-actor set of cooperating groups. Admission is serialized
+across rooms; duplicate joins are idempotent and leave, group close and actor
+retirement reclaim slots. `managedWorkers` remains a separate, exclusive
+lifecycle registry. `ActorGroupMultiMembershipTest` covers two-room
+participation, private zero-copy restrictions, room leave/closure and quota
+reclamation. This is a host runtime API, not yet full source-language lowering.
 
-LLVM: `NativeActorGroup` is a native host lifecycle primitive, **not** a
-cooperation-membership/event-bus API. It rejects duplicate actor adoption
-correctly. Do not reuse its owner registry as an exclusive membership registry;
-introduce an independent bounded membership registry and isolation-safe
-subscriptions only when source actors, typed references, continuation-aware
-asynchronous waits and supervision are implemented. Until then, fail closed
-on unsupported guest ActorGroup constructs instead of claiming parity.
+LLVM: `NativeActorMembershipRegistry.hpp` now implements a distinct,
+per-runtime, bounded *host-side* cooperation registry with revocable join
+permits, incarnation fencing, atomic multi-room admission, leave, group close
+and actor retirement. `NativeActorGroupLifecycle.hpp` still enforces one
+independent owner for stop/cancel/finalization. The new native regression
+compiles with strict warnings and passes ASan/UBSan in the private exact-source
+test mirror. These APIs are not yet source-level `ActorGroup` lowering,
+actor message authorization, room persistence or isolation-safe event
+subscriptions. Keep unsupported guest constructs fail-closed.
+
+Production WebSocket service routing remains an application-layer feature:
+only the connection actor owns socket writes, an authenticated room actor
+validates every message, and its per-client outbound mailbox must have a
+bounded byte/message budget with an explicit slow-client policy. The host
+membership registry must not be used as a substitute for application ACLs.
