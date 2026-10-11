@@ -56,3 +56,27 @@ Both languages' gates are only scheduling building blocks. Actual mixed
 HTTP + mailbox source integration, generation-fenced supervisor task
 tickets, real cancellation unwinding, full LLVM CMake/CTest and GraalVM
 native-image end-to-end validation remain mandatory.
+
+## Enum lifecycle and TLA+ parity — Oct 11, 2026
+
+The native `SerialActorLifetimeGate::Lifecycle` enum has exactly
+`Idle`, `Running`, `Suspended`, `Stopped`. `lifecycle()` is
+computed under the same mutex used by `submit/suspend/resume/finish/stop`,
+so no second mutable lifecycle variable can diverge from the lease, actor
+incarnation, or cancellation fence. The existing `admitted(lease)` versus
+`may_execute(lease)` distinction remains unchanged.
+
+Canonical finite-state safety model:
+[`SerialActorLifecycle.tla`](https://github.com/ores-truffle-oreslang/oreslang-source.java/blob/integration/serial-actor-runtime-gate-20261011/verification/serial_actor/SerialActorLifecycle.tla).
+The same model applies to both runtime admission gates at the abstract
+transition layer: one handler lifetime, FIFO queue, exact task provenance,
+suspension without admission release, and stopped/restarted incarnations.
+[Funded mirror TLC run 38180159775](https://github.com/akrion-sim/akrion-sim-e2e/actions/runs/38180159775)
+explored 19,616 distinct abstract states at depth 26 with no violations.
+The funded native GCC/Clang sanitizer test compiles the exact C++ header
+and checks all four lifecycle phases.
+
+These are **bounded abstraction and native policy tests**, not a complete
+LLVM source guest execution or a proof that every physical scheduler path
+refines the model. Real HTTP + message admission, resume ticket enforcement
+at guest codegen and restart/cleanup conformance are still release blockers.
