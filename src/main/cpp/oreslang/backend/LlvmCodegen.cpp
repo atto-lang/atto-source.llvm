@@ -292,11 +292,10 @@ std::string emit_verified_llvm_ir(const Program& source) {
             builder.CreateRetVoid();
         }
 
-        // The source actor's optional fnc main is lowered to a resumable
-        // pull-style continuation, NOT an OS-carrier-blocking entrypoint.
-        // ABI: step(ctx, state: *i32, result: *i64) returns 0=yield,
-        // 1=finished, -1=terminal failure. Only trusted host functions may
-        // admit actor work or inspect the two future readiness tickets.
+        // Compiler-only actor message send. Guest code cannot invoke
+        // generated actor business methods. The ONLY user send boundary is
+        // ActorRef.send(infer struct{typedField: int}); the receive function
+        // pointer is a trusted host callback admitted on that actor's lane.
         if (source.script) {
             const ActorScript& script = *source.script;
             auto host = [&](const std::string& name, llvm::Type* result,
@@ -307,93 +306,75 @@ std::string emit_verified_llvm_ir(const Program& source) {
             auto spawn_actor = host("ores_actor_host_spawn", i32,
                 {ptr, ptr, ptr, ptr, ptr, i32, i64});
             auto ready_poll = host("ores_actor_host_poll_ready", i32, {ptr});
-            auto invoke = host("ores_actor_host_call_i64", i32, {ptr, ptr, i64});
-            auto result_poll = host("ores_actor_host_poll_i64", i32, {ptr, ptr});
-            auto request_stop = host("ores_actor_host_stop", i32, {ptr});
+            auto send_message = host("ores_actor_host_send_i64", i32, {ptr, ptr, i64});
             auto done_poll = host("ores_actor_host_poll_done", i32, {ptr});
             auto cancel = host("ores_actor_host_cancel", i32, {ptr});
 
             llvm::Function* step = entrypoint("program_step", i32, {ptr, ptr, ptr});
-            auto arguments = params(step);
-            llvm::Value* host_ctx = arguments[0];
-            llvm::Value* state = arguments[1];
-            llvm::Value* output = arguments[2];
-            llvm::IRBuilder<> entry(llvm::BasicBlock::Create(context, "entry", step));
+            auto args = params(step);
+            llvm::Value* ctx = args[0];
+            llvm::Value* state = args[1];
+            llvm::Value* output = args[2];
+            llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", step));
             auto* invalid = llvm::BasicBlock::Create(context, "invalid", step);
-            auto* phase0 = llvm::BasicBlock::Create(context, "spawn", step);
-            auto* phase1 = llvm::BasicBlock::Create(context, "await_ready", step);
-            auto* phase2 = llvm::BasicBlock::Create(context, "enqueue_message", step);
-            auto* phase3 = llvm::BasicBlock::Create(context, "await_message", step);
-            auto* phase4 = llvm::BasicBlock::Create(context, "stop", step);
-            auto* phase5 = llvm::BasicBlock::Create(context, "await_done", step);
-            auto* decision = entry.CreateSwitch(entry.CreateLoad(i32, state), invalid, 6);
-            decision->addCase(entry.getInt32(0), phase0);
-            decision->addCase(entry.getInt32(1), phase1);
-            decision->addCase(entry.getInt32(2), phase2);
-            decision->addCase(entry.getInt32(3), phase3);
-            decision->addCase(entry.getInt32(4), phase4);
-            decision->addCase(entry.getInt32(5), phase5);
+            auto* spawn = llvm::BasicBlock::Create(context, "spawn", step);
+            auto* ready = llvm::BasicBlock::Create(context, "ready", step);
+            auto* send = llvm::BasicBlock::Create(context, "send_typed", step);
+            auto* done = llvm::BasicBlock::Create(context, "await_done", step);
+            auto* decision = builder.CreateSwitch(builder.CreateLoad(i32, state), invalid, 4);
+            decision->addCase(builder.getInt32(0), spawn);
+            decision->addCase(builder.getInt32(1), ready);
+            decision->addCase(builder.getInt32(2), send);
+            decision->addCase(builder.getInt32(3), done);
             llvm::IRBuilder<> bad(invalid);
-            bad.CreateCall(cancel, {host_ctx});
+            bad.CreateCall(cancel, {ctx});
             bad.CreateRet(bad.getInt32(-1));
 
-            auto finish_phase = [&](llvm::IRBuilder<>& builder,
-                                    llvm::Value* status, int next, bool terminal) {
-                // Poll never waits for a future or holds an OS carrier.
-                auto* pending = llvm::BasicBlock::Create(context, "yield_pending", step);
-                auto* nonpending = llvm::BasicBlock::Create(context, "nonpending", step);
-                builder.CreateCondBr(builder.CreateICmpEQ(status, builder.getInt32(0)),
-                                     pending, nonpending);
-                llvm::IRBuilder<> wait(pending);
-                wait.CreateRet(wait.getInt32(0));
-                llvm::IRBuilder<> test(nonpending);
-                auto* failed = llvm::BasicBlock::Create(context, "host_failed", step);
-                auto* succeeded = llvm::BasicBlock::Create(context, "host_succeeded", step);
-                test.CreateCondBr(test.CreateICmpSLT(status, test.getInt32(0)),
-                                  failed, succeeded);
-                llvm::IRBuilder<> failure(failed);
-                // All host-failure paths request terminal cleanup through
-                // supervisor CONTROL. The child never finalizes itself.
-                failure.CreateCall(cancel, {host_ctx});
-                failure.CreateRet(failure.getInt32(-1));
-                llvm::IRBuilder<> success(succeeded);
-                success.CreateStore(success.getInt32(next), state);
-                success.CreateRet(success.getInt32(terminal ? 1 : 0));
+            auto phase = [&](llvm::IRBuilder<>& emit, llvm::Value* status,
+                             int next, bool terminal) {
+                auto* pending = llvm::BasicBlock::Create(context, "pending", step);
+                auto* resolved = llvm::BasicBlock::Create(context, "resolved", step);
+                emit.CreateCondBr(emit.CreateICmpEQ(status, emit.getInt32(0)),
+                                  pending, resolved);
+                llvm::IRBuilder<> yield(pending);
+                yield.CreateRet(yield.getInt32(0));
+                llvm::IRBuilder<> check(resolved);
+                auto* failure = llvm::BasicBlock::Create(context, "error", step);
+                auto* success = llvm::BasicBlock::Create(context, "success", step);
+                check.CreateCondBr(check.CreateICmpSLT(status, check.getInt32(0)),
+                                   failure, success);
+                llvm::IRBuilder<> on_failure(failure);
+                on_failure.CreateCall(cancel, {ctx});
+                on_failure.CreateRet(on_failure.getInt32(-1));
+                llvm::IRBuilder<> on_success(success);
+                on_success.CreateStore(on_success.getInt32(next), state);
+                if (terminal) on_success.CreateStore(llvm::ConstantInt::get(i64, 0), output);
+                on_success.CreateRet(on_success.getInt32(terminal ? 1 : 0));
             };
-
             {
-                llvm::IRBuilder<> builder(phase0);
-                llvm::Value* status = builder.CreateCall(spawn_actor, {
-                    host_ctx, init, drop, layout_hash, version,
-                    builder.getInt32(static_cast<std::uint32_t>(actor.fields.size())),
+                llvm::IRBuilder<> emit(spawn);
+                auto* status = emit.CreateCall(spawn_actor, {
+                    ctx, init, drop, layout_hash, version,
+                    emit.getInt32(static_cast<std::uint32_t>(actor.fields.size())),
                     llvm::ConstantInt::get(i64, actor_layout_v1(actor))
                 });
-                finish_phase(builder, status, 1, false);
+                phase(emit, status, 1, false);
             }
             {
-                llvm::IRBuilder<> builder(phase1);
-                finish_phase(builder, builder.CreateCall(ready_poll, {host_ctx}), 2, false);
+                llvm::IRBuilder<> emit(ready);
+                phase(emit, emit.CreateCall(ready_poll, {ctx}), 2, false);
             }
             {
-                llvm::IRBuilder<> builder(phase2);
-                llvm::Value* value = lower(*script.argument, builder, i64,
+                llvm::IRBuilder<> emit(send);
+                llvm::Value* value = lower(*script.argument, emit, i64,
                                             none, none, no_functions);
-                finish_phase(builder, builder.CreateCall(invoke, {
-                    host_ctx, generated_methods.at(script.method), value
+                phase(emit, emit.CreateCall(send_message, {
+                    ctx, generated_methods.at("receive"), value
                 }), 3, false);
             }
             {
-                llvm::IRBuilder<> builder(phase3);
-                finish_phase(builder, builder.CreateCall(result_poll, {host_ctx, output}),
-                             4, false);
-            }
-            {
-                llvm::IRBuilder<> builder(phase4);
-                finish_phase(builder, builder.CreateCall(request_stop, {host_ctx}), 5, false);
-            }
-            {
-                llvm::IRBuilder<> builder(phase5);
-                finish_phase(builder, builder.CreateCall(done_poll, {host_ctx}), 6, true);
+                llvm::IRBuilder<> emit(done);
+                phase(emit, emit.CreateCall(done_poll, {ctx}), 4, true);
             }
         }
     }
@@ -435,9 +416,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_fields_codegen_drop"
                             && name != "ores_actor_host_spawn"
                             && name != "ores_actor_host_poll_ready"
-                            && name != "ores_actor_host_call_i64"
-                            && name != "ores_actor_host_poll_i64"
-                            && name != "ores_actor_host_stop"
+                            && name != "ores_actor_host_send_i64"
                             && name != "ores_actor_host_poll_done"
                             && name != "ores_actor_host_cancel") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
