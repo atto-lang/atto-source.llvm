@@ -339,13 +339,15 @@ int main() {
                   "first carrier rejected CONTROL turn");
         });
         entered.get_future().wait();
-        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::busy,
-              "two CONTROL handlers executed concurrently");
+        // Separate actors have separate logical lanes and may execute
+        // CONTROL concurrently on distinct physical carriers.
+        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::executed,
+              "unrelated actor CONTROL was blocked by busy actor");
         check(!group.finalized(a), "active CONTROL bypassed physical finalization gate");
         release.set_value();
         carrier.join();
-        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::executed,
-              "second CONTROL not admitted after first yielded");
+        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::idle,
+              "independent CONTROL delivered more than once");
         check(group.finalized(a) && group.finalized(b), "CONTROL not quiescent");
     }
     {
