@@ -1,0 +1,82 @@
+#include "oreslang/runtime/NativeActorPipeTransport.hpp"
+
+#include <chrono>
+#include <future>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace oreslang::runtime;
+using namespace std::chrono_literals;
+
+static void check(bool yes, const char* why) {
+    if (!yes) throw std::runtime_error(why);
+}
+
+static std::vector<PipeStage> stages() {
+    return {{"A1", PipeRole::readable, "", "Message"},
+            {"A2", PipeRole::transform, "Message", "Message"},
+            {"A3", PipeRole::writable, "Message", ""}};
+}
+
+int main() {
+    NativeSupervisorRegistry registry(10, 10, 10);
+    auto supervisor = registry.create_child(registry.root());
+    {
+        NativeActorPipeTransport pipe(registry, supervisor, stages(), 1, 3);
+        check(pipe.edge_count() == 2, "missing native pipe edges");
+        check(pipe.supervisor_id() == supervisor.id(), "pipe not supervised before publication");
+        check(registry.direct_group_ids(supervisor).size() == 1, "unregistered pipe ActorGroup");
+        auto first = pipe.write_async(0, "first");
+        first.get();
+        auto second = pipe.write_async(0, "second");
+        check(second.wait_for(0ms) == std::future_status::timeout,
+              "pipeline write bypassed bounded backpressure");
+        check(pipe.read_async(0).get() == "first", "lost FIFO pipe message");
+        second.get();
+        check(pipe.read_async(0).get() == "second", "stalled writer did not resume");
+        auto pending_read = pipe.read_async(1);
+        check(pending_read.wait_for(0ms) == std::future_status::timeout,
+              "empty edge must suspend receiver");
+        pipe.write_async(1, "transformed").get();
+        check(pending_read.get() == "transformed", "reader waiter missed delivery");
+        auto buffered = pipe.write_async(0, "retained");
+        buffered.get();
+        auto blocked = pipe.write_async(0, "cancelled by shutdown");
+        pipe.close();
+        check(pipe.closed(), "native pipe did not close");
+        bool failed = false;
+        try { blocked.get(); } catch (const std::logic_error&) { failed = true; }
+        check(failed, "pending writer stranded by native close");
+        check(pipe.read_async(0).get() == "retained",
+              "close discarded previously admitted payload");
+        failed = false;
+        try { pipe.read_async(0).get(); } catch (const std::logic_error&) { failed = true; }
+        check(failed, "closed and drained edge permitted new read");
+        check(registry.direct_group_ids(supervisor).empty(),
+              "closed pipe retained supervisor's live group");
+    }
+    {
+        NativeActorPipeTransport pipe(registry, supervisor, stages(), 8, 3);
+        constexpr int count = 800;
+        std::thread producer([&] {
+            for (int i = 0; i < count; ++i)
+                pipe.write_async(0, std::to_string(i)).get();
+        });
+        for (int i = 0; i < count; ++i)
+            check(pipe.read_async(0).get() == std::to_string(i),
+                  "concurrent native pipe lost FIFO ordering");
+        producer.join();
+        pipe.close();
+    }
+    bool rejected = false;
+    NativeSupervisorRegistry foreign(10, 10, 10);
+    try { NativeActorPipeTransport bad(registry, foreign.root(), stages(), 1, 3); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, "foreign supervisor injected into native pipe");
+    rejected = false;
+    try { NativeActorPipeTransport bad(registry, supervisor, stages(), 0, 3); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, "unbounded or zero capacity native pipe admitted");
+}
