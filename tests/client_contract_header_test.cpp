@@ -15,7 +15,7 @@ static void reject(std::string_view source) {
     throw std::runtime_error("unsafe or unsupported contract was accepted");
 }
 int main(int argc, char** argv) {
-    if (argc != 2) return 2;
+    if (argc != 3) return 2;
     std::ifstream f(argv[1], std::ios::binary);
     if (!f) return 2;
     const std::string text((std::istreambuf_iterator<char>(f)),
@@ -27,6 +27,27 @@ int main(int argc, char** argv) {
         parsed.methods[0].parameters[0] != "page_size") {
         throw std::runtime_error("generated golden contract declaration mismatch");
     }
+    std::ifstream route_file(argv[2], std::ios::binary);
+    if (!route_file) throw std::runtime_error("missing canonical RouteContract");
+    const std::string route((std::istreambuf_iterator<char>(route_file)),
+                            std::istreambuf_iterator<char>());
+    const auto route_header = oreslang::parse_client_contract_header(route);
+    if (route_header.name != "RouteContract" || route_header.methods.size() != 2 ||
+            route_header.methods[0].name != "get" ||
+            route_header.methods[1].name != "post" ||
+            route_header.methods[0].parameters.size() != 1 ||
+            route_header.methods[1].parameters.size() != 1 ||
+            route_header.methods[0].parameters[0] != "request" ||
+            route_header.methods[1].parameters[0] != "request") {
+        throw std::runtime_error("canonical cross-backend RouteContract declaration drifted");
+    }
+    // These declarations are type-only: a native executable must never be
+    // certified merely because the parser recognizes its RPC signatures.
+    reject("pub define contract RouteContract as fnc get(String request) => String; "
+           "fnc get(String request) => String; end");
+    reject("pub define contract RouteContract as fnc get(String request) => int; end");
+    reject("pub define contract RouteContract as fnc get(String request) => String; "
+           "fnc post(String request) => String; end unexpected");
     reject("pub define contract C as fnc async() => String; end");
     for (const auto* word : {"over", "structural", "gpu", "quantum", "borrow", "int"}) {
         reject(std::string("pub define contract C as fnc ") + word + "() => String; end");
