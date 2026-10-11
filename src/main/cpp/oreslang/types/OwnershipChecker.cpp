@@ -79,8 +79,7 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     // into a mutable one. Its new loan ends at that nested call's return.
     if (source.mode == Mode::Borrow && exclusive)
         reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
-    if (exclusive && source.mode == Mode::Value &&
-            !source.class_name.empty() && !source.mutable_owner)
+    if (exclusive && source.mode == Mode::Value && !source.mutable_owner)
         reject(expr, "cannot mutably borrow immutable owner '" + expr.left->name + "'");
     if (source.moved)
         reject(expr, (source.class_name.empty()
@@ -262,6 +261,10 @@ void validate_i64_ownership(const Program& program) {
             }
             LocalOwnership entry;
             entry.mode = param.mode;
+            // Native by-value scalar parameters occupy independently owned,
+            // mutable stack slots; borrowed parameters retain caller loans.
+            // Do not silently confer that mutability on const local bindings.
+            entry.mutable_owner = param.mode == Mode::Value;
             entry.class_name = param.class_name;
             if (!param.class_name.empty()) entry.class_fields = class_fields.at(param.class_name);
             locals.emplace(param.name, std::move(entry));
