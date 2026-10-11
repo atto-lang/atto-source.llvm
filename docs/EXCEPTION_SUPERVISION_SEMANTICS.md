@@ -30,6 +30,10 @@ desired language semantics from features the current compilers actually lower.
   cancellation, panic, raise, ordinary throw, normal control flow. Lower-priority
   cleanup failures must be retained as suppressed diagnostics. All registered
   defers must be attempted, even when a preceding defer fails.
+* An uncaught Java `Error` (except the explicit actor cancellation signal)
+  is classified as a host failure in supervision and ranks with native
+  `HostFatal` for cleanup precedence. This does **not** imply a fatal JVM
+  fault, out-of-memory condition, or process corruption is survivable.
 * `recover` is **not** a general-purpose replacement for `catch (Throwable)`.
   Proposed admission: only a supervisor/recovery scope with explicit typed
   capabilities may consume `raise` or `panic`, and it must leave a recorded
@@ -62,7 +66,8 @@ in the data FIFO:
 5. A notice is immutable **data only** (actor identity, category, diagnostic),
    not a cross-heap `Throwable` or an actor-owned mutable reference.
    Notice diagnostics are capped at **1024 UTF-8 bytes**, without splitting
-   Unicode scalar boundaries. Native invalid UTF-8 input is replaced with '?'.
+   Unicode scalar boundaries. Native invalid UTF-8 bytes and Java
+   unpaired UTF-16 surrogates are replaced with '?' before publication.
    This cap applies on direct record construction as well as emitted notices.
 6. Fairness means ordinary user traffic still progresses; urgent events
    cannot indefinitely postpone data processing and data cannot starve control.
@@ -130,7 +135,9 @@ does not unblock the failed actor, and cannot suppress the audit event.
 * A tested native `ExceptionPolicy.hpp` value-only policy primitive now
   mirrors Java precedence (host/process-fatal > cancellation > panic >
   raise > throw), suppressed diagnostic retention, and the 1024-byte
-  Unicode-safe notice limit. This is **not** integrated with source lowering
+  Unicode-safe notice limit. The native factory rejects invalid failure
+  category tags (including forged cast values) rather than treating them
+  as lowest-priority exceptions. This is **not** integrated with source lowering
   or native actors; it does not count as behavioral feature parity.
 * LLVM parity still requires native unwind/cleanup lowering, ownership-safe
   error payloads, actor-private heaps, supervisor/control queue scheduling,
