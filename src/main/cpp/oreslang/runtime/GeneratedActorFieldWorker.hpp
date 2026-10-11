@@ -38,11 +38,9 @@ public:
         : group_(group),
           actor_id_(actor_id), incarnation_(incarnation),
           stop_(std::make_shared<std::atomic<bool>>(false)),
-          ref_(group.adopt(runtime_id, actor_id, incarnation,
-                [flag = stop_] { flag->store(true, std::memory_order_release); })),
+          ref_(checked_adopt(group, runtime_id, actor_id, incarnation,
+                            initializer, finalizer, stop_)),
           initializer_(initializer), finalizer_(finalizer) {
-        if (!initializer_ || !finalizer_)
-            throw std::invalid_argument("generated actor requires init and drop");
         heap_ = ores_actor_i64_heap_open(actor_id_, incarnation_, field_capacity);
     }
 
@@ -129,7 +127,7 @@ public:
         if (!lane.owns_lock() || !stop_->load(std::memory_order_acquire))
             return false;
         if (finished_) return true;
-        if (ores_actor_i64_heap_active_loans(heap_) != 0) return false;
+        if (!ores_actor_i64_heap_quiescent(heap_)) return false;
         if (cancelled_.load(std::memory_order_acquire) && failure_.empty())
             failure_ = "actor cancelled";
         if (record_) {
@@ -148,6 +146,17 @@ public:
     }
 
 private:
+    static NativeActorRef checked_adopt(
+            NativeActorGroup& group,
+            std::uint64_t runtime_id, std::uint64_t actor_id,
+            std::uint64_t generation, Init initializer, Drop finalizer,
+            const std::shared_ptr<std::atomic<bool>>& stop) {
+        if (!initializer || !finalizer)
+            throw std::invalid_argument("generated actor requires init and drop");
+        return group.adopt(runtime_id, actor_id, generation,
+            [flag = stop] { flag->store(true, std::memory_order_release); });
+    }
+
     NativeActorGroup& group_;
     const std::uint64_t actor_id_;
     const std::uint64_t incarnation_;
