@@ -47,8 +47,8 @@ def main():
             shim = pathlib.Path(directory) / "module-entry.c"
             shim.write_text(
                 'extern long long oreslang_module_entry(void) __asm__("'
-                + args.entry_symbol + '");\\n'
-                + 'int main(void) { return (int)oreslang_module_entry(); }\\n',
+                + args.entry_symbol + '");\n'
+                + 'int main(void) { return (int)oreslang_module_entry(); }\n',
                 encoding="utf-8",
             )
             clang_cmd.extend(["-x", "c", str(shim), "-std=c11"])
