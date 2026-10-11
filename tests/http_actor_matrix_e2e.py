@@ -76,7 +76,7 @@ async def sweep(port, mode, round_number):
 
 def main():
     parser = argparse.ArgumentParser()
-    for field in ("compiler", "fixture", "clang", "actor_runtime", "arena_runtime", "native_runtime", "harness", "include"):
+    for field in ("compiler", "fixture", "clang", "actor_runtime", "arena_runtime", "native_runtime", "mailbox_runtime", "harness", "include"):
         parser.add_argument("--"+field.replace("_","-"), required=True)
     args = parser.parse_args()
     ir = subprocess.run([args.compiler, args.fixture], check=True, capture_output=True, text=True, timeout=25).stdout
@@ -85,7 +85,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ores-llvm-matrix-") as output:
         binary = str(pathlib.Path(output) / "http-matrix")
         command = [args.clang, "-O2", "-x", "ir", "-", "-x", "c", args.actor_runtime,
-                   args.arena_runtime, args.native_runtime, args.harness, "-std=c11",
+                   args.arena_runtime, args.native_runtime, args.mailbox_runtime, args.harness, "-std=c11",
                    "-pthread", "-I", args.include, "-o", binary]
         compiled = subprocess.run(command, input=ir, capture_output=True, text=True, timeout=60)
         assert compiled.returncode == 0, compiled.stderr
