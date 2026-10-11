@@ -52,6 +52,26 @@ bool HungryCarrier::ProducerHandle::try_send(ActorMessage message) const noexcep
     }
 }
 
+bool HungryCarrier::ProducerHandle::try_wake_control() const noexcept {
+    auto gate = gate_;
+    if (!gate) return false;
+    auto state = gate->leases.load(std::memory_order_acquire);
+    for (;;) {
+        if (state & ProducerGate::closing_bit) return false;
+        if ((state & ProducerGate::count_mask) == ProducerGate::count_mask)
+            return false;
+        if (gate->leases.compare_exchange_weak(state, state + 1,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire))
+            break;
+    }
+    struct LeaseGuard {
+        std::atomic<std::uint64_t>& leases;
+        ~LeaseGuard() { leases.fetch_sub(1, std::memory_order_release); }
+    } guard{gate->leases};
+    return gate->carrier->wake_control();
+}
+
 HungryCarrier::ProducerHandle HungryCarrier::producer_handle() const noexcept {
     return ProducerHandle{producer_gate_};
 }
@@ -137,6 +157,9 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
       producer_gate_(std::make_shared<ProducerGate>(this)) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
+    if ((options_.supervisor_control == nullptr)
+            != (options_.supervisor_hooks == nullptr))
+        throw std::invalid_argument("supervisor CONTROL lane requires typed hooks");
     if (options_.require_exclusive_core || options_.require_strict_no_gc ||
         options_.require_hard_realtime)
         throw std::invalid_argument("strict CPU/GC/RT profile is not certified or implemented");
@@ -181,6 +204,21 @@ void HungryCarrier::start() {
         join();
         throw std::runtime_error("actor CPU affinity admission failed");
     }
+}
+
+bool HungryCarrier::wake_control() noexcept {
+    if (options_.supervisor_control == nullptr
+            || !setup_ok_.load(std::memory_order_acquire)
+            || stop_.load(std::memory_order_acquire)
+            || !options_.supervisor_control->urgent()) return false;
+    try {
+        actor_signal_.notify();
+    } catch (...) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+        return false;
+    }
+    return true;
 }
 
 bool HungryCarrier::enqueue_mpsc(ActorMessage message) noexcept {
@@ -305,7 +343,9 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
 void HungryCarrier::wait_actor() noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
     const auto ready = [this] {
-        return (!pending_ && has_input_ready())
+        return (options_.supervisor_control != nullptr
+                    && options_.supervisor_control->urgent())
+               || (!pending_ && has_input_ready())
                || (pending_ && results_.has_ready())
                || stop_.load(std::memory_order_acquire);
     };
@@ -338,6 +378,20 @@ void HungryCarrier::actor_loop() noexcept {
         return;
     }
     while (!stop_.load(std::memory_order_acquire)) {
+        // Parent CONTROL runs before user envelopes or IO continuations on
+        // this actor's own carrier, never on the producer/failed child's
+        // thread. The typed lane owns its independent bounded capacity.
+        if (options_.supervisor_control != nullptr
+                && options_.supervisor_control->urgent()) {
+            try {
+                (void)options_.supervisor_control->admit_turn(
+                    *options_.supervisor_hooks, false);
+            } catch (...) {
+                failures_.fetch_add(1, std::memory_order_relaxed);
+                request_stop();
+            }
+            continue;
+        }
         if (pending_) {
             Completion c;
             if (results_.try_pop(c)) {
