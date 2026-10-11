@@ -234,6 +234,10 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-critical-state-loan-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-critical-state-loan-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_critical_state_loan_runtime_bridge COMMAND oreslang-critical-state-loan-bridge-test)
+    add_executable(oreslang-owned-scalar-state-test tests/actor_owned_scalar_state_test.cpp)
+    target_include_directories(oreslang-owned-scalar-state-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-owned-scalar-state-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_typed_scalar_state COMMAND oreslang-owned-scalar-state-test)
     # Bounded synchronous state-loan guard; not source-level suspend lowering.
     add_executable(oreslang-actor-state-scope-test tests/actor_state_scope_test.c)
     target_compile_options(oreslang-actor-state-scope-test PRIVATE
