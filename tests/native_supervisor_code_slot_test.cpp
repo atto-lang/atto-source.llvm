@@ -16,6 +16,23 @@ int main(){
     auto group = supervisors.create_group(daddy, 2);
     const auto group_id = group->group_id();
     const auto supervisor_id = group->supervisor_id();
+    auto installed = std::make_shared<NativeSupervisorCodeSlot<std::string>>(
+        "abi-root", "Daddy-live-v1", [&]{reclaimed++;}, 3);
+    supervisors.install_policy(daddy, installed);
+    check(supervisors.policy_revision(daddy).revision==1,
+          "native registry did not attach supervisor code");
+    bool denied_slot_reuse=false;
+    try { supervisors.install_policy(root, installed); }
+    catch (const std::logic_error&) { denied_slot_reuse=true; }
+    check(denied_slot_reuse, "one native code slot attached to two supervisors");
+    installed->activate(1, "abi-root", "Daddy-live-v2", [&]{reclaimed++;});
+    check(supervisors.policy_revision(daddy).revision==2,
+          "native registry did not observe activated policy revision");
+    check(group->group_id()==group_id && group->supervisor_id()==supervisor_id,
+          "native registry policy activation changed group/supervisor identity");
+    installed->close();
+    // This registry slot is independent from the direct slot exercised below.
+    reclaimed.store(0);
     {
         NativeSupervisorCodeSlot<std::string> slot("abi1", "Daddy-v1",
                 [&]{reclaimed++;}, 2);
