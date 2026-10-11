@@ -34,7 +34,7 @@ public:
                 && logical_child_id == rhs.logical_child_id;
         }
     };
-    enum class Phase { active, finalized, restarting, stopped };
+    enum class Phase { active, finalized, restarting, stopping, stopped };
     struct RestartReservation {
         ChildRef child;
         OresNativeActorRef failed_actor;
@@ -176,6 +176,40 @@ public:
         return stored;
     }
 
+    /**
+     * Reserve STOP before invoking any host lifecycle effect. A competing
+     * restart cannot consume this physically finalized generation. Unknown
+     * effects leave the child stopping until explicit reconciliation.
+     */
+    Snapshot begin_stop(ChildRef child, OresNativeActorRef failed_actor,
+                        std::uint64_t incarnation, std::uint64_t turn_generation) {
+        if (!turn_generation)
+            throw std::invalid_argument("missing STOP turn generation");
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_expected(child, failed_actor, incarnation, Phase::finalized);
+        auto [it, inserted] = pending_stops_.emplace(
+            child.logical_child_id, turn_generation);
+        (void) it;
+        if (!inserted) throw std::logic_error("duplicate STOP turn reservation");
+        auto& state = children_.at(child.logical_child_id);
+        state.phase = Phase::stopping;
+        return state;
+    }
+
+    Snapshot commit_stop(ChildRef child, OresNativeActorRef failed_actor,
+                         std::uint64_t incarnation, std::uint64_t turn_generation) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_expected(child, failed_actor, incarnation, Phase::stopping);
+        auto found = pending_stops_.find(child.logical_child_id);
+        if (!turn_generation || found == pending_stops_.end()
+            || found->second != turn_generation)
+            throw std::logic_error("stale or foreign STOP turn");
+        auto& state = children_.at(child.logical_child_id);
+        state.phase = Phase::stopped;
+        pending_stops_.erase(found);
+        return state;
+    }
+
     Snapshot stop(ChildRef child, OresNativeActorRef failed_actor,
                   std::uint64_t incarnation) {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -278,6 +312,7 @@ private:
     inline static std::atomic<std::uint64_t> next_global_child_id_{0};
     inline static std::atomic<std::uint64_t> next_restart_nonce_{0};
     std::unordered_map<std::uint64_t, std::uint64_t> pending_restarts_;
+    std::unordered_map<std::uint64_t, std::uint64_t> pending_stops_;
     std::unordered_map<std::uint64_t, Snapshot> children_;
     // Bounded by distinct native scheduler slots, not restart count.
     std::map<std::uint64_t, std::uint64_t> highest_generation_;
