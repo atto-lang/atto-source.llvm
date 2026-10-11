@@ -167,12 +167,11 @@ int main() {
     check(registry.stop_receipt(stop_child.child).status == Receipt::pending,
           "STOP reservation did not create PENDING host receipt");
     must_reject([&] { registry.commit_stop(stop_child.child, stop_actor, 1, 44); });
-    registry.record_stop_uncertain(stop_child.child, stop_actor, 1, 44);
-    check(registry.stop_receipt(stop_child.child).status == Receipt::uncertain,
-          "ambiguous native STOP callback was not recorded");
+    // The synchronous host sink succeeded; its exact-turn receipt can
+    // transition PENDING to APPLIED before committing STOPPED.
+    check(registry.stop_receipt(stop_child.child).status == Receipt::pending,
+          "native STOP callback was unexpectedly reclassified");
     must_reject([&] { registry.begin_restart(stop_child.child, stop_actor, 1); });
-    // The trusted lifecycle owner independently confirms the old turn's
-    // external outcome; UNKNOWN alone is not a successful acknowledgment.
     must_reject([&] {
         registry.record_stop_applied(stop_child.child, stop_actor, 1, 45);
     });
@@ -216,6 +215,15 @@ int main() {
     registry.finalized(uncertain_child.child, uncertain_actor, 1);
     registry.begin_stop(uncertain_child.child, uncertain_actor, 1, 72);
     registry.record_stop_uncertain(uncertain_child.child, uncertain_actor, 1, 72);
+    must_reject([&] {
+        registry.record_stop_applied(uncertain_child.child, uncertain_actor, 1, 72);
+    });
+    must_reject([&] {
+        registry.commit_stop(uncertain_child.child, uncertain_actor, 1, 72);
+    });
+    check(registry.snapshot(uncertain_child.child).phase
+                  == SupervisorChildRegistry::Phase::stopping,
+          "unverified UNCERTAIN receipt left quarantine");
     unsigned proof_calls = 0;
     const auto no_proof = [&](const SupervisorChildRegistry::StopReceipt& receipt) {
         ++proof_calls;
