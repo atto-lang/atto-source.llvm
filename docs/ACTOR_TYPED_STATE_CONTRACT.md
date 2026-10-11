@@ -51,9 +51,11 @@ until a declaration is provided. This avoids implicit unbounded native storage.
 1. Reserve `state` actor declarations and `critical handle_state` as a
    non-overridable actor intrinsic. Reject direct `self.state` and user-defined overrides.
 2. Type-check the callback against a schema-specific, ephemeral capability.
-3. Permit await/select within the callback using scheduler-owned async critical
-   admission and continuation fencing. Reentrant calls must follow explicit
-   critical ownership semantics (not blanket rejection); never hold a physical
+3. Permit await/select within the callback using scheduler-owned logical single-flight admission, compiler-approved
+   reentrancy boundaries and continuation fencing. A nested same-continuation
+   state callback temporarily fences the outer state loan, but a distinct
+   continuation must wait for its own lane turn. On await, revoke/segment
+   state-backed loans before releasing the actor lane; do not hold a physical
    mutex or JVM monitor across suspension. Reject capture/return/store of the
    state capability and borrowed aliases escaping their valid scope.
 4. Lower finite fields to a stable typed layout with explicit alignment,
@@ -64,3 +66,9 @@ until a declaration is provided. This avoids implicit unbounded native storage.
 
 The native `ActorStateScope.h` guard is a partial host ABI only. This document
 must not be taken as evidence that source-level state syntax compiles yet.
+
+For effect inference, concrete proposed `using`/`requires` signature syntax,
+and current `pure`/`nlex`/`trap` limitations, see
+[function-effect contract](FUNCTION_EFFECTS_AND_SIGNATURE_QUALIFIERS.md).
+For bounded preemption and strict real-time admission, see
+[reduction-region scheduling](REDUCTION_REGION_SCHEDULING.md).
