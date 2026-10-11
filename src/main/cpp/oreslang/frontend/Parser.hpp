@@ -58,6 +58,12 @@ struct FieldAssignment {
     std::size_t offset = 0;
 };
 
+struct ReceiveBooleanArm {
+    bool match_value = false;
+    std::vector<FieldAssignment> assignments;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
@@ -69,6 +75,8 @@ struct Function {
     std::string ready_await_actor;
     std::vector<std::string> actor_stops;
     std::vector<FieldAssignment> assignments;
+    std::string match_subject;
+    std::vector<ReceiveBooleanArm> boolean_arms;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
