@@ -1,12 +1,15 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <future>
 #include <stdexcept>
 #include <thread>
 #include <utility>
 
 using oreslang::runtime::NativeActorGroup;
 using oreslang::runtime::NativeActorRef;
+using namespace std::chrono_literals;
 
 static void check(bool yes, const char* error) {
     if (!yes) throw std::runtime_error(error);
@@ -30,6 +33,9 @@ int main() {
             ++callbacks;
         });
         check(callbacks == 2, "pending/late awaits not both fulfilled");
+        ref.get_ready().get();
+        check(ref.get_done().wait_for(0ms) == std::future_status::timeout,
+              "ready must not imply done");
         check(!group.mark_ready(ref), "duplicate startup should be rejected");
 
         bool full = false;
@@ -50,6 +56,11 @@ int main() {
         check(group.worker_count() == 0, "closed group retained strong worker refs");
         check(!group.mark_ready(ref), "closed group resurrected startup");
         check(group.closed(), "group is not closed");
+        check(ref.get_done().wait_for(0ms) == std::future_status::timeout,
+              "group close fabricated actor completion");
+        check(group.finalized(ref), "closed group rejected trusted terminal acknowledgment");
+        ref.get_done().get();
+        check(!group.finalized(ref), "duplicate physical finalization accepted");
     }
     {
         NativeActorGroup group(1, 1);
@@ -72,6 +83,9 @@ int main() {
             ++callback_count;
         });
         check(callback_count == 2, "incarnation readiness contamination");
+        check(!group.finalized(first), "old generation terminated replacement");
+        check(group.finalized(replacement), "failed to retire replacement");
+        replacement.get_done().get();
     }
     {
         NativeActorGroup group(1, 2);
@@ -92,6 +106,12 @@ int main() {
         check(failure_count == 2, "stopped workers left readiness hanging");
         group.close();
         check(stops == 2, "close double-stopped workers");
+        check(first.get_done().wait_for(0ms) == std::future_status::timeout,
+              "stop fabricated first done");
+        check(second.get_done().wait_for(0ms) == std::future_status::timeout,
+              "stop fabricated second done");
+        check(group.finalized(first, "stopped"), "first terminal acknowledgment rejected");
+        check(group.finalized(second, "stopped"), "second terminal acknowledgment rejected");
     }
     {
         // Publish readiness and group close simultaneously. Whichever wins
@@ -110,6 +130,10 @@ int main() {
             check(observed.load() == 1, "close/start race lost or duplicated readiness");
             check(stops.load() == 1, "close/start race duplicated stop request");
             check(group.worker_count() == 0, "close/start race retained ref");
+            check(ref.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "close/start race fabricated terminal done");
+            check(group.finalized(ref), "close/start race lost terminal ack");
+            ref.get_done().get();
         }
     }
     {
@@ -137,6 +161,8 @@ int main() {
         check(observers == 2, "one throwing readiness callback hid another");
         group.close();
         check(stops.load() == 2, "second close requested duplicate stop");
+        check(group.finalized(first), "first throwing worker not finalized");
+        check(group.finalized(second), "second throwing worker not finalized");
     }
     {
         // Reentrant close from a stop hook cannot deadlock or double-stop.
@@ -153,6 +179,8 @@ int main() {
         check(group.closed(), "reentrant close not processed");
         check(first_stops == 1 && second_stops == 1,
               "reentrant close duplicated or omitted stop request");
+        check(group.finalized(first), "reentrant first failed terminal ack");
+        check(group.finalized(second), "reentrant second failed terminal ack");
     }
     {
         // Callbacks may re-enter group methods; no group lock is held.
@@ -167,4 +195,82 @@ int main() {
         check(reentered && group.worker_count() == 0,
               "callback was invoked with ActorGroup mutex held");
     }
+    {
+        // Different groups cannot claim the same live actor, even when the
+        // first group has requested stop and detached its worker table.
+        NativeActorGroup primary(991, 1), secondary(991, 1);
+        auto old = primary.adopt(991, 14, 10, [] {});
+        bool duplicate_rejected = false;
+        try { (void) secondary.adopt(991, 14, 11, [] {}); }
+        catch (const std::logic_error&) { duplicate_rejected = true; }
+        check(duplicate_rejected, "cross-group active owner was stolen");
+        primary.close();
+        check(old.get_done().wait_for(0ms) == std::future_status::timeout,
+              "cross-group close fabricated done");
+        duplicate_rejected = false;
+        try { (void) secondary.adopt(991, 14, 11, [] {}); }
+        catch (const std::logic_error&) { duplicate_rejected = true; }
+        check(duplicate_rejected, "cross-group owner stolen after close");
+        check(primary.finalized(old), "closed owner unable to acknowledge teardown");
+        auto current = secondary.adopt(991, 14, 11, [] {});
+        check(!primary.finalized(old), "stale terminal ack accepted");
+        check(!primary.mark_ready(current), "foreign supervisor admitted start");
+        check(secondary.mark_ready(current), "new owner lost admission");
+        check(secondary.finalized(current), "new owner failed physical ack");
+        current.get_ready().get();
+        current.get_done().get();
+    }
+    {
+        // Stop, close, and late on_start failure must each settle the two
+        // lifecycle futures exactly once, without pretending stop is done.
+        for (int round = 0; round < 200; ++round) {
+            NativeActorGroup group(992, 1);
+            std::atomic<int> stops{0};
+            auto ref = group.adopt(992, 22, static_cast<std::uint64_t>(round + 1),
+                                   [&] { ++stops; });
+            std::thread stopper([&] { group.stop_workers(); });
+            std::thread closer([&] { group.close(); });
+            stopper.join();
+            closer.join();
+            check(stops == 1, "concurrent stop/close duplicated stop callback");
+            check(ref.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "stop and close fabricated finalization");
+            check(group.finalized(ref, "startup failed"),
+                  "late startup failure rejected after close");
+            check(!group.finalized(ref, "duplicated"),
+                  "duplicate startup failure acknowledged");
+            check(ref.get_ready().wait_for(0ms) == std::future_status::ready,
+                  "startup failure stranded ready future");
+            check(ref.get_done().wait_for(0ms) == std::future_status::ready,
+                  "startup failure stranded done future");
+            bool ready_failed = false, done_failed = false;
+            try { ref.get_ready().get(); }
+            catch (const std::runtime_error&) { ready_failed = true; }
+            try { ref.get_done().get(); }
+            catch (const std::runtime_error&) { done_failed = true; }
+            check(ready_failed && done_failed,
+                  "terminal startup error was not propagated to both observers");
+        }
+    }
+    {
+        // Physical-finalization acknowledgment racing with close does not
+        // resurrect a worker or duplicate terminal promise completion.
+        for (int round = 0; round < 200; ++round) {
+            NativeActorGroup group(993, 1);
+            auto ref = group.adopt(993, 99, static_cast<std::uint64_t>(round + 1),
+                                   [] {});
+            std::thread closed([&] { group.close(); });
+            std::thread finished([&] {
+                (void) group.finalized(ref, "initialization failed");
+            });
+            closed.join();
+            finished.join();
+            check(ref.get_ready().wait_for(0ms) == std::future_status::ready,
+                  "close/finalize race left readiness unresolved");
+            check(ref.get_done().wait_for(0ms) == std::future_status::ready,
+                  "close/finalize race left done unresolved");
+            check(!group.finalized(ref), "close/finalize race admitted duplicate");
+        }
+    }
+
 }
