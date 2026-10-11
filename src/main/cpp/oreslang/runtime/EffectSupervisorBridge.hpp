@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/EffectUnwind.hpp"
 #include "oreslang/runtime/SupervisorFailureLane.hpp"
+#include "oreslang/runtime/SupervisorControlTurn.hpp"
 
 #include <stdexcept>
 #include <string_view>
@@ -19,6 +20,34 @@ namespace oreslang {
  */
 class EffectSupervisorBridge final {
 public:
+    /**
+     * Native carrier integration: deliver a typed completed unwind directly
+     * to the parent's pre-reserved supervisor CONTROL lane. The caller then
+     * invokes the parent's lifetime-gated wake handle. A child carrier must
+     * never invoke admit_turn() or guest supervisor callbacks itself.
+     */
+    static bool publish_terminal(
+            SupervisorControlTurn& supervisor,
+            const SupervisorFailureLane::ActorKey& actor,
+            EffectStatus effect,
+            std::string_view diagnostic,
+            std::string_view parent_id = {}) {
+        using Effect = EffectKind;
+        using Failure = SupervisorFailureLane::Kind;
+        Failure classification;
+        switch (effect.kind) {
+            case Effect::Return: return false;
+            case Effect::Throw: classification = Failure::Throw; break;
+            case Effect::Raise: classification = Failure::Raise; break;
+            case Effect::Panic: classification = Failure::Panic; break;
+            case Effect::Cancel: classification = Failure::Cancel; break;
+            case Effect::Fatal: classification = Failure::HostFailure; break;
+            default: throw std::invalid_argument("unknown native typed effect");
+        }
+        return supervisor.publish_child(
+            actor, classification, diagnostic, parent_id);
+    }
+
     static bool publish_terminal(
             SupervisorFailureLane& lane,
             const SupervisorFailureLane::ActorKey& actor,
