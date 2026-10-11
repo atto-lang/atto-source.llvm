@@ -16,6 +16,8 @@ import time
 ACTORS = 5
 N = 1000
 LEVELS = (1, 10, 100, 1000)
+ROUNDS = 4
+WARMUP_PER_ACTOR = 25
 
 async def fetch(port, target):
     started = time.perf_counter_ns()
@@ -41,9 +43,12 @@ async def fetch(port, target):
         writer.close()
         await asyncio.wait_for(writer.wait_closed(), timeout=10)
 
-async def sweep(port, mode):
+async def sweep(port, mode, round_number):
     assert (await fetch(port, "/health"))[:2] == (200, "ok")
     profile = "native-single-process-owner-domains" if mode == "shared" else "native-per-actor-OS-process"
+    for n in range(ACTORS * WARMUP_PER_ACTOR):
+        status, body, _ = await fetch(port, f"/work/{n % ACTORS}")
+        assert status == 200 and int(body.split(",")[0]) == n % ACTORS
     for case, limit in enumerate(LEVELS):
         semaphore = asyncio.Semaphore(limit)
         async def one(index):
@@ -62,9 +67,9 @@ async def sweep(port, mode):
             assert actor == index % ACTORS and value == count * 43
             counts[actor].append(count)
         for idx, actor_counts in enumerate(counts):
-            assert sorted(actor_counts) == list(range(case * 200 + 1, case * 200 + 201)), (idx, actor_counts[:5])
-        print("MATRIX backend=llvm mode=%s isolation=%s actors=5 requests=1000 concurrency=%d p50_ms=%.3f p99_ms=%.3f rps=%.3f gc_count=0 gc_pause_ms=0 rss_delta_kb=%d errors=0" %
-              (mode, profile, limit, samples[499], samples[989], N / elapsed, after-before), flush=True)
+            assert sorted(actor_counts) == list(range(WARMUP_PER_ACTOR + case * 200 + 1, WARMUP_PER_ACTOR + case * 200 + 201)), (idx, actor_counts[:5])
+        print("MATRIX backend=llvm round=%d mode=%s isolation=%s actors=5 warmup_per_actor=%d requests=1000 concurrency=%d p50_ms=%.3f p99_ms=%.3f rps=%.3f gc_count=0 gc_pause_ms=0 rss_delta_kb=%d errors=0" %
+              (round_number, mode, profile, WARMUP_PER_ACTOR, limit, samples[499], samples[989], N / elapsed, after-before), flush=True)
     shutdown_started = time.perf_counter()
     assert (await fetch(port, "/shutdown"))[:2] == (200, "bye")
     return shutdown_started
@@ -84,19 +89,21 @@ def main():
                    "-pthread", "-I", args.include, "-o", binary]
         compiled = subprocess.run(command, input=ir, capture_output=True, text=True, timeout=60)
         assert compiled.returncode == 0, compiled.stderr
-        for mode in ("shared", "private"):
+        for round_number in range(ROUNDS):
+          modes = ("shared", "private") if round_number in (0, 3) else ("private", "shared")
+          for mode in modes:
             process = subprocess.Popen([binary, mode], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
             try:
                 line = process.stdout.readline().strip()
                 assert line.startswith("PORT="), (mode, line, process.poll())
                 port = int(line.split()[0].split("=")[1])
                 begin = time.perf_counter()
-                shutdown_started = asyncio.run(sweep(port, mode))
+                shutdown_started = asyncio.run(sweep(port, mode, round_number))
                 result = process.wait(timeout=20)
                 assert result == 0, (result, process.stderr.read())
                 ended = time.perf_counter()
-                print("MATRIX backend=llvm mode=%s shutdown_ms=%.3f mode_total_ms=%.3f physical_reclaim=true" %
-                      (mode, (ended - shutdown_started) * 1000, (ended - begin) * 1000), flush=True)
+                print("MATRIX backend=llvm round=%d mode=%s shutdown_ms=%.3f mode_total_ms=%.3f physical_reclaim=true" %
+                      (round_number, mode, (ended - shutdown_started) * 1000, (ended - begin) * 1000), flush=True)
             finally:
                 if process.poll() is None:
                     process.kill()
