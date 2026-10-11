@@ -46,8 +46,11 @@ and require source-level differential tests for each row.
 
 ## Current normative fixture coverage is very small
 
-`contracts/v1/semantics/cases.json` contains **11 cases**: only **4**
-require both backends, while **7** have one backend explicitly pending.
+`contracts/v1/semantics/cases.json` contains **11 cases**. With the
+signed-i64 literal overflow diagnostic implemented and tested on Graal,
+**10 now require both backends** and **1** ownership/mutation diagnostic
+remains LLVM-pending. The expanded inventory still does not test general
+reference/actor semantics.
 The comparator's default mode is therefore a progress inventory, not
 a parity signoff. The new `--require-suite-parity` flag rejects pending
 cases and requires exact pinned backend Git SHAs.

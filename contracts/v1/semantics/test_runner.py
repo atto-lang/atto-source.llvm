@@ -169,9 +169,17 @@ class ComparatorParityProof(unittest.TestCase):
             self.compare(revisions=revisions)
 
     def test_pending_cannot_smuggle_runtime_or_diagnostic_evidence(self):
+        # A synthetic pending case keeps the test useful as support expands.
+        # No production backend is required to remain permanently pending.
+        case = self.suite["cases"][0]
+        case["backends"]["graal"] = "pending"
+        case["pending_reason"] = "synthetic comparator regression only"
+        record = self.reports["graal"]["results"][0]
+        record.clear()
+        record.update({"id": case["id"], "status": "pending",
+                       "detail": case["pending_reason"]})
+        self.assertEqual(self.compare()[0], 0)
         for evidence in ({"observed_exit": 0}, {"diagnostic_class": "unknown_name"}):
-            record = next(item for item in self.reports["graal"]["results"]
-                          if item["status"] == "pending")
             record.update(evidence)
             self.assertEqual(self.compare()[0], 1)
             for key in evidence:
