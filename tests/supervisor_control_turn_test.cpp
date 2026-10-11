@@ -91,5 +91,14 @@ int main() {
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
     CHECK(lane.reserved_count() == 0);
     CHECK(lane.admit_turn(hooks, false) == SupervisorControlTurn::Admitted::None);
+
+    // After an actor turn, a new producer must make CONTROL ready.
+    Key handoff{"handoff", 4};
+    lane.reserve_child(handoff);
+    CHECK(lane.publish_child(handoff, Kind::Panic, "panic"));
+    CHECK(lane.pending_count() == 1);
+    CHECK(lane.urgent());
+    CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
+    CHECK(!lane.urgent());
     return 0;
 }
