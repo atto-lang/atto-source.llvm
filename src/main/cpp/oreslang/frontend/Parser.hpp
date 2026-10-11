@@ -79,12 +79,18 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer };
+    enum class Kind { Call, FieldWrite, Defer, Conditional };
     Kind kind;
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
     std::size_t offset = 0;
+    // A bounded synchronous if/else statement. Arms contain checked field
+    // writes or direct calls; local declarations and suspension fail closed.
+    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition_rhs;
+    std::vector<Statement> then_statements;
+    std::vector<Statement> else_statements;
 };
 
 // Side-effect-free equality guard with return-only taken branch.
