@@ -228,3 +228,40 @@ scheduler. These substrate tests do not prove complete backend parity.
 3. Finish source lowering of `throw`, `raise`, `panic`, `recover` and effect propagation across await on both backends. The reservation/error diagnostics are intentionally fail-closed today.
 4. Make the source guest failure payload a first-class immutable typed value rather than only the bounded `String summary`, including parent identity, effect kind, source trace and dedup/generation.
 5. Test scheduler wakeup under concurrent stop, cancel, retransmission and suspend; then run full current-head Java Maven, LLVM CMake/CTest, Graal native AOT/hybrid, fault injection, physical isolation, and independent review. Targeted funded CI is **not** release certification.
+
+
+## October 10: hierarchical escalation and reserved-slot queue hardening
+
+**JVM/Graal actual actor routing:** a descendant now pre-reserves one CONTROL
+event slot in every ancestor on successful spawn admission, as well as the
+runtime-root slot. A failure is offered to its direct parent first. On
+`ESCALATE`, an unhandled/stopped parent passes the **same typed terminal
+event** to the next living ancestor's already-reserved inbox, waking that
+ancestor's existing single-flight actor scheduler. Grandparent guest handlers
+never execute on a descendant carrier. `ACKNOWLEDGE` retires all unused
+higher-ancestor and root reservations. Graceful child retirement rolls back
+all unused reservations; partial failed spawn admission does likewise.
+
+A three-level real JVM actor integration test confirms grandparent admission
+and no duplicate root event. The Java `SupervisorFailureLane` queue is now
+an intrusive FIFO linked by pre-reserved per-child slots; publication does
+not allocate queue nodes. Concurrent 4-producer/256-event publication and
+FIFO retry-order tests passed.
+
+**Latest exact-source funded GraalVM 25 gate:** 118/118 passed; zero failures,
+errors or skips: https://github.com/zed-pkg-test/java-app/actions/runs/38103048914
+
+**LLVM typed native contract:** an exact-source C++17 test exercises child
+publish → middle supervisor CONTROL admission → grandparent CONTROL
+admission → typed `on_panic` ACK, with independent native logical turn leases.
+It does not imply compiler-generated native actor code is available.
+Exact-blob funded LLVM CI passed:
+https://github.com/zed-pkg-test/java-app/actions/runs/38102983344
+
+**Release gates still unresolved:** native LLVM source actor scheduling/IR
+lowering, full guest throw/raise/panic/recover and typed failure objects,
+handling of concurrent stop/cancel while pending ancestor events are in
+flight, complete Maven/CMake/CTest/native-image runs, profiler/GC and
+physical isolation benchmarks, and independent review. Source PRs remain
+draft and unmerged. Do not represent targeted subset CI as full release
+certification.
