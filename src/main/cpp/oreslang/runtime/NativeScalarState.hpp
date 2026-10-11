@@ -3,6 +3,7 @@
 #include "oreslang/runtime/ActorArena.h"
 #include "oreslang/runtime/CriticalGate.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -29,7 +30,8 @@ public:
         Scope(NativeScalarState& state, CriticalGate::Token ticket,
               OresArenaTurn physical_turn)
                 : state_(&state), ticket_(ticket), turn_(physical_turn) {
-            if (state_->retired_ || !state_->gate_.holds(ticket_)) {
+            if (state_->retired_.load(std::memory_order_acquire)
+                    || !state_->gate_.holds(ticket_)) {
                 throw std::logic_error("actor StateAccess requires live logical critical ticket");
             }
             if (state_->active_ && state_->active_->ticket_ != ticket_) {
@@ -74,7 +76,8 @@ public:
 
     private:
         void check(std::size_t key) const {
-            if (!live_ || state_->retired_ || state_->active_ != this) {
+            if (!live_ || state_->retired_.load(std::memory_order_acquire)
+                    || state_->active_ != this) {
                 throw std::logic_error("actor StateAccess expired or fenced by nested borrow");
             }
             if (!state_->gate_.holds(ticket_)) {
@@ -115,9 +118,11 @@ public:
     }
 
     /** Cancellation/teardown revokes further access even if token still held. */
-    void retire() noexcept { retired_ = true; }
+    void retire() noexcept { retired_.store(true, std::memory_order_release); }
 
-    [[nodiscard]] bool retired() const noexcept { return retired_; }
+    [[nodiscard]] bool retired() const noexcept {
+        return retired_.load(std::memory_order_acquire);
+    }
     [[nodiscard]] std::size_t size() const noexcept { return slots_.size(); }
 
 private:
@@ -125,7 +130,7 @@ private:
     OresActorArena* arena_;
     std::vector<OresArenaHandle> slots_;
     Scope* active_ = nullptr;
-    bool retired_ = false;
+    std::atomic<bool> retired_{false};
 };
 
 } // namespace oreslang::runtime
