@@ -97,9 +97,8 @@
       "diagnostic_class": "integer_overflow",
       "backends": {
         "llvm": "required",
-        "graal": "pending"
-      },
-      "pending_reason": "Java numeric type width and overflow parity need specification and verification."
+        "graal": "required"
+      }
     },
     {
       "id": "diagnostic.comment",
