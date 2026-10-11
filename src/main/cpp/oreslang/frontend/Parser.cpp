@@ -594,7 +594,8 @@ private:
             for (const auto& method : actor.methods) {
                 if (method.name == "init" || method.name == "drop"
                         || method.name == "layout_hash" || method.name == "layout_version"
-                        || method.name == "program_step") {
+                        || method.name == "program_step"
+                        || method.name == "message_schema_hash") {
                     throw std::runtime_error("reserved actor lifecycle method '" + method.name + "'");
                 }
                 if (!names.insert(method.name).second) {
