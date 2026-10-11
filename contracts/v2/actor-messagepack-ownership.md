@@ -78,6 +78,36 @@ MessagePack v2 encoded values but is NOT yet the production
 - Use funded CI exact Git blobs when source-org GitHub Actions fails before
   allocating a runner. No private cross-organization checkout tokens.
 
+## Audit hardening gates (2026-10-11)
+
+- **Snapshot before parsing**. Never validate caller-owned bytes and then
+  copy them later: a concurrent sender mutation can otherwise bypass validation.
+  Java variant dispatch and native transport decode the same detached snapshot
+  subsequently owned by the receiver/admitted mailbox.
+- **Pinned contract storage**. Native registration copies the schema ID,
+  canonical shape descriptor, and SHA-256 hash into group-owned storage before
+  spawn. Mutation or lifetime expiration of the host's registration buffer must
+  not change the actor's schema.
+- **Independently verified digest**. Native code computes SHA-256 over
+  `oreslang.actor.shape.v2/` + the canonical shape descriptor, and rejects
+  any supplied hash that differs. Wire-provided digests never authorize a new
+  decoder or type.
+- **Matched descriptor bounds**. Both compilers' actor-mail profiles enforce
+  a maximum **4096 ASCII shape-descriptor bytes**, depth **64**, and frame
+  length **1 MiB**. The generic Java MessagePack collection codec can admit
+  additional trusted shapes; they are not automatically portable actor mail.
+- **Float64/UTF-8**. Canonical scalar float64 encodes finite IEEE-754 binary64
+  and rejects NaN/Infinity, just as both decoders reject malformed UTF-8 and
+  noncanonical integer and collection headers.
+- **Lifecycle rule**. Contract registration is a trusted single-threaded
+  construction phase, complete before concurrent actor send/spawn. Scheduler
+  shutdown/final destruction additionally requires producer-fencing; source
+  lowering must enforce that capability boundary rather than exposing host
+  registration/destruction to guest actors.
+
+These guarantees are targeted host/runtime components, not yet all compiled
+Oreslang guest-source, Graal AOT, or arbitrary Future<T> behavior.
+
 ## Remaining compiler integration gates
 
 - Java/Graal and LLVM must derive the same closed contract descriptor and
