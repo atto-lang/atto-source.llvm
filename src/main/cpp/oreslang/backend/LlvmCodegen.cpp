@@ -217,16 +217,36 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
             }
         }
+        // Each taken return terminates in its own reverse-order cleanup
+        // block. All bindings were initialized before the first guard, so
+        // every return owns the same lexical slots and native region.
+        // Branch-local class creation / effectful conditions fail admission.
+        auto emit_cleanup_return = [&](llvm::Value* value) {
+            for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
+                if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
+                else builder.CreateLifetimeEnd(it->address,
+                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
+            }
+            if (region != nullptr) builder.CreateCall(regionClose, {region});
+            if (fn.returns_void) builder.CreateRetVoid();
+            else builder.CreateRet(value);
+        };
+        for (const auto& guard : fn.early_returns) {
+            llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage, declarations);
+            llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage, declarations);
+            llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
+            llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
+            llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
+            builder.CreateCondBr(equal, taken, next);
+            builder.SetInsertPoint(taken);
+            llvm::Value* selected = lower(*guard.result, builder, i64,
+                storage, field_storage, declarations);
+            emit_cleanup_return(selected);
+            builder.SetInsertPoint(next);
+        }
         llvm::Value* result = fn.result
             ? lower(*fn.result, builder, i64, storage, field_storage, declarations) : nullptr;
-        for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
-            if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
-            else builder.CreateLifetimeEnd(it->address,
-                llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
-        }
-        if (region != nullptr) builder.CreateCall(regionClose, {region});
-        if (fn.returns_void) builder.CreateRetVoid();
-        else builder.CreateRet(result);
+        emit_cleanup_return(result);
     }
 
     std::string diagnostics;
