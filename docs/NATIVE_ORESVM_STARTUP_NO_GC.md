@@ -13,13 +13,12 @@ class/async/actor ownership lowering.
 | CLI parse and native compilation | Build flags, module graph, verified code | No actor scheduler or GC service |
 | Native actor scheduler `open()` | Bounded mail rings, actor slots, capability domain, synchronization, maximum worker count | **Zero pthread carrier threads** |
 | Actor slot `spawn()` | Actor incarnation/identity and mailbox admission | Still **zero carriers** |
-| First **accepted** user/CONTROL message | Publish only after the complete worker activation barrier | Start configured carrier workers **once** |
+| First **accepted** user/CONTROL message | Publish only after the complete worker activation barrier | Start one carrier, grow toward the configured maximum according to outstanding demand |
 | Actor turns | Actor-owned arena + turn epochs, scratch scopes, pinned continuations/loans | No tracing GC |
 | Stop and retirement | Fence new admission, drain accepted work, join only created workers | Deterministic zeroization/free after loan and callback quiescence |
 
 `ores_native_actor_scheduler_started_workers` is a host diagnostic. It must
-read zero after `open()` and `spawn()` and equal the configured worker count
-after the first accepted item. A rejected invalid/stale actor reference never
+read zero after `open()` and `spawn()` and one after the first accepted item, and never exceed the configured maximum while growing with queued demand. A rejected invalid/stale actor reference never
 starts workers. A worker-start failure is fail-closed: no runnable work is
 published, any partially started workers are joined during retirement.
 
