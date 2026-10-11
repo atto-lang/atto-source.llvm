@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
+#include "oreslang/runtime/BoundedActorPort.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -97,7 +98,39 @@ static void exceptions_retire_lanes_and_stale_refs_fail_closed() {
     check(!group.enqueue_control(actor, [] {}), "retired actor admitted CONTROL");
 }
 
+static void bounded_port_admission_obeys_priority_and_release_fences() {
+    NativeActorGroup group(505, 1);
+    auto actor = group.adopt(505, 1, 1, [] {});
+    auto& value = actor;
+    oreslang::runtime::BoundedActorPort<std::unique_ptr<int>> port(1, sizeof(int));
+    auto get = [&] {
+        return group.run_port_turn(value, port, [&](auto& delivery) {
+            check(*delivery.value() == 42, "wrong owned port value");
+            check(port.used_frames() == 1, "receive prematurely refunded credit");
+            check(delivery.acknowledge_released(), "acknowledgement failed");
+        });
+    };
+    check(get() == NativeActorGroup::DataTurn::retired, "unready actor consumed port");
+    check(group.mark_ready(actor), "port actor not ready");
+    check(get() == NativeActorGroup::DataTurn::idle, "empty port was not idle");
+    std::unique_ptr<int> payload = std::make_unique<int>(42);
+    check(port.offer(std::move(payload), sizeof(int)), "owned message not admitted");
+    check(group.enqueue_control(actor, [] {}), "CONTROL was not reserved");
+    check(get() == NativeActorGroup::DataTurn::busy,
+          "CONTROL priority failed to block DATA receive");
+    check(port.used_frames() == 1, "busy actor consumed queued payload");
+    check(group.run_control_turn(actor) == NativeActorGroup::ControlTurn::executed,
+          "CONTROL did not execute");
+    check(get() == NativeActorGroup::DataTurn::executed,
+          "queued port frame not processed after CONTROL");
+    check(port.used_frames() == 0, "owned credits not released");
+    check(get() == NativeActorGroup::DataTurn::idle, "empty port not reported idle");
+    check(group.finalized(actor), "port actor not finalized");
+    port.close();
+}
+
 int main() {
     independent_actors_progress_while_first_lane_is_busy();
     exceptions_retire_lanes_and_stale_refs_fail_closed();
+    bounded_port_admission_obeys_priority_and_release_fences();
 }
