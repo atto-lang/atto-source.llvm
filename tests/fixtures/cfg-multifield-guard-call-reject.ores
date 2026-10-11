@@ -1,0 +1,12 @@
+define class Player as
+  pub let int health = 100;
+  pub let int stamina = 80;
+end
+fnc observe(borrow Player p): int {
+  return p.stamina;
+}
+pub fnc main(): int {
+  let Player p = new Player();
+  if (observe(rt borrow p) eq 80) { return 42; } fi
+  return p.health;
+}
