@@ -95,8 +95,8 @@ if(BUILD_TESTING)
         --diagnostic "unknown actor type")
     oreslang_contract_test(reject_source_actor_double_stop source-actor-spawn-double-stop.ores
         --diagnostic "invalid or repeated actor stop")
-    oreslang_contract_test(reject_source_actor_await source-actor-spawn-unavailable-await.ores
-        --diagnostic "await requires native compiler continuation lowering")
+    oreslang_contract_test(reject_source_actor_done_await_unimplemented source-actor-spawn-unavailable-await.ores
+        --diagnostic "expected 'get_ready'")
     oreslang_contract_test(reject_source_actor_await_spawn source-actor-await-spawn.ores
         --diagnostic "await requires native compiler continuation lowering")
     oreslang_contract_test(reject_source_actor_shadow source-actor-ref-local-shadow.ores
