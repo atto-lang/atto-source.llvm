@@ -61,6 +61,9 @@ in the data FIFO:
    are checked; untrusted actors cannot forge escalation notices.
 5. A notice is immutable **data only** (actor identity, category, diagnostic),
    not a cross-heap `Throwable` or an actor-owned mutable reference.
+   Notice diagnostics are capped at **1024 UTF-8 bytes**, without splitting
+   Unicode scalar boundaries. Native invalid UTF-8 input is replaced with '?'.
+   This cap applies on direct record construction as well as emitted notices.
 6. Fairness means ordinary user traffic still progresses; urgent events
    cannot indefinitely postpone data processing and data cannot starve control.
    Scheduler starvation from a non-cooperating busy loop is a separate concern.
@@ -105,7 +108,10 @@ does not unblock the failed actor, and cannot suppress the audit event.
 * `ActorRef.failureNotice()` is a **host/runtime control-plane primitive**:
   a single immutable, non-cancellable terminal signal independent of user
   mailbox traffic. It is not yet a compiler-checked actor source callback.
-* A true dedicated parent/ActorGroup failure inbox, scheduling reservation,
+* The direct-parent `ActorRef.nextChildFailure()` inbox is now a separate
+  bounded CONTROL queue with one pending reader and no user-mail dependency.
+  Parent queue overflow fails closed; host/parent observation is supported.
+* ActorGroup-level supervision dispatch, CONTROL scheduling reservation,
   checked `on_*` handlers, source `throw/raise/panic/recover` lowering,
   exhaustive effect checking and full cross-suspension cleanup audit remain
   future implementation work.
@@ -118,9 +124,14 @@ does not unblock the failed actor, and cannot suppress the audit event.
 * Reserved exceptional keywords and unsupported control statements must
   produce a nonzero compilation exit and **no LLVM IR**. This is a
   fail-closed compatibility safeguard, not implementation parity.
-* LLVM parity requires native unwind/cleanup lowering, ownership-safe error
-  payloads, actor-private heaps, supervisor/control queue scheduling, fatal
-  isolation and exact same observable traces as Java.
+* A tested native `ExceptionPolicy.hpp` value-only policy primitive now
+  mirrors Java precedence (host/process-fatal > cancellation > panic >
+  raise > throw), suppressed diagnostic retention, and the 1024-byte
+  Unicode-safe notice limit. This is **not** integrated with source lowering
+  or native actors; it does not count as behavioral feature parity.
+* LLVM parity still requires native unwind/cleanup lowering, ownership-safe
+  error payloads, actor-private heaps, supervisor/control queue scheduling,
+  fatal isolation and exact same observable traces as Java.
 
 ## Required differential regression matrix
 
