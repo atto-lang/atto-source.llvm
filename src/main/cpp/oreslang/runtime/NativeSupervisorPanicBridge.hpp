@@ -167,9 +167,33 @@ public:
         return child_registry_.snapshot(child);
     }
 
-    /** Commit STOP disposition only for the exact physically finalized child. */
+    /** Secure a generation-scoped STOP lease before any host side effect. */
+    SupervisorChildRegistry::Snapshot reserve_finalized_stop(
+            const SupervisorProcess::Resolution& resolution) {
+        auto key = validated_stop_child(resolution);
+        OresNativeActorRef actor{resolution.notice.runtime_id,
+                                 resolution.notice.actor_id,
+                                 resolution.notice.generation};
+        return child_registry_.begin_stop(
+            key, actor, resolution.notice.logical_incarnation,
+            resolution.turn_generation);
+    }
+
+    /** Commit STOP disposition only for an already reserved exact turn. */
     SupervisorChildRegistry::Snapshot acknowledge_finalized_stop(
             const SupervisorProcess::Resolution& resolution) {
+        auto key = validated_stop_child(resolution);
+        OresNativeActorRef actor{resolution.notice.runtime_id,
+                                 resolution.notice.actor_id,
+                                 resolution.notice.generation};
+        return child_registry_.commit_stop(
+            key, actor, resolution.notice.logical_incarnation,
+            resolution.turn_generation);
+    }
+
+    // Host-only validation. The logical child ID is never source authority.
+    SupervisorChildRegistry::ChildRef validated_stop_child(
+            const SupervisorProcess::Resolution& resolution) const {
         const auto& notice = resolution.notice;
         if (resolution.requested != SupervisorProcess::Directive::stop
                 || resolution.turn_generation == 0
@@ -180,11 +204,8 @@ public:
                 || !notice.logical_child_id || !notice.logical_incarnation) {
             throw std::logic_error("unauthorized finalized supervisor STOP");
         }
-        SupervisorChildRegistry::ChildRef key{
+        return SupervisorChildRegistry::ChildRef{
             notice.supervisor_id, notice.runtime_id, notice.logical_child_id};
-        OresNativeActorRef actor{
-            notice.runtime_id, notice.actor_id, notice.generation};
-        return child_registry_.stop(key, actor, notice.logical_incarnation);
     }
 
     std::size_t tracked_logical_children() const {
