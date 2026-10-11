@@ -258,6 +258,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_suspends unsupported-suspends.ores --diagnostic "native suspends declaration requires")
     oreslang_contract_test(reject_critical unsupported-critical.ores --diagnostic "native critical declaration requires")
     oreslang_contract_test(reject_suspend_critical unsupported-suspend-critical.ores --diagnostic "native suspends declaration requires")
+    # Native parity substrate for the Graal per-incarnation i64/bool
+    # StateAccess lifetime. LLVM guest-source lowering is a separate gate.
+    add_executable(oreslang-native-scalar-state-test
+        tests/native_scalar_state_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-scalar-state-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-native-scalar-state-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-scalar-state-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_scalar_state_critical_lifetimes
+        COMMAND oreslang-native-scalar-state-test)
+
     add_executable(oreslang-critical-gate-test tests/critical_gate_test.cpp)
     target_include_directories(oreslang-critical-gate-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     find_package(Threads REQUIRED)
