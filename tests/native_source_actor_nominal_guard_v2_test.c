@@ -54,7 +54,6 @@ int main(void) {
     assert(canonical[digest_pos] == 0xc4 && canonical[digest_pos+1] == 32);
     memcpy(digest, canonical+digest_pos+2, 32);
     OresMp2Contract c = {schema, shape, digest};
-    OresSourceNominalCase nominal = {"Status", 2};
     assert(ores_mp2_contract_valid(&c));
     assert(!oreslang_source_actor_spawn_tagged_variants(
         init, receive, 1, &c, NULL, 1));
