@@ -111,6 +111,9 @@ does not unblock the failed actor, and cannot suppress the audit event.
 * The direct-parent `ActorRef.nextChildFailure()` inbox is now a separate
   bounded CONTROL queue with one pending reader and no user-mail dependency.
   Parent queue overflow fails closed; host/parent observation is supported.
+* Actor class methods spelled `on_throw`, `on_throws`, `on_raise`,
+  `on_panic` or `on_recover` currently fail closed in the Java parser; an
+  ordinary user method must not masquerade as a checked supervisor handler.
 * ActorGroup-level supervision dispatch, CONTROL scheduling reservation,
   checked `on_*` handlers, source `throw/raise/panic/recover` lowering,
   exhaustive effect checking and full cross-suspension cleanup audit remain
