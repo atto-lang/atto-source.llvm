@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
 typedef struct SourceActor {
     uint64_t magic;
@@ -114,7 +115,7 @@ int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
     if (forwarding) {
         // At most 128 accepted but not yet sink-acknowledged messages. There
         // cannot be downstream saturation if this is the only writer.
-        uint64_t used = atomic_load_explicit(&actor->forward_reserved, memory_order_acquire);
+        uint_fast64_t used = atomic_load_explicit(&actor->forward_reserved, memory_order_acquire);
         do {
             if (used >= 128) return 0;
         } while (!atomic_compare_exchange_weak_explicit(
