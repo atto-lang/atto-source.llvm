@@ -14,6 +14,7 @@ message(STATUS "Building Oreslang LLVM against LLVM ${LLVM_PACKAGE_VERSION}")
 add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
     src/main/cpp/oreslang/frontend/Parser.cpp
+    src/main/cpp/oreslang/frontend/ClientContractHeader.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
 )
@@ -28,6 +29,14 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(oreslang-contract-header-test
+        tests/client_contract_header_test.cpp
+        src/main/cpp/oreslang/frontend/ClientContractHeader.cpp)
+    target_include_directories(oreslang-contract-header-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-contract-header-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME generated_oreslang_string_contract_header
+        COMMAND oreslang-contract-header-test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generated-client-contract.ores")
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
