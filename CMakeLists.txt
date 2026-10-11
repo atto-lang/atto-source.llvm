@@ -488,4 +488,16 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_typed_panic_event
         COMMAND oreslang-native-supervisor-panic-test)
     set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
+    # Stable-address READY/DONE actor lifecycle subscription, native-host only.
+    # Source-level await remains rejected until typed continuation state machines.
+    add_executable(oreslang-actor-lifecycle-await-test
+        tests/actor_lifecycle_await_test.cpp)
+    target_include_directories(oreslang-actor-lifecycle-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-lifecycle-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-lifecycle-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_pinned_actor_future_control_continuation
+        COMMAND oreslang-actor-lifecycle-await-test)
+    set_tests_properties(native_pinned_actor_future_control_continuation PROPERTIES TIMEOUT 15)
 endif()
