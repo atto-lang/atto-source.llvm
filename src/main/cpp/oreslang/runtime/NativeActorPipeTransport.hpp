@@ -56,6 +56,12 @@ public:
         std::lock_guard<std::mutex> lock(link.mutex);
         if (closed_.load(std::memory_order_acquire) || link.closed)
             return failed_void("native actor pipe is closed");
+        if (payload.size() > max_payload_bytes)
+            return failed_void("native actor pipe payload exceeds byte budget");
+        if (link.messages.size() == link.capacity
+                && link.readers.empty()
+                && link.writers.size() >= link.capacity)
+            return failed_void("native actor pipe pending-write budget exceeded");
         auto pending = std::make_shared<PendingWrite>(std::move(payload));
         auto future = pending->promise.get_future().share();
         if (!link.readers.empty()) {
@@ -90,6 +96,9 @@ public:
         } else if (closed_.load(std::memory_order_acquire) || link.closed) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe is closed")));
+        } else if (link.readers.size() >= link.capacity) {
+            receiver->set_exception(std::make_exception_ptr(
+                    std::logic_error("native actor pipe pending-read budget exceeded")));
         } else {
             link.readers.push_back(std::move(receiver));
         }
@@ -119,6 +128,8 @@ public:
     }
 
 private:
+    static constexpr std::size_t max_payload_bytes = 1024 * 1024;
+
     struct PendingWrite {
         explicit PendingWrite(std::string value) : payload(std::move(value)) {}
         std::string payload;
