@@ -48,7 +48,7 @@ void* oreslang_source_actor_spawn_wire(
     OresSourceActorInit initializer, OresSourceActorWireMessage on_wire,
     uint64_t fields, const OresMp2Contract* compiler_owned_contract);
 /* Returns 1 on admission, 0 for malformed frame, full actor DATA mailbox
- * or stopped/stale actor. Caller retains ownership of input bytes.
+ * or stopped actor (not a stale-pointer-safe handle). Caller retains ownership of input bytes.
  * Registered wire actors cannot use scalar source_actor_send.
  */
 int oreslang_source_actor_send_wire(
@@ -85,6 +85,24 @@ void* oreslang_source_actor_spawn_variants(
     size_t contract_count);
 int oreslang_source_actor_send_variant(
     void* actor, const uint8_t* wire, size_t size);
+/* REQUIRED path for Java-compatible 'define enum' / 'define pattern':
+ * a variant's SHA-256 commits to tuple SHAPE but not the 'Status' name
+ * or numeric case tag inside its tuple. Pin these nominal identities at
+ * compile time and verify BOTH before entering a guest receive callback.
+ *
+ * The generic spawn_variants API above is structural-only; it is NOT
+ * sufficient by itself for typed nominal enum source messages.
+ * All tag descriptors are copied before verification and registration.
+ */
+typedef struct {
+    const char* enum_name;
+    uint32_t declared_tag; /* 1..INT32_MAX; NOT the variant index */
+} OresSourceNominalCase;
+void* oreslang_source_actor_spawn_tagged_variants(
+    OresSourceActorInit initializer,
+    OresSourceActorVariantMessage on_variant, uint64_t fields,
+    const OresMp2Contract* contracts,
+    const OresSourceNominalCase* identities, size_t contract_count);
 void oreslang_source_actor_stop(void* actor);
 /* A source-compiled continuation runs on the root ActorGroup CONTROL lane.
  * Only the outer trusted-main ABI waits to return the program's i64 result;
