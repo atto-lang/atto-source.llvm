@@ -215,6 +215,27 @@ int main() {
               && untyped->undelivered() == 1 && !untyped->healthy(),
           "untyped native notice forged the explicit Failure binder");
 
+    // Even zero-argument self.stop() is compiled inside a typed
+    // on_panic(f: Failure). A legacy, zero-kind host notice has no validated
+    // PANIC provenance and must never trigger a guest source lifecycle effect.
+    unsigned legacy_applied = 0;
+    auto legacy = oreslang::runtime::install_source_supervisor_stop(
+        source, 99, 64, 2, enqueue,
+        [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
+            ++legacy_applied;
+        });
+    legacy->accept(oreslang::runtime::SupervisorFailureNotice{
+        99, 64, 21, 9, std::nullopt, "legacy untyped zero-arg terminal"});
+    while (!queued.empty()) {
+        check(++ticks < 100, "runaway legacy CONTROL");
+        auto task = std::move(queued.front());
+        queued.pop_front();
+        task();
+    }
+    check(legacy_applied == 0 && legacy->resolved() == 0
+              && legacy->undelivered() == 1 && !legacy->healthy(),
+          "zero-argument source STOP accepted untyped legacy notice");
+
     // Cancellation is *not* silently treated as a panic STOP decision.
     auto cancelled = oreslang::runtime::install_source_supervisor_stop(
         source, 88, 43, 2, enqueue,
