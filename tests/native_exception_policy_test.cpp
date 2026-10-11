@@ -22,6 +22,14 @@ int main() {
     static_assert(failure_priority(FailureKind::Raise) >
                   failure_priority(FailureKind::Throw));
 
+    bool rejected_unknown_kind = false;
+    try {
+        (void)Failure::make(static_cast<FailureKind>(0xff), "forged failure tag");
+    } catch (const std::invalid_argument&) {
+        rejected_unknown_kind = true;
+    }
+    assert(rejected_unknown_kind);
+
     auto pending_panic = combine_failure(
         Failure::make(FailureKind::Panic, "body invariant"),
         Failure::make(FailureKind::Throw, "defer error"));
