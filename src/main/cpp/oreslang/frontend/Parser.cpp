@@ -91,7 +91,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=.").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -120,6 +120,12 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("actor")) {
+                program.actor = std::make_unique<ActorDecl>(actor_declaration());
+                if (token_.kind != Kind::End) fail("unexpected trailing actor source");
+                validate(program);
+                return program;
+            }
             require("module");
             program.module = identifier();
             accept("as"); // Both 'define module M as' and 'define module M' occur in Java.
@@ -137,6 +143,68 @@ public:
     }
 
 private:
+    ActorDecl actor_declaration() {
+        ActorDecl actor;
+        actor.offset = token_.offset;
+        actor.name = identifier();
+        require("as");
+        while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+            ActorField field;
+            field.offset = token_.offset;
+            advance();
+            field.name = identifier();
+            require(":");
+            require("int");
+            require("=");
+            field.initializer = expression();
+            require(";");
+            actor.fields.push_back(std::move(field));
+            if (actor.fields.size() > 4096) fail("actor field capacity exceeds 4096");
+        }
+        if (actor.fields.empty()) fail("actor requires at least one int field");
+        while (token_.text != "end" && token_.kind != Kind::End) {
+            actor.methods.push_back(actor_method());
+        }
+        require("end");
+        if (actor.methods.empty()) fail("actor requires at least one method");
+        return actor;
+    }
+
+    ActorMethod actor_method() {
+        ActorMethod value;
+        value.offset = token_.offset;
+        accept("pub");
+        if (!accept("fnc") && !accept("routine")) fail("expected actor method");
+        value.name = identifier();
+        require("(");
+        if (!accept(")")) {
+            do {
+                require("int");
+                value.parameters.push_back(identifier());
+            } while (accept(","));
+            require(")");
+        }
+        require(":");
+        require("int");
+        require("{");
+        while (token_.text == "self") {
+            ActorAssignment assignment;
+            assignment.offset = token_.offset;
+            advance();
+            require(".");
+            assignment.field = identifier();
+            require("=");
+            assignment.value = expression();
+            require(";");
+            value.assignments.push_back(std::move(assignment));
+        }
+        require("return");
+        value.result = expression();
+        require(";");
+        require("}");
+        return value;
+    }
+
     Function function() {
         Function value;
         value.offset = token_.offset;
@@ -241,6 +309,12 @@ private:
             advance();
             return expr;
         }
+        if (accept("self")) {
+            require(".");
+            auto expr = make_expression(Expression::Kind::ActorField, offset);
+            expr->name = identifier();
+            return expr;
+        }
         if (token_.kind != Kind::Identifier || reserved(token_.text)) {
             fail("expected int expression");
         }
@@ -279,9 +353,16 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::size_t>& functions) {
+                                    const std::unordered_map<std::string, std::size_t>& functions,
+                                    const std::unordered_set<std::string>* fields = nullptr) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
+            case Expression::Kind::ActorField:
+                if (fields == nullptr || !fields->count(expr.name)) {
+                    throw std::runtime_error("unknown or forbidden actor field '" + expr.name
+                                             + "' at byte " + std::to_string(expr.offset));
+                }
+                return;
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
@@ -296,24 +377,59 @@ private:
                                              + std::to_string(expr.offset));
                 }
                 for (const auto& arg : expr.arguments) {
-                    validate_expression(*arg, parameters, functions);
+                    validate_expression(*arg, parameters, functions, fields);
                 }
                 return;
             }
             case Expression::Kind::Negate:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, fields);
                 return;
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-                validate_expression(*expr.left, parameters, functions);
-                validate_expression(*expr.right, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, fields);
+                validate_expression(*expr.right, parameters, functions, fields);
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
     }
 
     static void validate(const Program& program) {
+        if (program.actor) {
+            const auto& actor = *program.actor;
+            std::unordered_set<std::string> fields;
+            const std::unordered_set<std::string> empty;
+            const std::unordered_map<std::string, std::size_t> no_calls;
+            for (const auto& field : actor.fields) {
+                // Initializers are pure integer expressions. Actor state
+                // cannot escape or be read before the entire record exists.
+                validate_expression(*field.initializer, empty, no_calls);
+                if (!fields.insert(field.name).second) {
+                    throw std::runtime_error("duplicate actor field '" + field.name
+                                             + "' at byte " + std::to_string(field.offset));
+                }
+            }
+            std::unordered_set<std::string> names;
+            for (const auto& method : actor.methods) {
+                if (!names.insert(method.name).second) {
+                    throw std::runtime_error("duplicate actor method '" + method.name + "'");
+                }
+                std::unordered_set<std::string> params;
+                for (const auto& parameter : method.parameters) {
+                    if (!params.insert(parameter).second) {
+                        throw std::runtime_error("duplicate actor parameter '" + parameter + "'");
+                    }
+                }
+                for (const auto& assignment : method.assignments) {
+                    if (!fields.count(assignment.field)) {
+                        throw std::runtime_error("unknown actor assignment field '" + assignment.field + "'");
+                    }
+                    validate_expression(*assignment.value, params, no_calls, &fields);
+                }
+                validate_expression(*method.result, params, no_calls, &fields);
+            }
+            return;
+        }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
