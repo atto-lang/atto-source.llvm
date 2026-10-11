@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <optional>
 #include <cstdint>
 #include <future>
 #include <stdexcept>
@@ -77,10 +79,14 @@ int main() {
             }) && answer == 32, "compiled first actor method failed");
 
             OresActorLoan loan{};
+            std::optional<oreslang::runtime::NativeActorHeapWorker::ContinuationPin> continuation;
             check(worker->with_turn([&](auto* heap, OresActorTurn turn, auto* fields) {
                 loan = ores_actor_i64_fields_borrow(heap, turn, fields, 0);
-            }), "borrowed actor field could not be pinned");
+                continuation.emplace(worker->pin_continuation());
+            }), "actor failed to pin field and await continuation");
             check(worker->pending_loans() == 1, "suspended field loan was not retained");
+            check(worker->pending_continuations() == 1,
+                  "await continuation escaped without a lifecycle pin");
 
             group.request_stop_all();
             check(!worker->with_turn([](auto*, auto, auto*) {}),
@@ -93,8 +99,16 @@ int main() {
 
             std::thread foreign([worker, loan] { worker->release_field_loan(loan); });
             foreign.join();
+            check(group.drain_control() == 0,
+                  "CONTROL destroyed heap while await continuation still pinned");
             check(ref.get_done().wait_for(0ms) == std::future_status::timeout,
                   "FFI completion thread incorrectly finalized actor");
+            std::thread completion([&] { continuation.reset(); });
+            completion.join();
+            check(worker->pending_continuations() == 0,
+                  "released await continuation was still charged");
+            check(ref.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "completion thread bypassed parent CONTROL lane");
             check(group.drain_control() == 1,
                   "supervisor CONTROL failed to drain now-quiescent actor");
             check(worker->physically_finalized(), "actor memory was not freed");
@@ -164,7 +178,7 @@ int main() {
         }
         return 0;
     } catch (const std::exception& failure) {
-        (void)failure;
+        std::fprintf(stderr, "actor group test failed: %s\n", failure.what());
         return 63;
     }
 }
