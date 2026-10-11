@@ -468,6 +468,39 @@ int main() {
               "inline CONTROL rejection retained a pending notice");
     }
 
+
+    // A process itself must also fail admission if the enqueue adapter
+    // rejected the CONTROL turn. No caller may mistake that for success.
+    {
+        std::atomic<unsigned> policies{0};
+        auto process = std::make_shared<SupervisorProcess>(
+            5507, 55, 2,
+            [](std::function<void()> fn) {
+                fn(); // Illegal same-thread invocation must be suppressed.
+                return true;
+            },
+            [&](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                ++policies;
+                return SupervisorProcess::Directive::stop;
+            },
+            [](const SupervisorProcess::Resolution&) {
+                throw std::runtime_error("inline process committed a lifecycle effect");
+            });
+        bool rejected = false;
+        try {
+            process->accept(SupervisorFailureNotice{
+                5507, 55, 1, 1, std::nullopt, "direct process"});
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        check(rejected && policies.load() == 0,
+              "failed CONTROL process dispatch was reported as accepted");
+        check(process->undelivered() == 1 && process->pending() == 0
+              && !process->callback_active() && !process->healthy(),
+              "rejected CONTROL process dispatch retained its notice or lease");
+    }
+
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
               " await=1 replay=0 native_stop=1 throwing_self_close=1"
               " terminal_cleanup=1 suspended_close=1");
