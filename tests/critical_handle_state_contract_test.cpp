@@ -17,10 +17,25 @@ int main() {
     const auto using_rw = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
+    // The serial actor base is an immutable compiler property, but an
+    // implicit critical callback is safe only with an actual lifetime lease.
+    c.actor_is_serial = true;
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.serial_lifetime_admission_proven = true;
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::Accept);
+    c.actor_is_serial = false;
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.serial_lifetime_admission_proven = false;
     c.callback_critical = true;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::Accept);
 
+    c.actor_is_serial = true;
+    c.serial_lifetime_admission_proven = true;
+    c.callback_critical = false;
     c.intrinsic_critical = false;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::MissingIntrinsicCritical);
