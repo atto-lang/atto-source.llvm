@@ -115,6 +115,20 @@ int main() {
           "checked Failure.child did not lower to a restricted child target");
     check(!targeted.targets_logical_child,
           "direct typed Failure unexpectedly requires a child projection");
+    // The Java opt-in async STOP acknowledgment slice does not imply
+    // native async guest lowering. The normal native parser must still reject
+    // the identical source until its CONTROL continuation is implemented.
+    constexpr std::string_view awaited_stop = R"(
+        define supervisor Root as
+          @Implements
+          pub async on_panic(f: Failure): void {
+            await self.stop(f);
+            return;
+          }
+        end
+    )";
+    reject_supervisor(awaited_stop);
+    reject_stop_slice(awaited_stop);
     reject_supervisor(with_child); // normal compiler remains closed
     reject_supervisor(with_failure); // general native compiler remains closed
     for (const auto forged : {
