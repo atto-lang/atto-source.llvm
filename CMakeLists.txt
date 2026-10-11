@@ -98,6 +98,22 @@ if(BUILD_TESTING)
         --diagnostic "native defer requires a direct function call")
     oreslang_contract_test(reject_native_defer_moved_return native-defer-moved-after-return.ores
         --diagnostic "borrow of explicitly moved int")
+    # Native source if/else CFG: separate branch states must join safely.
+    # Real Clang execution, ASan/UBSan and no-partial-IR rejection matrix.
+    if(ORE_CLANG)
+        add_test(NAME native_source_conditional_cfg
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/conditional_cfg_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        add_test(NAME native_source_conditional_cfg_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/conditional_cfg_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_source_conditional_cfg
+            native_source_conditional_cfg_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")

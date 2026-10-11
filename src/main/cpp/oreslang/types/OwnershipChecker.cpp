@@ -274,23 +274,53 @@ void validate_i64_ownership(const Program& program) {
             locals.emplace(binding.name, std::move(entry));
         }
         std::vector<const Expression*> deferred_calls;
+        auto check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::FieldWrite) {
+                auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
+                if (recv.mode == Mode::Borrow)
+                    throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
+                if (recv.exclusive_loan || recv.shared_loans != 0)
+                    throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
+                check_value(*stmt.expression, state, functions);
+            } else if (stmt.kind == Statement::Kind::Call) {
+                if (stmt.expression->kind != Expression::Kind::Call)
+                    throw std::runtime_error("invalid native call statement");
+                check_call(*stmt.expression, state, functions);
+            } else {
+                throw std::runtime_error("ownership violation: unsupported conditional arm effect");
+            }
+        };
         for (const auto& stmt : function.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
                 deferred_calls.push_back(stmt.expression.get());
                 continue;
             }
-            if (stmt.kind == Statement::Kind::FieldWrite) {
-                auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, locals);
-                if (recv.mode == Mode::Borrow)
-                    throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
-                if (recv.exclusive_loan || recv.shared_loans != 0)
-                    throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
-                check_value(*stmt.expression, locals, functions);
-            } else {
-                if (stmt.expression->kind != Expression::Kind::Call)
-                    throw std::runtime_error("invalid native call statement");
-                check_call(*stmt.expression, locals, functions);
+            if (stmt.kind == Statement::Kind::Conditional) {
+                // A condition cannot change ownership; analyze each arm
+                // independently and require compatible resulting states.
+                // Until phi ownership/drop flags exist, the checker must
+                // reject divergent moves instead of silently picking a path.
+                check_pure_guard(*stmt.condition_lhs, locals, functions);
+                check_pure_guard(*stmt.condition_rhs, locals, functions);
+                Locals then_state = locals;
+                Locals else_state = locals;
+                for (const auto& arm : stmt.then_statements)
+                    check_effect(arm, then_state);
+                for (const auto& arm : stmt.else_statements)
+                    check_effect(arm, else_state);
+                for (const auto& item : then_state) {
+                    const auto found = else_state.find(item.first);
+                    if (found == else_state.end() ||
+                            item.second.moved != found->second.moved ||
+                            item.second.shared_loans != found->second.shared_loans ||
+                            item.second.exclusive_loan != found->second.exclusive_loan)
+                        throw std::runtime_error("ownership violation: conditional CFG predecessor ownership mismatch at byte " +
+                            std::to_string(stmt.offset));
+                }
+                locals = std::move(then_state);
+                continue;
             }
+            check_effect(stmt, locals);
         }
         auto check_deferred_exit = [&](Locals& path) {
             for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
