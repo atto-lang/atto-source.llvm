@@ -24,6 +24,11 @@ struct SupervisorFailureNotice {
     std::uint64_t generation;
     std::optional<std::uint64_t> spawned_by;
     std::string diagnostic;
+    // Optional typed native source identity; zeros for non-native host
+    // notices. Keep these at the end for existing aggregate initializers.
+    std::uint64_t native_terminal_kind = 0;
+    std::uint64_t failure_code = 0;
+    std::uint64_t correlation = 0;
 };
 
 /**
