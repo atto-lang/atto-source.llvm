@@ -153,6 +153,12 @@ if(BUILD_TESTING)
         --diagnostic "scalar local shadows actor reference")
     oreslang_contract_test(reject_source_actor_escape source-actor-spawn-escape.ores
         --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_source_actor_pipeline_forward_unlowered
+        source-actor-pipeline-forward-unavailable.ores
+        --diagnostic "self.forward requires native pipeline routing lowering")
+    oreslang_contract_test(reject_source_actor_pipeline_backward_unlowered
+        source-actor-pipeline-backward-unavailable.ores
+        --diagnostic "self.backward requires native pipeline routing lowering")
     oreslang_contract_test(source_actor_send_ir source-actor-send.ores
         --ir "oreslang_source_actor_send")
     oreslang_contract_test(source_actor_five_workers_ir source-actor-five-workers.ores
