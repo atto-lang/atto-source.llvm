@@ -71,5 +71,86 @@ class DiagnosticProof(unittest.TestCase):
             result = run.run_case(case, "llvm", ["fake", "{source}"], "", 3)
             self.assertEqual("fail", result["status"])
 
+
+class ComparatorParityProof(unittest.TestCase):
+    """The incremental conformance comparison must never certify pending parity."""
+
+    def setUp(self):
+        self.suite, self.digest = run.validate_suite()
+        self.sha = {"llvm": "a" * 40, "graal": "b" * 40}
+        self.reports = {}
+        for backend in ("llvm", "graal"):
+            results = []
+            for case in self.suite["cases"]:
+                if case["backends"][backend] == "pending":
+                    record = {"id": case["id"], "status": "pending",
+                              "detail": case["pending_reason"]}
+                elif case["kind"] == "diagnostic":
+                    record = {"id": case["id"], "status": "pass",
+                              "diagnostic_class": case["diagnostic_class"], "detail": ""}
+                else:
+                    record = {"id": case["id"], "status": "pass",
+                              "observed_exit": case["expected_exit"], "detail": ""}
+                results.append(record)
+            self.reports[backend] = {
+                "schema_version": "1.1.0", "backend": backend,
+                "suite_sha256": self.digest, "source_revision": self.sha[backend],
+                "results": results,
+            }
+
+    def compare(self, *, strict=False, revisions=None, suite=None):
+        from contextlib import redirect_stdout, redirect_stderr
+        import io
+        import compare
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            status = compare.compare(suite or self.suite, self.digest,
+                                     self.reports["llvm"], self.reports["graal"],
+                                     require_suite_parity=strict, expected_revisions=revisions)
+        return status, out.getvalue()
+
+    def test_incremental_mode_is_explicitly_incomplete(self):
+        status, summary = self.compare()
+        self.assertEqual(status, 0)
+        self.assertIn("SUITE_COMPLETE=no", summary)
+        self.assertIn("BACKEND_PENDING=", summary)
+
+    def test_strict_gate_rejects_pending_cases(self):
+        status, summary = self.compare(strict=True, revisions=self.sha)
+        self.assertEqual(status, 1)
+        self.assertIn("SUITE_COMPLETE=no", summary)
+
+    def test_strict_gate_demands_pinned_heads(self):
+        with self.assertRaisesRegex(ValueError, "requires pinned"):
+            self.compare(strict=True)
+
+    def test_stale_source_sha_rejected(self):
+        revisions = dict(self.sha, llvm="c" * 40)
+        with self.assertRaisesRegex(ValueError, "stale llvm report"):
+            self.compare(revisions=revisions)
+
+    def test_pending_cannot_smuggle_runtime_or_diagnostic_evidence(self):
+        for evidence in ({"observed_exit": None}, {"diagnostic_class": "unknown_name"}):
+            record = next(item for item in self.reports["graal"]["results"]
+                          if item["status"] == "pending")
+            record.update(evidence)
+            self.assertEqual(self.compare()[0], 1)
+            for key in evidence:
+                del record[key]
+
+    def test_required_diagnostic_cannot_smuggle_native_exit(self):
+        record = next(item for item in self.reports["llvm"]["results"]
+                      if item.get("diagnostic_class"))
+        record["observed_exit"] = 0
+        self.assertEqual(self.compare()[0], 1)
+
+    def test_strict_gate_can_verify_fully_required_subset_only(self):
+        # A tiny suite passing its fixtures still does NOT prove language parity.
+        suite = {"cases": [case for case in self.suite["cases"]
+                          if all(s == "required" for s in case["backends"].values())]}
+        self.assertTrue(suite["cases"])
+        status, summary = self.compare(strict=True, revisions=self.sha, suite=suite)
+        self.assertEqual(status, 0)
+        self.assertIn("SUITE_COMPLETE=yes", summary)
+
 if __name__ == "__main__":
     unittest.main()
