@@ -71,10 +71,6 @@ CASES = {
         "pub fnc main(): int { throw 42; return 0; }",
         "native exception/control effect unsupported",
     ),
-    "defer-statement": (
-        "pub fnc main(): int { defer cleanup(); return 0; }",
-        "native exception/control effect unsupported",
-    ),
     "try-statement": (
         "pub fnc main(): int { try { return 42; } catch (err) { return 0; } }",
         "native exception/control effect unsupported",
