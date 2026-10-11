@@ -59,6 +59,16 @@ int main() {
         "gpu fnc bias(f32 value): f32 { return value - 3.0; }", layout);
     check(minus.kernel.bias == -3);
 
+    auto subnormal = a::compile_gpu(
+        "gpu fnc tiny(f32 value): f32 { return value * 1e-45; }", layout);
+    check(subnormal.kernel.scale == std::numeric_limits<float>::denorm_min());
+    rejects([&] { (void)a::compile_gpu(
+        "gpu fnc tiny(f32 value): f32 { return value * 1e-1000; }", layout); });
+    rejects([&] { (void)a::compile_gpu(
+        "gpu fnc huge(f32 value): f32 { return value; }" + std::string(70000, ' '), layout); });
+    rejects([&] { (void)a::compile_quantum(
+        "quantum fnc huge(): Circuit<2,2> { measure(0,0); }" + std::string(70000, ' ')); });
+
     auto bell = a::compile_quantum(R"(
       quantum fnc bell(): Circuit<2,2> {
         h(0);
