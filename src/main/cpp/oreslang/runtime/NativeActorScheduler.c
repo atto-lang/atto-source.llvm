@@ -413,7 +413,9 @@ int ores_native_actor_scheduler_publish_failure(
         a->has_control = 1;
         s->accepted++;
         s->outstanding++;
-        pthread_cond_signal(&s->ready);
+        /* A ready worker cannot consume this event until the pool scheduler
+         * issues a dispatch ticket. Wake the scheduler, not the worker. */
+        pthread_cond_signal(&s->scheduler_wakeup);
     } else if (s->rejected != UINT64_MAX) s->rejected++;
     unlock(s);
     return ok;
