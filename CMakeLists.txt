@@ -45,6 +45,20 @@ if(BUILD_TESTING)
                 --binary "$<TARGET_FILE:oreslang-messagepack-wire-v2-test>"
                 --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/messagepack_collection_vectors.json")
         set_tests_properties(native_messagepack_wire_v2_java_parity PROPERTIES TIMEOUT 30)
+        add_executable(oreslang-tagged-message-wire-v2-test
+            tests/tagged_message_wire_v2_test.cpp)
+        target_include_directories(oreslang-tagged-message-wire-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-tagged-message-wire-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-tagged-message-wire-v2-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_tagged_enum_message_java_wire_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/tagged_message_wire_v2_matrix.py"
+                --binary "$<TARGET_FILE:oreslang-tagged-message-wire-v2-test>"
+                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/tagged_message_vectors.json")
+        set_tests_properties(native_tagged_enum_message_java_wire_parity PROPERTIES TIMEOUT 30)
     else()
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
