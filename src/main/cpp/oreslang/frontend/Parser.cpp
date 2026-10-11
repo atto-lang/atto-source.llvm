@@ -473,6 +473,13 @@ private:
                     const std::string enum_name = identifier();
                     require(".");
                     send.tagged_variant = enum_name + "." + identifier();
+                    /* First executable payload subset: Enum.Case(123).
+                     * The literal is encoded at compile time, never cast
+                     * into an actor's scalar i64 mail channel. */
+                    if (accept("(")) {
+                        send.payload = expression();
+                        require(")");
+                    }
                 } else {
                     send.payload = expression();
                 }
@@ -890,6 +897,25 @@ private:
                                 allowed.insert(own->first + "." + c.name);
                         if (!allowed.count(send.tagged_variant))
                             throw std::runtime_error("actor send case outside closed tagged pattern");
+                        const auto dot = send.tagged_variant.find('.');
+                        const auto declared = enumNames.at(send.tagged_variant.substr(0, dot));
+                        const auto member = std::find_if(declared->cases.begin(),
+                            declared->cases.end(), [&](const EnumCase& c) {
+                                return c.name == send.tagged_variant.substr(dot + 1);
+                            });
+                        if (member == declared->cases.end())
+                            throw std::runtime_error("unknown tagged variant");
+                        if (!member->has_payload) {
+                            if (send.payload)
+                                throw std::runtime_error("payloadless enum send has arguments");
+                        } else if (member->payload.kind != MessageShape::Kind::Integer
+                                   || !send.payload
+                                   || send.payload->kind != Expression::Kind::Integer
+                                   || send.payload->integer < 0
+                                   || send.payload->integer > INT32_MAX) {
+                            throw std::runtime_error(
+                                "LLVM tagged int send requires a positive or zero int literal");
+                        }
                         continue;
                     }
                     if (!send.tagged_variant.empty())
@@ -1057,6 +1083,10 @@ private:
                                 [&](const EnumCase& c) { return c.name == variant; });
                             if (matched == enumeration->cases.end())
                                 throw std::runtime_error("unresolved tagged enum case");
+                            auto armAvailable = available;
+                            for (const auto& binder : arm.binders) {
+                                if (binder != "_") armAvailable.insert(binder);
+                            }
                             for (const auto& assignment : arm.assignments) {
                                 if (!mutableFields.count(assignment.field))
                                     throw std::runtime_error(
@@ -1064,7 +1094,7 @@ private:
                                 if (reads_name(*assignment.value, parameter))
                                     throw std::runtime_error(
                                         "tagged match arm Message payload binding is not narrowed");
-                                validate_expression(*assignment.value, available, functions);
+                                validate_expression(*assignment.value, armAvailable, functions);
                             }
                             if (arm.binds_payload) {
                                 if (!matched->has_payload)
@@ -1138,9 +1168,11 @@ private:
                         [&](const EnumCase& c) {
                             return c.name == alternative.substr(dot + 1);
                         });
-                    if (it == owner->cases.end() || it->has_payload)
+                    if (it == owner->cases.end()
+                            || (it->has_payload
+                                && it->payload.kind != MessageShape::Kind::Integer))
                         throw std::runtime_error(
-                            "LLVM tagged source subset requires payloadless cases");
+                            "LLVM tagged source subset requires payloadless or int cases");
                 }
                 const auto receiver = std::find_if(actor.methods.begin(),
                     actor.methods.end(), [](const Function& f) { return f.is_receiver; });
