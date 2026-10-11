@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--source-actor-runtime")
     parser.add_argument("--stderr")
     parser.add_argument("--stderr-count", type=int)
+    parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     compile_result = subprocess.run(
@@ -63,7 +64,8 @@ def main():
                                "-I", str(path.parents[2]), "-pthread"])
         if args.source_actor_runtime:
             path = pathlib.Path(args.source_actor_runtime)
-            clang_args.extend(["-x", "c", str(path), "-std=c11",
+            native_future = path.parent / "NativeActorFuture.c"
+            clang_args.extend(["-x", "c", str(path), str(native_future), "-std=c11",
                                "-DORESLANG_SOURCE_ACTOR_TESTING",
                                "-I", str(path.parents[2]), "-pthread"])
         if args.native_harness:
@@ -77,18 +79,23 @@ def main():
             capture_output=True, text=True, check=False, timeout=30
         )
         assert native.returncode == 0, native.stderr
-        result = subprocess.run(
-            [executable], capture_output=True, text=True, check=False, timeout=10
-        )
-        # The native platform truncates main's i64 return to its process exit code.
-        assert result.returncode == args.run, (
-            f"native exit {result.returncode}, expected {args.run}: {result.stderr}"
-        )
-        if args.stderr:
-            assert args.stderr in result.stderr, result.stderr
-        if args.stderr_count is not None:
-            assert args.stderr, "--stderr-count needs --stderr"
-            assert result.stderr.count(args.stderr) == args.stderr_count, result.stderr
+        assert 1 <= args.runs <= 100, "unreasonable repeat count"
+        for trial in range(args.runs):
+            result = subprocess.run(
+                [executable], capture_output=True, text=True, check=False, timeout=10
+            )
+            # The native platform truncates main's i64 return to its exit code.
+            assert result.returncode == args.run, (
+                f"trial {trial}: native exit {result.returncode}, "
+                f"expected {args.run}: {result.stderr}"
+            )
+            if args.stderr:
+                assert args.stderr in result.stderr, result.stderr
+            if args.stderr_count is not None:
+                assert args.stderr, "--stderr-count needs --stderr"
+                assert result.stderr.count(args.stderr) == args.stderr_count, (
+                    f"trial {trial}: {result.stderr}"
+                )
 
 
 if __name__ == "__main__":
