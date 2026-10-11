@@ -21,7 +21,8 @@ struct Router final : SupervisorControlTurn::Hooks {
     }
     SupervisorControlTurn::Decision on_panic(const SupervisorFailureLane::Failure&) override {
         ++panics;
-        return acknowledge ? Decision::Acknowledge : Decision::Escalate;
+        return acknowledge ? SupervisorControlTurn::Decision::Acknowledge
+                           : SupervisorControlTurn::Decision::Escalate;
     }
     SupervisorControlTurn::Decision on_cancel(const SupervisorFailureLane::Failure&) override {
         return SupervisorControlTurn::Decision::Escalate;
