@@ -86,3 +86,22 @@ participate in normal forward-data routing, and an ordinary actor's reply
 target is not automatically its supervising actor. Context code generation,
 bidirectional replies, terminal shutdown and hot reload are future
 runtime implementation gates, **not** proven by the admission test.
+
+## Executable host transport and code-revision milestones
+
+- `NativeActorPipeTransport.hpp` now creates a supervised ActorGroup before
+  publishing a fixed set of bounded forward message edges. Per-edge capacity,
+  bounded outstanding reader/writer waiters, a 1 MiB serialized-byte limit,
+  close/cancel failure of pending futures, and no separate carrier threads
+  are tested under strict native compilation and sanitizers.
+- `NativeSupervisorCodeSlot.hpp` pins an immutable policy code revision for
+  existing host CONTROL turns and atomically activates a subsequent revision
+  after checking the expected revision/ABI. Code image cleanup waits for the
+  final pin release. `NativeSupervisorRegistry` binds one slot to one
+  supervisor in its own runtime-affine domain; changing code does not
+  change child-parent registration or associated ActorGroups.
+- These are host/runtime foundations. They do NOT implement executable
+  source `define supervisor actor`, migration callbacks, pinned native
+  *guest* continuation frames, native source `pipe` execution, upstream
+  reply channels, or authentic cross-process proxy actors. Full CMake/CTest
+  and shared source conformance remain merge gates.
