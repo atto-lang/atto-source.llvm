@@ -1,0 +1,17 @@
+// await spawn is a readiness shorthand returning a still-owned ActorRef.
+define actor Counter as
+  let count: int = 5;
+  let offset: int = 7;
+  pub fnc add(int by): int {
+    self.count = self.count + by;
+    return self.count + self.offset;
+  }
+end
+
+fnc main(): int {
+  const worker = await spawn Counter();
+  const result: int = await worker.add(20);
+  worker.stop();
+  await worker.get_done();
+  return result;
+}
