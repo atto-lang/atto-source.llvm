@@ -160,6 +160,37 @@ int main() {
             process->undelivered() == 0 && process->healthy(),
           "native guest STOP failed exactly-once CONTROL commit");
 
+
+    // Compiled typed Failure STOP must preserve the actor incarnation and
+    // generation supplied by the trusted host notice, not synthesize or
+    // accept an arbitrary target chosen by guest source.
+    unsigned targeted_applied = 0;
+    auto targeted_process = oreslang::runtime::install_source_supervisor_stop(
+        with_failure, 97, 62, 2, enqueue,
+        [&](const oreslang::runtime::SupervisorProcess::Resolution& decision) {
+            check(decision.requested ==
+                      oreslang::runtime::SupervisorProcess::Directive::stop,
+                  "bound Failure did not lower to STOP");
+            check(decision.notice.actor_id == 19
+                      && decision.notice.generation == 7
+                      && decision.notice.supervisor_id == 97
+                      && decision.notice.runtime_id == 62,
+                  "typed Failure STOP changed the authorized incarnation");
+            ++targeted_applied;
+        });
+    targeted_process->accept(oreslang::runtime::SupervisorFailureNotice{
+        97, 62, 19, 7, std::nullopt, "bound typed failure",
+        ORES_NATIVE_CONTROL_PANIC, 38, 20261011});
+    while (!queued.empty()) {
+        check(++ticks < 60, "runaway typed Failure CONTROL");
+        auto task = std::move(queued.front());
+        queued.pop_front();
+        task();
+    }
+    check(targeted_applied == 1 && targeted_process->resolved() == 1
+              && targeted_process->undelivered() == 0,
+          "typed Failure STOP did not commit exactly once");
+
     // Cancellation is *not* silently treated as a panic STOP decision.
     auto cancelled = oreslang::runtime::install_source_supervisor_stop(
         source, 88, 43, 2, enqueue,
