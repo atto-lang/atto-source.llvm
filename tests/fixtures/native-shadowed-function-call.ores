@@ -1,0 +1,5 @@
+fnc owned(int value): int { return value; }
+pub fnc main(): int {
+  const owned: int = 21;
+  return owned(owned) + 21;
+}
