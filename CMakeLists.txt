@@ -55,6 +55,16 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
     oreslang_contract_test(source_value_match_ir value-match-return.ores --ir "dispatch.collected.value")
+    # Nested arm-local returns must merge into their lexical value dispatch,
+    # while an enclosing do arm still returns from the containing function.
+    oreslang_contract_test(source_nested_match_switch_ir value-match-nested-switch-return.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_do_switch_nested_value_ir do-switch-nested-value-return.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_return_do_match_nested_value_ir return-do-match-nested-value.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_nested_value_nonexhaustive reject-nested-value-nonexhaustive.ores
+        --diagnostic "non-exhaustive value match/switch")
     oreslang_contract_test(source_value_switch_ir value-switch-return.ores --ir "dispatch.collected.value")
     oreslang_contract_test(source_value_switch_default_before_cases_ir value-switch-default-first.ores
         --ir "dispatch.collected.value")
@@ -128,6 +138,12 @@ if(BUILD_TESTING)
 
     if(ORE_CLANG)
         oreslang_contract_test(native_exec_value_match_return value-match-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_nested_match_switch value-match-nested-switch-return.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_do_switch_nested_value do-switch-nested-value-return.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_return_do_match_nested_value return-do-match-nested-value.ores
+            --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_value_switch_return value-switch-return.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_value_match_capture value-match-capture.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_do_match_continue do-match-continue.ores --run 42 --clang "${ORE_CLANG}")
