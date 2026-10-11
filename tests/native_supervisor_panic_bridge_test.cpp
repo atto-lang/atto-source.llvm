@@ -337,6 +337,57 @@ int main() {
         control->close();
     }
 
+
+    // A thrown host CONTROL callback must retire every queued owned notice
+    // without replaying the handler or leaving a phantom pending event.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        auto lane = std::make_shared<oreslang::runtime::SupervisorFailureControl>(
+            3307, 3);
+        std::mutex gate_mutex;
+        std::condition_variable gate;
+        bool entered = false;
+        bool release = false;
+        std::atomic<unsigned> calls{0};
+        lane->install(
+            [&](const SupervisorFailureNotice&) {
+                ++calls;
+                std::unique_lock<std::mutex> lock(gate_mutex);
+                entered = true;
+                gate.notify_all();
+                if (!gate.wait_for(lock, 5s, [&] { return release; }))
+                    throw std::runtime_error("CONTROL test timed out");
+                throw std::runtime_error("CONTROL callback failed");
+            },
+            control->adapter());
+        lane->publish(SupervisorFailureNotice{
+            3307, 53, 1, 1, std::nullopt, "first failure"});
+        {
+            std::unique_lock<std::mutex> lock(gate_mutex);
+            check(gate.wait_for(lock, 5s, [&] { return entered; }),
+                  "CONTROL callback never started");
+        }
+        lane->publish(SupervisorFailureNotice{
+            3307, 53, 2, 1, std::nullopt, "pending failure"});
+        check(lane->pending() == 2, "queued CONTROL notices were not retained");
+        {
+            std::lock_guard<std::mutex> lock(gate_mutex);
+            release = true;
+        }
+        gate.notify_all();
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (lane->healthy() && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(calls.load() == 1, "failed CONTROL callback was replayed");
+        check(lane->undelivered() == 2 && lane->pending() == 0,
+              "failed CONTROL callback retained queued notice payloads");
+        lane->publish(SupervisorFailureNotice{
+            3307, 53, 3, 1, std::nullopt, "late failure"});
+        check(lane->undelivered() == 3 && lane->pending() == 0,
+              "late failure was accepted onto a permanently failed lane");
+        control->close();
+    }
+
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
               " await=1 replay=0 native_stop=1 throwing_self_close=1"
               " terminal_cleanup=1 suspended_close=1");
