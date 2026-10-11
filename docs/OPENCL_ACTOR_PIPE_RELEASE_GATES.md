@@ -10,8 +10,9 @@ host device access.
 
 The authoritative native group is **NativeActorGroup** in
 `src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp` on current main.
-The related CONTROL and bounded-port hardening is now draft PR **#97**:
-https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/97
+The per-actor DATA/CONTROL scheduler and typed port admission are in draft PR **#127**:
+https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/127
+PR #97 was closed. Current main contains the prior CONTROL/port substrate, but group-wide CONTROL serialization is no longer the intended runtime model.
 
 The earlier `ActorGroup.hpp` implementation in PR #54 was closed without
 merging and is NOT a supported integration target. Accelerator PR #83's
@@ -27,9 +28,14 @@ test was deleted.
 
 These runs compile exact mirrored source Git blobs on a funded organization,
 not cross-org private checkout with an insufficient GITHUB_TOKEN.
-The bounded three-stage execution is a **host integration/reference graph**.
-It is NOT source-level execution of `spawn CpuWorker() pipe spawn GpuWorker()
-pipe spawn CollectResultsWorker()` by the LLVM compiler.
+The new three-stage execution is a source-validated **restricted host graph**. The native compiler accepts a real Oreslang `.ores` fixture with declared StreamOperator ports, a typed GPU kernel and a source-level spawn/pipe expression, then dispatches predefined audited native actor implementations. It does **not** compile arbitrary actor method bodies or general guest-level actor effects.
+
+### Additional executed integration gates
+
+- [Java source-compiler parity](https://github.com/zed-pkg-test/java-app/actions/runs/38109615219): PASS on exact mirrored parser/compiler source and same .ores fixture; unrelated type-checker dependencies were test-stubbed.
+- [LLVM source-derived OpenCL graph](https://github.com/zed-pkg-test/java-app/actions/runs/38105846277): PASS using the actual Parser.cpp + OwnershipChecker.cpp translation units and real explicit CPU OpenCL ICD.
+- [Per-actor DATA/CONTROL scheduler with sanitizer stress](https://github.com/zed-pkg-test/java-app/actions/runs/38109985928): PASS, including typed mailbox-port admission, two-carrier actor separation and per-actor CONTROL priority.
+- [Source graph with distinct DATA payload and CONTROL completion](https://github.com/zed-pkg-test/java-app/actions/runs/38109891583): PASS on explicit CPU OpenCL. The latest typed port helper rerun remains a separate gate.
 
 ## Device and actor invariants
 
@@ -40,9 +46,7 @@ pipe spawn CollectResultsWorker()` by the LLVM compiler.
   output, and acknowledges quiescent release. The host reference wraps it in
   an async provider worker; it does not yet expose all device events as a
   production driver service.
-- Each actor has one reserved bounded CONTROL slot. Producer threads only
-  enqueue; scheduler-admitted CONTROL turns are logically single-flight
-  even when carrier threads change. Finalization cannot overtake active or
+- Each actor has a reserved bounded CONTROL slot. Device completion carriers enqueue; admitted CONTROL and DATA turns share one exclusive logical lane per actor. Different actors can run concurrently even within one ActorGroup. Finalization cannot overtake active or
   queued CONTROL. A dropped CONTROL on close is flagged to the supervisor.
 - The bounded native actor port moves ownership on admitted frames,
   retains ownership when full, and reserves frame and byte credit until
@@ -56,8 +60,7 @@ pipe spawn CollectResultsWorker()` by the LLVM compiler.
 
 ## Required release tests
 
-- [ ] Rebase accelerator #83 onto the authoritative current-main control and
-  port PR #97 when merged; ensure there is one native worker registry.
+- [ ] Integrate and review the native per-actor DATA/CONTROL scheduler from draft PR #127. Preserve the one authoritative NativeActorGroup registry.
 - [ ] Lower actual Oreslang GPU/quantum AST and typed actor stream operators
   through full native type and borrow checking, producing executable
   guest-level `CpuWorker pipe GpuWorker pipe CollectResultsWorker`.
@@ -74,5 +77,4 @@ pipe spawn CollectResultsWorker()` by the LLVM compiler.
   native gate map and measurement verification; the ideal simulator is not QPU
   validation.
 
-Keep accelerator PR #83 and NativeActorGroup PR #97 **draft** until these
-gates are satisfied and reviewed.
+Keep accelerator PR #83 and native scheduler PR #127 **draft** until the remaining compiler, hardware and release test gates are satisfied.
