@@ -1,5 +1,5 @@
-#include "oreslang/runtime/ActorGroup.hpp" // Authoritative PR #54 runtime
-#include "oreslang/runtime/BoundedActorPort.hpp" // PR #54 bounded transport
+#include "oreslang/runtime/ActorGroupLifecycle.hpp" // authoritative NativeActorGroup on current main
+#include "oreslang/runtime/BoundedActorPort.hpp" // current-main CONTROL/port PR #97
 #include "oreslang/runtime/GpuActorControlBridge.hpp"
 #include "oreslang/runtime/OpenClF32Device.hpp"
 
@@ -18,7 +18,7 @@
 #include <vector>
 
 using namespace oreslang;
-using Group = runtime::ActorGroup;
+using Group = runtime::NativeActorGroup;
 using Bridge = gpu::GpuActorControlBridge<Group>;
 
 struct CpuBatch {
@@ -96,10 +96,10 @@ int main() {
         dop::Kernel(layout, dop::Element::F32, dop::Op::ScaleBias, 2.0f, 1.0f),
         {64, 4096, 100, true});
     const auto bytes = static_cast<std::size_t>(kernel.required_bytes);
-    auto group = std::make_shared<Group>(3);
-    auto cpu = group->register_spawn([] {});
-    auto gpu_actor = group->register_spawn([] {});
-    auto collect = group->register_spawn([] {});
+    auto group = std::make_shared<Group>(1004, 3);
+    auto cpu = group->adopt(1004, 1, 1, [] {});
+    auto gpu_actor = group->adopt(1004, 2, 1, [] {});
+    auto collect = group->adopt(1004, 3, 1, [] {});
     assert(group->mark_ready(cpu));
     assert(group->mark_ready(gpu_actor));
     assert(group->mark_ready(collect));
