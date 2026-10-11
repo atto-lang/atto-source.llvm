@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -249,6 +250,31 @@ public:
             return receipt;
         receipt.status = StopReceiptStatus::uncertain;
         return receipt;
+    }
+
+    /**
+     * Reconcile an uncertain STOP ONLY after an independent authoritative
+     * host receipt check. No automatic retry and no rollback to FINALIZED.
+     * The verifier runs outside the registry lock. A stale/changed turn is
+     * rejected again under the lock before the disposition can commit.
+     */
+    bool reconcile_uncertain_stop(
+            ChildRef child, OresNativeActorRef actor,
+            std::uint64_t incarnation, std::uint64_t turn_generation,
+            const std::function<bool(const StopReceipt&)>& verify_applied) {
+        if (!verify_applied)
+            throw std::invalid_argument("missing independent STOP verifier");
+        const auto receipt = stop_receipt(child);
+        if (receipt.status != StopReceiptStatus::uncertain
+                || receipt.incarnation != incarnation
+                || receipt.turn_generation != turn_generation
+                || !same_actor(receipt.failed_actor, actor))
+            throw std::logic_error("foreign or non-uncertain STOP reconciliation");
+        if (!verify_applied(receipt))
+            return false;  // UNKNOWN remains quarantined; no state change.
+        record_stop_applied(child, actor, incarnation, turn_generation);
+        commit_stop(child, actor, incarnation, turn_generation);
+        return true;
     }
 
     Snapshot commit_stop(ChildRef child, OresNativeActorRef failed_actor,
