@@ -62,6 +62,17 @@ int main() {
         expect_rejected([&] { (void) outer.read(0); });
     }
     state.assert_can_suspend();
+    // A prematurely ended outer loan must not be resurrected after its
+    // nested view unwinds, even when cleanup is out of lexical order.
+    {
+        auto outer = state.borrow(first.token, turn);
+        auto nested = state.borrow(first.token, turn);
+        outer.close();
+        expect_rejected([&] { state.assert_can_suspend(); });
+        nested.close();
+        state.assert_can_suspend();
+        expect_rejected([&] { (void) outer.read(0); });
+    }
     ores_actor_arena_leave(arena, turn);
 
     check(gate.release(first.token) == second.token,
