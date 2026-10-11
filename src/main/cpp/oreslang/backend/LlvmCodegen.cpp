@@ -281,12 +281,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             }
         }
 
-        for (const auto& send : fn.actor_sends) {
-            llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations);
-            builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
+        // Emit observable actor effects in source order. Reordering all sends
+        // ahead of all stops incorrectly executes a stopped worker's messages.
+        for (const auto& action : fn.actor_actions) {
+            if (action.kind == ActorAction::Kind::Send) {
+                const auto& send = fn.actor_sends.at(action.index);
+                llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations);
+                builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
+            } else {
+                builder.CreateCall(sourceStop, {actorRefs.at(fn.actor_stops.at(action.index))});
+            }
         }
-        for (const auto& name : fn.actor_stops)
-            builder.CreateCall(sourceStop, {actorRefs.at(name)});
         // Each taken return terminates in its own reverse-order cleanup
         // block. All bindings were initialized before the first guard, so
         // every return owns the same lexical slots and native region.

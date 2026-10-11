@@ -61,6 +61,14 @@ struct ActorSend {
     std::unique_ptr<Expression> payload;
     std::size_t offset = 0;
 };
+// Preserve the sequence of source-visible actor effects. Separating sends
+// from stops changes program behavior and can hide use-after-stop errors.
+struct ActorAction {
+    enum class Kind { Send, Stop };
+    Kind kind;
+    std::size_t index = 0;
+};
+
 struct ActorFieldWrite {
     std::string field;
     std::unique_ptr<Expression> expression;
@@ -95,6 +103,7 @@ struct Function {
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
+    std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     std::unique_ptr<Expression> result;
