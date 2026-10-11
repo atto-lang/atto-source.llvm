@@ -20,6 +20,7 @@ int main() {
     std::vector<int> closed;
     registry.register_resource(Kind::socket, [&] {
         assert(registry.phase() == Phase::closing); // verifies no registry lock held
+        assert(registry.try_reclaim().status == Reclaim::closing);
         closed.push_back(1);
     });
     registry.register_resource(Kind::file, [&] {
@@ -101,4 +102,17 @@ int main() {
     assert(rejected);
     bounded.retire();
     assert(bounded.try_reclaim().status == Reclaim::complete);
+
+    ActorResourceRegistry tokenBound(18, 1, 1);
+    std::vector<ActorResourceRegistry::Ticket> outstanding;
+    outstanding.reserve(4096);
+    for (int i = 0; i < 4096; ++i) outstanding.push_back(tokenBound.acquire_loan());
+    rejected = false;
+    try { tokenBound.acquire_loan(); }
+    catch (const std::length_error&) { rejected = true; }
+    assert(rejected);
+    tokenBound.retire();
+    assert(tokenBound.try_reclaim().status == Reclaim::busy);
+    for (auto token : outstanding) tokenBound.release_loan(token);
+    assert(tokenBound.try_reclaim().status == Reclaim::complete);
 }
