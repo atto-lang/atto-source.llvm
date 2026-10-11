@@ -138,6 +138,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-logical-mutex-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-logical-mutex-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_mutex_fifo_and_cancellation COMMAND oreslang-logical-mutex-test)
+    # Control-plane exception policy; this does NOT implement guest exception lowering.
+    add_executable(oreslang-native-exception-policy-test tests/native_exception_policy_test.cpp)
+    target_include_directories(oreslang-native-exception-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-exception-policy-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_exception_failure_precedence_and_diagnostics
+             COMMAND oreslang-native-exception-policy-test)
     add_test(NAME native_reserved_java_keywords
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
