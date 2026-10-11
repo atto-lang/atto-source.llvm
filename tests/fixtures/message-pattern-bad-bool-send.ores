@@ -3,8 +3,8 @@ define actor Foo<messages=Signals> as
     receive(Message m) { }
 end
 pub fnc main(): int {
-    const actor = spawn Foo();
-    actor.send(42);
-    stop actor;
+    const worker = spawn Foo();
+    worker.send(42);
+    stop worker;
     return 43;
 }

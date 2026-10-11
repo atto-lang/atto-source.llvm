@@ -8,8 +8,8 @@ define actor Foo<messages=Patterns> as
     receive(Message m) { }
 end
 pub fnc main(): int {
-    const actor = spawn Foo();
-    actor.send(true);
-    stop actor;
+    const worker = spawn Foo();
+    worker.send(true);
+    stop worker;
     return 43;
 }
