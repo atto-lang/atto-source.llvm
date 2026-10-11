@@ -7,6 +7,12 @@
 #include <string_view>
 #include <vector>
 
+namespace oreslang::dop {
+class Plan;
+struct GpuTarget;
+struct OpenClArtifact;
+}
+
 namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
@@ -48,6 +54,13 @@ struct Program {
     std::string module;
     std::vector<Function> functions;
 };
+
+// Explicit, trusted compiler-only accelerator admission. These are not
+// LLVM guest-execution entry points. Source is lowered through the same
+// fail-closed typed accelerator frontend and requires target profiles.
+dop::OpenClArtifact compile_gpu_source(
+        std::string_view source, dop::Plan layout, dop::GpuTarget target);
+std::string compile_quantum_source_openqasm3(std::string_view source);
 
 // Parse and statically validate a strict Java-compatible subset: int functions,
 // int parameters, return expressions and same-module calls. Reject everything else.
