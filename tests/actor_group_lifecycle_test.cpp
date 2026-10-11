@@ -18,6 +18,32 @@ static void check(bool yes, const char* error) {
 
 int main() {
     {
+        // Inline CONTROL dispatch used to deadlock on the supervisor mutex
+        // and could execute policies on a failing child's physical carrier.
+        int callbacks = 0;
+        auto inline_enqueue = [](std::function<void()> work) {
+            work(); // invalid adapter: must be refused without deadlock
+            return true;
+        };
+        auto lane = std::make_shared<oreslang::runtime::SupervisorFailureControl>(2703, 2);
+        lane->install([&](const auto&) { ++callbacks; }, inline_enqueue);
+        lane->publish(oreslang::runtime::SupervisorFailureNotice{
+            2703, 2703, 1, 1, std::nullopt, "terminal"});
+        check(callbacks == 0 && !lane->healthy() && lane->undelivered() >= 1,
+              "inline supervisor CONTROL adapter was not rejected");
+        auto process = std::make_shared<oreslang::runtime::SupervisorProcess>(
+            2704, 2704, 2, inline_enqueue,
+            [&](const auto&) -> std::optional<oreslang::runtime::SupervisorProcess::Directive> {
+                ++callbacks;
+                return oreslang::runtime::SupervisorProcess::Directive::stop;
+            },
+            [&](const auto&) { ++callbacks; });
+        process->accept(oreslang::runtime::SupervisorFailureNotice{
+            2704, 2704, 1, 1, std::nullopt, "terminal"});
+        check(callbacks == 0 && !process->healthy() && process->undelivered() >= 1,
+              "inline supervisor process adapter ran guest policy");
+    }
+    {
         // A supervisor's physical carrier is released across an await-like
         // suspension, but its logical single-flight turn stays reserved.
         NativeActorGroup group(2701, 4);
@@ -69,12 +95,14 @@ int main() {
               "await released the exclusive logical supervisor lease");
         check(dispatcher.empty() && process->pending() == 2,
               "second supervisor policy was executed while first suspended");
-        check(process->resume(
+        const auto c_epoch = process->current_epoch();
+        check(c_epoch != 0, "supervisor callback did not record continuation epoch");
+        check(process->resume(c_epoch,
               oreslang::runtime::SupervisorProcess::Directive::escalate),
               "supervisor could not enqueue await continuation");
         // A resumed continuation is queued, not executed on foreign thread.
         check(decisions.empty(), "resume invoked supervisor sink inline");
-        check(!process->resume(
+        check(!process->resume(c_epoch,
               oreslang::runtime::SupervisorProcess::Directive::restart),
               "duplicate supervisor resume was admitted");
         run_one(); // C's continuation: sink and schedule D
