@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 namespace oreslang {
 
@@ -38,9 +39,16 @@ public:
         SubmitStatus status;
         std::optional<Lease> lease;
     };
+    struct QueuedEvent { Kind kind; std::uint64_t event_id; };
     struct FinishResult {
         bool accepted;
         std::optional<Lease> next;
+        // Scheduler must complete each dropped request/message with a failure.
+        std::deque<QueuedEvent> rejected;
+    };
+    struct StopResult {
+        std::optional<Lease> revoked;
+        std::deque<QueuedEvent> rejected;
     };
 
     explicit SerialActorLifetimeGate(
@@ -116,8 +124,9 @@ public:
         if (pending_.empty() || stopped_) return {true, std::nullopt};
         if (generation_ == std::numeric_limits<std::uint64_t>::max()) {
             stopped_ = true; // fail closed rather than wrap a trusted token
-            pending_.clear();
-            return {true, std::nullopt};
+            std::deque<QueuedEvent> rejected;
+            rejected.swap(pending_);
+            return {true, std::nullopt, std::move(rejected)};
         }
         const auto next = pending_.front();
         pending_.pop_front();
@@ -135,12 +144,19 @@ public:
         return true;
     }
 
-    void stop() {
+    /** Revokes all tickets and returns the pending identities so the
+     * supervisor can fail waiting HTTP requests and mailbox deliveries.
+     * Never invoke user callbacks while holding this bookkeeping lock. */
+    StopResult stop() {
         std::lock_guard<std::mutex> guard(lock_);
+        StopResult result;
+        if (stopped_) return result;
         stopped_ = true;
+        result.revoked = active_;
         active_.reset();
         suspended_ = false;
-        pending_.clear();
+        result.rejected.swap(pending_);
+        return result;
     }
 
     bool busy() const {
@@ -153,7 +169,7 @@ public:
     }
 
 private:
-    struct Pending { Kind kind; std::uint64_t event_id; };
+    using Pending = QueuedEvent;
     bool matches_locked(const Lease& lease) const noexcept {
         return !stopped_ && active_
                 && active_->actor_id == lease.actor_id
