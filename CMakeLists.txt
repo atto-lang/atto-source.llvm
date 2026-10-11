@@ -159,6 +159,19 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_pipeline_backward_unlowered
         source-actor-pipeline-backward-unavailable.ores
         --diagnostic "self.backward requires native pipeline routing lowering")
+    oreslang_contract_test(native_ir_three_actor_bidirectional_pipeline
+        source-actor-pipeline-bidirectional.ores
+        --ir "oreslang_source_actor_pipeline_emit_i64")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_three_actor_bidirectional_pipeline
+            source-actor-pipeline-bidirectional.ores
+            --run 43 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/OwnedI64Region.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19")
+    endif()
     oreslang_contract_test(source_actor_send_ir source-actor-send.ores
         --ir "oreslang_source_actor_send")
     oreslang_contract_test(source_actor_five_workers_ir source-actor-five-workers.ores
