@@ -1,0 +1,107 @@
+#include "oreslang/frontend/Parser.hpp"
+#include <cassert>
+#include <cstdint>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+static void rejects(std::string_view source, const std::string& phrase) {
+    try {
+        (void)oreslang::parse_program(source);
+    } catch (const std::runtime_error& error) {
+        if (std::string(error.what()).find(phrase) != std::string::npos) return;
+        std::cerr << "incorrect diagnostic: " << error.what()
+                  << " (wanted " << phrase << ")\n";
+        std::abort();
+    }
+    std::cerr << "invalid nominal message source unexpectedly accepted\n";
+    std::abort();
+}
+int main() {
+    using namespace oreslang;
+    auto p = parse_program(R"(
+        define pattern Commands as
+            Events.Compute
+            Events.Ping
+            Events.Stop
+        end
+        define enum Events as
+            Compute: Tuple[string, int]
+            Ping: string = 3
+            Stop = 10
+        end
+    )");
+    assert(p.enums.size() == 1 && p.tagged_patterns.size() == 1);
+    assert(p.enums.at(0).name == "Events");
+    assert(p.enums.at(0).cases.size() == 3);
+    assert(p.enums.at(0).cases.at(0).tag == 1);
+    assert(p.enums.at(0).cases.at(1).tag == 3);
+    assert(p.enums.at(0).cases.at(2).tag == 10);
+    assert(!p.enums.at(0).cases.at(2).has_payload);
+    assert(p.enums.at(0).cases.at(0).payload.kind == MessageShape::Kind::Tuple);
+    assert(p.enums.at(0).cases.at(0).payload.elements.size() == 2);
+    assert(p.tagged_patterns.at(0).alternatives.at(1) == "Events.Ping");
+
+    auto collection = parse_program(R"(
+        define enum Other as
+            Many: List[int]
+            Fixed: FixedArray[string, string, string]
+            More: Array[bool]
+            Items: FixedList[bool, int]
+        end
+        define pattern All as
+            Other.Many, Other.Fixed;
+            Other.More
+            Other.Items
+        end
+    )");
+    assert(collection.enums.size() == 1);
+    assert(collection.enums.at(0).cases.at(1).payload.kind == MessageShape::Kind::FixedArray);
+    assert(collection.enums.at(0).cases.at(3).payload.kind == MessageShape::Kind::FixedList);
+    assert(collection.tagged_patterns.at(0).alternatives.size() == 4);
+
+    rejects("define enum Bad as A: string = 2 B: string = 1 end",
+            "enum wire tags must increase monotonically");
+    rejects("define enum Bad as A: string = 0 end",
+            "enum wire tag must be a positive");
+    rejects("define enum Bad as A: string = 2147483648 end",
+            "enum wire tag must be a positive");
+    rejects("define enum Bad as A B A end", "duplicate enum case");
+    rejects("define enum Bad as A: List[bool, int] end",
+            "variable enum message collection must have exactly one element type");
+    rejects("define pattern Missing as Events.Nope end",
+            "unknown enum in tagged pattern");
+    rejects("define enum E as A end define pattern P as E.Missing end",
+            "unknown enum case in tagged pattern");
+    rejects("define enum E as A end define pattern P as E.A E.A end",
+            "duplicate pattern alternative");
+    rejects("define enum E as A end define pattern E as E.A end",
+            "duplicate enum/pattern declaration");
+    rejects(R"(
+        define enum E as A: string end
+        define pattern P as E.A end
+        define actor Worker<messages=P> as
+            receive(Message m) { }
+        end
+    )", "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+
+    // Existing bool-only actor receive semantics remain usable.
+    auto legacy = parse_program(R"(
+        declare type match Signals as bool end
+        define actor Worker<messages=Signals> as
+            let count: int = 0;
+            receive(Message m) {
+                match m {
+                    true => { count = count + 1; }
+                    false => { count = count + 2; }
+                }
+                return count;
+            }
+        end
+    )");
+    assert(legacy.message_patterns.size() == 1);
+    assert(legacy.actors.size() == 1);
+    std::cout << "NOMINAL_MESSAGE_PARSER_PASS enums=1 cases=3 tagged_patterns=1 "
+                 "legacy_bool=1 fail_closed_guest=1\n";
+}
