@@ -209,6 +209,52 @@ int main() {
     check(wins == 1 && rejects == 1,
           "STOP and RESTART simultaneously claimed the same native generation");
 
+    // A separate unresolved host STOP can be reconciled only by a
+    // trusted, independently checked outcome for the same CONTROL turn.
+    const OresNativeActorRef uncertain_actor{42, 93, 1};
+    const auto uncertain_child = registry.register_child(uncertain_actor);
+    registry.finalized(uncertain_child.child, uncertain_actor, 1);
+    registry.begin_stop(uncertain_child.child, uncertain_actor, 1, 72);
+    registry.record_stop_uncertain(uncertain_child.child, uncertain_actor, 1, 72);
+    unsigned proof_calls = 0;
+    const auto no_proof = [&](const SupervisorChildRegistry::StopReceipt& receipt) {
+        ++proof_calls;
+        return receipt.turn_generation == 0; // Host reports UNKNOWN.
+    };
+    check(!registry.reconcile_uncertain_stop(
+                uncertain_child.child, uncertain_actor, 1, 72, no_proof),
+          "UNKNOWN reconciliation was treated as committed STOP");
+    check(registry.snapshot(uncertain_child.child).phase
+                  == SupervisorChildRegistry::Phase::stopping
+              && registry.stop_receipt(uncertain_child.child).status
+                  == SupervisorChildRegistry::StopReceiptStatus::uncertain,
+          "unverified STOP reopened a quarantined generation");
+    must_reject([&] {
+        registry.reconcile_uncertain_stop(uncertain_child.child, uncertain_actor,
+            1, 73, [&](const SupervisorChildRegistry::StopReceipt&) {
+                ++proof_calls; return true;
+            });
+    });
+    check(proof_calls == 1, "forged turn invoked external STOP verifier");
+    const auto accepted_proof = [&](const SupervisorChildRegistry::StopReceipt& receipt) {
+        ++proof_calls;
+        return receipt.child == uncertain_child.child
+            && receipt.failed_actor.generation == uncertain_actor.generation
+            && receipt.incarnation == 1 && receipt.turn_generation == 72;
+    };
+    check(registry.reconcile_uncertain_stop(
+                uncertain_child.child, uncertain_actor, 1, 72, accepted_proof),
+          "independently acknowledged STOP did not reconcile");
+    check(registry.snapshot(uncertain_child.child).phase
+                  == SupervisorChildRegistry::Phase::stopped
+              && registry.stop_receipt(uncertain_child.child).status
+                  == SupervisorChildRegistry::StopReceiptStatus::acknowledged,
+          "reconciled native STOP lost terminal receipt");
+    must_reject([&] {
+        registry.reconcile_uncertain_stop(
+            uncertain_child.child, uncertain_actor, 1, 72, accepted_proof);
+    });
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
