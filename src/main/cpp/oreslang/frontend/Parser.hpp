@@ -72,6 +72,6 @@ struct Program {
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // exactly one-field i64 classes. No escaping class pointers, GC, or suspension.
-Program parse_program(std::string_view source);
+Program parse_program(std::string_view source, bool experimental_owned_int = false);
 
 } // namespace oreslang

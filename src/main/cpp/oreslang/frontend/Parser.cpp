@@ -42,7 +42,7 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "owned", "int"
+        "gpu", "quantum", "over", "structural", "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -115,7 +115,9 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
 
 class Parser {
 public:
-    explicit Parser(std::string_view source) : lexer_(source), token_(lexer_.next()) {}
+    explicit Parser(std::string_view source, bool experimental_owned_int)
+        : lexer_(source), token_(lexer_.next()),
+          experimental_owned_int_(experimental_owned_int) {}
 
     Program parse() {
         Program program;
@@ -234,7 +236,10 @@ private:
                 advance();
                 binding.name = identifier();
                 require(":");
-                binding.heap_owned = accept("owned");
+                if (token_.text == "owned" && !experimental_owned_int_) {
+                    fail("experimental owned int requires --experimental-owned-int");
+                }
+                binding.heap_owned = experimental_owned_int_ && accept("owned");
                 require("int");
                 require("=");
                 binding.initializer = expression();
@@ -502,12 +507,13 @@ private:
 
     Lexer lexer_;
     Token token_;
+    bool experimental_owned_int_;
 };
 
 } // namespace
 
-Program parse_program(std::string_view source) {
-    Program program = Parser(source).parse();
+Program parse_program(std::string_view source, bool experimental_owned_int) {
+    Program program = Parser(source, experimental_owned_int).parse();
     // LLVM lowering is prohibited unless the native subset has passed both
     // name/arity checking and flow-sensitive explicit ownership admission.
     validate_i64_ownership(program);
