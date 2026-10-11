@@ -15,7 +15,7 @@ PAIR = (
 POSITIVE = {
     "field-take-and-reinitialize-on-both-edges": PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (p.first eq 1) { p.first = rt take p.second; p.second = 40; }
   else { p.first = rt take p.second; p.second = 40; } fi
   return p.first + p.second;
@@ -27,7 +27,7 @@ fnc update(borrow mut Pair p, int flag): void {
   return;
 }
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   update(rt borrow mut p, 0);
   update(rt borrow mut p, 1);
   return p.first + p.second;
@@ -48,7 +48,7 @@ fnc dispatch(borrow mut Pair p, int n): void {
   return;
 }
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   dispatch(rt borrow mut p, 0);
   dispatch(rt borrow mut p, 1);
   return p.first + p.second;
@@ -65,7 +65,7 @@ fnc branch(borrow mut Pair p, int n): void {
   return;
 }
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   branch(rt borrow mut p, 0);
   return p.first + 31;
 }
@@ -75,7 +75,7 @@ pub fnc main(): int {
 NEGATIVE = {
     "divergent-field-move": (PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (p.first eq 1) { p.first = rt take p.second; }
   else { p.first = 41; } fi
   return p.first;
@@ -99,14 +99,14 @@ pub fnc main(): int {
 """, "native guarded condition must be pure"),
     "missing-else": (PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (1 eq 1) { p.first = 42; } fi
   return p.first;
 }
 """, "expected 'else'"),
     "branch-local-construction": (PAIR + """
 pub fnc main(): int {
-  if (1 eq 1) { let Pair p = new Pair(); } else { } fi
+  if (1 eq 1) { let mut Pair p = new Pair(); } else { } fi
   return 42;
 }
 """, "expected int expression"),
@@ -119,7 +119,7 @@ pub fnc main(): int {
 """, "expected int expression"),
     "branch-after-return-guard": (PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (0 eq 1) { return 0; } fi
   if (1 eq 1) { p.first = 4; } else { p.first = 5; } fi
   return 42;

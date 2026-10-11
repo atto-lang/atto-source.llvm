@@ -33,23 +33,23 @@ def main():
     successes = {
         "move-parenthesized": PAIR + """
 pub fnc main(): int {
-  let Pair source = new Pair();
-  let Pair dest = rt take(source);
+  let mut Pair source = new Pair();
+  let mut Pair dest = rt take(source);
   return dest.a + dest.b;
 }
 """,
         "move-unparenthesized": PAIR + """
 pub fnc main(): int {
-  let Pair source = new Pair();
-  let Pair dest = rt take source;
+  let mut Pair source = new Pair();
+  let mut Pair dest = rt take source;
   return dest.a + dest.b;
 }
 """,
         "multi-hop-move": PAIR + """
 pub fnc main(): int {
-  let Pair source = new Pair();
-  let Pair second = rt take(source);
-  let Pair third = rt take(second);
+  let mut Pair source = new Pair();
+  let mut Pair second = rt take(source);
+  let mut Pair third = rt take(second);
   return third.a + third.b;
 }
 """,
@@ -59,24 +59,24 @@ fnc plus_one(borrow mut Pair pair): void {
   return;
 }
 pub fnc main(): int {
-  let Pair source = new Pair();
-  let Pair dest = rt take(source);
+  let mut Pair source = new Pair();
+  let mut Pair dest = rt take(source);
   plus_one(rt borrow mut dest);
   return dest.a + dest.b - 1;
 }
 """,
         "guarded-move-taken": PAIR + """
 pub fnc main(): int {
-  let Pair first = new Pair();
-  let Pair second = rt take(first);
+  let mut Pair first = new Pair();
+  let mut Pair second = rt take(first);
   if (second.a == 13) { return second.b + 13; } fi
   return second.a + second.b;
 }
 """,
         "guarded-move-fallthrough": PAIR + """
 pub fnc main(): int {
-  let Pair first = new Pair();
-  let Pair second = rt take(first);
+  let mut Pair first = new Pair();
+  let mut Pair second = rt take(first);
   if (second.a eq 0) { return 0; } fi
   return second.a + second.b;
 }
@@ -84,8 +84,8 @@ pub fnc main(): int {
         "guarded-scalar-branch-move": PAIR + """
 pub fnc main(): int {
   const x: int = 42;
-  let Pair first = new Pair();
-  let Pair second = rt take(first);
+  let mut Pair first = new Pair();
+  let mut Pair second = rt take(first);
   if (second.a eq 13) { return rt take x; } fi
   return x;
 }
@@ -94,46 +94,46 @@ pub fnc main(): int {
     rejections = {
         "use-after-move": (PAIR + """
 pub fnc main(): int {
-  let Pair source = new Pair();
-  let Pair dest = rt take(source);
+  let mut Pair source = new Pair();
+  let mut Pair dest = rt take(source);
   return source.a + dest.b;
 }
 """, "ownership violation: use-after-move"),
         "double-move": (PAIR + """
 pub fnc main(): int {
-  let Pair source = new Pair();
-  let Pair dest = rt take(source);
-  let Pair again = rt take(source);
+  let mut Pair source = new Pair();
+  let mut Pair dest = rt take(source);
+  let mut Pair again = rt take(source);
   return dest.a + again.b;
 }
 """, "ownership violation: class move requires live unborrowed owner"),
         "wrong-type": (PAIR + OTHER + """
 pub fnc main(): int {
-  let Pair source = new Pair();
+  let mut Pair source = new Pair();
   let Other dest = rt take(source);
   return dest.a;
 }
 """, "ownership violation: class move type mismatch"),
         "borrowed-source": (PAIR + """
 fnc steal(borrow Pair source): int {
-  let Pair dest = rt take(source);
+  let mut Pair dest = rt take(source);
   return dest.a;
 }
 pub fnc main(): int {
-  let Pair source = new Pair();
+  let mut Pair source = new Pair();
   return steal(rt borrow source);
 }
 """, "ownership violation: class move requires live unborrowed owner"),
         "unknown-owner": (PAIR + """
 pub fnc main(): int {
-  let Pair dest = rt take(not_defined);
+  let mut Pair dest = rt take(not_defined);
   return dest.a;
 }
 """, "unknown class move source"),
         "implicit-copy": (PAIR + """
 pub fnc main(): int {
-  let Pair source = new Pair();
-  let Pair dest = source;
+  let mut Pair source = new Pair();
+  let mut Pair dest = source;
   return dest.a;
 }
 """, "expected 'rt'"),

@@ -38,6 +38,7 @@ struct LocalBinding {
     // Restricted local stack-only explicit class move.
     bool move_class = false;
     std::string move_source;
+    bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
     std::size_t offset = 0;
 };
