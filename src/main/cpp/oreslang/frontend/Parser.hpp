@@ -11,7 +11,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ActorField };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -39,13 +39,40 @@ struct Function {
     bool exported = false;
 };
 
+// Restricted actor field fragment: i64 fields and serial methods. No refs,
+// await, exceptions or constructor callbacks enter this grammar.
+struct ActorField {
+    std::string name;
+    std::unique_ptr<Expression> initializer;
+    std::size_t offset = 0;
+};
+struct ActorAssignment {
+    std::string field;
+    std::unique_ptr<Expression> value;
+    std::size_t offset = 0;
+};
+struct ActorMethod {
+    std::string name;
+    std::vector<std::string> parameters;
+    std::vector<ActorAssignment> assignments;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+};
+struct ActorDecl {
+    std::string name;
+    std::vector<ActorField> fields;
+    std::vector<ActorMethod> methods;
+    std::size_t offset = 0;
+};
+
 struct Program {
+    std::unique_ptr<ActorDecl> actor;
     std::string module;
     std::vector<Function> functions;
 };
 
-// Parse and statically validate a strict Java-compatible subset: int functions,
-// int parameters, return expressions and same-module calls. Reject everything else.
+// Parse and validate the strict i64 function and serial actor-field fragments.
+// Source cannot manufacture actor heap, turn epochs, or field-table pointers.
 Program parse_program(std::string_view source);
 
 } // namespace oreslang
