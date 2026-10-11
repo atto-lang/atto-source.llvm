@@ -92,7 +92,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=.").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -121,14 +121,23 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
-            require("module");
-            program.module = identifier();
-            accept("as"); // Both 'define module M as' and 'define module M' occur in Java.
-            wrapped_module = true;
+            if (accept("module")) {
+                program.module = identifier();
+                accept("as");
+                wrapped_module = true;
+            } else {
+                require("class");
+                program.classes.push_back(class_declaration());
+            }
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            program.functions.push_back(function());
+            if (accept("define")) {
+                require("class");
+                program.classes.push_back(class_declaration());
+            } else {
+                program.functions.push_back(function());
+            }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
@@ -138,6 +147,36 @@ public:
     }
 
 private:
+    ClassDecl class_declaration() {
+        ClassDecl result;
+        result.name = identifier();
+        require("as");
+        accept("pub");
+        require("let");
+        require("int");
+        result.field = identifier();
+        require("=");
+        if (token_.kind != Kind::Integer) fail("class field requires i64 literal initializer");
+        result.initial = integer_literal();
+        require(";");
+        require("end");
+        return result;
+    }
+
+    std::int64_t integer_literal() {
+        if (token_.kind != Kind::Integer) fail("expected integer literal");
+        std::string digits(token_.text);
+        if (digits.front() == '_' || digits.back() == '_' ||
+                digits.find("__") != std::string::npos) fail("malformed integer separator");
+        digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        std::int64_t value = 0;
+        const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+            fail("integer literal overflows signed 64-bit result");
+        advance();
+        return value;
+    }
+
     Function function() {
         Function value;
         value.offset = token_.offset;
@@ -165,30 +204,64 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                require("int");
+                if (!accept("int")) parameter.class_name = identifier();
                 parameter.name = identifier();
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
         }
         require(":");
-        require("int");
+        value.returns_void = accept("void");
+        if (!value.returns_void) require("int");
         require("{");
-        while (token_.text == "const" || token_.text == "val") {
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
             LocalBinding binding;
             binding.offset = token_.offset;
-            advance();
-            binding.name = identifier();
-            require(":");
-            binding.heap_owned = accept("owned");
-            require("int");
-            require("=");
-            binding.initializer = expression();
+            if (accept("let")) {
+                // Class construction is stack-only. No reference to an
+                // uninitialized, moved, or temporary class can escape.
+                binding.class_name = identifier();
+                binding.name = identifier();
+                require("=");
+                require("new");
+                const std::string ctor = identifier();
+                if (ctor != binding.class_name) fail("class constructor type mismatch");
+                require("(");
+                require(")");
+                binding.new_class = true;
+            } else {
+                advance();
+                binding.name = identifier();
+                require(":");
+                binding.heap_owned = accept("owned");
+                require("int");
+                require("=");
+                binding.initializer = expression();
+            }
             require(";");
             value.locals.push_back(std::move(binding));
         }
+        while (token_.text != "return") {
+            if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
+            Statement statement;
+            statement.offset = token_.offset;
+            auto action = primary();
+            if (action->kind == Expression::Kind::Field && accept("=")) {
+                statement.kind = Statement::Kind::FieldWrite;
+                statement.receiver = action->left->name;
+                statement.field = action->name;
+                statement.expression = expression();
+            } else if (action->kind == Expression::Kind::Call) {
+                statement.kind = Statement::Kind::Call;
+                statement.expression = std::move(action);
+            } else {
+                fail("expected class field assignment or function call statement");
+            }
+            require(";");
+            value.statements.push_back(std::move(statement));
+        }
         require("return");
-        value.result = expression();
+        if (!value.returns_void) value.result = expression();
         require(";");
         require("}");
         return value;
@@ -268,19 +341,7 @@ private:
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
-            std::string digits(token_.text);
-            if (digits.front() == '_' || digits.back() == '_'
-                    || digits.find("__") != std::string::npos) {
-                fail("malformed integer separator");
-            }
-            digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
-            const auto parsed = std::from_chars(digits.data(),
-                                                 digits.data() + digits.size(),
-                                                 expr->integer);
-            if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()) {
-                fail("integer literal overflows signed 64-bit result");
-            }
-            advance();
+            expr->integer = integer_literal();
             return expr;
         }
         if (token_.kind != Kind::Identifier || reserved(token_.text)) {
@@ -296,6 +357,11 @@ private:
                 } while (accept(","));
                 require(")");
             }
+        } else if (accept(".")) {
+            auto field = make_expression(Expression::Kind::Field, offset);
+            field->left = std::move(expr);
+            field->name = identifier();
+            expr = std::move(field);
         }
         return expr;
     }
@@ -330,6 +396,9 @@ private:
                                              + "' at byte " + std::to_string(expr.offset));
                 }
                 return;
+            case Expression::Kind::Field:
+                validate_expression(*expr.left, parameters, functions);
+                return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
                 if (found == functions.end() || found->second != expr.arguments.size()) {
@@ -361,6 +430,11 @@ private:
     }
 
     static void validate(const Program& program) {
+        std::unordered_set<std::string> classes;
+        for (const auto& cls : program.classes) {
+            if (!classes.insert(cls.name).second)
+                throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
+        }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
@@ -380,13 +454,25 @@ private:
             for (const auto& param : fn.parameters) params.insert(param.name);
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                validate_expression(*binding.initializer, params, functions);
+                if (binding.new_class) {
+                    if (classes.count(binding.class_name) == 0)
+                        throw std::runtime_error("unknown class '" + binding.class_name + "'");
+                } else {
+                    validate_expression(*binding.initializer, params, functions);
+                }
                 if (!params.insert(binding.name).second) {
                     throw std::runtime_error("duplicate owned local '" + binding.name
                         + "' at byte " + std::to_string(binding.offset));
                 }
             }
-            validate_expression(*fn.result, params, functions);
+            for (const auto& stmt : fn.statements) {
+                if (stmt.kind == Statement::Kind::FieldWrite) {
+                    if (!params.count(stmt.receiver))
+                        throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
+                }
+                validate_expression(*stmt.expression, params, functions);
+            }
+            if (fn.result) validate_expression(*fn.result, params, functions);
         }
     }
 
