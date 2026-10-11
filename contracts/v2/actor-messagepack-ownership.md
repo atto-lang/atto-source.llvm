@@ -99,6 +99,12 @@ MessagePack v2 encoded values but is NOT yet the production
 - **Float64/UTF-8**. Canonical scalar float64 encodes finite IEEE-754 binary64
   and rejects NaN/Infinity, just as both decoders reject malformed UTF-8 and
   noncanonical integer and collection headers.
+- **Bounded pre-admission allocations**. The native adapter reserves a
+  per-recipient in-flight DATA slot (queued, active, or preparing) before
+  allocating, snapshotting, hashing or decoding input. Failed validation and
+  rejected enqueue return the slot; admitted DATA returns its reservation only
+  after its receiver callback and owned-frame finalizer finish. Capacity
+  includes active turns, not merely pending queue entries.
 - **Lifecycle rule**. Contract registration is a trusted single-threaded
   construction phase, complete before concurrent actor send/spawn. Scheduler
   shutdown/final destruction additionally requires producer-fencing; source
