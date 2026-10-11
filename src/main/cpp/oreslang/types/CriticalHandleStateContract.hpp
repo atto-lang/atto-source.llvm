@@ -19,7 +19,8 @@ enum class CriticalStateAdmission : std::uint8_t {
     CallbackEscape,
     EffectExceedsUsing,
     LoanAcrossSuspension,
-    MissingContinuationFence
+    MissingContinuationFence,
+    ScopeDenied
 };
 
 struct CriticalStateCallback {
