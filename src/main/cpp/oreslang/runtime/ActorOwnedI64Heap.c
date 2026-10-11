@@ -293,3 +293,30 @@ void ores_actor_i64_fields_drop(
     memset(fields, 0, bytes);
     free(fields);
 }
+
+/* No raw heap or credentials are provided by source Oreslang programs.
+ * An admitted scheduler turn supplies the pointer and current epoch. */
+OresActorI64Fields* ores_actor_i64_fields_codegen_create(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        const int64_t* values, uint32_t count) {
+    OresActorTurn turn = {domain, epoch};
+    return ores_actor_i64_fields_create(heap, turn, values, count);
+}
+int64_t ores_actor_i64_fields_codegen_get(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        const OresActorI64Fields* fields, uint32_t index) {
+    OresActorTurn turn = {domain, epoch};
+    return ores_actor_i64_fields_get(heap, turn, fields, index);
+}
+void ores_actor_i64_fields_codegen_set(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        OresActorI64Fields* fields, uint32_t index, int64_t value) {
+    OresActorTurn turn = {domain, epoch};
+    ores_actor_i64_fields_set(heap, turn, fields, index, value);
+}
+void ores_actor_i64_fields_codegen_drop(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        OresActorI64Fields* fields) {
+    OresActorTurn turn = {domain, epoch};
+    ores_actor_i64_fields_drop(heap, turn, fields);
+}
