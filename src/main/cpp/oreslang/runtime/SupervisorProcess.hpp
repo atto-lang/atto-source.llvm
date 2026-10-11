@@ -70,8 +70,17 @@ public:
             ++undelivered_;
             throw std::logic_error("supervisor process cannot admit CONTROL");
         }
-        mailbox_.push_back(notice);
+        try {
+            mailbox_.push_back(notice);
+        } catch (...) {
+            // The rejected notice is separate from already queued notices.
+            ++undelivered_;
+            fail_locked();
+            throw;
+        }
         schedule_locked();
+        if (failed_)
+            throw std::logic_error("supervisor CONTROL dispatch failed during admission");
     }
 
     /**
