@@ -26,10 +26,7 @@ int main() {
     check(first.incarnation == 1
           && first.phase == SupervisorChildRegistry::Phase::active,
           "initial logical child incarnation missing");
-    must_reject([&] {
-        registry.replace(first.child, first_actor, 1,
-                         OresNativeActorRef{42, 9, 1});
-    });
+    must_reject([&] { registry.begin_restart(first.child, first_actor, 1); });
     must_reject([&] { registry.register_child(first_actor); });
     must_reject([&] {
         registry.finalized(first.child, OresNativeActorRef{42, 0, 2}, 1);
@@ -51,9 +48,16 @@ int main() {
     must_reject([&] { another_registry.snapshot(first.child); });
 
     registry.finalized(first.child, first_actor, 1);
-    must_reject([&] { registry.replace(first.child, first_actor, 1, first_actor); });
+    auto reservation = registry.begin_restart(first.child, first_actor, 1);
+    check(registry.snapshot(first.child).phase ==
+              SupervisorChildRegistry::Phase::restarting,
+          "begin_restart did not acquire exclusive lifecycle reservation");
+    must_reject([&] { registry.begin_restart(first.child, first_actor, 1); });
+    must_reject([&] { registry.stop(first.child, first_actor, 1); });
+    must_reject([&] { registry.replace(reservation, first_actor); });
     const auto next_actor = OresNativeActorRef{42, 5, 1};
-    auto second = registry.replace(first.child, first_actor, 1, next_actor);
+    auto second = registry.replace(reservation, next_actor);
+    must_reject([&] { registry.replace(reservation, OresNativeActorRef{42, 9, 1}); });
     check(second.child == first.child && second.incarnation == 2,
           "logical child identity did not survive native replacement");
     check(second.actor.actor_slot == 5 && second.actor.generation == 1,
@@ -63,10 +67,7 @@ int main() {
 
     registry.finalized(first.child, next_actor, 2);
     registry.stop(first.child, next_actor, 2);
-    must_reject([&] {
-        registry.replace(first.child, next_actor, 2,
-                         OresNativeActorRef{42, 6, 1});
-    });
+    must_reject([&] { registry.begin_restart(first.child, next_actor, 2); });
     registry.retire_stopped(first.child);
     check(registry.tracked_children() == 0,
           "stopped native child record leaked");
@@ -77,14 +78,23 @@ int main() {
     const auto before_actor = OresNativeActorRef{42, 7, 1};
     const auto before = registry.register_child(before_actor);
     registry.finalized(before.child, before_actor, 1);
+    // A failed spawn releases only the holder's permit. A stale permit
+    // cannot cancel or commit a newer reservation for the same generation.
+    const auto aborted = registry.begin_restart(before.child, before_actor, 1);
+    registry.abort_restart(aborted);
+    const auto current = registry.begin_restart(before.child, before_actor, 1);
+    check(current.nonce != aborted.nonce, "restart permit nonce was reused");
+    must_reject([&] { registry.abort_restart(aborted); });
+    must_reject([&] { registry.replace(aborted, OresNativeActorRef{42, 10, 1}); });
+    registry.abort_restart(current);
     std::atomic<int> wins{0};
     std::atomic<int> rejects{0};
     std::vector<std::thread> contenders;
     for (std::uint64_t i = 0; i < 2; ++i) {
         contenders.emplace_back([&, i] {
             try {
-                registry.replace(before.child, before_actor, 1,
-                                 OresNativeActorRef{42, 8 + i, 1});
+                auto claim = registry.begin_restart(before.child, before_actor, 1);
+                registry.replace(claim, OresNativeActorRef{42, 8 + i, 1});
                 ++wins;
             } catch (const std::exception&) {
                 ++rejects;
