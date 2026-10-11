@@ -29,6 +29,20 @@ static void run(void* raw, size_t actor, uint64_t msg) {
     atomic_fetch_add(&s->total, 1);
 }
 int main(void) {
+    /* Even a configured scheduler with actors is entirely thread-free before
+     * its first accepted runnable item. Retirement of a dormant scheduler
+     * joins zero workers and never needs a collector/sweeper thread. */
+    State dormant_state = {0};
+    OresNativeActorScheduler* dormant =
+        ores_native_actor_scheduler_open(2, 4, 8, run, &dormant_state);
+    check(dormant != NULL);
+    check(ores_native_actor_scheduler_started_workers(dormant) == 0);
+    OresNativeActorRef idle = ores_native_actor_scheduler_spawn(dormant, 0);
+    check(idle.scheduler_domain != 0);
+    check(ores_native_actor_scheduler_started_workers(dormant) == 0);
+    ores_native_actor_scheduler_retire(dormant);
+    check(ores_native_actor_scheduler_drain(dormant));
+    check(ores_native_actor_scheduler_try_destroy(dormant));
     State s = {0};
     OresNativeActorScheduler* scheduler =
         ores_native_actor_scheduler_open(ACTORS, EACH, 8, run, &s);
