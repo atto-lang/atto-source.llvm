@@ -38,7 +38,9 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop(
     return std::make_shared<SupervisorProcess>(
         supervisor_id, runtime_id, capacity,
         std::move(enqueue),
-        [supervisor_id, runtime_id](const SupervisorFailureNotice& notice)
+        [supervisor_id, runtime_id,
+         targets_logical_child = plan.targets_logical_child]
+         (const SupervisorFailureNotice& notice)
                 -> std::optional<SupervisorProcess::Directive> {
             if (notice.supervisor_id != supervisor_id
                     || notice.runtime_id != runtime_id
@@ -52,6 +54,12 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop(
             if (notice.native_terminal_kind != ORES_NATIVE_CONTROL_PANIC) {
                 throw std::invalid_argument(
                     "source STOP requires typed terminal PANIC envelope");
+            }
+            if (targets_logical_child
+                    && (!notice.logical_child_id
+                        || !notice.logical_incarnation)) {
+                throw std::invalid_argument(
+                    "source Failure.child STOP lacks verified logical child");
             }
             return SupervisorProcess::Directive::stop;
         },
