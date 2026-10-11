@@ -478,9 +478,18 @@ private:
                 Statement deferred;
                 deferred.kind = Statement::Kind::Defer;
                 deferred.offset = token_.offset;
-                deferred.expression = expression();
-                if (deferred.expression->kind != Expression::Kind::Call)
-                    fail("native defer requires a direct function call");
+                auto target = primary();
+                if (target->kind == Expression::Kind::Field && accept("=")) {
+                    if (!target->left || target->left->kind != Expression::Kind::Variable)
+                        fail("native deferred field assignment requires named class receiver");
+                    deferred.receiver = target->left->name;
+                    deferred.field = target->name;
+                    deferred.expression = expression();
+                } else if (target->kind == Expression::Kind::Call) {
+                    deferred.expression = std::move(target);
+                } else {
+                    fail("native defer requires a direct function call or class field assignment");
+                }
                 require(";");
                 value.statements.push_back(std::move(deferred));
                 continue;
@@ -785,7 +794,9 @@ private:
                         check_statement_names(action);
                     return;
                 }
-                if (stmt.kind == Statement::Kind::FieldWrite && !params.count(stmt.receiver))
+                if ((stmt.kind == Statement::Kind::FieldWrite ||
+                        (stmt.kind == Statement::Kind::Defer && !stmt.receiver.empty())) &&
+                        !params.count(stmt.receiver))
                     throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
                 validate_expression(*stmt.expression, params, functions);
             };

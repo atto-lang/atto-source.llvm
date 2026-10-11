@@ -112,6 +112,23 @@ if(BUILD_TESTING)
         --diagnostic "native defer requires a direct function call")
     oreslang_contract_test(reject_native_defer_moved_return native-defer-moved-after-return.ores
         --diagnostic "borrow of explicitly moved int")
+    # Native return snapshot is immutable under subsequent deferred field cleanup.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_defer_field_return_snapshot native-defer-field-return.ores
+            --ir "return.guard.eq" --run 222 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(reject_native_defer_field_shared_borrow
+        native-defer-field-shared-borrow-reject.ores
+        --diagnostic "cannot mutate through shared class borrow")
+    oreslang_contract_test(reject_native_defer_field_moved_return
+        native-defer-field-moved-after-return-reject.ores
+        --diagnostic "not definitely initialized")
+    oreslang_contract_test(reject_native_deferred_return_rebinding
+        native-defer-return-rebinding-reject.ores
+        --diagnostic "native defer requires a direct function call or class field assignment")
+    oreslang_contract_test(reject_native_finally_override
+        native-defer-finally-unsupported.ores
+        --diagnostic "native exception/control effect unsupported")
     # Native source if/else CFG: separate branch states must join safely.
     # Real Clang execution, ASan/UBSan and no-partial-IR rejection matrix.
     if(ORE_CLANG)

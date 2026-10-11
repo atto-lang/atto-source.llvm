@@ -320,7 +320,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             storage.emplace(binding.name, slot);
             lexical_slots.push_back({binding.name, slot, binding.heap_owned, 8});
         }
-        std::vector<const Expression*> deferred_calls;
+        std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
             if (effect.kind == Statement::Kind::FieldWrite) {
                 llvm::Value* updated = lower(*effect.expression, builder, i64,
@@ -335,7 +335,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         };
         for (const auto& stmt : fn.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
-                deferred_calls.push_back(stmt.expression.get());
+                deferred_effects.push_back(&stmt);
                 continue;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
@@ -383,8 +383,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         auto emit_cleanup_return = [&](llvm::Value* value) {
             // Evaluate deferred expressions at lexical exit, in reverse
             // registration order, before releasing their borrowed owners.
-            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
-                lower(**it, builder, i64, storage, field_storage, declarations, &region_moves);
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
+                const Statement& cleanup = **it;
+                if (cleanup.receiver.empty()) {
+                    lower(*cleanup.expression, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                } else {
+                    // The return value was evaluated into SSA before cleanup,
+                    // so modifying the referent cannot change its snapshot.
+                    llvm::Value* updated = lower(*cleanup.expression, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    builder.CreateStore(updated, field_storage.at(
+                        field_key(cleanup.receiver, cleanup.field)));
+                }
+            }
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
                 if (it->heap_owned) {
                     // Conditional native destruction is backed by an actual
