@@ -51,8 +51,8 @@ python3 contracts/v1/semantics/compare.py \
 ```
 
 **Current limitations:** no shared runtime value ABI beyond a small native
-process exit code; no validated Java native result adapter; no LLVM borrow
-checker; no automatic actor/preemption conformance yet. Proposed functionality
+process exit code; no validated Java native result adapter; LLVM has only a
+restricted i64 ownership checker; no automatic source-level actor/preemption conformance yet. Proposed functionality
 is recorded as pending instead of turned into false passing tests.
 
 Follow-up work: integer width/overflow specification, stable diagnostic IDs
@@ -81,6 +81,39 @@ These properties test the **backend-neutral trace validator** and a
 narrow integer arithmetic subset. They do not claim that compiled
 Oreslang actors already emit production traces, or that LLVM supports
 verified borrow/no-GC or Linux hard-realtime execution.
+
+
+## Exact-head, fail-closed fixture parity gate
+
+The default comparator is an **incremental conformance inventory check**. Its
+exit code is zero when required tests pass and declared pending tests remain
+pending; **it does not certify source, feature, runtime, or semantic parity**.
+Inspect `SUITE_COMPLETE=no` and `BACKEND_PENDING` in its summary.
+
+A release/merge job that intends to claim **full coverage of this fixture
+suite** must run the strict gate with independently verified commit hashes:
+
+```sh
+python3 contracts/v1/semantics/compare.py \
+  --llvm build/semantics-llvm.json \
+  --graal target/semantics-graal.json \
+  --llvm-revision "$LLVM_SOURCE_SHA" \
+  --graal-revision "$GRAAL_SOURCE_SHA" \
+  --require-suite-parity
+```
+
+The strict gate rejects any pending/failing/mismatched fixture, missing or
+fabricated diagnostic/native evidence, and reports for source commits other
+than the pinned heads. Both heads must be supplied; do not use arbitrary
+hard-coded revisions or presume the files correspond to a current branch.
+
+Even a passing **strict suite** covers only its enumerated fixtures. It must
+not be labeled *language-wide feature parity*, since actors, source-level
+supervision, asynchronous continuation frames, cancellation, select,
+untrusted-isolate boundaries, cyclic graphs and general heap ownership are
+not all represented by identical, end-to-end executable fixtures today.
+LLVM's small native i64 checker implements a subset of ownership operations,
+not general actor/heap/async borrow parity.
 
 ## Externally admitted actor messages
 
