@@ -180,6 +180,7 @@ Next ==
     \/ \E p \in Pools : SignalFromMaster(p) \/ DeliverWake(p) \/ AddWorker(p)
     \/ Shutdown
     \/ StopVM
+    \/ (vm = "Stopped" /\ UNCHANGED vars)
 
 TypeOK ==
     /\ vm \in {"New", "Running", "Stopping", "Stopped"}
