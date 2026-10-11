@@ -402,31 +402,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 builder.CreateCall(sourceStop, {actorRefs.at(fn.actor_stops.at(action.index))});
             }
         }
-        // Each taken return terminates in its own reverse-order cleanup
-        // block. All bindings were initialized before the first guard, so
-        // every return owns the same lexical slots and native region.
-        // Branch-local class creation / effectful conditions fail admission.
-        auto emit_cleanup_return = [&](llvm::Value* value) {
-            // Evaluate deferred expressions at lexical exit, in reverse
-            // registration order, before releasing their borrowed owners.
-            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
-                const Statement& cleanup = **it;
-                if (cleanup.receiver.empty()) {
-                    lower(*cleanup.expression, builder, i64, storage, field_storage,
-                        declarations, &region_moves);
-                } else {
-                    // The return value was evaluated into SSA before cleanup,
-                    // so modifying the referent cannot change its snapshot.
-                    llvm::Value* updated = lower(*cleanup.expression, builder, i64,
-                        storage, field_storage, declarations, &region_moves);
-                    builder.CreateStore(updated, field_storage.at(
-                        field_key(cleanup.receiver, cleanup.field)));
-                }
-            }
+        // One cleanup authority for every guarded-return path. A function
+        // with only its final return and no registered defer has exactly one
+        // exit by construction, so preserve its direct ret IR contract.
+        // That fast path still runs the same drop and lifetime cleanup.
+        auto emit_lexical_cleanup = [&]() {
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
                 if (it->heap_owned) {
-                    // Conditional native destruction is backed by an actual
-                    // i1 live flag: moved allocations have already dropped.
                     llvm::Value* flag = owned_live_flags.at(it->name);
                     llvm::Value* live = builder.CreateLoad(builder.getInt1Ty(), flag,
                         it->name + ".drop.if.live");
@@ -441,30 +423,68 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     builder.CreateBr(after_drop);
                     builder.SetInsertPoint(after_drop);
                 } else {
+                    // llvm.lifetime.end is not a source-level destructor.
                     builder.CreateLifetimeEnd(it->address,
                         llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
                 }
             }
             if (region != nullptr) builder.CreateCall(regionClose, {region});
-            if (fn.returns_void) builder.CreateRetVoid();
-            else builder.CreateRet(value);
         };
-        for (const auto& guard : fn.early_returns) {
-            llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage, declarations, &region_moves);
-            llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage, declarations, &region_moves);
-            llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
-            llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
-            llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
-            builder.CreateCondBr(equal, taken, next);
-            builder.SetInsertPoint(taken);
-            llvm::Value* selected = lower(*guard.result, builder, i64,
-                storage, field_storage, declarations, &region_moves);
-            emit_cleanup_return(selected);
-            builder.SetInsertPoint(next);
+        if (fn.early_returns.empty() && deferred_effects.empty()) {
+            // Maintain stable native IR (ret i64 42, for example) for
+            // functions without a multi-exit cleanup obligation.
+            llvm::Value* result = fn.result
+                ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves)
+                : nullptr;
+            emit_lexical_cleanup();
+            if (fn.returns_void) builder.CreateRetVoid();
+            else builder.CreateRet(result);
+        } else {
+            llvm::Value* return_snapshot = fn.returns_void
+                ? nullptr : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot");
+            llvm::BasicBlock* cleanup = llvm::BasicBlock::Create(
+                context, "exit.cleanup", function);
+            auto branch_to_cleanup = [&](llvm::Value* value) {
+                if (!fn.returns_void) builder.CreateStore(value, return_snapshot);
+                builder.CreateBr(cleanup);
+            };
+            for (const auto& guard : fn.early_returns) {
+                llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
+                    declarations, &region_moves);
+                llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
+                    declarations, &region_moves);
+                llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
+                llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
+                llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
+                builder.CreateCondBr(equal, taken, next);
+                builder.SetInsertPoint(taken);
+                llvm::Value* selected = lower(*guard.result, builder, i64,
+                    storage, field_storage, declarations, &region_moves);
+                branch_to_cleanup(selected);
+                builder.SetInsertPoint(next);
+            }
+            llvm::Value* result = fn.result
+                ? lower(*fn.result, builder, i64, storage, field_storage,
+                    declarations, &region_moves) : nullptr;
+            branch_to_cleanup(result);
+            builder.SetInsertPoint(cleanup);
+            // Capture the return before deferred calls can mutate class fields.
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
+                const Statement& effect = **it;
+                if (effect.receiver.empty()) {
+                    lower(*effect.expression, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                } else {
+                    llvm::Value* updated = lower(*effect.expression, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    builder.CreateStore(updated, field_storage.at(
+                        field_key(effect.receiver, effect.field)));
+                }
+            }
+            emit_lexical_cleanup();
+            if (fn.returns_void) builder.CreateRetVoid();
+            else builder.CreateRet(builder.CreateLoad(i64, return_snapshot, "return.snapshot"));
         }
-        llvm::Value* result = fn.result
-            ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
-        emit_cleanup_return(result);
     }
 
 
