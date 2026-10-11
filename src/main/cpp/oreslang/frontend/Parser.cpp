@@ -33,6 +33,7 @@ bool reserved(std::string_view name) {
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "generator",
+        "pipeline", "expect_pipeline",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -447,6 +448,15 @@ private:
             }
         }
         if (!actor_method) {
+            if (accept("pipeline")) {
+                require("(");
+                do { value.pipeline_actors.push_back(identifier()); }
+                while (accept(","));
+                require(")");
+                require(";");
+                if (value.pipeline_actors.size() != 3)
+                    fail("pipeline requires exactly source, transform, sink");
+            }
             if (accept("await")) {
                 value.ready_await_actor = identifier();
                 require(".");
@@ -486,6 +496,25 @@ private:
                 require(")");
                 require(";");
                 value.actor_sends.push_back(std::move(send));
+            }
+            if (accept("expect_pipeline")) {
+                require("(");
+                value.pipeline_expect_actor = identifier();
+                require(",");
+                if (token_.kind != Kind::Integer)
+                    fail("expect_pipeline needs nonnegative int literal");
+                std::string digits(token_.text);
+                if (digits.empty() || digits.front() == '_' || digits.back() == '_'
+                    || digits.find("__") != std::string::npos)
+                    fail("invalid expect_pipeline integer");
+                digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+                auto parsed = std::from_chars(digits.data(),
+                    digits.data() + digits.size(), value.pipeline_expect_value);
+                if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+                    fail("expect_pipeline expected int out of range");
+                advance();
+                require(")");
+                require(";");
             }
             while (accept("stop")) {
                 value.actor_stops.push_back(identifier());
@@ -535,6 +564,21 @@ private:
                         assignment.value = expression();
                         require(";");
                         arm.assignments.push_back(std::move(assignment));
+                    }
+                    if (accept("self")) {
+                        require(".");
+                        if (accept("forward")) arm.route_direction = "forward";
+                        else if (accept("backward")) arm.route_direction = "backward";
+                        else fail("unsupported self pipeline operation");
+                        require("(");
+                        arm.route_variant = identifier();
+                        require(".");
+                        arm.route_variant += "." + identifier();
+                        require("(");
+                        arm.route_payload = expression();
+                        require(")");
+                        require(")");
+                        require(";");
                     }
                     require("}");
                     value.tagged_arms.push_back(std::move(arm));
@@ -877,6 +921,35 @@ private:
                     throw std::runtime_error(
                         "await get_ready requires one source actor without suspended locals");
             }
+            if (!fn.pipeline_actors.empty()) {
+                if (fn.name != "main" || !fn.parameters.empty()
+                    || fn.pipeline_actors.size() != 3 || !fn.ready_await_actor.empty())
+                    throw std::runtime_error("pipeline requires zero-argument main without ready await");
+                std::unordered_set<std::string> unique;
+                std::string contract;
+                for (const auto& refName : fn.pipeline_actors) {
+                    if (!unique.insert(refName).second || !actorTypes.count(refName))
+                        throw std::runtime_error("pipeline actor ref missing or repeated");
+                    const auto found = std::find_if(program.actors.begin(), program.actors.end(),
+                        [&](const Actor& a) { return a.name == actorTypes.at(refName); });
+                    if (found == program.actors.end() || !typedDomains.count(found->messages_type))
+                        throw std::runtime_error("pipeline actors require nominal typed mailbox");
+                    if (contract.empty()) contract = found->messages_type;
+                    else if (contract != found->messages_type)
+                        throw std::runtime_error("pipeline actor message domains must match");
+                }
+                if (fn.pipeline_expect_actor != fn.pipeline_actors.front())
+                    throw std::runtime_error("expect_pipeline must name pipeline source");
+                if (fn.actor_sends.size() != 1
+                    || fn.actor_sends.front().reference != fn.pipeline_actors.front()
+                    || fn.actor_stops.size() != 3)
+                    throw std::runtime_error("pipeline requires one source send and three stops");
+                for (const auto& refName : fn.pipeline_actors)
+                    if (std::count(fn.actor_stops.begin(), fn.actor_stops.end(), refName) != 1)
+                        throw std::runtime_error("pipeline must stop each connected actor");
+            } else if (!fn.pipeline_expect_actor.empty()) {
+                throw std::runtime_error("expect_pipeline requires declared pipeline");
+            }
             // Actor references cannot be cast to i64 or used as scalar values.
             for (const auto& actor : liveActors) available.erase(actor);
             for (const auto& local : fn.locals) {
@@ -1110,6 +1183,23 @@ private:
                                     throw std::runtime_error(
                                         "tagged match arm Message payload binding is not narrowed");
                                 validate_expression(*assignment.value, armAvailable, functions);
+                            }
+                            if (!arm.route_direction.empty()) {
+                                if (!arm.route_payload || arm.tuple_destructure)
+                                    throw std::runtime_error("pipeline route requires scalar payload expression");
+                                if (arm.route_variant.find('.') == std::string::npos
+                                        || !allowed.count(arm.route_variant))
+                                    throw std::runtime_error("pipeline route outside nominal message contract");
+                                const auto output = enumNames.at(arm.route_variant.substr(0,
+                                    arm.route_variant.find('.')));
+                                const auto outputCase = std::find_if(output->cases.begin(),
+                                    output->cases.end(), [&](const EnumCase& c) {
+                                        return c.name == arm.route_variant.substr(
+                                            arm.route_variant.find('.') + 1); });
+                                if (outputCase == output->cases.end() || !outputCase->has_payload
+                                    || outputCase->payload.kind != MessageShape::Kind::Integer)
+                                    throw std::runtime_error("pipeline route requires typed int enum case");
+                                validate_expression(*arm.route_payload, armAvailable, functions);
                             }
                             if (arm.binds_payload) {
                                 if (!matched->has_payload)
