@@ -71,8 +71,14 @@ public:
     WorkerRef spawn(std::uint64_t actor_id, std::uint64_t generation,
                     std::uint64_t slots, NativeActorFieldEntrypoints descriptor) {
         std::weak_ptr<NativeActorScheduledGroup> weak = shared_from_this();
-        auto heap = group_.spawn(actor_id, generation, slots, descriptor,
-            [weak] { if (auto owner = weak.lock()) owner->request_control(); });
+        std::shared_ptr<NativeActorHeapWorker> heap;
+        {
+            // NativeActorOwnedHeapGroup maintains a vector of source workers.
+            // Its admission and CONTROL iteration must share this lock.
+            std::lock_guard<std::mutex> guard(group_mutex_);
+            heap = group_.spawn(actor_id, generation, slots, descriptor,
+                [weak] { if (auto owner = weak.lock()) owner->request_control(); });
+        }
         auto lane = std::make_shared<ActorExclusiveScheduler>(
             mailbox_capacity_, executor_, [weak, worker = std::weak_ptr<NativeActorHeapWorker>(heap)] {
                 if (auto owned = worker.lock()) owned->request_panic();
@@ -173,7 +179,10 @@ public:
             child->lane->close();
             child->heap_owner->request_cancel();
         }
-        group_.close();
+        {
+            std::lock_guard<std::mutex> guard(group_mutex_);
+            group_.close();
+        }
         request_control();
     }
 
@@ -228,7 +237,10 @@ private:
 
     void process_control() {
         // Never block parent CONTROL behind a running child turn.
-        finalized_.fetch_add(group_.drain_control(), std::memory_order_acq_rel);
+        {
+            std::lock_guard<std::mutex> guard(group_mutex_);
+            finalized_.fetch_add(group_.drain_control(), std::memory_order_acq_rel);
+        }
         std::deque<Task> pending;
         std::vector<DoneObserver> terminal;
         {
@@ -258,6 +270,7 @@ private:
     }
 
     NativeActorOwnedHeapGroup group_;
+    mutable std::mutex group_mutex_;
     const std::size_t mailbox_capacity_;
     const Executor executor_;
     const std::shared_ptr<ActorExclusiveScheduler> parent_lane_;
