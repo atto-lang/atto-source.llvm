@@ -1,0 +1,12 @@
+// return do must terminate; its nested switch collects a value locally.
+pub fnc main(): int {
+  return do match 1 over
+    on 1 {
+      return switch 2
+        case 2 { return 42; };
+        default { return 0; };
+      end;
+    };
+    on _ { return 1; };
+  end
+}
