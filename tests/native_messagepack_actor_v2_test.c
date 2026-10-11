@@ -84,6 +84,10 @@ int main(void) {
         ores_mp2_owned_release(&owned);
         assert(!owned.bytes && !owned.size);
         assert(!ores_mp2_validate_copy(&schemas[i], wire[i], sizes[i] - 1, &owned));
+        OresMp2Contract mismatch = schemas[i];
+        mismatch.shape = "I";
+        if (strcmp(golden[i].shape, "I") != 0)
+            assert(!ores_mp2_validate_copy(&mismatch, wire[i], sizes[i], &owned));
         uint8_t corrupted[1024];
         memcpy(corrupted, wire[i], sizes[i]);
         corrupted[1] = 1; /* v1 is not accepted under v2 */
@@ -102,7 +106,30 @@ int main(void) {
     memcpy(state.expected[1], wire[5], sizes[5]);
     OresMp2ActorGroup* group = ores_mp2_group_open(2, 1, 2, on_message, &state);
     assert(group);
-    assert(ores_mp2_group_contract(group, 0, schemas[0]));
+    /* Hash must be derived from the pinned shape, not blindly trusted
+     * just because a host pointer or MessagePack frame supplies 32 bytes.
+     */
+    OresMp2Contract forged_shape = schemas[0];
+    forged_shape.shape = "I";
+    assert(!ores_mp2_group_contract(group, 0, forged_shape));
+    uint8_t wrong_hash[32];
+    memcpy(wrong_hash, schemas[0].shape_sha256, 32);
+    wrong_hash[0] ^= 0x80;
+    OresMp2Contract forged_hash = schemas[0];
+    forged_hash.shape_sha256 = wrong_hash;
+    assert(!ores_mp2_group_contract(group, 0, forged_hash));
+    /* Contract registration deep-copies mutable caller buffers. */
+    char mutable_schema[256];
+    char mutable_shape[128];
+    uint8_t mutable_hash[32];
+    strcpy(mutable_schema, schemas[0].schema_id);
+    strcpy(mutable_shape, schemas[0].shape);
+    memcpy(mutable_hash, schemas[0].shape_sha256, 32);
+    OresMp2Contract borrowed = {mutable_schema, mutable_shape, mutable_hash};
+    assert(ores_mp2_group_contract(group, 0, borrowed));
+    memset(mutable_schema, 'x', strlen(mutable_schema));
+    memset(mutable_shape, 'x', strlen(mutable_shape));
+    memset(mutable_hash, 0, 32);
     assert(!ores_mp2_group_contract(group, 0, schemas[0]));
     assert(ores_mp2_group_contract(group, 1, schemas[5]));
     OresMp2ActorRef a = ores_mp2_group_spawn(group, 0);
