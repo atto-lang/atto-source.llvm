@@ -1,0 +1,11 @@
+// Outer fallback cannot rescue the missing coverage of an inner value switch.
+pub fnc main(): int {
+  return match 1 over
+    on 1 {
+      return switch 2
+        case 2 { return 42; };
+      end;
+    };
+    on _ { return 0; };
+  end
+}
