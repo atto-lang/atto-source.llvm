@@ -88,9 +88,11 @@ RUNNING → QUIESCING → TEARING_DOWN → RETIRING → FINALIZED
 2. Stop or cancel descendants under structured ownership. Cancel pending
    timers, channel/select waiters and async/FFI continuation tickets. Await
    currently admitted turn to relinquish the exclusive logical lane.
-3. On **graceful** stop only, run `tear_down` at most once as a special
-   lifecycle CONTROL turn with restricted access to still-live resources.
-   Permit bounded asynchronous close/flush via nonblocking await; yielding
+3. On **graceful** stop, or after an unhandled THROW/RAISE when actor
+   state and cleanup invariants remain provably valid, run `tear_down` at most
+   once as a special lifecycle CONTROL turn with restricted access to still-live
+   resources. Skip guest teardown for panic, forcibly terminated or corrupted
+   state. Permit bounded asynchronous close/flush via nonblocking await; yielding
    relinquishes the lane and resumption must reacquire a scheduler ticket.
    No new actor spawns, mailbox reopens, state-loan escapes, or arbitrary
    unbounded resource allocations during teardown.
