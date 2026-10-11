@@ -64,6 +64,9 @@ struct Function {
     std::vector<LocalBinding> locals;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
+    // Restricted initial compiler continuation: await ref.get_ready()
+    // directly after spawning actors, before messages or cleanup.
+    std::string ready_await_actor;
     std::vector<std::string> actor_stops;
     std::vector<FieldAssignment> assignments;
     std::unique_ptr<Expression> result;

@@ -257,6 +257,14 @@ private:
             }
         }
         if (!actor_method) {
+            if (accept("await")) {
+                value.ready_await_actor = identifier();
+                require(".");
+                require("get_ready");
+                require("(");
+                require(")");
+                require(";");
+            }
             while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
                 ActorSend send;
                 send.offset = token_.offset;
@@ -451,7 +459,8 @@ private:
         for (const auto& fn : program.functions) {
             std::unordered_set<std::string> available(fn.parameters.begin(),
                                                       fn.parameters.end());
-            if (!fn.actor_spawns.empty() || !fn.actor_stops.empty()) {
+            if (!fn.actor_spawns.empty() || !fn.actor_stops.empty()
+                || !fn.ready_await_actor.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty())
                     throw std::runtime_error("source actor spawn requires zero-argument main");
             }
@@ -464,6 +473,15 @@ private:
                     !available.insert(spawn.name).second)
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
                 actorTypes.emplace(spawn.name, spawn.actor_type);
+            }
+            if (!fn.ready_await_actor.empty()) {
+                // First source continuation prototype intentionally supports
+                // a single linear ActorRef, no scalar locals across yield,
+                // and deterministic trusted-main teardown after resumption.
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty() ||
+                    !liveActors.count(fn.ready_await_actor))
+                    throw std::runtime_error(
+                        "await get_ready requires one source actor without suspended locals");
             }
             // Actor references cannot be cast to i64 or used as scalar values.
             for (const auto& actor : liveActors) available.erase(actor);
