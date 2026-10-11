@@ -51,6 +51,10 @@ int main() {
             ++late_failure;
         });
         check(late_failure == 1, "failed actor readiness ticket lost on retirement");
+        bool failed_done = false;
+        try { next.get_done().get(); }
+        catch (const std::runtime_error&) { failed_done = true; }
+        check(failed_done, "startup failure must fail done on physical retirement");
         group.close();
         check(stop_count == 1, "group close must stop owned worker exactly once");
         check(group.worker_count() == 0, "closed group retained strong worker refs");
@@ -133,7 +137,14 @@ int main() {
             check(ref.get_done().wait_for(0ms) == std::future_status::timeout,
                   "close/start race fabricated terminal done");
             check(group.finalized(ref), "close/start race lost terminal ack");
-            ref.get_done().get();
+            bool failed_start = false;
+            try { ref.get_ready().get(); }
+            catch (const std::runtime_error&) { failed_start = true; }
+            bool failed_done = false;
+            try { ref.get_done().get(); }
+            catch (const std::runtime_error&) { failed_done = true; }
+            check(failed_start == failed_done,
+                  "close/start race lost terminal failure correspondence");
         }
     }
     {
@@ -271,6 +282,20 @@ int main() {
                   "close/finalize race left done unresolved");
             check(!group.finalized(ref), "close/finalize race admitted duplicate");
         }
+    }
+    {
+        // A failure before on_start completion has a failed done, even when
+        // a host finalizer reports physical quiescence without extra error.
+        NativeActorGroup group(994, 1);
+        auto ref = group.adopt(994, 3, 1, [] {});
+        check(group.finalized(ref), "pre-ready physical acknowledgment missing");
+        bool ready_failed = false, done_failed = false;
+        try { ref.get_ready().get(); }
+        catch (const std::runtime_error&) { ready_failed = true; }
+        try { ref.get_done().get(); }
+        catch (const std::runtime_error&) { done_failed = true; }
+        check(ready_failed && done_failed,
+              "uninitialized actor must fail both ready and done");
     }
 
 }
