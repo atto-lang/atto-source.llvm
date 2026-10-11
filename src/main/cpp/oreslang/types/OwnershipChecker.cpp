@@ -82,6 +82,12 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (exclusive && source.mode == Mode::Value &&
             !source.class_name.empty() && !source.mutable_owner)
         reject(expr, "cannot mutably borrow immutable owner '" + expr.left->name + "'");
+    // The new native heap ABI stores a generation-tagged value handle,
+    // not an i64* borrowed payload. Until a validated loan-view ABI exists,
+    // passing its handle slot as borrow int would be type-correct LLVM but
+    // semantically unsafe. Fail closed before any IR is emitted.
+    if (source.heap_owned)
+        reject(expr, "ownership violation: native owned int borrow requires handle loan lowering");
     if (source.moved)
         reject(expr, (source.class_name.empty()
             ? "borrow of explicitly moved int '" : "ownership violation: borrow of moved class '")
