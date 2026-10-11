@@ -14,6 +14,20 @@
 #define SOURCE_GROUP_MAILBOX 128u
 #define SOURCE_GROUP_ROOT_SLOT (SOURCE_GROUP_SLOTS - 1u)
 
+#define SOURCE_MAX_VARIANTS 64u
+
+typedef struct {
+    OresMp2Contract value;
+    char* owned_schema;
+    char* owned_shape;
+    uint8_t sha[32];
+} SourceVariantContract;
+
+typedef struct {
+    OresMp2Owned packet;
+    size_t variant_index;
+} SourceWireDelivery;
+
 typedef struct {
     uint64_t magic;
     uint64_t id;
@@ -22,10 +36,9 @@ typedef struct {
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
     OresSourceActorWireMessage on_wire;
-    OresMp2Contract wire_contract;
-    char* owned_schema;
-    char* owned_shape;
-    uint8_t wire_sha[32];
+    OresSourceActorVariantMessage on_variant;
+    SourceVariantContract* variants;
+    size_t variant_count;
     atomic_size_t wire_reserved;
     atomic_int initialized;
     atomic_uint_fast64_t processed;
@@ -125,17 +138,26 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 static void deliver(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group);
     SourceActor* instance = lookup(slot);
-    ensure((instance->on_message != NULL) != (instance->on_wire != NULL));
+    ensure((instance->on_message != NULL)
+        + (instance->on_wire != NULL) + (instance->on_variant != NULL) == 1);
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     int64_t result;
-    if (instance->on_wire) {
-        OresMp2Owned* accepted = (OresMp2Owned*)(uintptr_t)payload;
-        ensure(accepted && accepted->bytes && accepted->size);
-        result = instance->on_wire(instance->heap, turn.domain, turn.epoch,
-                                   accepted->bytes, accepted->size);
+    if (instance->on_wire || instance->on_variant) {
+        SourceWireDelivery* accepted = (SourceWireDelivery*)(uintptr_t)payload;
+        ensure(accepted && accepted->packet.bytes && accepted->packet.size);
+        ensure(accepted->variant_index < instance->variant_count);
+        if (instance->on_variant) {
+            result = instance->on_variant(instance->heap, turn.domain, turn.epoch,
+                    accepted->variant_index, accepted->packet.bytes,
+                    accepted->packet.size);
+        } else {
+            ensure(accepted->variant_index == 0 && instance->variant_count == 1);
+            result = instance->on_wire(instance->heap, turn.domain, turn.epoch,
+                    accepted->packet.bytes, accepted->packet.size);
+        }
         ores_actor_i64_heap_leave(instance->heap, turn);
-        ores_mp2_owned_release(accepted);
+        ores_mp2_owned_release(&accepted->packet);
         free(accepted);
         size_t before = atomic_fetch_sub_explicit(
             &instance->wire_reserved, 1, memory_order_acq_rel);
