@@ -68,6 +68,8 @@ if(BUILD_TESTING)
         --diagnostic "duplicate dispatch integer case")
     oreslang_contract_test(reject_value_switch_duplicate_default value-switch-duplicate-default.ores
         --diagnostic "duplicate switch default")
+    oreslang_contract_test(reject_unsupported_finally_source unsupported-finally-source.ores
+        --diagnostic "expected 'return' or a supported 'do match/switch' statement")
     oreslang_contract_test(source_actor_field_ir actor-fields-counter.ores --ir "ores_actor_i64_fields_codegen_set")
     oreslang_contract_test(source_actor_union_receive_ir actor-message-union.ores --ir "message_reset")
     oreslang_contract_test(reject_actor_union_nonexhaustive actor-message-union-missing-arm.ores
