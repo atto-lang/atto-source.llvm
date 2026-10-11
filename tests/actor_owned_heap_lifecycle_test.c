@@ -80,7 +80,7 @@ static int second_carrier(void* argument) {
 
 int main(void) {
     /* One actor heap survives between logical turns and native carriers. */
-    OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
+    OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 6);
     OresActorTurn first = ores_actor_i64_heap_enter(heap, 29, 7);
     OresActorSlot saved = ores_actor_i64_heap_new(heap, first, 40);
     CHECK(ores_actor_i64_heap_read(heap, first, saved) == 40);
