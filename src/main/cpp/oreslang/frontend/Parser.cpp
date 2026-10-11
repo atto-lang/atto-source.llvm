@@ -41,7 +41,7 @@ bool reserved(std::string_view name) {
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
-        "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
+        "nlex", "trap", "actor", "isoactor", "def", "fnc", "method", "routine",
         "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
@@ -191,7 +191,13 @@ private:
         method.offset = token_.offset;
         method.exported = accept("pub");
         if (!method.exported) fail("native actor requires pub on_message(int)");
-        require("fnc");
+        // Match the Java frontend's declaration spelling contract. The native
+        // actor subset still lowers only on_message(int) and cannot admit
+        // arbitrary methods, static fnc members or suspension frames.
+        if (token_.text == "suspend" || token_.text == "suspends") {
+            fail("native suspends actor method requires continuation lowering");
+        }
+        accept("fnc") || accept("method"); // optional method marker
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
