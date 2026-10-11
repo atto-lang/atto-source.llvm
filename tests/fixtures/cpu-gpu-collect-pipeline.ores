@@ -1,0 +1,23 @@
+// Narrow host-runtime executable actor stream profile.
+// Typed source is admitted by compile_pipeline_source(), NOT the general i64
+// guest compiler. The named actor implementations are audited host adapters.
+// Real actor method bodies and arbitrary host effects remain fail closed.
+
+define actor CpuWorker implements StreamOperator<void, f32> as
+end
+
+define actor GpuWorker implements StreamOperator<f32, f32> as
+end
+
+define actor CollectResultsWorker implements StreamOperator<f32, Results> as
+end
+
+gpu fnc transform(f32 value): f32 {
+    return value * 2.0 + 1.0;
+}
+
+pub fnc do_work(): ActorStream<void, Results> {
+    return spawn CpuWorker()
+        pipe spawn GpuWorker()
+        pipe spawn CollectResultsWorker();
+}
