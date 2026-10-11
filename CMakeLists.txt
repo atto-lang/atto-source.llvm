@@ -183,6 +183,19 @@ if(BUILD_TESTING)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
     endif()
 
+    # Trusted host resource reclamation: close in reverse acquisition order only
+    # after active turns, outstanding loans and native callbacks quiesce.
+    add_executable(oreslang-actor-resource-registry-test
+        tests/actor_resource_registry_test.cpp)
+    target_include_directories(oreslang-actor-resource-registry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-resource-registry-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-resource-registry-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_resource_registry_quiescence
+        COMMAND oreslang-actor-resource-registry-test)
+    set_tests_properties(native_actor_resource_registry_quiescence PROPERTIES TIMEOUT 15)
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
