@@ -39,6 +39,17 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Native policy primitive matches JVM exception precedence, without claiming
+    # exception source lowering, native actor runtime or supervision parity.
+    add_executable(oreslang-native-exception-policy-test
+        tests/native_exception_policy_test.cpp)
+    target_include_directories(oreslang-native-exception-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-exception-policy-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_exception_cleanup_precedence
+        COMMAND oreslang-native-exception-policy-test)
+
     add_executable(oreslang-dop-kernel-test tests/dop_kernel_lowering_test.cpp)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
