@@ -70,7 +70,9 @@ llvm::Value* lower(const Expression& expr,
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
                 arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions));
-            return builder.CreateCall(functions.at(expr.name), arguments, "call");
+            llvm::Function* callee = functions.at(expr.name);
+            return builder.CreateCall(callee, arguments,
+                callee->getReturnType()->isVoidTy() ? "" : "call");
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
