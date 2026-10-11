@@ -2,9 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace oreslang {
 
@@ -57,7 +57,6 @@ public:
         if (base != Admission::Ok) return base;
         if (state_ != State::New) return Admission::InvalidOrder;
         if (status < 200 || status > 599) return Admission::InvalidStatus;
-        status_ = status;
         state_ = State::Body;
         body_allowed_ = status != 204 && status != 205 && status != 304;
         commit(sequence);
@@ -133,7 +132,7 @@ private:
             std::string_view actor,
             std::string_view request,
             std::uint64_t sequence) const noexcept {
-        if (!valid() || actor != actor_id_ || request != request_id_) {
+        if (!valid() || actor != std::string_view(actor_id_) || request != std::string_view(request_id_)) {
             return Admission::Unauthorized;
         }
         if (has_sequence_ && sequence <= last_sequence_) {
@@ -154,7 +153,6 @@ private:
     std::size_t credit_ = 0;
     std::size_t used_ = 0;
     std::uint64_t last_sequence_ = 0;
-    unsigned status_ = 0;
     State state_ = State::New;
     bool has_sequence_ = false;
     bool body_allowed_ = true;
