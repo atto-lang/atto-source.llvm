@@ -74,6 +74,10 @@ typedef struct {
     SourceActor* pipeline_source;
     int pipeline_done;
     int64_t pipeline_result;
+    SourceActor* pipeline_middle;
+    SourceActor* pipeline_sink;
+    atomic_uint_fast64_t pipeline_forward_count;
+    atomic_uint_fast64_t pipeline_backward_count;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     size_t next_slot;
     size_t live;
@@ -619,6 +623,10 @@ void oreslang_source_actor_pipeline_connect(void* first, void* middle, void* las
     b->downstream = c;
     c->upstream = b;
     group.pipeline_source = a;
+    group.pipeline_middle = b;
+    group.pipeline_sink = c;
+    atomic_store_explicit(&group.pipeline_forward_count, 0, memory_order_release);
+    atomic_store_explicit(&group.pipeline_backward_count, 0, memory_order_release);
     group.pipeline_done = 0;
     group.pipeline_result = 0;
     group_unlock();
@@ -682,6 +690,15 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
     ensure(at < sizeof(wire));
     /* This first slice is single-flow and fail-closed on saturation.
      * Future<T>-based suspension/backpressure belongs to the next slice. */
+    /* Count real scheduled direction admissions. These counters are not
+     * compiler-declared constants and cannot be supplied by the guest. */
+    if (direction == 1) {
+        atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
+                                  memory_order_acq_rel);
+    } else {
+        atomic_fetch_add_explicit(&group.pipeline_backward_count, 1,
+                                  memory_order_acq_rel);
+    }
     ensure(source_send_binary(target, wire, at, (uint8_t)direction));
 }
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
@@ -698,9 +715,20 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
         ensure(status == 0);
     }
     ensure(group.pipeline_result == expected);
+    const uint64_t forwards = atomic_load_explicit(
+        &group.pipeline_forward_count, memory_order_acquire);
+    const uint64_t backwards = atomic_load_explicit(
+        &group.pipeline_backward_count, memory_order_acquire);
+    ensure(forwards == 2 && backwards == 2);
+    ensure(group.pipeline_middle && group.pipeline_sink);
+    ensure(atomic_load_explicit(&group.pipeline_middle->processed,
+                                memory_order_acquire) == 2);
+    ensure(atomic_load_explicit(&group.pipeline_sink->processed,
+                                memory_order_acquire) == 1);
     group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
-    fprintf(stderr, "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=%lld\n",
+    fprintf(stderr, "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=%llu backward=%llu result=%lld\n",
+        (unsigned long long)forwards, (unsigned long long)backwards,
         (long long)expected);
 #endif
 }
@@ -746,6 +774,8 @@ void oreslang_source_actor_stop(void* opaque) {
     if (instance == group.pipeline_source) {
         ensure(group.pipeline_done);
         group.pipeline_source = NULL;
+        group.pipeline_middle = NULL;
+        group.pipeline_sink = NULL;
     }
     ensure(atomic_load_explicit(&instance->wire_reserved,
                                  memory_order_acquire) == 0);
