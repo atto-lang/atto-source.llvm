@@ -1,0 +1,6 @@
+define actor Counter as
+  let count: int = 5;
+  fnc read(): int {
+    return self.missing;
+  }
+end
