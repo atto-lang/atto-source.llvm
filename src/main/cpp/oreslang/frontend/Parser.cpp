@@ -91,6 +91,12 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // The Java lexer admits '==' as ONE contiguous token. Lexing it as
+        // two '=' characters would wrongly allow 'x = = y' as equality.
+        if (source_.substr(at_, 2) == "==") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
@@ -186,8 +192,7 @@ private:
             // '==' as a compatible alias. This strict subset does not admit
             // arbitrary condition types, 'neq' or compound predicates yet.
             if (!accept("eq")) {
-                require("=");
-                require("=");
+                require("==");
             }
             guard.rhs = expression();
             require(")");
