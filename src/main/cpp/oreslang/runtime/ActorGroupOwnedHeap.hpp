@@ -33,8 +33,14 @@ struct NativeActorFieldEntrypoints {
     using Init = OresActorI64Fields* (*)(OresActorI64Heap*, std::uint64_t, std::uint64_t);
     using Drop = void (*)(OresActorI64Heap*, std::uint64_t, std::uint64_t,
                           OresActorI64Fields*);
+    using LayoutHash = std::uint64_t (*)();
+    using LayoutVersion = std::uint32_t (*)();
     Init init = nullptr;
     Drop drop = nullptr;
+    LayoutHash layout_hash = nullptr;
+    LayoutVersion layout_version = nullptr;
+    std::uint32_t field_count = 0;
+    std::uint64_t expected_layout_hash = 0;
 };
 
 enum class NativeActorExit : int {
@@ -59,8 +65,13 @@ public:
           slot_capacity_(slot_capacity), generated_(generated),
           enqueue_control_(std::move(enqueue_control)) {
         if (!actor_id_ || !generation_ || !slot_capacity_ || slot_capacity_ > 4096
-            || !generated_.init || !generated_.drop || !enqueue_control_)
+            || !generated_.init || !generated_.drop || !enqueue_control_
+            || !generated_.layout_hash || !generated_.layout_version
+            || !generated_.field_count || slot_capacity_ < generated_.field_count)
             throw std::invalid_argument("invalid generated native actor field descriptor");
+        if (generated_.layout_version() != 1
+                || generated_.layout_hash() != generated_.expected_layout_hash)
+            throw std::invalid_argument("actor field layout version/hash mismatch");
     }
 
     NativeActorHeapWorker(const NativeActorHeapWorker&) = delete;
