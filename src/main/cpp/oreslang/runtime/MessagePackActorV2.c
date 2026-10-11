@@ -204,26 +204,38 @@ int ores_mp2_validate_copy(const OresMp2Contract* c,
                 || (unsigned char)c->schema_id[i] > 126) return 0;
     const char* shape_end = c->shape;
     if (!valid_shape(&shape_end, 0) || *shape_end) return 0;
-    Reader r = {bytes, size, 0, 0};
+    /*
+     * Security invariant: decode the very snapshot we enqueue.
+     * Validating caller memory and only copying afterwards is a TOCTOU
+     * vulnerability if a different thread mutates the source byte array.
+     * The copy is bounded before allocation and is zeroized on every
+     * subsequent failure path.
+     */
+    uint8_t* snapshot = malloc(size);
+    if (!snapshot) return 0;
+    memcpy(snapshot, bytes, size);
+    Reader r = {snapshot, size, 0, 0};
     size_t n;
     uint8_t version;
     const uint8_t *schema, *digest;
     size_t actual_schema_len;
-    if (!array_header(&r, &n) || n != 4
-            || !octet(&r, &version) || version != 2
-            || !string(&r, &schema, &actual_schema_len)
-            || actual_schema_len != schema_len
-            || memcmp(schema, c->schema_id, schema_len)
-            || !octet(&r, &version) || version != 0xc4
-            || !octet(&r, &version) || version != 32
-            || !take(&r, 32, &digest)
-            || memcmp(digest, c->shape_sha256, 32)) return 0;
+    int valid = array_header(&r, &n) && n == 4
+            && octet(&r, &version) && version == 2
+            && string(&r, &schema, &actual_schema_len)
+            && actual_schema_len == schema_len
+            && memcmp(schema, c->schema_id, schema_len) == 0
+            && octet(&r, &version) && version == 0xc4
+            && octet(&r, &version) && version == 32
+            && take(&r, 32, &digest)
+            && memcmp(digest, c->shape_sha256, 32) == 0;
     const char* shape = c->shape;
-    if (!typed_value(&r, &shape, 0) || *shape || r.at != size) return 0;
-    uint8_t* copy = malloc(size);
-    if (!copy) return 0;
-    memcpy(copy, bytes, size);
-    out->bytes = copy; out->size = size;
+    if (valid) valid = typed_value(&r, &shape, 0) && *shape == 0 && r.at == size;
+    if (!valid) {
+        OresMp2Owned invalid = {snapshot, size};
+        ores_mp2_owned_release(&invalid);
+        return 0;
+    }
+    out->bytes = snapshot; out->size = size;
     return 1;
 }
 void ores_mp2_owned_release(OresMp2Owned* v) {
