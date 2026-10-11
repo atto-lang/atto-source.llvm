@@ -78,7 +78,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_native_defer_noncall native-defer-noncall-reject.ores
         --diagnostic "native defer requires a direct function call")
     oreslang_contract_test(reject_native_defer_moved_return native-defer-moved-after-return.ores
-        --diagnostic "use of explicitly moved int")
+        --diagnostic "borrow of explicitly moved int")
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
