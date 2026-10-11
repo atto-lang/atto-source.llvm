@@ -470,6 +470,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-supervisor-admission-test)
     set_tests_properties(native_source_supervisor_fail_closed PROPERTIES TIMEOUT 15)
 
+    # Replayed enqueue adapters and stale CONTROL continuations must not
+    # execute another guest policy or apply an old lifecycle decision.
+    add_executable(oreslang-native-supervisor-replay-guards-test
+        tests/native_supervisor_replay_guards_test.cpp)
+    target_include_directories(oreslang-native-supervisor-replay-guards-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-supervisor-replay-guards-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_replay_guards
+        COMMAND oreslang-native-supervisor-replay-guards-test)
+    set_tests_properties(native_supervisor_replay_guards PROPERTIES TIMEOUT 15)
+
+
     # Host-only deterministic actor arena; no source actor lowering implied.
     add_executable(oreslang-native-actor-arena-test
         tests/native_actor_arena_test.c
