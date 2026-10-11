@@ -119,6 +119,7 @@ static void exercise(bool ambiguous) {
     const auto deadline = std::chrono::steady_clock::now() + 10s;
     while (std::chrono::steady_clock::now() < deadline) {
         if (f.applied.load() == 1
+            && f.accepted.load() == 1 && f.terminal_events.load() == 1
             && (ambiguous ? f.process->undelivered() == 1
                           : f.process->resolved() == 1))
             break;
