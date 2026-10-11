@@ -293,24 +293,16 @@ int ores_mp2_contract_valid(const OresMp2Contract* c) {
     return canonical_shape_sha256(c->shape, shape_len, digest)
            && memcmp(digest, c->shape_sha256, 32) == 0;
 }
-int ores_mp2_validate_copy(const OresMp2Contract* c,
-                           const uint8_t* bytes, size_t size,
-                           OresMp2Owned* out) {
-    if (!bytes || !out || out->bytes || out->size
-            || size > ORES_MP2_MAX_BYTES || size < 40
+/* The type-checking parser operates ONLY on an already-owned immutable
+ * snapshot. Source actor routing uses it after copying incoming wire bytes
+ * and before touching any guest callback or actor-owned storage. */
+int ores_mp2_validate_owned(const OresMp2Contract* c,
+                            const OresMp2Owned* owned) {
+    if (!owned || !owned->bytes || owned->size < 40
+            || owned->size > ORES_MP2_MAX_BYTES
             || !ores_mp2_contract_valid(c)) return 0;
-    size_t schema_len = strlen(c->schema_id);
-    /*
-     * Security invariant: decode the very snapshot we enqueue.
-     * Validating caller memory and only copying afterwards is a TOCTOU
-     * vulnerability if a different thread mutates the source byte array.
-     * The copy is bounded before allocation and is zeroized on every
-     * subsequent failure path.
-     */
-    uint8_t* snapshot = malloc(size);
-    if (!snapshot) return 0;
-    memcpy(snapshot, bytes, size);
-    Reader r = {snapshot, size, 0, 0};
+    const size_t schema_len = strlen(c->schema_id);
+    Reader r = {owned->bytes, owned->size, 0, 0};
     size_t n;
     uint8_t version;
     const uint8_t *schema, *digest;
@@ -325,13 +317,25 @@ int ores_mp2_validate_copy(const OresMp2Contract* c,
             && take(&r, 32, &digest)
             && memcmp(digest, c->shape_sha256, 32) == 0;
     const char* shape = c->shape;
-    if (valid) valid = typed_value(&r, &shape, 0) && *shape == 0 && r.at == size;
-    if (!valid) {
-        OresMp2Owned invalid = {snapshot, size};
-        ores_mp2_owned_release(&invalid);
+    if (valid) valid = typed_value(&r, &shape, 0)
+                         && *shape == 0 && r.at == owned->size;
+    return valid;
+}
+int ores_mp2_validate_copy(const OresMp2Contract* c,
+                           const uint8_t* bytes, size_t size,
+                           OresMp2Owned* out) {
+    if (!bytes || !out || out->bytes || out->size
+            || size > ORES_MP2_MAX_BYTES || size < 40) return 0;
+    /* Never validate caller memory then enqueue a later independent read:
+     * copied bytes are the sole source of routing and type information. */
+    OresMp2Owned snapshot = {malloc(size), size};
+    if (!snapshot.bytes) return 0;
+    memcpy(snapshot.bytes, bytes, size);
+    if (!ores_mp2_validate_owned(c, &snapshot)) {
+        ores_mp2_owned_release(&snapshot);
         return 0;
     }
-    out->bytes = snapshot; out->size = size;
+    *out = snapshot;
     return 1;
 }
 void ores_mp2_owned_release(OresMp2Owned* v) {
