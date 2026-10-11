@@ -107,6 +107,12 @@ if(BUILD_TESTING)
             --run 32 --clang "${ORE_CLANG}"
             --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
+        oreslang_contract_test(native_exec_source_await_handler_panic actor-spawn-await-source.ores
+            --run 79 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
+        set_tests_properties(native_exec_source_await_handler_panic PROPERTIES
+            ENVIRONMENT "ORES_ACTOR_TEST_HANDLER_PANIC=1")
         oreslang_contract_test(native_exec_actor_group_owned_fields actor-fields-counter.ores
             --run 0 --clang "${ORE_CLANG}"
             --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
