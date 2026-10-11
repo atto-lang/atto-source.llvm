@@ -1,0 +1,9 @@
+// 'owned' is a public ordinary identifier, not a reserved ownership keyword.
+fnc owned(int owned): int {
+  const local: int = owned;
+  return local;
+}
+pub fnc main(): int {
+  const owned: int = 21;
+  return owned(owned) + 21;
+}
