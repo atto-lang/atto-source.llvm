@@ -106,12 +106,13 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
                 reject(argument, "ownership violation: by-value class parameters require move/drop lowering");
             check_value(argument, locals, functions);
         } else {
-            if (!argument.left || argument.left->kind != Expression::Kind::Variable)
-                reject(argument, "native loan argument must name an addressable binding");
-            const auto& source = local(*argument.left, locals);
+            // Acquire first so malformed loans preserve the existing
+            // precise diagnostics for temporaries and missing 'rt borrow'.
+            Loan loan = acquire(argument, parameters[i].mode, locals);
+            const auto& source = locals.at(loan.name);
             if (source.class_name != parameters[i].class_name)
                 reject(argument, "ownership violation: borrowed argument type mismatch");
-            loans.push_back(acquire(argument, parameters[i].mode, locals));
+            loans.push_back(std::move(loan));
         }
     }
     for (auto it = loans.rbegin(); it != loans.rend(); ++it)
