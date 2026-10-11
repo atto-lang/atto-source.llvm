@@ -96,6 +96,53 @@ llvm::Value* lower(const Expression& expr,
                 builder.getInt32(index)
             }, expr.name + ".native.actor.field");
         }
+        case Expression::Kind::Match:
+        case Expression::Kind::Switch: {
+            // Arm-local return is an SSA result, not a function return.
+            llvm::Value* subject = lower(*expr.left, builder, i64,
+                                          parameters, locals, functions, actor);
+            auto* function = builder.GetInsertBlock()->getParent();
+            auto* merged = llvm::BasicBlock::Create(
+                    builder.getContext(), "dispatch.value.merge", function);
+            std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> values;
+            bool covered = false;
+            for (const auto& arm : expr.arms) {
+                llvm::BasicBlock* next = nullptr;
+                if (arm.fallback) {
+                    covered = true;
+                } else {
+                    llvm::Value* selected = builder.getFalse();
+                    for (const auto number : arm.cases) {
+                        auto* equal = builder.CreateICmpEQ(
+                                subject, llvm::ConstantInt::getSigned(i64, number));
+                        selected = builder.CreateOr(selected, equal);
+                    }
+                    auto* body = llvm::BasicBlock::Create(
+                            builder.getContext(), "dispatch.value.arm", function);
+                    next = llvm::BasicBlock::Create(
+                            builder.getContext(), "dispatch.value.next", function);
+                    builder.CreateCondBr(selected, body, next);
+                    builder.SetInsertPoint(body);
+                }
+                if (!arm.value) throw std::runtime_error(
+                        "value match/switch arm has no result");
+                llvm::Value* value = lower(*arm.value, builder, i64,
+                                            parameters, locals, functions, actor);
+                auto* predecessor = builder.GetInsertBlock();
+                builder.CreateBr(merged);
+                values.emplace_back(value, predecessor);
+                if (arm.fallback) break;
+                builder.SetInsertPoint(next);
+            }
+            if (!covered) throw std::runtime_error(
+                    "native value match/switch must be exhaustive");
+            builder.SetInsertPoint(merged);
+            auto* phi = builder.CreatePHI(
+                    i64, static_cast<unsigned>(values.size()), "dispatch.collected.value");
+            for (const auto& [value, predecessor] : values)
+                phi->addIncoming(value, predecessor);
+            return phi;
+        }
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable:
