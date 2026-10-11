@@ -69,6 +69,12 @@ public:
             || notice.runtime_id != runtime_id_) {
             throw std::invalid_argument("foreign supervisor process notice");
         }
+        // Value-only failure identity is either a complete trusted binding
+        // or the legacy unbound host notification, never a partial token.
+        if ((notice.logical_child_id == 0)
+                != (notice.logical_incarnation == 0)) {
+            throw std::invalid_argument("partial logical child identity");
+        }
         if (failed_ || closed_ || close_after_commit_ || mailbox_.size() >= capacity_) {
             ++undelivered_;
             throw std::logic_error("supervisor process cannot admit CONTROL");
