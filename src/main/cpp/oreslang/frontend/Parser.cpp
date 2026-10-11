@@ -794,7 +794,9 @@ private:
                         check_statement_names(action);
                     return;
                 }
-                if (stmt.kind == Statement::Kind::FieldWrite && !params.count(stmt.receiver))
+                if ((stmt.kind == Statement::Kind::FieldWrite ||
+                        (stmt.kind == Statement::Kind::Defer && !stmt.receiver.empty())) &&
+                        !params.count(stmt.receiver))
                     throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
                 validate_expression(*stmt.expression, params, functions);
             };
