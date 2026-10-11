@@ -34,8 +34,9 @@ public:
     };
 
     explicit ActorOwnedScalarState(std::uint64_t actor_id,
-                                   const std::map<std::string, Field>& schema)
-            : actor_id_(actor_id) {
+                                   const std::map<std::string, Field>& schema,
+                                   bool verified_serial_actor = false)
+            : actor_id_(actor_id), verified_serial_actor_(verified_serial_actor) {
         if (actor_id == 0 || schema.empty() || schema.size() > kMaxFields) {
             throw std::invalid_argument("actor state requires owner and typed fields");
         }
@@ -113,7 +114,8 @@ public:
             throw std::runtime_error("stale or foreign actor state owner");
         }
         CriticalStateLoan loan;
-        if (loan.begin(scope_, actor_id, continuation_id, metadata, using_effects)
+        if (loan.begin(scope_, actor_id, continuation_id, metadata,
+                using_effects, verified_serial_actor_)
                 != CriticalStateAdmission::Accept) {
             throw std::runtime_error("critical actor state/effect admission denied");
         }
@@ -156,6 +158,9 @@ private:
         return Access::fits(type, value);
     }
     std::uint64_t actor_id_;
+    // Trusted compiler/runtime actor-declaration property, not an argument
+    // the untrusted callback can set to skip critical admission.
+    bool verified_serial_actor_ = false;
     ores_actor_state_scope scope_{};
     std::map<std::string, Field> fields_;
     std::size_t total_string_bytes_ = 0;
