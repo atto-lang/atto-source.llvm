@@ -1,5 +1,7 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include <assert.h>
+#include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,6 +39,26 @@ static int64_t receive_variant(OresActorI64Heap* heap, uint64_t d,
     atomic_fetch_add(&calls[variant], 1);
     assert(atomic_fetch_sub(&active, 1) == 1);
     return n + 1;
+}
+typedef struct { void* actor; size_t variant; } Producer;
+static void* send_many(void* raw) {
+    Producer* producer = (Producer*)raw;
+    for (int n = 0; n < 24; ++n) {
+        uint8_t input[512];
+        memcpy(input, expected[producer->variant], lengths[producer->variant]);
+        int delivered = 0;
+        for (int spin = 0; spin < 1000000; ++spin) {
+            if (oreslang_source_actor_send_variant(producer->actor, input,
+                                                   lengths[producer->variant])) {
+                delivered = 1;
+                break;
+            }
+            sched_yield();
+        }
+        assert(delivered);
+        memset(input, 0, lengths[producer->variant]);
+    }
+    return NULL;
 }
 int main(void) {
     lengths[0] = from_hex(
@@ -125,9 +147,20 @@ int main(void) {
         memset(sender, 0, lengths[i]);
     }
     assert(!oreslang_source_actor_send_wire(actor, expected[0], lengths[0]));
+    /* All producers are joined BEFORE trusted stop. Eight producers still
+     * target one DATA admission budget and one executing actor turn. */
+    pthread_t workers[8];
+    Producer producers[8];
+    for (size_t i = 0; i < 8; ++i) {
+        producers[i] = (Producer){actor, i % 4};
+        assert(pthread_create(&workers[i], NULL, send_many, &producers[i]) == 0);
+    }
+    for (size_t i = 0; i < 8; ++i) {
+        assert(pthread_join(workers[i], NULL) == 0);
+    }
     oreslang_source_actor_stop(actor);
-    for (size_t i = 0; i < 4; ++i) assert(atomic_load(&calls[i]) == 1);
+    for (size_t i = 0; i < 4; ++i) assert(atomic_load(&calls[i]) == 49);
     assert(atomic_load(&active) == 0);
-    puts("SOURCE_ACTOR_CLOSED_VARIANTS_PASS same_lane=1 nominal_tags=1 single_budget=1 java_tagged_wire=1");
+    puts("SOURCE_ACTOR_CLOSED_VARIANTS_PASS same_lane=1 nominal_tags=1 single_budget=1 java_tagged_wire=1 producers=8 messages=196");
     return 0;
 }
