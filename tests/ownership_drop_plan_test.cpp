@@ -101,6 +101,71 @@ static void wrong_flag_preflights_before_any_drop() {
     drop_token(slots.at("y").address);
 }
 
+static void reject_alias_before_destructors() {
+    Graph graph;
+    graph.entry = {{"a", {kOwned, 0, false}}, {"b", {kOwned, 0, false}}};
+    graph.blocks = {{{}, {}}};
+    const auto plans = plan_drop_exits(graph, {"a", "b"});
+    std::vector<int> log;
+    auto* shared = new Token{1, &log};
+    DropSlots slots{{"a", {kOwned, shared, drop_token}},
+                    {"b", {kOwned, shared, drop_token}}};
+    expect_reject([&] { run_drop_exit(plans.at(0), slots); });
+    check(log.empty() && slots.at("a").state == kOwned &&
+          slots.at("b").state == kOwned, "duplicate owned pointer must not run destructors");
+    delete shared; // Only one native allocation was created.
+}
+
+static void reject_stale_capabilities_and_bad_masks() {
+    Graph graph;
+    graph.entry = {{"a", {static_cast<ValueMask>(kMoved | kDropped | kUninitialized), 0, false}},
+                   {"b", {kOwned, 0, false}}};
+    graph.blocks = {{{}, {}}};
+    const auto plans = plan_drop_exits(graph, {"a", "b"});
+    std::vector<int> log;
+    auto* stale = new Token{1, &log};
+    for (ValueMask state : {kMoved, kDropped, kUninitialized}) {
+        DropSlots slots{{"a", {state, stale, drop_token}},
+                        {"b", live(2, log)}};
+        expect_reject([&] { run_drop_exit(plans.at(0), slots); });
+        check(log.empty() && slots.at("b").state == kOwned,
+              "stale native capability must fail before destructor");
+        delete static_cast<Token*>(slots.at("b").address);
+    }
+    delete stale;
+    DropSlots valid{{"a", {kMoved, nullptr, nullptr}},
+                    {"b", live(2, log)}};
+    DropExit forged = plans.at(0);
+    forged.fields.at(0).possible = static_cast<ValueMask>(kOwned | 0x80);
+    expect_reject([&] { run_drop_exit(forged, valid); });
+    check(log.empty() && valid.at("b").state == kOwned,
+          "invalid abstract state must fail before destructor");
+    delete static_cast<Token*>(valid.at("b").address);
+}
+
+static void reject_missing_extra_or_duplicate_drop_places() {
+    Graph graph;
+    graph.entry = {{"a", {kOwned, 0, false}}, {"b", {kOwned, 0, false}}};
+    graph.blocks = {{{}, {}}};
+    const auto plans = plan_drop_exits(graph, {"a", "b"});
+    std::vector<int> log;
+    DropSlots slots{{"a", live(1, log)}, {"b", live(2, log)}};
+    DropExit forged = plans.at(0);
+    forged.fields.at(0).place = "a";
+    expect_reject([&] { run_drop_exit(forged, slots); });
+    check(log.empty(), "duplicate cleanup place must not run destructor");
+    forged = plans.at(0);
+    forged.fields.at(1).place = "unknown";
+    expect_reject([&] { run_drop_exit(forged, slots); });
+    check(log.empty(), "missing field must not run destructor");
+    DropSlots extra = slots;
+    extra.emplace("stray", DropSlot{kUninitialized, nullptr, nullptr});
+    expect_reject([&] { run_drop_exit(plans.at(0), extra); });
+    check(log.empty(), "extra drop slot must not be silently ignored");
+    delete static_cast<Token*>(slots.at("a").address);
+    delete static_cast<Token*>(slots.at("b").address);
+}
+
 static void forbid_live_loans_and_invalid_layout() {
     Graph graph;
     graph.entry = {{"x", {kOwned, 1, false}}};
@@ -114,6 +179,9 @@ int main() {
     diamond_partial_init();
     partial_move_and_prior_drop();
     wrong_flag_preflights_before_any_drop();
+    reject_alias_before_destructors();
+    reject_stale_capabilities_and_bad_masks();
+    reject_missing_extra_or_duplicate_drop_places();
     forbid_live_loans_and_invalid_layout();
     std::puts("NATIVE_CFG_EXACT_ONCE_FIELD_DROP_OK");
 }
