@@ -51,7 +51,14 @@ typedef struct {
  */
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
-static void ensure(int condition) { if (!condition) abort(); }
+static void check_invariant(int condition, const char* predicate, int line) {
+    if (!condition) {
+        fprintf(stderr, "SOURCE_ACTOR_INVARIANT_FAILURE line=%d check=%s\n",
+                line, predicate);
+        abort();
+    }
+}
+#define ensure(expr) check_invariant((expr), #expr, __LINE__)
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
 
