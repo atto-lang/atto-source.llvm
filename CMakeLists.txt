@@ -53,6 +53,11 @@ if(BUILD_TESTING)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
+    add_test(NAME native_explicit_wasm32_target_ir
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_target_ir_test.py"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
