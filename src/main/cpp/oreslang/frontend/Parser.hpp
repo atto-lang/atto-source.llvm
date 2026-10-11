@@ -44,9 +44,23 @@ struct Function {
     bool exported = false;
 };
 
+// Compiler-only structural contract evidence for the native i64 subset.
+// Contract declarations do not allocate runtime objects or generate LLVM IR.
+struct ContractMethod {
+    std::string name;
+    std::vector<Parameter::Mode> parameter_modes;
+};
+
+struct ModuleContract {
+    std::string name;
+    std::vector<ContractMethod> methods;
+};
+
 struct Program {
     std::string module;
     std::vector<Function> functions;
+    std::vector<ModuleContract> contracts;
+    std::vector<std::string> conforms;
 };
 
 // Parse and statically validate a strict Java-compatible subset: int functions,
