@@ -143,6 +143,8 @@ public:
             } else {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
+                else if (accept("supervisor"))
+                    fail("source supervisor on_panic requires typed Failure and compiler-lowered CONTROL turns; native host bridge alone is not guest source lowering");
                 else fail("expected 'module', 'class' or 'actor'");
             }
         }
@@ -151,6 +153,8 @@ public:
             if (accept("define")) {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
+                else if (accept("supervisor"))
+                    fail("source supervisor on_panic requires typed Failure and compiler-lowered CONTROL turns; native host bridge alone is not guest source lowering");
                 else fail("expected 'class' or 'actor'");
             } else {
                 program.functions.push_back(function());
