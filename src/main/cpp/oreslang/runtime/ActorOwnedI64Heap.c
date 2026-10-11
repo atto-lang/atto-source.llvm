@@ -241,8 +241,7 @@ OresActorI64Fields* ores_actor_i64_fields_create(
         OresActorI64Heap* heap, OresActorTurn turn,
         const int64_t* initial_values, uint32_t field_count) {
     if (!initial_values || !field_count || field_count > MAX_SLOTS) rejected();
-    if ((size_t) field_count > (SIZE_MAX - offsetof(OresActorI64Fields, slots))
-                                   / sizeof(OresActorSlot)) rejected();
+    /* MAX_SLOTS=4096 bounds this allocation well below SIZE_MAX. */
     /* The caller is compiler-generated in a trusted actor turn. Do not
      * expose these pointers to untrusted guest code or across await. */
     lock_heap(heap);
