@@ -28,6 +28,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only quantum policy. Executable native guest await/cooperate must
+    # prove its own continuation lowering before claiming cross-backend parity.
+    add_executable(oreslang-native-cooperation-quantum-test
+        tests/native_cooperation_quantum_test.cpp)
+    target_include_directories(oreslang-native-cooperation-quantum-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-cooperation-quantum-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_execution_context_cooperation_quantum
+        COMMAND oreslang-native-cooperation-quantum-test)
+    set_tests_properties(native_execution_context_cooperation_quantum PROPERTIES TIMEOUT 15)
+
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
