@@ -265,3 +265,17 @@ flight, complete Maven/CMake/CTest/native-image runs, profiler/GC and
 physical isolation benchmarks, and independent review. Source PRs remain
 draft and unmerged. Do not represent targeted subset CI as full release
 certification.
+
+
+### Additional stop-vs-failure proof
+
+A dedicated JVM/Graal test stages a terminal child PANIC while its middle
+supervisor holds a user turn; an external host stops the middle supervisor.
+Its reserved pending CONTROL event is flushed to the grandparent's logical
+lane and ACKed without root duplication. Latest funded exact-source GraalVM
+25 suite: **119 passed, 0 failures/errors/skips**:
+https://github.com/zed-pkg-test/java-app/actions/runs/38103218616
+
+This exercises a deliberate stop/turn overlap, but does not certify every
+adversarial force-kill, concurrent cancellation, or independent native
+scheduler race. No LLVM source-level actor codegen parity is claimed.
