@@ -55,6 +55,16 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-accelerator-source-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-accelerator-source-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME accelerator_source_gpu_quantum_strict_lowering COMMAND oreslang-accelerator-source-test)
+    # Compile the *normal* native Parser.cpp translation unit too; this
+    # exercises the trusted accelerator bridge and ensures normal i64 guest
+    # parsing still rejects unsupported GPU/QPU execution.
+    add_executable(oreslang-accelerator-compiler-test
+        tests/accelerator_compiler_entrypoints_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-accelerator-compiler-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-accelerator-compiler-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME accelerator_normal_native_compiler_boundary COMMAND oreslang-accelerator-compiler-test)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
