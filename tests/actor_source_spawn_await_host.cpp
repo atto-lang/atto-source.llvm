@@ -176,7 +176,7 @@ extern "C" int ores_actor_host_poll_ready(void* value) {
     return 1;
 }
 
-extern "C" int ores_actor_host_call_i64(
+extern "C" int ores_actor_host_send_i64(
         void* value, GeneratedI64Method method, std::int64_t argument) {
     auto& ctx = *static_cast<HostContext*>(value);
     if (!ctx.worker || !method) return -1;
@@ -189,6 +189,10 @@ extern "C" int ores_actor_host_call_i64(
             ctx.answer.store(method(heap, turn.domain, turn.epoch, fields, argument));
         });
         ctx.call_phase.store(ok ? 2 : -1);
+        // In this restricted typed-message fixture, receive() includes
+        // self.end(), so only after the admitted message body completes do
+        // we request normal terminal CONTROL on the supervisor lane.
+        if (ok) ctx.worker->request_normal_stop();
         ctx.pulse();
     })) {
         ctx.call_phase.store(0);
@@ -241,12 +245,12 @@ int main() {
             const auto snapshot = ctx.snapshot();
             const int disposition = ores_actor_Counter_program_step(&ctx, &pc, &result);
             if (disposition == 1) {
-                if (pc != 6 || result != 32 || !ctx.worker
+                if (pc != 4 || result != 0 || !ctx.worker
                     || !ctx.worker->physically_finalized()
                     || ctx.ready_wakes.load() == 0
                     || ctx.control_wakes.load() == 0)
                     throw std::runtime_error("source actor lifecycle/result contract violated");
-                return 32;
+                return 0;
             }
             if (disposition < 0) {
                 if (!std::getenv("ORES_ACTOR_TEST_HANDLER_PANIC"))
