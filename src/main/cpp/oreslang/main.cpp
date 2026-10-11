@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/ClientContractHeader.hpp"
+#include "oreslang/frontend/ExperimentalString.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -11,15 +12,17 @@
 int main(int argc, char** argv) {
     const bool check_contract = argc == 3 && std::string(argv[1]) == "--check-contract";
     const bool emit_contract = argc == 3 && std::string(argv[1]) == "--emit-contract-llvm";
+    const bool experimental_string =
+        argc == 3 && std::string(argv[1]) == "--experimental-string";
     const bool experimental_owned_int =
         argc == 3 && std::string(argv[1]) == "--experimental-owned-int";
-    if (argc != 2 && !experimental_owned_int && !check_contract && !emit_contract) {
-        std::cerr << "usage: oreslang-llvmc [--experimental-owned-int|--check-contract|--emit-contract-llvm] <source.ores>\n"
+    if (argc != 2 && !experimental_owned_int && !check_contract && !emit_contract && !experimental_string) {
+        std::cerr << "usage: oreslang-llvmc [--experimental-owned-int|--experimental-string|--check-contract|--emit-contract-llvm] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
     try {
-        const char* path = (experimental_owned_int || check_contract || emit_contract) ? argv[2] : argv[1];
+        const char* path = (experimental_owned_int || experimental_string || check_contract || emit_contract) ? argv[2] : argv[1];
         std::ifstream source(path, std::ios::binary);
         if (!source.is_open()) {
             throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
@@ -41,6 +44,10 @@ int main(int argc, char** argv) {
                 std::cout << "checked Oreslang contract " << contract.name
                           << " signatures=" << contract.methods.size() << '\n';
             }
+            return 0;
+        }
+        if (experimental_string) {
+            std::cout << oreslang::emit_experimental_string_ir(text);
             return 0;
         }
         auto ast = oreslang::parse_program(text, experimental_owned_int);
