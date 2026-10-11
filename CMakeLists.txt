@@ -114,6 +114,14 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_native_defer_field_moved_return
         native-defer-field-moved-after-return-reject.ores
         --diagnostic "not definitely initialized")
+    # Fail closed: native returns are snapshots, never mutable bindings.
+    # Unsupported finally is not silently lowered as a no-op cleanup.
+    oreslang_contract_test(reject_native_deferred_return_rebinding
+        native-defer-return-rebinding-reject.ores
+        --diagnostic "native defer requires a direct function call or class field assignment")
+    oreslang_contract_test(reject_native_finally_override
+        native-defer-finally-unsupported.ores
+        --diagnostic "native exception/control effect unsupported")
     # Native source if/else CFG: separate branch states must join safely.
     # Real Clang execution, ASan/UBSan and no-partial-IR rejection matrix.
     if(ORE_CLANG)
