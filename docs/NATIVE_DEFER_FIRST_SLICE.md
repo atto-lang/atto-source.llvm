@@ -20,3 +20,8 @@ typed cleanup failure precedence. Issue #143 tracks this follow-on work.
 The native executable test mutates an owned record on both early and
 fallthrough return paths. The final value 111 demonstrates two LIFO cleanup
 sequences with real Clang execution.
+
+The ownership CFG verifier also incorporates each deferred call's input
+place-read and loan effects **after** the return-expression effects on every
+exit edge. A three-exit executable fixture checks two guarded returns plus
+fallthrough without granting a moved value a synthetic surviving loan.
