@@ -1,8 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -31,6 +34,11 @@ public:
     std::uint64_t runtime_id() const noexcept { return runtime_id_; }
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t generation() const noexcept { return generation_; }
+
+    // HOST-ONLY futures: guest awaits must suspend the scheduler, never block
+    // a carrier using shared_future::get(). Not cancellation capabilities.
+    std::shared_future<void> get_ready() const { return ticket_->ready_future; }
+    std::shared_future<void> get_done() const { return ticket_->done_future; }
 
     bool operator==(const NativeActorRef& other) const noexcept {
         return runtime_id_ == other.runtime_id_
@@ -63,6 +71,13 @@ private:
         bool settled = false;
         ActorReadyResult result;
         std::vector<ReadyContinuation> waiters;
+        std::promise<void> ready_promise;
+        std::promise<void> done_promise;
+        std::shared_future<void> ready_future = ready_promise.get_future().share();
+        std::shared_future<void> done_future = done_promise.get_future().share();
+        bool done_settled = false;
+        std::atomic<bool> stop_issued{false};
+        std::atomic<bool> physically_done{false};
     };
 
     friend class NativeActorGroup;
@@ -88,7 +103,8 @@ public:
     using StopRequest = std::function<void()>;
 
     explicit NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
-        : runtime_id_(runtime_id), maximum_workers_(maximum_workers) {
+        : runtime_id_(runtime_id), maximum_workers_(maximum_workers),
+          group_id_(next_group_id().fetch_add(1, std::memory_order_relaxed)) {
         if (runtime_id == 0 || maximum_workers == 0)
             throw std::invalid_argument("invalid ActorGroup runtime/capacity");
     }
@@ -98,22 +114,33 @@ public:
 
     ~NativeActorGroup() { close(); }
 
-    /** Immediate native equivalent of spawn: not a readiness barrier. */
+    /** Immediate native equivalent of spawn: one *exclusive* manager. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
                          std::uint64_t generation, StopRequest stop_request) {
         if (!stop_request || actor_id == 0 || generation == 0)
             throw std::invalid_argument("invalid native actor admission");
         if (runtime_id != runtime_id_)
             throw std::invalid_argument("foreign runtime actor reference");
-        std::lock_guard<std::mutex> guard(mutex_);
+        auto& owners = registry();
+        // All paths touching both locks take the same scoped pair.
+        std::scoped_lock guard(mutex_, owners.mutex);
         if (closed_) throw std::logic_error("ActorGroup is closed");
         if (workers_.find(actor_id) != workers_.end())
             throw std::logic_error("actor already managed by group");
         if (workers_.size() >= maximum_workers_)
             throw std::logic_error("ActorGroup worker capacity exceeded");
+        const Key key{runtime_id, actor_id};
+        if (owners.live.find(key) != owners.live.end())
+            throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
         workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting});
+        try {
+            owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
+        } catch (...) {
+            workers_.erase(actor_id);
+            throw;
+        }
         return ref;
     }
 
@@ -136,21 +163,42 @@ public:
     }
 
     /**
-     * Failure before ready always rejects the ticket, even when no awaiter
-     * has been registered yet. Reference-counted tickets outlive the table.
+     * Physical terminal acknowledgment, not stop/cancel. The runtime must
+     * call this ONLY after all turns, continuations, wakers, loans, heap
+     * drops, finalizers and carrier references have quiesced. An old ref
+     * cannot acknowledge a newer generation, even after group close.
      */
-    bool retire(const NativeActorRef& ref, std::string error = "actor terminated before ready") {
+    bool finalized(const NativeActorRef& ref, std::string failure = "") {
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
-        ActorReadyResult result{false, std::move(error)};
+        auto& owners = registry();
         {
-            std::lock_guard<std::mutex> guard(mutex_);
-            Entry* entry = find_active_locked(ref);
-            if (!entry) return false;
-            callbacks = settle_ticket(entry->ref, std::move(result));
+            std::scoped_lock guard(mutex_, owners.mutex);
+            const auto it = owners.live.find(Key{ref.runtime_id(), ref.actor_id()});
+            if (it == owners.live.end() || it->second.group_id != group_id_
+                || it->second.generation != ref.generation()
+                || it->second.ticket != ref.ticket_)
+                return false;
+            if (!ref.ticket_->settled) {
+                ActorReadyResult rejected{false,
+                    failure.empty() ? "actor terminated before ready" : failure};
+                callbacks = settle_ticket(ref, std::move(rejected));
+            }
+            // Settle the done promise ONLY on this acknowledged finalization.
+            // A failed on_start propagates to both observers.
+            settle_done(ref, failure);
+            ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
+            owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
         return true;
+    }
+
+    // Legacy name: explicitly an already-terminated actor, never request
+    // retirement. Kept for existing native host tests.
+    bool retire(const NativeActorRef& ref,
+                std::string error = "actor terminated before ready") {
+        return finalized(ref, std::move(error));
     }
 
     /**
@@ -165,7 +213,7 @@ public:
             ActorReadyResult result;
             std::vector<NativeActorRef::ReadyContinuation> callbacks;
         };
-        std::vector<StopRequest> stops;
+        std::vector<std::pair<NativeActorRef, StopRequest>> stops;
         std::vector<Rejection> rejections;
         {
             std::lock_guard<std::mutex> guard(mutex_);
@@ -175,7 +223,7 @@ public:
             for (const auto& item : workers_) {
                 const Entry& worker = item.second;
                 if (worker.phase == Phase::stopping) continue;
-                stops.push_back(worker.stop_request);
+                stops.emplace_back(worker.ref, worker.stop_request);
                 if (worker.phase == Phase::starting) {
                     // Construct every failure string BEFORE touching any
                     // readiness ticket or stop phase. OOM leaves the entire
@@ -225,12 +273,8 @@ public:
                     // prevent the group from requesting actor shutdown.
                 }
             }
-            if (worker.phase != Phase::stopping) {
-                try { worker.stop_request(); }
-                catch (...) {
-                    // Other workers' stop requests still run.
-                }
-            }
+            if (worker.phase != Phase::stopping)
+                dispatch_stop(worker.ref, worker.stop_request);
         }
     }
 
@@ -245,6 +289,24 @@ public:
     }
 
 private:
+    using Key = std::pair<std::uint64_t, std::uint64_t>;
+    struct Owner {
+        std::uint64_t generation;
+        std::uint64_t group_id;
+        std::shared_ptr<NativeActorRef::Ticket> ticket;
+    };
+    struct OwnerRegistry {
+        std::mutex mutex;
+        std::map<Key, Owner> live;
+    };
+    static OwnerRegistry& registry() {
+        static OwnerRegistry instance;
+        return instance;
+    }
+    static std::atomic<std::uint64_t>& next_group_id() {
+        static std::atomic<std::uint64_t> next{1};
+        return next;
+    }
     enum class Phase { starting, ready, stopping };
     struct Entry {
         NativeActorRef ref;
@@ -264,11 +326,27 @@ private:
             const NativeActorRef& ref, ActorReadyResult result) {
         std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
         if (ref.ticket_->settled) return {};
+        std::exception_ptr failure;
+        if (!result.ready)
+            failure = std::make_exception_ptr(std::runtime_error(result.error));
         ref.ticket_->result = std::move(result);
+        if (failure) ref.ticket_->ready_promise.set_exception(failure);
+        else ref.ticket_->ready_promise.set_value();
         ref.ticket_->settled = true;
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         callbacks.swap(ref.ticket_->waiters);
         return callbacks;
+    }
+
+    static void settle_done(const NativeActorRef& ref, const std::string& error) {
+        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
+        if (ref.ticket_->done_settled) return;
+        std::exception_ptr failure;
+        if (!error.empty())
+            failure = std::make_exception_ptr(std::runtime_error(error));
+        if (failure) ref.ticket_->done_promise.set_exception(failure);
+        else ref.ticket_->done_promise.set_value();
+        ref.ticket_->done_settled = true;
     }
 
     static void notify(
@@ -281,16 +359,22 @@ private:
         }
     }
 
-    static void request_stops(const std::vector<StopRequest>& stops) noexcept {
-        for (const auto& stop : stops) {
-            try { stop(); } catch (...) {
-                // Host supervisors record/report callback failures separately.
-            }
-        }
+    static void dispatch_stop(const NativeActorRef& ref,
+                              const StopRequest& stop) noexcept {
+        if (ref.ticket_->physically_done.load(std::memory_order_acquire)) return;
+        if (ref.ticket_->stop_issued.exchange(true, std::memory_order_acq_rel))
+            return;
+        try { stop(); } catch (...) { /* do not strand sibling workers */ }
+    }
+
+    static void request_stops(
+            const std::vector<std::pair<NativeActorRef, StopRequest>>& stops) noexcept {
+        for (const auto& item : stops) dispatch_stop(item.first, item.second);
     }
 
     const std::uint64_t runtime_id_;
     const std::size_t maximum_workers_;
+    const std::uint64_t group_id_;
     mutable std::mutex mutex_;
     bool closed_ = false;
     std::unordered_map<std::uint64_t, Entry> workers_;
