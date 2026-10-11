@@ -259,7 +259,7 @@ int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
                                            OresNativeActorRef actor) {
     if (!s) return 0;
     lock(s);
-    int ready = matching(s, actor) && !s->retired && !s->actors[actor.actor_slot].retired;
+    int ready = matching(s, actor) && !s->retired\n        && s->actors[actor.actor_slot].init_complete\n        && !s->actors[actor.actor_slot].retired;
     unlock(s);
     return ready;
 }
