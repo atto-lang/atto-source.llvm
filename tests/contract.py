@@ -65,7 +65,9 @@ def main():
         if args.source_actor_runtime:
             path = pathlib.Path(args.source_actor_runtime)
             native_future = path.parent / "NativeActorFuture.c"
-            clang_args.extend(["-x", "c", str(path), str(native_future), "-std=c11",
+            native_messagepack = path.parent / "MessagePackActorV2.c"
+            clang_args.extend(["-x", "c", str(path), str(native_future),
+                               str(native_messagepack), "-std=c11",
                                "-DORESLANG_SOURCE_ACTOR_TESTING",
                                "-I", str(path.parents[2]), "-pthread"])
         if args.native_harness:
