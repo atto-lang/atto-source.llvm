@@ -12,8 +12,8 @@ class/async/actor ownership lowering.
 | --- | --- | --- |
 | CLI parse and native compilation | Build flags, module graph, verified code | No actor scheduler or GC service |
 | Native actor scheduler `open()` | Bounded mail rings, actor slots, capability domain, synchronization, maximum worker count | **Zero pthread carrier threads** |
-| Actor slot `spawn()` | Actor incarnation/identity and mailbox admission | Still **zero carriers** |
-| First **accepted** user/CONTROL message | Publish only after the complete worker activation barrier | Start one carrier, grow toward the configured maximum according to outstanding demand |
+| First actor slot `spawn()` | Actor incarnation/identity; start exactly **one pool scheduler CONTROL thread** | Still **zero carrier workers** |
+| First **accepted** user/CONTROL message | Scheduler signals a blocking condition and issues bounded worker-dispatch tickets | Start one carrier, grow toward the configured maximum according to outstanding demand |
 | Actor turns | Actor-owned arena + turn epochs, scratch scopes, pinned continuations/loans | No tracing GC |
 | Stop and retirement | Fence new admission, drain accepted work, join only created workers | Deterministic zeroization/free after loan and callback quiescence |
 
@@ -24,7 +24,7 @@ published, any partially started workers are joined during retirement.
 
 The scheduler is a multiplexor, **not** one thread per actor or group.
 ActorGroup membership/communications do not themselves require new carriers.
-A serial actor's single logical handler lease survives await/cooperate even
+One dedicated scheduler control thread per activated native pool selects ready actor turns, prioritizes CONTROL tickets, and waits on a condition variable; workers only execute scheduler-issued tickets. There is no busy polling, no actor code on the scheduler thread, and no extra scheduler thread per actor. The separate OresVM master-to-pool event plumbing is not yet part of this native host ABI.\n\nA serial actor's single logical handler lease survives await/cooperate even
 when it is not physically running; no new message may overtake that handler.
 
 ## Memory
