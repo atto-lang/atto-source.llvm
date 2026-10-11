@@ -143,6 +143,15 @@ int main() {
             // the admitted CONTROL decision. The effect must still commit.
             s.process->close();
             try {
+                auto forged = result;
+                forged.notice.actor_id = s.sibling.actor_slot;
+                bool rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(forged);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
                 auto stopped = s.bridge->acknowledge_finalized_stop(result);
                 if (stopped.phase !=
                         oreslang::runtime::SupervisorChildRegistry::Phase::stopped
@@ -151,6 +160,13 @@ int main() {
                     || stopped.incarnation != result.notice.logical_incarnation
                     || stopped.child.logical_child_id != result.notice.logical_child_id)
                     ++s.unexpected;
+                rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(result);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
             } catch (...) {
                 ++s.unexpected;
             }
