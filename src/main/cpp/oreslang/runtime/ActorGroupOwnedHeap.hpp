@@ -50,11 +50,38 @@ enum class NativeActorExit : int {
     panicked = 3
 };
 
-class NativeActorHeapWorker final {
+class NativeActorHeapWorker final : public std::enable_shared_from_this<NativeActorHeapWorker> {
 public:
     using EnqueueControl = std::function<void()>;
     using TurnBody = std::function<void(OresActorI64Heap*, OresActorTurn,
                                         OresActorI64Fields*)>;
+
+    // A source-await/FFI completion may retain a continuation without
+    // borrowing any concrete actor field. Pin the host dispatch token, not
+    // the native heap pointer. This is independent of slot loan accounting.
+    class ContinuationPin final {
+    public:
+        ContinuationPin(const ContinuationPin&) = delete;
+        ContinuationPin& operator=(const ContinuationPin&) = delete;
+        ContinuationPin(ContinuationPin&& other) noexcept
+            : owner_(std::move(other.owner_)) {}
+        ContinuationPin& operator=(ContinuationPin&& other) noexcept {
+            if (this != &other) { release(); owner_ = std::move(other.owner_); }
+            return *this;
+        }
+        ~ContinuationPin() { release(); }
+        void release() noexcept {
+            if (owner_) {
+                auto retained = std::move(owner_);
+                retained->release_continuation_pin();
+            }
+        }
+    private:
+        friend class NativeActorHeapWorker;
+        explicit ContinuationPin(std::shared_ptr<NativeActorHeapWorker> owner)
+            : owner_(std::move(owner)) {}
+        std::shared_ptr<NativeActorHeapWorker> owner_;
+    };
 
     NativeActorHeapWorker(NativeActorGroup& group,
                           std::uint64_t actor_id, std::uint64_t generation,
@@ -168,6 +195,24 @@ public:
         enqueue_control_();
     }
 
+    // Create only while an actor is running and admitted; the returned
+    // move-only pin must live until callback/waker/continuation release.
+    ContinuationPin pin_continuation() {
+        std::lock_guard<std::mutex> guard(lane_);
+        if (!initialized_ || finalized_ || !heap_
+            || requested_.load(std::memory_order_acquire) != NativeActorExit::running)
+            throw std::logic_error("continuation admission after actor stop");
+        if (continuation_pins_ == UINT32_MAX)
+            throw std::overflow_error("too many pinned actor continuations");
+        ++continuation_pins_;
+        return ContinuationPin(shared_from_this());
+    }
+
+    std::uint32_t pending_continuations() const {
+        std::lock_guard<std::mutex> guard(lane_);
+        return continuation_pins_;
+    }
+
     // A suspended loan is held by the future/FFI operation. Releasing it
     // may happen on a foreign carrier, but cannot itself finalize the actor.
     void release_field_loan(OresActorLoan loan) {
@@ -192,7 +237,8 @@ public:
             const NativeActorExit reason = requested_.load(std::memory_order_acquire);
             if (reason == NativeActorExit::running || finalized_) return false;
             if (heap_) {
-                if (ores_actor_i64_heap_loan_count(heap_) != 0) return false;
+                if (continuation_pins_ != 0
+                    || ores_actor_i64_heap_loan_count(heap_) != 0) return false;
                 if (fields_) {
                     const OresActorTurn turn =
                         ores_actor_i64_heap_enter(heap_, actor_id_, generation_);
@@ -229,6 +275,21 @@ public:
     }
 
 private:
+    void release_continuation_pin() noexcept {
+        bool stopped = false;
+        {
+            std::lock_guard<std::mutex> guard(lane_);
+            if (continuation_pins_ == 0) std::terminate();
+            --continuation_pins_;
+            stopped = requested_.load(std::memory_order_acquire)
+                      != NativeActorExit::running;
+        }
+        if (stopped) {
+            try { enqueue_control_(); }
+            catch (...) { /* scheduler must supply a reliable enqueue callback */ }
+        }
+    }
+
     void request(NativeActorExit desired) {
         NativeActorExit expected = NativeActorExit::running;
         if (requested_.compare_exchange_strong(
@@ -249,6 +310,7 @@ private:
     bool initialized_ = false;
     bool finalized_ = false;
     std::string failure_;
+    std::uint32_t continuation_pins_ = 0;
     std::atomic<NativeActorExit> requested_{NativeActorExit::running};
 };
 
