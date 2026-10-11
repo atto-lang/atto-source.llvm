@@ -57,7 +57,7 @@ public:
             || notice.runtime_id != runtime_id_) {
             throw std::invalid_argument("foreign supervisor process notice");
         }
-        if (failed_ || closed_ || mailbox_.size() >= capacity_) {
+        if (failed_ || closed_ || close_after_commit_ || mailbox_.size() >= capacity_) {
             ++undelivered_;
             throw std::logic_error("supervisor process cannot admit CONTROL");
         }
@@ -118,7 +118,7 @@ public:
     }
     bool healthy() const {
         std::lock_guard<std::mutex> guard(mutex_);
-        return !failed_ && !closed_ && undelivered_ == 0;
+        return !failed_ && !closed_ && !close_after_commit_ && undelivered_ == 0;
     }
     void close() {
         // Linearize shutdown with actual lifecycle decision side effects.
