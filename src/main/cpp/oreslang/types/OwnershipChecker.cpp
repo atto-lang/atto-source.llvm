@@ -273,7 +273,12 @@ void validate_i64_ownership(const Program& program) {
             }
             locals.emplace(binding.name, std::move(entry));
         }
+        std::vector<const Expression*> deferred_calls;
         for (const auto& stmt : function.statements) {
+            if (stmt.kind == Statement::Kind::Defer) {
+                deferred_calls.push_back(stmt.expression.get());
+                continue;
+            }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, locals);
                 if (recv.mode == Mode::Borrow)
@@ -288,6 +293,12 @@ void validate_i64_ownership(const Program& program) {
             }
         }
         const Locals cfg_entry = locals;
+        // Defers are *registered* earlier but evaluated after the return
+        // expression, for every distinct exit, in reverse lexical order.
+        auto check_deferred_exit = [&](Locals& path) {
+            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+                check_call(**it, path, functions);
+        };
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the
         // fallthrough path, which has a different live ownership state.
@@ -296,8 +307,10 @@ void validate_i64_ownership(const Program& program) {
             check_pure_guard(*guard.rhs, locals, functions);
             Locals taken = locals;
             check_value(*guard.result, taken, functions);
+            check_deferred_exit(taken);
         }
         if (function.result) check_value(*function.result, locals, functions);
+        check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
         // field-sensitive fixed-point verifier. This currently models the
         // admitted return-only source CFG. The lattice also handles general
@@ -353,9 +366,13 @@ void validate_i64_ownership(const Program& program) {
             add_effects(*guard.rhs, condition.operations);
             condition.successors = {2 * i + 1, 2 * i + 2};
             add_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
+            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+                add_effects(**it, cfg.blocks[2 * i + 1].operations);
         }
         if (function.result)
             add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
+        for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+            add_effects(**it, cfg.blocks[guard_count * 2].operations);
         ownership::verify(cfg);
 
     }

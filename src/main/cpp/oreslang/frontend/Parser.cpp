@@ -309,6 +309,9 @@ private:
             LocalBinding binding;
             binding.offset = token_.offset;
             if (accept("let")) {
+                // Align explicit mutable class-owner syntax with Java/Graal.
+                // This narrow native subset still also accepts legacy locals.
+                accept("mut");
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
                 binding.class_name = identifier();
@@ -357,8 +360,19 @@ private:
         }
         while (token_.text != "return" && token_.text != "if") {
             if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
-            if (exceptional_control(token_.text))
+            if (token_.text != "defer" && exceptional_control(token_.text))
                 fail("native exception/control effect unsupported");
+            if (accept("defer")) {
+                Statement deferred;
+                deferred.kind = Statement::Kind::Defer;
+                deferred.offset = token_.offset;
+                deferred.expression = expression();
+                if (deferred.expression->kind != Expression::Kind::Call)
+                    fail("native defer requires a direct function call");
+                require(";");
+                value.statements.push_back(std::move(deferred));
+                continue;
+            }
             if (accept("stop")) {
                 value.actor_stops.push_back(identifier());
                 require(";");
