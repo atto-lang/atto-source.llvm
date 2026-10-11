@@ -40,6 +40,20 @@ public:
     using Executor = ActorExclusiveScheduler::Executor;
     using Method = std::int64_t (*)(OresActorI64Heap*, std::uint64_t,
                                     std::uint64_t, OresActorI64Fields*, std::int64_t);
+    // The internal case_index is an LLVM compiler ordinal, not a stable
+    // numeric enum/wire tag. Nominal enum case tags require the separate
+    // proposed TAGGED_ENUM_ACTOR_MESSAGES contract before production.
+    struct MailContract {
+        std::uint64_t schema_hash = 0;
+        std::uint32_t case_count = 0;
+    };
+    struct TaggedI64Mail {
+        std::uint64_t schema_hash;
+        std::uint32_t case_index;
+        std::int64_t value;
+    };
+    using TaggedReceiver = std::int64_t (*)(OresActorI64Heap*, std::uint64_t,
+        std::uint64_t, OresActorI64Fields*, std::uint32_t, std::int64_t);
     using ReadyCallback = std::function<void(const ActorReadyResult&)>;
     using DoneCallback = std::function<void(const std::string&)>;
     using ResultCallback = std::function<void(std::optional<std::int64_t>,
@@ -49,11 +63,13 @@ public:
         const NativeActorRef ref;
         const std::shared_ptr<NativeActorHeapWorker> heap_owner;
         const std::shared_ptr<ActorExclusiveScheduler> lane;
+        const MailContract mail_contract;
         Worker(NativeActorRef actor_ref,
                std::shared_ptr<NativeActorHeapWorker> heap,
-               std::shared_ptr<ActorExclusiveScheduler> scheduler)
+               std::shared_ptr<ActorExclusiveScheduler> scheduler,
+               MailContract contract)
             : ref(std::move(actor_ref)), heap_owner(std::move(heap)),
-              lane(std::move(scheduler)) {}
+              lane(std::move(scheduler)), mail_contract(contract) {}
     };
     using WorkerRef = std::shared_ptr<Worker>;
 
@@ -69,7 +85,11 @@ public:
     NativeActorScheduledGroup& operator=(const NativeActorScheduledGroup&) = delete;
 
     WorkerRef spawn(std::uint64_t actor_id, std::uint64_t generation,
-                    std::uint64_t slots, NativeActorFieldEntrypoints descriptor) {
+                    std::uint64_t slots, NativeActorFieldEntrypoints descriptor,
+                    MailContract mail_contract = {}) {
+        if ((mail_contract.schema_hash == 0) != (mail_contract.case_count == 0)
+                || mail_contract.case_count > 16)
+            throw std::invalid_argument("incomplete or invalid typed actor mailbox contract");
         std::weak_ptr<NativeActorScheduledGroup> weak = shared_from_this();
         std::shared_ptr<NativeActorHeapWorker> heap;
         {
@@ -84,7 +104,7 @@ public:
                 if (auto owned = worker.lock()) owned->request_panic();
                 if (auto supervisor = weak.lock()) supervisor->request_control();
             });
-        auto result = std::make_shared<Worker>(heap->ref(), heap, lane);
+        auto result = std::make_shared<Worker>(heap->ref(), heap, lane, mail_contract);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             workers_.push_back(result);
@@ -151,6 +171,48 @@ public:
                 else finish(std::nullopt, "actor failed or stopped");
             },
             [finish] { finish(std::nullopt, "actor call cancelled before admission"); });
+        if (!accepted) finish(std::nullopt, "actor mailbox closed or full");
+        return accepted;
+    }
+
+    // Trusted native mailbox boundary. This is not a public ActorRef
+    // method invocation: guest source only emits send(payload).
+    // Never admit a forged schema or out-of-range compiler case index.
+    // All result/error observers resume on the parent's CONTROL lane.
+    bool send_tagged_i64(const WorkerRef& child, TaggedReceiver receiver,
+                         TaggedI64Mail mail, ResultCallback callback) {
+        require_member(child);
+        if (!receiver || !callback)
+            throw std::invalid_argument("null actor receiver or completion");
+        std::weak_ptr<NativeActorScheduledGroup> weak = shared_from_this();
+        auto cb = std::make_shared<ResultCallback>(std::move(callback));
+        auto settled = std::make_shared<std::atomic<bool>>(false);
+        auto finish = [weak, cb, settled](std::optional<std::int64_t> result,
+                                         std::string error) {
+            if (settled->exchange(true, std::memory_order_acq_rel)) return;
+            if (auto owner = weak.lock()) {
+                owner->push_control_event([cb, result, error] {
+                    (*cb)(result, error);
+                });
+            }
+        };
+        const auto contract = child->mail_contract;
+        if (contract.case_count == 0 || contract.schema_hash != mail.schema_hash
+                || mail.case_index >= contract.case_count) {
+            finish(std::nullopt, "actor message schema mismatch or unknown variant");
+            return false;
+        }
+        bool accepted = child->lane->post_data(
+            [heap = child->heap_owner, receiver, mail, finish] {
+                std::int64_t result = 0;
+                bool ok = heap->with_turn([&](auto* h, auto turn, auto* fields) {
+                    result = receiver(h, turn.domain, turn.epoch, fields,
+                                      mail.case_index, mail.value);
+                });
+                if (ok) finish(result, "");
+                else finish(std::nullopt, "actor message rejected after stop");
+            },
+            [finish] { finish(std::nullopt, "actor message cancelled before delivery"); });
         if (!accepted) finish(std::nullopt, "actor mailbox closed or full");
         return accepted;
     }
