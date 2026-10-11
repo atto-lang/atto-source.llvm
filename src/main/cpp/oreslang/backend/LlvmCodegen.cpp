@@ -20,13 +20,31 @@
 namespace oreslang {
 namespace {
 
+struct ActorContext {
+    llvm::Value* heap;
+    llvm::Value* domain;
+    llvm::Value* epoch;
+    llvm::Value* fields;
+    llvm::FunctionCallee get;
+    const std::unordered_map<std::string, std::uint32_t>* field_index;
+};
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
                    const std::unordered_map<std::string, llvm::Value*>& parameters,
                    const std::unordered_map<std::string, llvm::Value*>& locals,
-                   const std::unordered_map<std::string, llvm::Function*>& functions) {
+                   const std::unordered_map<std::string, llvm::Function*>& functions,
+                   const ActorContext* actor = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::ActorField: {
+            if (!actor) throw std::runtime_error("actor field without trusted actor context");
+            const auto index = actor->field_index->at(expr.name);
+            return builder.CreateCall(actor->get, {
+                actor->heap, actor->domain, actor->epoch, actor->fields,
+                builder.getInt32(index)
+            }, expr.name + ".native.actor.field");
+        }
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable:
@@ -35,24 +53,24 @@ llvm::Value* lower(const Expression& expr,
             }
             return parameters.at(expr.name);
         case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, locals, functions),
+            return builder.CreateNeg(lower(*expr.left, builder, i64, parameters, locals, functions, actor),
                                      "neg");
         case Expression::Kind::Add:
-            return builder.CreateAdd(lower(*expr.left, builder, i64, parameters, locals, functions),
-                                     lower(*expr.right, builder, i64, parameters, locals, functions),
+            return builder.CreateAdd(lower(*expr.left, builder, i64, parameters, locals, functions, actor),
+                                     lower(*expr.right, builder, i64, parameters, locals, functions, actor),
                                      "add");
         case Expression::Kind::Subtract:
-            return builder.CreateSub(lower(*expr.left, builder, i64, parameters, locals, functions),
-                                     lower(*expr.right, builder, i64, parameters, locals, functions),
+            return builder.CreateSub(lower(*expr.left, builder, i64, parameters, locals, functions, actor),
+                                     lower(*expr.right, builder, i64, parameters, locals, functions, actor),
                                      "sub");
         case Expression::Kind::Multiply:
-            return builder.CreateMul(lower(*expr.left, builder, i64, parameters, locals, functions),
-                                     lower(*expr.right, builder, i64, parameters, locals, functions),
+            return builder.CreateMul(lower(*expr.left, builder, i64, parameters, locals, functions, actor),
+                                     lower(*expr.right, builder, i64, parameters, locals, functions, actor),
                                      "mul");
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments) {
-                arguments.push_back(lower(*arg, builder, i64, parameters, locals, functions));
+                arguments.push_back(lower(*arg, builder, i64, parameters, locals, functions, actor));
             }
             return builder.CreateCall(functions.at(expr.name), arguments, "call");
         }
@@ -147,6 +165,94 @@ std::string emit_verified_llvm_ir(const Program& source) {
         builder.CreateRet(result);
     }
 
+    if (source.actor) {
+        // Host-only generated entrypoints. Every call is authorized by the
+        // supervisor's admitted turn; source cannot access these arguments.
+        const ActorDecl& actor = *source.actor;
+        llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+        llvm::Type* void_type = llvm::Type::getVoidTy(context);
+        llvm::FunctionCallee fieldCreate = module.getOrInsertFunction(
+            "ores_actor_i64_fields_codegen_create",
+            llvm::FunctionType::get(ptr, {ptr, i64, i64, ptr, i32}, false));
+        llvm::FunctionCallee fieldGet = module.getOrInsertFunction(
+            "ores_actor_i64_fields_codegen_get",
+            llvm::FunctionType::get(i64, {ptr, i64, i64, ptr, i32}, false));
+        llvm::FunctionCallee fieldSet = module.getOrInsertFunction(
+            "ores_actor_i64_fields_codegen_set",
+            llvm::FunctionType::get(void_type, {ptr, i64, i64, ptr, i32, i64}, false));
+        llvm::FunctionCallee fieldDrop = module.getOrInsertFunction(
+            "ores_actor_i64_fields_codegen_drop",
+            llvm::FunctionType::get(void_type, {ptr, i64, i64, ptr}, false));
+        const std::string prefix = "ores_actor_" + actor.name + "_";
+        auto entrypoint = [&](const std::string& name, llvm::Type* result,
+                              const std::vector<llvm::Type*>& params) {
+            return llvm::Function::Create(
+                llvm::FunctionType::get(result, params, false),
+                llvm::Function::ExternalLinkage, prefix + name, module);
+        };
+        auto params = [](llvm::Function* function) {
+            std::vector<llvm::Value*> result;
+            for (auto& arg : function->args()) result.push_back(&arg);
+            return result;
+        };
+        std::unordered_map<std::string, std::uint32_t> field_indices;
+        for (std::uint32_t i = 0; i < actor.fields.size(); ++i)
+            field_indices.emplace(actor.fields[i].name, i);
+        const std::unordered_map<std::string, llvm::Value*> none;
+        const std::unordered_map<std::string, llvm::Function*> no_functions;
+        llvm::Function* init = entrypoint("init", ptr, {ptr, i64, i64});
+        {
+            llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", init));
+            const auto args = params(init);
+            llvm::ArrayType* array = llvm::ArrayType::get(i64, actor.fields.size());
+            llvm::Value* values = builder.CreateAlloca(array, nullptr, "actor.initial.values");
+            for (std::uint32_t i = 0; i < actor.fields.size(); ++i) {
+                llvm::Value* initial = lower(*actor.fields[i].initializer,
+                                              builder, i64, none, none, no_functions);
+                llvm::Value* address = builder.CreateInBoundsGEP(
+                    array, values, {builder.getInt32(0), builder.getInt32(i)});
+                builder.CreateStore(initial, address);
+            }
+            llvm::Value* first = builder.CreateInBoundsGEP(
+                array, values, {builder.getInt32(0), builder.getInt32(0)});
+            llvm::Value* record = builder.CreateCall(fieldCreate, {
+                args[0], args[1], args[2], first,
+                builder.getInt32(static_cast<std::uint32_t>(actor.fields.size()))
+            }, "actor.persistent.fields");
+            builder.CreateRet(record);
+        }
+        for (const auto& method : actor.methods) {
+            std::vector<llvm::Type*> signature = {ptr, i64, i64, ptr};
+            signature.insert(signature.end(), method.parameters.size(), i64);
+            llvm::Function* function = entrypoint(method.name, i64, signature);
+            llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", function));
+            const auto args = params(function);
+            ActorContext owned{args[0], args[1], args[2], args[3], fieldGet, &field_indices};
+            std::unordered_map<std::string, llvm::Value*> inputs;
+            for (std::size_t i = 0; i < method.parameters.size(); ++i) {
+                args[4 + i]->setName(method.parameters[i]);
+                inputs.emplace(method.parameters[i], args[4 + i]);
+            }
+            for (const auto& assignment : method.assignments) {
+                llvm::Value* value = lower(*assignment.value, builder, i64,
+                                           inputs, none, no_functions, &owned);
+                builder.CreateCall(fieldSet, {
+                    owned.heap, owned.domain, owned.epoch, owned.fields,
+                    builder.getInt32(field_indices.at(assignment.field)), value
+                });
+            }
+            builder.CreateRet(lower(*method.result, builder, i64, inputs,
+                                    none, no_functions, &owned));
+        }
+        llvm::Function* drop = entrypoint("drop", void_type, {ptr, i64, i64, ptr});
+        {
+            llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", drop));
+            const auto args = params(drop);
+            builder.CreateCall(fieldDrop, {args[0], args[1], args[2], args[3]});
+            builder.CreateRetVoid();
+        }
+    }
+
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
     if (llvm::verifyModule(module, &errors)) {
@@ -177,7 +283,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_owned_i64_region_open"
                             && name != "oreslang_owned_i64_region_new"
                             && name != "oreslang_owned_i64_region_drop"
-                            && name != "oreslang_owned_i64_region_close") {
+                            && name != "oreslang_owned_i64_region_close"
+                            && name != "ores_actor_i64_fields_codegen_create"
+                            && name != "ores_actor_i64_fields_codegen_get"
+                            && name != "ores_actor_i64_fields_codegen_set"
+                            && name != "ores_actor_i64_fields_codegen_drop") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }
