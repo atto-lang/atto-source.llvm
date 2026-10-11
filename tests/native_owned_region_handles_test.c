@@ -24,12 +24,6 @@ static void good(void) {
     oreslang_owned_i64_region_drop_handle(r, c);
     oreslang_owned_i64_region_close(r);
 
-    r = oreslang_owned_i64_region_open_handles(1);
-    oreslang_owned_i64_region_test_set_generation(r, 0, (UINT64_MAX >> 12) - 1);
-    a = oreslang_owned_i64_region_new_handle(r, 42);
-    assert(oreslang_owned_i64_region_read_handle(r, a) == 42);
-    oreslang_owned_i64_region_drop_handle(r, a);
-    oreslang_owned_i64_region_close(r);
 }
 #if defined(__unix__) || defined(__APPLE__)
 static void bad(int kind) {
@@ -49,27 +43,24 @@ static void bad(int kind) {
         if (kind == 4) {
             OresOwnedI64Region* other = oreslang_owned_i64_region_open_handles(1);
             uint64_t external = oreslang_owned_i64_region_new_handle(other, 3);
-            /* Raw (slot,generation) alone is not a cross-region capability.
-             * Region domain binding is needed before FFI exposure. */
-            (void)external;
+            oreslang_owned_i64_region_drop_handle(r, external); /* wrong region */
+        }
+        if (kind == 5) {
+            oreslang_owned_i64_region_test_set_generation(r, 0, (UINT64_MAX >> 12));
             oreslang_owned_i64_region_drop_handle(r, current);
-            oreslang_owned_i64_region_drop_handle(other, external);
-            oreslang_owned_i64_region_close(other);
-            oreslang_owned_i64_region_close(r);
-            _exit(0);
+            (void)oreslang_owned_i64_region_new_handle(r, 4);
         }
         _exit(0);
     }
     int status=0;
     assert(waitpid(pid, &status, 0) == pid);
-    if (kind == 4) assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    else assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 #endif
 int main(void) {
     good();
 #if defined(__unix__) || defined(__APPLE__)
-    for (int i = 0; i < 5; ++i) bad(i);
+    for (int i = 0; i < 6; ++i) bad(i);
 #endif
     return 0;
 }
