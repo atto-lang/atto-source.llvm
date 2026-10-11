@@ -25,6 +25,15 @@ namespace oreslang::runtime {
 class SupervisorProcess final : public std::enable_shared_from_this<SupervisorProcess> {
 public:
     enum class Directive { restart, stop, escalate, acknowledge };
+    static constexpr bool valid_directive(Directive value) noexcept {
+        switch (value) {
+            case Directive::restart:
+            case Directive::stop:
+            case Directive::escalate:
+            case Directive::acknowledge: return true;
+        }
+        return false;
+    }
     struct Resolution {
         SupervisorFailureNotice notice;
         Directive requested;
@@ -79,6 +88,12 @@ public:
         if (!expected_epoch || expected_epoch != epoch_
             || !suspended_ || resume_enqueued_ || failed_ || closed_)
             return false;
+        if (!valid_directive(decision)) {
+            // Native callers can manufacture unknown enum values through
+            // FFI or an explicit cast. Never send one to a lifecycle owner.
+            fail_locked();
+            return false;
+        }
         resume_enqueued_ = true;
         try {
             auto self = shared_from_this();
@@ -200,6 +215,10 @@ private:
             // resume() admission alone does not fence a stale queued callback.
             if (failed_ || closed_ || !active_ || generation != epoch_
                 || !policy_started_ || mailbox_.empty()) return;
+            if (!valid_directive(decision)) {
+                fail_locked();
+                return;
+            }
             resolution = Resolution{mailbox_.front(), decision};
             suspended_ = false;
         } catch (...) {
