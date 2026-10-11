@@ -411,6 +411,9 @@ private:
             }
             std::unordered_set<std::string> names;
             for (const auto& method : actor.methods) {
+                if (method.name == "init" || method.name == "drop") {
+                    throw std::runtime_error("reserved actor lifecycle method '" + method.name + "'");
+                }
                 if (!names.insert(method.name).second) {
                     throw std::runtime_error("duplicate actor method '" + method.name + "'");
                 }
