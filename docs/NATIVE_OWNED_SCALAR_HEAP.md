@@ -1,54 +1,60 @@
-# Native owned scalar region: strict no-tracing-GC heap lowering
+# LLVM native scalar regions: experimental ownership fixture
 
-Oreslang's experimental LLVM backend now supports:
-```oreslang
+**Status:** Test-only LLVM feature behind `--experimental-owned-int`. It is **not**
+part of the public Oreslang language grammar. In Java/Graal and LLVM,
+ordinary `int` is `Copy`; a variable or routine may be called `owned`.
+Non-Copy values require the language's `rt borrow` / `rt take` / `rt copy`
+contracts, which are **not** implemented by this scalar allocator.
+
+## Normal source (no forced heap allocation)
+
+```ores
 pub fnc main(): int {
-  const value: owned int = 6;
-  val result: owned int = value * 7;
-  return result;
+  const owned: int = 6;
+  return owned * 7;
 }
 ```
 
-`owned int` is an explicit heap-backed scalar owner. Unlike `int`, which
-lives in a stack `alloca` with LLVM lifetime hints, every `owned int`
-is allocated in a bounded native region created for the function call.
-The compiler copies scalar values to return/call arguments, so no native
-heap pointer escapes this restricted source subset.
+Ordinary scalar code uses LLVM register/stack storage and lifetime hints.
+The compiler does not declare `oreslang_owned_i64_region_*` ABI functions
+for programs with no explicitly experimental region-backed locals. The
+`native_owned_identifier` and `native_owned_lexical_lifetime` CTests
+guard this. The parser rejects `const x: owned int = 6;` by default with
+an explicit opt-in diagnostic and emits **no IR** on rejection.
 
-The verified LLVM IR calls `oreslang_owned_i64_region_open`,
-`oreslang_owned_i64_region_new`, emits exactly one
-`oreslang_owned_i64_region_drop` per successfully created owned binding in
-reverse declaration order, and finally `oreslang_owned_i64_region_close`.
-The native runtime validates pointer-to-region provenance and live counts;
-double release, wrong-domain release, region-close-with-live-slots, invalid
-size and allocation failure abort rather than freeing memory unsafely.
+## Experimental test invocation
 
-The region uses one native `calloc` and `free` per activation, not a tracing
-collector. There are no GC statepoints, GC annotations or collector hooks in
-generated guest IR. A compiler-side verifier rejects unknown external and
-indirect calls. The permitted native ABI names are exact and compiler emitted.
-A validated native executable must complete normally: a missing drop causes
-the region-close guard to abort instead.
+```sh
+./build/oreslang-llvmc --experimental-owned-int tests/fixtures/owned-native-region-main.ores
+```
 
-## Restrictions
+Only this opt-in compiler mode supports `owned int`, a native bounded
+function-activation region using `oreslang_owned_i64_region_open/new/drop/close`.
+It does **not** make `owned` a keyword in the shared language. Each
+initialized experimental slot must drop exactly once on each supported
+normal/guarded return path; the region must close before function exit.
+The native ABI fail-closes on invalid slot/region/provenance state.
 
-- The region currently belongs to a **function activation**, not an actor.
-  It cannot survive the return or be shared between actors. The OresVM actor
-  scheduler/native arena bridge and borrow-to-actor-lifetime lowering are next.
-- Only `owned int` works. No user class, struct, destructor body, field,
-  array, string, aliasing native pointer, borrow across await, exception or
-  cancellation is accepted by this compiler subset.
-- The compiler currently supports one ordinary return at function end, so
-  cleanup is complete for **supported paths** only. Expand lifetime insertion
-  to every CFG exit before adding early returns, throws, `trap` and `await`.
-- Native `calloc/free` may contend or page fault; *zero tracing-GC pauses*
-  is not a claim of constant-time allocation or general real-time execution.
-- Native code outside this compiler-generated guest ABI must be independently
-  audited before end-to-end OresVM strict no-GC certification.
+This is not an actor heap, a source-level general object model, a
+tracing collector, a proof of zero allocation or of hard real-time bounds.
+`calloc/free` and platform allocators can still block. Compiler-emitted
+source actors have a separate bounded i64 field ABI. Guest `await`,
+cancellation, exception unwind, FFI lease quiescence and arbitrary
+graph/class destructors are **not** covered by this region fixture.
 
-## CI
+## Verification and the old PR stack
 
-The funded exact-source test mirror builds Release LLVM CMake, runs all 43
-CTest contracts, including native execution of nested owned regions, validates
-compiler rejection of unsupported types, and inspects IR for reverse drops,
-closure and absence of tracing-GC statepoints.
+The mainline already implements default opt-in gating, accepted ordinary
+`owned` identifiers, lazy scalar region declarations and guarded cleanup.
+The stale stacked ownership branch #72 must not overwrite current actor,
+WASM, class ownership, or scheduler code. Its useful generated ownership
+stress test has instead been ported independently.
+
+`native_owned_scalar_cfg_generated_stress` is a deterministic 77-case
+compiler→LLVM IR→Clang native-execution and fail-closed matrix: ordinary
+scalar/identifier checks, seeded 1–8-local guarded-return programs,
+experimental region allocation and per-edge drop/close counts, and
+negative syntax. It checks that neither GC intrinsics nor an unwanted
+heap ABI enter ordinary source. **Registering the test is not evidence
+that it ran**: require exact-head full CMake/CTest, Clang and sanitizers
+before merging or claiming regression certification.
