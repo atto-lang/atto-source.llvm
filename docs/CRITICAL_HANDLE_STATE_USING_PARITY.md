@@ -233,3 +233,37 @@ admission lane. The serial metadata/callback waiver and native ABI tests do
 Until ingress adapters are integrated and cross-protocol concurrency tests
 pass, do not claim complete runtime serial guarantees or LLVM executable
 guest-source parity.
+
+
+### Serial critical-state audit: fail-closed boundaries (2026-10-11)
+
+- **Instance-method privilege only.** `serial` waives the lexical
+  `critical` marker solely within instance methods on a serial actor.
+  Static functions, ordinary actors and free functions retain explicit
+  critical admission; `using` effect summaries do not infer authority.
+- **Single aggregate.** Serial actors may have no stored fields, or one
+  sealed `state { ... }` aggregate; legacy actor scalar fields and a
+  second state store are rejected. Explicit `extends` on serial actors
+  is rejected for now: inherited mutable state and scheduler-lane
+  ownership have not been proven. `from`/`implements` interfaces are
+  unaffected.
+- **Immutable scalar results.** Java `SealedActorState` no longer admits
+  arbitrary `Number` subclasses or `Enum` objects as safe callback
+  results; user-defined mutable `Number` wrappers and atomic counters
+  could otherwise bypass the fail-closed return boundary. Accepted
+  numbers are precisely primitive boxed numeric types and immutable
+  BigInteger/BigDecimal.
+- **LLVM serial admission cannot bypass safety checks.** Funded tests
+  exercise missing intrinsic criticality, missing state parameter,
+  non-lexical callbacks, escaped loans and insufficient `using`
+  declarations even when runtime-provided serial status is true.
+- **Verification:** [funded run #38176946646](https://github.com/akrion-sim/akrion-sim-e2e/actions/runs/38176946646)
+  compiled real mirrored Java parser, TypeChecker/OwnershipChecker and
+  effects admission; Java state runtime tests with a deterministic
+  test-only actor-turn harness, native parser fail-closed assertions and
+  GCC/Clang ASan/UBSan admission/loan tests **passed**. All 32 pinned
+  source/fixture Git object checks passed. Full source Maven/JUnit,
+  native-image, LLVM CMake/CTest and unified HTTP/mail lane runtime
+  integration are **still not verified**. Upstream source Actions jobs
+  have failed with no runner steps; the mirror's unrelated
+  secrets-audit has also failed. Do not mark PRs merge-ready.
