@@ -327,6 +327,69 @@ int main() {
           cancelled->undelivered() == 1 && !cancelled->callback_active(),
           "native STOP-only hook accepted cancellation");
 
+    // Trusted registry-bound STOP: an identity in the envelope is not
+    // authority without a live, exactly-finalized registry snapshot.
+    for (int case_id = 0; case_id < 6; ++case_id) {
+        const auto supervisor = static_cast<std::uint64_t>(700 + case_id);
+        const auto domain = static_cast<std::uint64_t>(900 + case_id);
+        auto children = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
+            supervisor, domain);
+        const OresNativeActorRef actor{domain, 51, 1};
+        const auto admitted_child = children->register_child(actor);
+        if (case_id != 1) {
+            children->finalized(admitted_child.child, actor, 1);
+        }
+        if (case_id == 2) {
+            children->stop(admitted_child.child, actor, 1);
+        }
+        oreslang::runtime::SupervisorFailureNotice failure{
+            supervisor, domain, actor.actor_slot, actor.generation,
+            std::nullopt, "typed terminal panic",
+            ORES_NATIVE_CONTROL_PANIC, 23, 4242,
+            admitted_child.child.logical_child_id, admitted_child.incarnation};
+        if (case_id == 3) ++failure.actor_id;
+        if (case_id == 4) ++failure.logical_incarnation;
+        if (case_id == 5) failure.logical_child_id = 0;
+
+        std::deque<std::function<void()>> locally_queued;
+        auto enqueue_verified = [&](std::function<void()> cb) -> bool {
+            locally_queued.push_back(std::move(cb));
+            return true;
+        };
+        int sink_calls = 0;
+        auto verified = oreslang::runtime::install_source_supervisor_stop_verified(
+            source, supervisor, domain, 2, enqueue_verified,
+            children,
+            [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
+                ++sink_calls;
+            });
+        verified->accept(failure);
+        unsigned loop = 0;
+        while (!locally_queued.empty()) {
+            check(++loop < 32, "verified native STOP work queue never drained");
+            auto run = std::move(locally_queued.front());
+            locally_queued.pop_front();
+            run();
+        }
+        if (case_id == 0) {
+            check(sink_calls == 1 && verified->resolved() == 1
+                    && verified->undelivered() == 0 && verified->healthy(),
+                  "verified native STOP did not acknowledge finalized target");
+            check(children->snapshot(admitted_child.child).phase
+                    == oreslang::runtime::SupervisorChildRegistry::Phase::stopped,
+                  "verified STOP effect did not retire logical incarnation");
+        } else {
+            check(sink_calls == 0 && verified->resolved() == 0
+                    && verified->undelivered() == 1 && !verified->healthy(),
+                  "unfinalized/stale native Failure reached STOP effect");
+            check(children->snapshot(admitted_child.child).phase
+                    != oreslang::runtime::SupervisorChildRegistry::Phase::stopped
+                    || case_id == 2,
+                  "rejected STOP changed registered child lifecycle");
+        }
+        verified->close();
+    }
+
     std::cout << "NATIVE_SOURCE_SUPERVISOR_STOP_SLICE_PASS parsed=1 "
                  "typed=1 stop=1 cancelled=0 default_admission=closed\n";
 }
