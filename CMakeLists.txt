@@ -27,8 +27,17 @@ add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
+add_library(oreslang-native-string STATIC src/main/cpp/oreslang/runtime/NativeString.c)
+target_include_directories(oreslang-native-string PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+set_target_properties(oreslang-native-string PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+target_compile_options(oreslang-native-string PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(oreslang-native-string-test tests/native_string_test.c)
+    target_link_libraries(oreslang-native-string-test PRIVATE oreslang-native-string)
+    target_compile_options(oreslang-native-string-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_utf8_string_json_codec COMMAND oreslang-native-string-test)
     add_executable(oreslang-contract-header-test
         tests/client_contract_header_test.cpp
         src/main/cpp/oreslang/frontend/ClientContractHeader.cpp)
