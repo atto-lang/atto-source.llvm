@@ -55,6 +55,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
     oreslang_contract_test(source_actor_field_ir actor-fields-counter.ores --ir "ores_actor_i64_fields_codegen_set")
+    oreslang_contract_test(source_actor_union_receive_ir actor-message-union.ores --ir "message_reset")
+    oreslang_contract_test(reject_actor_union_nonexhaustive actor-message-union-missing-arm.ores
+        --diagnostic "non-exhaustive actor message match")
+    oreslang_contract_test(reject_actor_union_duplicate_arm actor-message-union-duplicate-arm.ores
+        --diagnostic "duplicate actor message match arm")
+    oreslang_contract_test(reject_actor_union_undeclared_arm actor-message-union-undeclared-arm.ores
+        --diagnostic "match arm selects undeclared actor message variant")
+    oreslang_contract_test(reject_actor_union_duplicate_variant actor-message-union-duplicate-variant.ores
+        --diagnostic "ambiguous duplicate actor message variant")
     oreslang_contract_test(source_actor_spawn_await_ir actor-spawn-await-source.ores --ir "ores_actor_host_poll_done")
     oreslang_contract_test(source_actor_await_spawn_ir actor-await-spawn-source.ores --ir "ores_actor_host_poll_ready")
     oreslang_contract_test(reject_spawn_foreign_actor actor-spawn-wrong-type.ores --diagnostic "source spawn actor must match enclosing actor declaration")
