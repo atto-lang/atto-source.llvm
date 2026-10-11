@@ -82,6 +82,10 @@ static void typed_parent_control(
         OresNativeActorTerminalFailure failure) {
     auto& s = *static_cast<State*>(raw);
     ++s.control_events;
+    // Physical child shutdown does NOT authorize normal-exit retirement
+    // once this terminal failure has been published to parent CONTROL.
+    if (!s.bridge || s.bridge->retire_normally_finalized_child(failure.child))
+        ++s.unexpected;
     if (!s.bridge || !s.bridge->on_panic(parent_actor, failure))
         ++s.unexpected;
 }
@@ -245,6 +249,12 @@ int main() {
           "stale or future generation retired a different child's registration");
     check(s.bridge->retire_normally_finalized_child(s.sibling),
           "normally finalized sibling did not retire its registration");
+    OresNativeActorTerminalFailure suppressed{
+        ORES_NATIVE_CONTROL_PANIC, s.sibling, 99, 123
+    };
+    check(!ores_native_actor_scheduler_publish_failure(
+                  s.scheduler, s.parent, suppressed),
+          "clean-exit seal permitted a late terminal failure");
     check(!s.bridge->retire_normally_finalized_child(s.sibling),
           "normal child registration was retired twice");
     check(s.bridge->registered_children() == 0,
