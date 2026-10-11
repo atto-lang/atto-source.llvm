@@ -1,0 +1,11 @@
+define class Pair as
+  pub let int left = 20;
+  pub let int right = 22;
+end
+fnc consume(borrow mut Pair p): int {
+  return rt take p.left;
+}
+pub fnc main(): int {
+  let Pair p = new Pair();
+  return consume(rt borrow mut p);
+}
