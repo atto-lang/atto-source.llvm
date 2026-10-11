@@ -33,6 +33,8 @@ public:
         Reclaim status;
         std::size_t closed;
         std::vector<std::string> errors;
+        // Includes failures whose diagnostic text could not be allocated.
+        std::size_t failures = 0;
     };
 
     explicit ActorResourceRegistry(std::uint64_t actor_id,
@@ -99,21 +101,39 @@ public:
             try {
                 it->close();
             } catch (const std::exception& e) {
-                if (result.errors.size() < 16) result.errors.emplace_back(e.what());
+                ++result.failures;
+                append_error(result, e.what());
             } catch (...) {
-                if (result.errors.size() < 16) result.errors.emplace_back("unknown closer failure");
+                ++result.failures;
+                append_error(result, "unknown closer failure");
             }
             ++result.closed;
         }
         {
             std::lock_guard<std::mutex> guard(mutex_);
-            last_result_ = result;
+            // Vector move cannot allocate. Set RECLAIMED after commit so an
+            // allocation failure while building optional diagnostic text
+            // never leaves the registry permanently in CLOSING.
+            last_result_ = std::move(result);
             phase_ = Phase::reclaimed;
+            return last_result_;
         }
-        return result;
     }
 
 private:
+    static void append_error(Result& result, const char* message) noexcept {
+        if (result.errors.size() >= 16) return;
+        const char* text = message != nullptr ? message : "unknown closer failure";
+        std::size_t size = 0;
+        while (size < 256 && text[size] != '\0') ++size;
+        try {
+            result.errors.emplace_back(text, size);
+        } catch (...) {
+            // OOM while formatting a diagnostic must never interrupt the
+            // remaining closers. The integer failure count is authoritative.
+        }
+    }
+
     struct Entry {
         Kind kind;
         std::function<void()> close;
