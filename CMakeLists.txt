@@ -92,6 +92,18 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
     set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
+    # Pinned native Future<void> lifecycle frame: host callbacks only record
+    # completion; resumption is admitted on a parent actor's CONTROL lane.
+    # Guest-source await remains compiler-rejected pending typed MIR lowering.
+    add_executable(oreslang-actor-lifecycle-await-test tests/actor_lifecycle_await_test.cpp)
+    target_include_directories(oreslang-actor-lifecycle-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-lifecycle-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-lifecycle-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_pinned_actor_future_control_continuation
+        COMMAND oreslang-actor-lifecycle-await-test)
+    set_tests_properties(native_pinned_actor_future_control_continuation PROPERTIES TIMEOUT 15)
     add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
