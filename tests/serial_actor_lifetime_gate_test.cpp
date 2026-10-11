@@ -101,5 +101,28 @@ int main() {
     CHECK(count == 1002); // 1 leader + 1000 queued + final loop iteration
     CHECK(!many.busy() && many.queued() == 0);
     many.stop();
+
+    // Stop must revoke leases atomically against concurrent submission.
+    for (int trial = 0; trial < 100; ++trial) {
+        SerialActorLifetimeGate racing(1000 + static_cast<std::uint64_t>(trial), 1, 256);
+        const auto inFlight = racing.submit(Kind::Http, 1);
+        CHECK(inFlight.lease);
+        std::atomic<bool> released{false};
+        std::thread producer([&racing, &released]() {
+            for (std::uint64_t id = 2; id < 202; ++id) {
+                const auto answer = racing.submit(Kind::Message, id);
+                CHECK(answer.status == Status::Queued || answer.status == Status::Stopped);
+            }
+            released = true;
+        });
+        racing.stop();
+        producer.join();
+        CHECK(released.load());
+        CHECK(!racing.busy() && racing.queued() == 0);
+        CHECK(!racing.admitted(*inFlight.lease));
+        CHECK(!racing.may_execute(*inFlight.lease));
+        CHECK(!racing.finish(*inFlight.lease).accepted);
+        CHECK(racing.submit(Kind::Http, 300).status == Status::Stopped);
+    }
     return 0;
 }
