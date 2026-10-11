@@ -25,41 +25,41 @@ int main() {
     auto pending_panic = combine_failure(
         Failure::make(FailureKind::Panic, "body invariant"),
         Failure::make(FailureKind::Throw, "defer error"));
-    assert(pending_panic.kind == FailureKind::Panic);
-    assert(pending_panic.suppressed.size() == 1);
-    assert(pending_panic.suppressed[0].kind == FailureKind::Throw);
+    assert(pending_panic.kind() == FailureKind::Panic);
+    assert(pending_panic.suppressed().size() == 1);
+    assert(pending_panic.suppressed()[0].kind() == FailureKind::Throw);
 
     auto cleanup_panic = combine_failure(
         Failure::make(FailureKind::Throw, "body error"),
         Failure::make(FailureKind::Panic, "defer invariant"));
-    assert(cleanup_panic.kind == FailureKind::Panic);
-    assert(cleanup_panic.suppressed.size() == 1);
-    assert(cleanup_panic.suppressed[0].kind == FailureKind::Throw);
+    assert(cleanup_panic.kind() == FailureKind::Panic);
+    assert(cleanup_panic.suppressed().size() == 1);
+    assert(cleanup_panic.suppressed()[0].kind() == FailureKind::Throw);
 
     auto equal_priority = combine_failure(
         Failure::make(FailureKind::Raise, "first"),
         Failure::make(FailureKind::Raise, "second"));
-    assert(equal_priority.diagnostic == "first");
-    assert(equal_priority.suppressed.size() == 1);
-    assert(equal_priority.suppressed[0].diagnostic == "second");
+    assert(equal_priority.diagnostic() == "first");
+    assert(equal_priority.suppressed().size() == 1);
+    assert(equal_priority.suppressed()[0].diagnostic() == "second");
 
     auto cancellation = combine_failure(
         Failure::make(FailureKind::Cancelled, "structured cancellation"),
         Failure::make(FailureKind::Panic, "cleanup panic"));
-    assert(cancellation.kind == FailureKind::Cancelled);
-    assert(cancellation.suppressed[0].kind == FailureKind::Panic);
+    assert(cancellation.kind() == FailureKind::Cancelled);
+    assert(cancellation.suppressed()[0].kind() == FailureKind::Panic);
 
     auto explicit_exit = combine_failure(
         Failure::make(FailureKind::ProcessExit, "exit 2"),
         Failure::make(FailureKind::Panic, "defer panic"));
-    assert(explicit_exit.kind == FailureKind::ProcessExit);
-    assert(explicit_exit.suppressed[0].kind == FailureKind::Panic);
+    assert(explicit_exit.kind() == FailureKind::ProcessExit);
+    assert(explicit_exit.suppressed()[0].kind() == FailureKind::Panic);
 
     auto host_fatal = combine_failure(
         Failure::make(FailureKind::Raise, "escalation"),
         Failure::make(FailureKind::HostFatal, "OOM"));
-    assert(host_fatal.kind == FailureKind::HostFatal);
-    assert(host_fatal.suppressed[0].kind == FailureKind::Raise);
+    assert(host_fatal.kind() == FailureKind::HostFatal);
+    assert(host_fatal.suppressed()[0].kind() == FailureKind::Raise);
 
     // A chain of cleanup failures cannot silently erase earlier failures,
     // even when a stronger error occurs in the middle of unwinding.
@@ -67,17 +67,17 @@ int main() {
     chain = combine_failure(std::move(chain), Failure::make(FailureKind::Raise, "defer 3"));
     chain = combine_failure(std::move(chain), Failure::make(FailureKind::Panic, "defer 2"));
     chain = combine_failure(std::move(chain), Failure::make(FailureKind::Throw, "defer 1"));
-    assert(chain && chain->kind == FailureKind::Panic);
-    assert(chain->suppressed.size() == 2);
-    assert(chain->suppressed[0].kind == FailureKind::Raise);
-    assert(chain->suppressed[0].suppressed[0].kind == FailureKind::Throw);
-    assert(chain->suppressed[1].kind == FailureKind::Throw);
+    assert(chain && chain->kind() == FailureKind::Panic);
+    assert(chain->suppressed().size() == 2);
+    assert(chain->suppressed()[0].kind() == FailureKind::Raise);
+    assert(chain->suppressed()[0].suppressed()[0].kind() == FailureKind::Throw);
+    assert(chain->suppressed()[1].kind() == FailureKind::Throw);
 
     std::optional<Failure> none;
     auto first = combine_failure(std::move(none), Failure::make(FailureKind::Throw, "first"));
-    assert(first && first->diagnostic == "first");
+    assert(first && first->diagnostic() == "first");
     auto unchanged = combine_failure(std::move(first), std::optional<Failure>{});
-    assert(unchanged && unchanged->diagnostic == "first");
+    assert(unchanged && unchanged->diagnostic() == "first");
 
     const std::string rocket = "\xf0\x9f\x9a\xa8";
     const auto long_unicode = rocket + std::string(300, 'x') + rocket;
