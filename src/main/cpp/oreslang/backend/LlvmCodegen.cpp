@@ -328,17 +328,30 @@ std::string emit_verified_llvm_ir(const Program& source) {
             ++index;
         }
         std::unordered_map<std::string, llvm::Value*> actorRefs;
+        std::unordered_map<std::string, std::string> actorRefTypes;
         for (const auto& spawn : fn.actor_spawns) {
             auto found = actorMessageHandlers.find(spawn.actor_type);
             llvm::Value* handler = found == actorMessageHandlers.end()
                 ? static_cast<llvm::Value*>(llvm::ConstantPointerNull::get(
                     llvm::cast<llvm::PointerType>(ptr)))
                 : static_cast<llvm::Value*>(found->second);
-            auto* ref = builder.CreateCall(sourceSpawn,
-                {actorInitializers.at(spawn.actor_type), handler,
-                 llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
-                spawn.name + ".native.actor.ref");
+            llvm::Value* ref;
+            if (taggedCases.count(spawn.actor_type)) {
+                ref = builder.CreateCall(sourceSpawnTagged,
+                    {actorInitializers.at(spawn.actor_type), handler,
+                     llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type)),
+                     taggedContracts.at(spawn.actor_type),
+                     taggedIdentities.at(spawn.actor_type),
+                     llvm::ConstantInt::get(i64, taggedCases.at(spawn.actor_type).size())},
+                    spawn.name + ".native.tagged.actor.ref");
+            } else {
+                ref = builder.CreateCall(sourceSpawn,
+                    {actorInitializers.at(spawn.actor_type), handler,
+                     llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
+                    spawn.name + ".native.actor.ref");
+            }
             actorRefs.emplace(spawn.name, ref);
+            actorRefTypes.emplace(spawn.name, spawn.actor_type);
         }
         // Scalar locals are either stack owned ('int') or explicitly backed
         // by a bounded native lexical heap region ('owned int'). The latter
@@ -371,6 +384,26 @@ std::string emit_verified_llvm_ir(const Program& source) {
             locals.emplace(local.name, address);
             slots.push_back({address, local.heap_owned});
         }
+        auto emitSend = [&](llvm::IRBuilder<>& at, const ActorSend& send,
+                            const std::unordered_map<std::string, llvm::Value*>& refs,
+                            const std::unordered_map<std::string, llvm::Value*>& params,
+                            const std::unordered_map<std::string, llvm::Value*>& slots) {
+            const auto& actorType = actorRefTypes.at(send.reference);
+            if (!send.tagged_variant.empty()) {
+                const auto& cases = taggedCases.at(actorType);
+                const auto it = std::find_if(cases.begin(), cases.end(),
+                    [&](const GuestNominalCase& c) { return c.qualified == send.tagged_variant; });
+                if (it == cases.end())
+                    throw std::runtime_error("source tagged send outside closed domain");
+                at.CreateCall(sourceSendTaggedChecked,
+                    {refs.at(send.reference),
+                     taggedFrames.at(actorType).at(send.tagged_variant),
+                     llvm::ConstantInt::get(i64, it->wire.size())});
+            } else {
+                auto* payload = lower(*send.payload, at, i64, params, slots, declarations);
+                at.CreateCall(sourceSend, {refs.at(send.reference), payload});
+            }
+        };
         llvm::Value* result = nullptr;
         if (!fn.ready_await_actor.empty()) {
             // First compiler-generated suspend point: the program's original
@@ -387,12 +420,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 {fn.ready_await_actor, &*resume->arg_begin()}};
             const std::unordered_map<std::string, llvm::Value*> noLocals;
             const std::unordered_map<std::string, llvm::Value*> noParams;
-            for (const auto& send : fn.actor_sends) {
-                auto* payload = lower(*send.payload, resumeBuilder, i64,
-                                      noParams, noLocals, declarations);
-                resumeBuilder.CreateCall(sourceSend,
-                    {resumedActors.at(send.reference), payload});
-            }
+            for (const auto& send : fn.actor_sends)
+                emitSend(resumeBuilder, send, resumedActors, noParams, noLocals);
+
             auto* resumedResult = lower(*fn.result, resumeBuilder, i64,
                                         noParams, noLocals, declarations);
             resumeBuilder.CreateRet(resumedResult);
@@ -401,11 +431,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
         } else {
             result = lower(*fn.result, builder, i64, parameters,
                            locals, declarations);
-            for (const auto& send : fn.actor_sends) {
-                llvm::Value* payload = lower(*send.payload, builder, i64,
-                                              parameters, locals, declarations);
-                builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
-            }
+            for (const auto& send : fn.actor_sends)
+                emitSend(builder, send, actorRefs, parameters, locals);
+
         }
         for (const auto& name : fn.actor_stops) {
             builder.CreateCall(sourceStop, {actorRefs.at(name)});
@@ -603,6 +631,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_read"
                             && name != "ores_actor_i64_heap_field_init_mutable"
                             && name != "ores_actor_i64_heap_field_write"
+                            && name != "oreslang_source_actor_spawn_tagged_variants"
+                            && name != "oreslang_source_actor_send_variant_checked"
                             && name != "oreslang_source_actor_spawn"
                             && name != "oreslang_source_actor_stop"
                             && name != "oreslang_source_actor_send"
