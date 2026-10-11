@@ -48,6 +48,7 @@ int main() {
     must_reject([&] { another_registry.snapshot(first.child); });
 
     registry.finalized(first.child, first_actor, 1);
+    must_reject([&] { registry.register_child(first_actor); });
     auto reservation = registry.begin_restart(first.child, first_actor, 1);
     check(registry.snapshot(first.child).phase ==
               SupervisorChildRegistry::Phase::restarting,
@@ -66,6 +67,14 @@ int main() {
     must_reject([&] { registry.stop(first.child, first_actor, 1); });
 
     registry.finalized(first.child, next_actor, 2);
+    const auto reused = registry.begin_restart(first.child, next_actor, 2);
+    must_reject([&] { registry.replace(reused, first_actor); });
+    // Slot 5 can only be reincarnated with a higher scheduler generation;
+    // an older incarnation must not be revived by a logical RESTART.
+    must_reject([&] {
+        registry.replace(reused, OresNativeActorRef{42, 5, 1});
+    });
+    registry.abort_restart(reused);
     registry.stop(first.child, next_actor, 2);
     must_reject([&] { registry.begin_restart(first.child, next_actor, 2); });
     registry.retire_stopped(first.child);
@@ -106,6 +115,20 @@ int main() {
           "native child replacement was not exclusive");
     check(registry.snapshot(before.child).incarnation == 2,
           "native logical generation fence failed");
+    // Even with a fresh logical child ID, the same native slot must not
+    // host two active generations, and a completed generation is not reusable.
+    const auto live = registry.snapshot(before.child).actor;
+    must_reject([&] {
+        registry.register_child(OresNativeActorRef{
+            42, live.actor_slot, live.generation + 1});
+    });
+    registry.finalized(before.child, live, 2);
+    must_reject([&] { registry.register_child(live); });
+    const auto newer = registry.register_child(
+        OresNativeActorRef{42, live.actor_slot, live.generation + 1});
+    check(newer.incarnation == 1 && newer.child.logical_child_id
+              != before.child.logical_child_id,
+          "new scheduler generation was not admitted independently");
 
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
