@@ -224,6 +224,13 @@ static SourceVariantContract* source_copy_variants(
             owned[i].owned_schema, owned[i].owned_shape, owned[i].sha
         };
         if (!ores_mp2_contract_valid(&owned[i].value)) goto fail;
+        /* A Java/Oreslang typed enum schema is NOMINAL. The structural
+         * registration entrypoint cannot guarantee its embedded enum owner
+         * and tag. Require the pinned-tag API, never silently degrade it. */
+        if (!nominal && strncmp(owned[i].value.schema_id,
+                               "oreslang.enum.",
+                               sizeof("oreslang.enum.") - 1) == 0)
+            goto fail;
         if (nominal) {
             if (!nominal[i].enum_name || !nominal[i].declared_tag
                     || nominal[i].declared_tag > INT32_MAX
