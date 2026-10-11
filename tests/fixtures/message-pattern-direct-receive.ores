@@ -1,0 +1,10 @@
+declare type match Signals as bool end
+define actor Foo<messages=Signals> as
+    receive(Message m) { }
+end
+pub fnc main(): int {
+    const actor = spawn Foo();
+    actor.receive(true);
+    stop actor;
+    return 43;
+}

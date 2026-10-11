@@ -1,0 +1,10 @@
+declare type match Numbers as int end
+define actor Foo<messages=Numbers> as
+    receive(Message m) { }
+end
+pub fnc main(): int {
+    const actor = spawn Foo();
+    actor.send(true);
+    stop actor;
+    return 43;
+}

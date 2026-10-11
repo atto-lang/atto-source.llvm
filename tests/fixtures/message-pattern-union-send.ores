@@ -1,0 +1,15 @@
+declare type match Patterns as
+    (bool, string)
+    string
+    Array[string, string, string]
+    List[bool, bool]
+end
+define actor Foo<messages=Patterns> as
+    receive(Message m) { }
+end
+pub fnc main(): int {
+    const actor = spawn Foo();
+    actor.send(true);
+    stop actor;
+    return 43;
+}
