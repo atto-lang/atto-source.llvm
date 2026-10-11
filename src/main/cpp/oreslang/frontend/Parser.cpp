@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <functional>
 #include <cctype>
 #include <stdexcept>
 #include <string>
@@ -358,8 +359,88 @@ private:
             require(";");
             value.locals.push_back(std::move(binding));
         }
-        while (token_.text != "return" && token_.text != "if") {
-            if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
+        // Restrict the first general-source CFG slice to synchronous
+        // if/else arms containing field writes or direct function calls.
+        // They may change owned scalar state only when both predecessors
+        // agree at the join; checked below by the ownership verifier.
+        auto branch_arm = [&]() {
+            std::vector<Statement> actions;
+            while (token_.text != "}") {
+                if (token_.kind == Kind::End || actions.size() == 16)
+                    fail("native conditional arm limit exceeded (16)");
+                Statement statement;
+                statement.offset = token_.offset;
+                auto target = primary();
+                if (target->kind == Expression::Kind::Field && accept("=")) {
+                    if (!target->left || target->left->kind != Expression::Kind::Variable)
+                        fail("native conditional requires named class field");
+                    statement.kind = Statement::Kind::FieldWrite;
+                    statement.receiver = target->left->name;
+                    statement.field = target->name;
+                    statement.expression = expression();
+                } else if (target->kind == Expression::Kind::Call) {
+                    statement.kind = Statement::Kind::Call;
+                    statement.expression = std::move(target);
+                } else {
+                    fail("native conditional arm requires field assignment or direct call");
+                }
+                require(";");
+                actions.push_back(std::move(statement));
+            }
+            return actions;
+        };
+        bool return_guards_started = false;
+        std::size_t branch_count = 0;
+        while (token_.text != "return") {
+            if (token_.kind == Kind::End || token_.text == "}")
+                fail("missing final return");
+            if (token_.text == "if") {
+                const auto offset = token_.offset;
+                require("if");
+                require("(");
+                auto lhs = expression();
+                if (!accept("eq")) require("==");
+                auto rhs = expression();
+                require(")");
+                require("{");
+                if (accept("return")) {
+                    if (value.returns_void)
+                        fail("guarded early return requires int result");
+                    if (value.early_returns.size() == 8)
+                        fail("native guarded return limit exceeded (8)");
+                    GuardedReturn guard;
+                    guard.offset = offset;
+                    guard.lhs = std::move(lhs);
+                    guard.rhs = std::move(rhs);
+                    guard.result = expression();
+                    require(";");
+                    require("}");
+                    require("fi");
+                    value.early_returns.push_back(std::move(guard));
+                    return_guards_started = true;
+                } else {
+                    if (return_guards_started)
+                        fail("native conditional statements cannot follow return guards");
+                    if (++branch_count > 8)
+                        fail("native conditional CFG limit exceeded (8)");
+                    Statement conditional;
+                    conditional.kind = Statement::Kind::Conditional;
+                    conditional.offset = offset;
+                    conditional.condition_lhs = std::move(lhs);
+                    conditional.condition_rhs = std::move(rhs);
+                    conditional.then_statements = branch_arm();
+                    require("}");
+                    require("else");
+                    require("{");
+                    conditional.else_statements = branch_arm();
+                    require("}");
+                    require("fi");
+                    value.statements.push_back(std::move(conditional));
+                }
+                continue;
+            }
+            if (return_guards_started)
+                fail("native statements cannot follow guarded returns");
             if (token_.text != "defer" && exceptional_control(token_.text))
                 fail("native exception/control effect unsupported");
             if (accept("defer")) {
@@ -409,29 +490,6 @@ private:
             }
             require(";");
             value.statements.push_back(std::move(statement));
-        }
-        // First CFG milestone: return-only equality guards after all locals
-        // are initialized and all ordinary statements have completed.
-        // No branch-local object construction or exceptional edges.
-        while (token_.text == "if") {
-            if (value.returns_void) fail("guarded early return requires int result");
-            if (value.early_returns.size() == 8)
-                fail("native guarded return limit exceeded (8)");
-            GuardedReturn guard;
-            guard.offset = token_.offset;
-            require("if");
-            require("(");
-            guard.lhs = expression();
-            if (!accept("eq")) require("==");
-            guard.rhs = expression();
-            require(")");
-            require("{");
-            require("return");
-            guard.result = expression();
-            require(";");
-            require("}");
-            require("fi");
-            value.early_returns.push_back(std::move(guard));
         }
         require("return");
         if (!value.returns_void) value.result = expression();
@@ -685,13 +743,23 @@ private:
                         + "' at byte " + std::to_string(binding.offset));
                 }
             }
-            for (const auto& stmt : fn.statements) {
-                if (stmt.kind == Statement::Kind::FieldWrite) {
-                    if (!params.count(stmt.receiver))
-                        throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
+            std::function<void(const Statement&)> check_statement_names;
+            check_statement_names = [&](const Statement& stmt) {
+                if (stmt.kind == Statement::Kind::Conditional) {
+                    validate_expression(*stmt.condition_lhs, params, functions);
+                    validate_expression(*stmt.condition_rhs, params, functions);
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_names(action);
+                    for (const auto& action : stmt.else_statements)
+                        check_statement_names(action);
+                    return;
                 }
+                if (stmt.kind == Statement::Kind::FieldWrite && !params.count(stmt.receiver))
+                    throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
                 validate_expression(*stmt.expression, params, functions);
-            }
+            };
+            for (const auto& stmt : fn.statements)
+                check_statement_names(stmt);
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
             for (const auto& action : fn.actor_actions) {
