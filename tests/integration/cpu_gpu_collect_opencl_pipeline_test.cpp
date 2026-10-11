@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
     runtime::BoundedActorPort<CpuBatch> to_gpu(1, bytes);
     runtime::BoundedActorPort<GpuBatch> to_collect(1, bytes);
     std::atomic<int> cpu_turns{0}, gpu_turns{0}, collected{0};
-    assert(group->enqueue_control(cpu, [&] {
+    assert(group->run_data_turn(cpu, [&] {
         std::vector<std::uint8_t> input(bytes, 0);
         for (std::uint64_t row = 0; row < layout.rows(); ++row)
             for (std::uint32_t field = 0; field < layout.fields(); ++field) {
@@ -134,9 +134,7 @@ int main(int argc, char** argv) {
             }
         assert(to_gpu.offer(CpuBatch(std::move(input)), bytes));
         ++cpu_turns;
-    }));
-    assert(cpu_turns == 0); // actor only executes on admitted CONTROL turn
-    assert(group->run_control_turn(cpu) == Group::ControlTurn::executed);
+    }) == Group::DataTurn::executed);
     assert(cpu_turns == 1 && to_gpu.used_frames() == 1);
     CpuBatch rejected(std::vector<std::uint8_t>(bytes, 0));
     assert(!to_gpu.offer(std::move(rejected), bytes)); // bounded frame/bytes
@@ -148,7 +146,7 @@ int main(int argc, char** argv) {
     std::shared_ptr<Bridge::Receipt> route;
     std::optional<gpu::GpuDispatchCoordinator::Submission> submission;
     const gpu::Identity identity{"tenant", "OpenCL-CPU-explicit", 17};
-    assert(group->enqueue_control(gpu_actor, [&] {
+    assert(group->run_data_turn(gpu_actor, [&] {
         *cpu_input = to_gpu.try_receive();
         assert(cpu_input->has_value());
         assert(to_gpu.used_frames() == 1); // held while GPU device uses input
@@ -162,7 +160,20 @@ int main(int argc, char** argv) {
             }
             assert(to_collect.offer(GpuBatch(std::move(result)), bytes));
             ++gpu_turns;
-            assert(group->enqueue_control(collect, [&] {
+        });
+    }) == Group::DataTurn::executed);
+    assert(submission.has_value());
+    submission->get_ready().get();
+    submission->get_done().get(); // real OpenCL event and physical release
+    if (driver->worker.joinable()) driver->worker.join();
+    assert(to_gpu.used_frames() == 0);
+    assert(gpu_turns == 0 && collected == 0); // no callback executes actor code
+    assert(route->route.load() == Bridge::Route::posted);
+    assert(group->run_control_turn(gpu_actor) == Group::ControlTurn::executed);
+    assert(gpu_turns == 1 && to_collect.used_frames() == 1 && collected == 0);
+    // The collector processes ordinary DATA. GPU completion CONTROL only
+    // publishes the bounded output; no CONTROL callback runs collector code.
+    assert(group->run_data_turn(collect, [&] {
                 auto final = to_collect.try_receive();
                 assert(final.has_value());
                 for (std::uint64_t row = 0; row < layout.rows(); ++row)
@@ -176,20 +187,8 @@ int main(int argc, char** argv) {
                     }
                 assert(final->acknowledge_released());
                 ++collected;
-            }));
-        });
-    }));
-    assert(group->run_control_turn(gpu_actor) == Group::ControlTurn::executed);
-    assert(submission.has_value());
-    submission->get_ready().get();
-    submission->get_done().get(); // real OpenCL event and physical release
-    if (driver->worker.joinable()) driver->worker.join();
-    assert(to_gpu.used_frames() == 0);
-    assert(gpu_turns == 0 && collected == 0); // no callback executes actor code
-    assert(route->route.load() == Bridge::Route::posted);
-    assert(group->run_control_turn(gpu_actor) == Group::ControlTurn::executed);
-    assert(gpu_turns == 1 && to_collect.used_frames() == 1 && collected == 0);
-    assert(group->run_control_turn(collect) == Group::ControlTurn::executed);
+
+    }) == Group::DataTurn::executed);
     assert(collected == 1 && to_collect.used_frames() == 0);
     assert(group->finalized(cpu));
     assert(group->finalized(gpu_actor));
