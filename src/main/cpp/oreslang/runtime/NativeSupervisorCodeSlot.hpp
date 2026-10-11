@@ -30,6 +30,10 @@ class NativeSupervisorCodeSlot final {
         std::string abi;
         Policy code;
         std::function<void()> reclaim;
+        Generation(std::uint64_t revision, std::string signature, Policy image,
+                   std::function<void()> cleanup)
+            : number(revision), abi(std::move(signature)),
+              code(std::move(image)), reclaim(std::move(cleanup)) {}
         ~Generation() noexcept {
             try { if (reclaim) reclaim(); }
             catch (...) { /* cannot throw from final shared pin release */ }
@@ -69,8 +73,8 @@ public:
         if (initial_abi.empty() || maximum_live < 2 || !reclaim)
             throw std::invalid_argument("invalid native supervisor code slot admission");
         current_ = std::make_shared<Generation>(
-                Generation{1, std::move(initial_abi), std::move(initial),
-                           std::move(reclaim)});
+                1, std::move(initial_abi), std::move(initial),
+                std::move(reclaim));
         retained_.push_back(current_);
     }
 
@@ -106,9 +110,9 @@ public:
             prune_locked();
             if (retained_.size() >= max_live_ && current_.use_count() > 1)
                 throw std::length_error("pinned native supervisor code revision cap exceeded");
-            auto next = std::make_shared<Generation>(Generation{
+            auto next = std::make_shared<Generation>(
                 current_->number + 1, std::move(abi),
-                std::move(code), std::move(reclaim)});
+                std::move(code), std::move(reclaim));
             activated = {next->number, next->abi};
             retained_.push_back(next);
             previous = std::move(current_);
