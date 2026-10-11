@@ -29,9 +29,12 @@ int ores_native_actor_future_complete(OresNativeActorFuture* f, int status) {
     if (pthread_mutex_lock(&f->lock) != 0) abort();
     int success = 0;
     if (f->state == ORES_NATIVE_FUTURE_PENDING) {
+        /* Publish the terminal state before exposing the CONTROL wake.
+         * The callback may be admitted immediately on another worker. */
+        f->state = status;
         success = ores_native_actor_scheduler_publish_control(
             f->scheduler, f->owner, f->token);
-        if (success) f->state = status;
+        if (!success) f->state = ORES_NATIVE_FUTURE_PENDING;
     }
     if (pthread_mutex_unlock(&f->lock) != 0) abort();
     return success;
