@@ -52,10 +52,11 @@ public:
     /**
      * Retire a normally terminated child generation.
      *
-     * Only the trusted actor lifecycle owner may call this after physical
-     * finalization AND after establishing that no terminal CONTROL failure
-     * notification will be emitted for this incarnation. poll_done alone
-     * proves finalization, not the absence of a pending panic notification.
+     * Only the trusted actor lifecycle owner may classify this exit as
+     * normal. Scheduler-owned seal_normal_exit() atomically confirms physical
+     * finalization and denies cleanup if a failure has already been published
+     * (including a queued but not yet delivered CONTROL notification).
+     * It also forbids any later failure publication for the generation.
      *
      * A generation-scoped one-shot erase cannot remove a replacement child,
      * even if the native scheduler reuses the same actor slot.
@@ -64,12 +65,20 @@ public:
      */
     bool retire_normally_finalized_child(OresNativeActorRef child) noexcept {
         if (!valid(child) || child.scheduler_domain != parent_.scheduler_domain
-                || child.actor_slot == parent_.actor_slot
-                || !ores_native_actor_scheduler_poll_done(scheduler_, child))
+                || child.actor_slot == parent_.actor_slot)
             return false;
         try {
             std::lock_guard<std::mutex> lock(mutex_);
-            return registered_.erase(Key{child.actor_slot, child.generation}) == 1;
+            const Key key{child.actor_slot, child.generation};
+            if (registered_.count(key) == 0) return false;
+            // Both retirement and on_panic hold the bridge lock before asking
+            // the scheduler, so they cannot race to consume the same key.
+            // The scheduler seals the child under its own lock, making the
+            // absence of a published terminal failure authoritative.
+            if (!ores_native_actor_scheduler_seal_normal_exit(scheduler_, child))
+                return false;
+            registered_.erase(key);
+            return true;
         } catch (...) {
             return false;
         }
