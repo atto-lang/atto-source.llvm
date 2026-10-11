@@ -92,8 +92,20 @@ int main(void) {
         assert(ores_mp2_validate_copy(&schemas[i], wire[i], sizes[i], &owned));
         assert(owned.size == sizes[i] && memcmp(owned.bytes, wire[i], sizes[i]) == 0);
         assert(!ores_mp2_validate_copy(&schemas[i], wire[i], sizes[i], &owned));
+        assert(ores_mp2_validate_owned(&schemas[i], &owned));
         wire[i][sizes[i] - 1] ^= 0xff; /* detach from mutable sender bytes */
         assert(memcmp(owned.bytes, wire[i], sizes[i]) != 0);
+        /* Decoder can ONLY examine the owned snapshot, never a later
+         * mutation of the caller's buffer. */
+        assert(ores_mp2_validate_owned(&schemas[i], &owned));
+        OresMp2Owned deliberately_invalid = {0};
+        deliberately_invalid.bytes = malloc(owned.size);
+        assert(deliberately_invalid.bytes);
+        deliberately_invalid.size = owned.size;
+        memcpy(deliberately_invalid.bytes, owned.bytes, owned.size);
+        deliberately_invalid.bytes[1] = 1; /* unsupported protocol version */
+        assert(!ores_mp2_validate_owned(&schemas[i], &deliberately_invalid));
+        ores_mp2_owned_release(&deliberately_invalid);
         wire[i][sizes[i] - 1] ^= 0xff;
         ores_mp2_owned_release(&owned);
         ores_mp2_owned_release(&owned);
