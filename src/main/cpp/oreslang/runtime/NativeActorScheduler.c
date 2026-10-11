@@ -432,6 +432,18 @@ int ores_native_actor_scheduler_publish_failure(
     unlock(s);
     return ok;
 }
+/* Master-to-pool CONTROL notification. No callbacks or guest execution on
+ * caller/master; the pool scheduler consumes the condition event. */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int accepted = !s->retired;
+    if (accepted && s->scheduler_started) {
+        if (pthread_cond_signal(&s->scheduler_wakeup) != 0) abort();
+    }
+    unlock(s);
+    return accepted;
+}
 /* Host metric: the scheduler is started at first actor registration. */
 size_t ores_native_actor_scheduler_started_control_threads(OresNativeActorScheduler* s) {
     if (!s) return 0;
