@@ -1,6 +1,7 @@
 #include "oreslang/runtime/NativeOwnedI64Region.h"
 #include <assert.h>
 #include <stdint.h>
+#include <signal.h>
 #include <stdlib.h>
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/resource.h>
