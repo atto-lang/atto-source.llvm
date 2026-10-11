@@ -37,8 +37,8 @@ static void normal(void* raw, size_t actor, uint64_t payload) {
         check(actor == 1 && payload == 7);
         atomic_store(&s->child_active, 1);
         check(ores_native_actor_future_complete(s->ready, ORES_NATIVE_FUTURE_READY));
-        atomic_store(&s->child_completed, 1);
         atomic_store(&s->child_active, 0);
+        atomic_store(&s->child_completed, 1);
     }
 }
 static void control(void* raw, size_t actor, uint64_t payload) {
