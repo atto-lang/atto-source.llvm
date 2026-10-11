@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include "oreslang/runtime/ActorArena.h"
+#include "oreslang/runtime/NativeActorMailbox.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -30,7 +31,7 @@ typedef struct {
     OresActorI64Heap* heap;
     OresActorArena* arena;
     OresArenaHandle counter;
-    pthread_mutex_t gate;
+    OresNativeActorMailbox* gate;
     int ipc;
     pid_t child;
 } Worker;
@@ -108,7 +109,7 @@ static void child_worker(int fd, int idx) {
 }
 static Answer process_request(int idx) {
     Worker* w = &workers[idx];
-    require(pthread_mutex_lock(&w->gate) == 0, "mutex lock");
+    require(ores_native_actor_mailbox_enter(w->gate) == 1, "bounded actor admission");
     Answer ans;
     if (!process_mode) ans = step(w, idx);
     else {
@@ -116,7 +117,7 @@ static Answer process_request(int idx) {
         require(full_io(w->ipc, &op, sizeof op, 1), "send to isolated actor");
         require(full_io(w->ipc, &ans, sizeof ans, 0), "read isolated actor response");
     }
-    require(pthread_mutex_unlock(&w->gate) == 0, "mutex unlock");
+    ores_native_actor_mailbox_leave(w->gate);
     return ans;
 }
 static long rss_pid_kb(pid_t pid) {
@@ -212,7 +213,8 @@ int main(int argc, char** argv) {
     socklen_t size = sizeof addr;
     require(getsockname(listener, (struct sockaddr*)&addr, &size) == 0, "getsockname");
     for (int i = 0; i < ACTORS; ++i) {
-        require(pthread_mutex_init(&workers[i].gate, NULL) == 0, "mutex init");
+        workers[i].gate = ores_native_actor_mailbox_open(64);
+        require(workers[i].gate != NULL, "bounded actor lane open");
         if (!process_mode) { init_worker(&workers[i], i); continue; }
         int fd[2];
         require(socketpair(AF_UNIX, SOCK_STREAM, 0, fd) == 0, "socketpair");
@@ -245,7 +247,8 @@ int main(int argc, char** argv) {
             require(waitpid(workers[i].child, &status, 0) == workers[i].child
                     && WIFEXITED(status) && WEXITSTATUS(status) == 0, "isolated child finalized");
         } else retire_worker(&workers[i]);
-        pthread_mutex_destroy(&workers[i].gate);
+        ores_native_actor_mailbox_retire(workers[i].gate);
+        require(ores_native_actor_mailbox_try_destroy(workers[i].gate) == 1, "actor lane quiescent destroy");
     }
     puts("NATIVE_MATRIX_SHUTDOWN_OK");
     return 0;
