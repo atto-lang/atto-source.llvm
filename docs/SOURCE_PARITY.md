@@ -76,3 +76,14 @@ Record the exact Java source SHA in future differential fixtures, rather than cl
 Next priorities: imported Java lexer golden cases, unambiguous checked integer semantics,
 structured control flow, typed return analysis, precise ownership and actor ABI,
 before introducing scheduler or pinned-frame execution.
+
+
+## Experimental LLVM actor-field compiler slice
+
+The LLVM frontend now recognizes bounded i64 serial actor fields in a small
+source-defined actor fragment, with compiler-generated native initialization,
+field access, update and explicit drop. Host-issued credentials are checked
+against the native actor heap and do not become guest source values. This
+is not Java actor semantic parity: await, spawn, supervision, runtime
+scheduling, exceptions, automatic all-exit cleanup, general object layouts,
+and FFI quiescence remain release gates.
