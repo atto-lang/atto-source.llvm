@@ -49,6 +49,8 @@ struct ActorSpawnBinding {
 struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
+    // Nominal case, e.g. Messages.Stop; never lowered as scalar i64.
+    std::string tagged_variant;
     std::size_t offset = 0;
 };
 
@@ -72,6 +74,7 @@ struct TaggedReceiveArm {
     std::vector<std::string> binders;
     bool binds_payload = false;
     bool tuple_destructure = false;
+    std::vector<FieldAssignment> assignments;
     std::size_t offset = 0;
 };
 
