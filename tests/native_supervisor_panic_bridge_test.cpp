@@ -152,6 +152,26 @@ int main() {
                     rejected = true;
                 }
                 if (!rejected) ++s.unexpected;
+                // A forged cancellation/normal STOP terminal may never
+                // acknowledge the PANIC-only source STOP disposition.
+                forged = result;
+                forged.notice.native_terminal_kind = ORES_NATIVE_CONTROL_CANCELLED;
+                rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(forged);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
+                forged = result;
+                forged.notice.native_terminal_kind = ORES_NATIVE_CONTROL_STOPPED;
+                rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(forged);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
                 auto stopped = s.bridge->acknowledge_finalized_stop(result);
                 if (stopped.phase !=
                         oreslang::runtime::SupervisorChildRegistry::Phase::stopped
