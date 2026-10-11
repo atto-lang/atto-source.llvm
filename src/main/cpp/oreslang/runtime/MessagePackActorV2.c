@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 /* Fail closed: any malformed byte or unsupported shape rejects before a
  * queue slot is reserved. No allocation based on untrusted encoded lengths. */
@@ -349,7 +350,9 @@ struct OresMp2ActorGroup {
     OresNativeActorScheduler* scheduler;
     OwnedContract* contracts;
     unsigned char* spawned;
+    atomic_size_t* reserved; /* active + queued + preparing per actor */
     size_t actors;
+    size_t capacity;
     OresMp2OnMessage callback;
     void* callback_context;
 };
@@ -363,6 +366,11 @@ static void deliver(void* raw, size_t slot, uint64_t token) {
     group->callback(group->callback_context, slot, owned->bytes, owned->size);
     ores_mp2_owned_release(owned);
     free(owned);
+    /* Admission reservations cover the entire accepted DATA turn and are
+     * released only after actor user code can no longer access this frame. */
+    size_t prior = atomic_fetch_sub_explicit(&group->reserved[slot], 1,
+                                             memory_order_acq_rel);
+    if (prior == 0) abort();
 }
 static OresMp2ActorRef wrap(OresNativeActorRef r) {
     OresMp2ActorRef result = {r.scheduler_domain, r.actor_slot, r.generation};
@@ -380,11 +388,20 @@ OresMp2ActorGroup* ores_mp2_group_open(size_t actors, size_t capacity,
     if (!g) return NULL;
     g->contracts = calloc(actors, sizeof(*g->contracts));
     g->spawned = calloc(actors, 1);
-    if (!g->contracts || !g->spawned) { free(g->spawned); free(g->contracts); free(g); return NULL; }
-    g->actors = actors; g->callback = callback; g->callback_context = context;
+    g->reserved = calloc(actors, sizeof(*g->reserved));
+    if (!g->contracts || !g->spawned || !g->reserved) {
+        free(g->reserved); free(g->spawned); free(g->contracts); free(g);
+        return NULL;
+    }
+    for (size_t i = 0; i < actors; ++i) atomic_init(&g->reserved[i], 0);
+    g->actors = actors; g->capacity = capacity;
+    g->callback = callback; g->callback_context = context;
     g->scheduler = ores_native_actor_scheduler_open(actors, capacity, carriers,
                                                     deliver, g);
-    if (!g->scheduler) { free(g->spawned); free(g->contracts); free(g); return NULL; }
+    if (!g->scheduler) {
+        free(g->reserved); free(g->spawned); free(g->contracts); free(g);
+        return NULL;
+    }
     return g;
 }
 static size_t bounded_len(const char* text, size_t limit) {
@@ -440,17 +457,36 @@ int ores_mp2_group_send(OresMp2ActorGroup* g, OresMp2ActorRef target,
                         const uint8_t* wire, size_t size) {
     if (!g || target.actor_slot >= g->actors
             || !g->contracts[target.actor_slot].value.schema_id) return 0;
+    /* Reserve a bounded DATA slot BEFORE any allocation/hash/recursive
+     * decode. This prevents a flood of concurrent rejected 1 MiB sends from
+     * creating unbounded in-flight snapshots while the mailbox is saturated.
+     */
+    atomic_size_t* admission = &g->reserved[target.actor_slot];
+    size_t current = atomic_load_explicit(admission, memory_order_relaxed);
+    do {
+        if (current >= g->capacity) return 0;
+    } while (!atomic_compare_exchange_weak_explicit(
+        admission, &current, current + 1, memory_order_acq_rel,
+        memory_order_relaxed));
     OresMp2Owned* snapshot = calloc(1, sizeof(*snapshot));
-    if (!snapshot) return 0;
+    if (!snapshot) {
+        atomic_fetch_sub_explicit(admission, 1, memory_order_acq_rel);
+        return 0;
+    }
     if (!ores_mp2_validate_copy(&g->contracts[target.actor_slot].value,
                                 wire, size, snapshot)) {
-        free(snapshot); return 0;
+        free(snapshot);
+        atomic_fetch_sub_explicit(admission, 1, memory_order_acq_rel);
+        return 0;
     }
     if (!ores_native_actor_scheduler_send(g->scheduler, unwrap(target),
                                           (uint64_t)(uintptr_t)snapshot)) {
-        ores_mp2_owned_release(snapshot); free(snapshot);
+        ores_mp2_owned_release(snapshot);
+        free(snapshot);
+        atomic_fetch_sub_explicit(admission, 1, memory_order_acq_rel);
         return 0;
     }
+    /* A successful send transfers its reservation and frame to DATA deliver. */
     return 1;
 }
 int ores_mp2_group_stop(OresMp2ActorGroup* g, OresMp2ActorRef target) {
@@ -468,6 +504,7 @@ int ores_mp2_group_destroy(OresMp2ActorGroup* g) {
         free(g->contracts[i].owned_schema);
         free(g->contracts[i].owned_shape);
     }
+    free(g->reserved);
     free(g->spawned);
     free(g->contracts);
     free(g);
