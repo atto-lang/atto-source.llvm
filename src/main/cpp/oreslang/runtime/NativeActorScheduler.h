@@ -40,6 +40,15 @@ int ores_native_actor_scheduler_poll_ready(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 int ores_native_actor_scheduler_poll_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Trusted normal-exit claim. Atomically verify physical finalization and
+ * seal this exact actor generation against any later terminal-failure
+ * publication. Refuse if a terminal failure was already published, even
+ * if its parent CONTROL callback has not yet been delivered. Only the
+ * lifecycle owner may classify the exit as normal; not a guest capability.
+ * Returns 1 on the first successful seal, 0 otherwise.
+ */
+int ores_native_actor_scheduler_seal_normal_exit(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Trusted external supervisor barrier: block only the host caller until
  * the selected stopped actor drains. This is NOT a guest await/Future;
  * never invoke it on a scheduler worker/actor carrier. */
