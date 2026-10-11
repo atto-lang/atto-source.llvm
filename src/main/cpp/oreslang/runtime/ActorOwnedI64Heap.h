@@ -51,6 +51,21 @@ void ores_actor_i64_fields_set(
 void ores_actor_i64_fields_drop(
     OresActorI64Heap* heap, OresActorTurn turn,
     OresActorI64Fields* fields);
+/* Compiler-generated bridge with flattened turn credentials. Its stable
+ * primitive ABI avoids target-dependent C struct-by-value lowering. These
+ * functions are host/runtime-only and MUST NOT be source-callable builtins. */
+OresActorI64Fields* ores_actor_i64_fields_codegen_create(
+    OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+    const int64_t* initial_values, uint32_t field_count);
+int64_t ores_actor_i64_fields_codegen_get(
+    OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+    const OresActorI64Fields* fields, uint32_t index);
+void ores_actor_i64_fields_codegen_set(
+    OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+    OresActorI64Fields* fields, uint32_t index, int64_t value);
+void ores_actor_i64_fields_codegen_drop(
+    OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+    OresActorI64Fields* fields);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
 /* Returns zero while a turn or loan is outstanding; returns one and frees
  * native memory after quiescence. Never call with an invalidated heap pointer.
