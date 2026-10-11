@@ -86,6 +86,9 @@ private:
         std::atomic<bool> control_active{false};
         std::atomic<bool> control_reserved{false};
         std::atomic<bool> control_dropped{false};
+        // Shared admission bit for ordinary user turns and supervisor CONTROL.
+        // Never tied to a physical carrier thread.
+        std::atomic<bool> logical_turn_active{false};
     };
 
     friend class NativeActorGroup;
@@ -112,6 +115,38 @@ public:
     using StopRequest = std::function<void()>;
 
     enum class ControlTurn { idle, executed, busy, retired };
+    enum class UserTurn { executed, busy, retired };
+
+    /**
+     * Host scheduler ONLY: admit an ordinary actor user turn on the SAME
+     * single-flight logical lane used by supervisor CONTROL. Distinct actors
+     * may run concurrently on different physical carriers.
+     *
+     * The actor scheduler is responsible for requeueing busy turns; neither
+     * admission nor resumption parks an OS thread. Reserved CONTROL takes
+     * priority over new user turns. Source lowering must use this boundary.
+     */
+    UserTurn run_user_turn(const NativeActorRef& ref, std::function<void()> handler) {
+        if (!handler) throw std::invalid_argument("user turn handler required");
+        std::shared_ptr<NativeActorRef::Ticket> ticket;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            Entry* worker = find_active_locked(ref);
+            if (closed_ || !worker || worker->phase == Phase::starting)
+                return UserTurn::retired;
+            if (worker->pending_control) return UserTurn::busy;
+            ticket = worker->ref.ticket_;
+            bool expected = false;
+            if (!ticket->logical_turn_active.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                return UserTurn::busy;
+        }
+        std::exception_ptr failure;
+        try { handler(); } catch (...) { failure = std::current_exception(); }
+        ticket->logical_turn_active.store(false, std::memory_order_release);
+        if (failure) std::rethrow_exception(failure);
+        return UserTurn::executed;
+    }
 
     /** Enqueue-only reserved CONTROL slot. A GPU callback posts here but
      * cannot execute actor/user handlers on its carrier thread. */
@@ -135,13 +170,12 @@ public:
     }
 
     /**
-     * Runtime scheduler ONLY. Single-flight group CONTROL across physical
-     * carrier migrations; busy returns immediately without blocking carrier.
-     * Pending tickets prevent finalization until the turn retires.
+     * Host scheduler ONLY: CONTROL shares the target actor's logical lane
+     * with normal user turns, not a global group-wide lane. A reserved
+     * CONTROL event cannot execute on the child producer's carrier or
+     * overlap the parent's ordinary user code.
      */
     ControlTurn run_control_turn(const NativeActorRef& ref) {
-        std::unique_lock<std::mutex> lane(control_lane_mutex_, std::try_to_lock);
-        if (!lane.owns_lock()) return ControlTurn::busy;
         std::function<void()> handler;
         std::shared_ptr<NativeActorRef::Ticket> ticket;
         {
@@ -149,15 +183,20 @@ public:
             Entry* worker = find_active_locked(ref);
             if (closed_ || !worker) return ControlTurn::retired;
             if (!worker->pending_control) return ControlTurn::idle;
+            ticket = worker->ref.ticket_;
+            bool expected = false;
+            if (!ticket->logical_turn_active.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                return ControlTurn::busy;
             handler = std::move(worker->pending_control);
             worker->pending_control = {};
-            ticket = worker->ref.ticket_;
             ticket->control_reserved.store(false, std::memory_order_release);
             ticket->control_active.store(true, std::memory_order_release);
         }
         std::exception_ptr failure;
         try { handler(); } catch (...) { failure = std::current_exception(); }
         ticket->control_active.store(false, std::memory_order_release);
+        ticket->logical_turn_active.store(false, std::memory_order_release);
         if (failure) std::rethrow_exception(failure);
         return ControlTurn::executed;
     }
@@ -254,7 +293,8 @@ public:
             }
             // Physical finalization must not overtake an admitted or queued
             // CONTROL turn, including device-result and panic reporting.
-            if (ref.ticket_->control_active.load(std::memory_order_acquire)
+            if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
+                || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
             // Settle done ONLY on acknowledged physical finalization.
@@ -455,7 +495,6 @@ private:
     const std::size_t maximum_workers_;
     const std::uint64_t group_id_;
     mutable std::mutex mutex_;
-    std::mutex control_lane_mutex_; // runtime-only exclusive group CONTROL turns
     bool closed_ = false;
     std::unordered_map<std::uint64_t, Entry> workers_;
 };
