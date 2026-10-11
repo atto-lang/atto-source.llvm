@@ -419,7 +419,12 @@ private:
                     while (accept(","));
                 }
             }
-            if (fallback) fail("dispatch arm after catch-all is unreachable");
+            // Match wildcard remains source-ordered and makes later arms unreachable.
+            // Switch default is a fallback regardless of its source position;
+            // explicit cases may follow it, but a second default is invalid.
+            if (fallback && (is_match || arm.fallback))
+                fail(is_match ? "dispatch arm after catch-all is unreachable"
+                              : "duplicate switch default");
             if (arm.fallback) fallback = true;
             for (const auto number : arm.cases)
                 if (!distinct.insert(number).second)
@@ -437,6 +442,14 @@ private:
             if (expr->arms.size() > 256) fail("dispatch arm count exceeds 256");
         }
         require("end");
+        if (!is_match && fallback) {
+            // Preserve the relative order of concrete cases while keeping the
+            // only default last for both SSA result and procedural lowering.
+            auto default_arm = std::find_if(expr->arms.begin(), expr->arms.end(),
+                [](const Expression::Arm& arm) { return arm.fallback; });
+            if (default_arm + 1 != expr->arms.end())
+                std::rotate(default_arm, default_arm + 1, expr->arms.end());
+        }
         if (expr->arms.empty()) fail("match/switch needs at least one arm");
         if (!procedural && !fallback)
             fail("non-exhaustive value match/switch: add catch-all");
