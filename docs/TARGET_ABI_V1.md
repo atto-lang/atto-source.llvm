@@ -19,9 +19,10 @@ features or ABI overrides are supported yet.
   addressable allocation, additionally require `bytes <= PTRDIFF_MAX` and
   `bytes <= SIZE_MAX` on the *actual host*, and enforce the selected target's
   conservative signed-address offset limit (2^31-1 on 32-bit).
-- File/wire representations use separately versioned little-endian encodings;
-  do not reinterpret native structs or assume `memcpy(float)` is a portable
-  cross-endian serialization format.
+- Every file/wire representation must specify its own byte order and version;
+  MessagePack integer scalars use network (big-endian) order, while the current
+  Java DOP F32 host-buffer draft uses little-endian storage. Neither may be
+  inferred from a native struct layout or from `memcpy(float)`.
 - ABI, vector ISA, cache-line size, and atomic availability must be obtained from
   verified target machine capabilities. 64-bit pointer width alone does not
   imply any SIMD instruction set or lock-free atomic width.
