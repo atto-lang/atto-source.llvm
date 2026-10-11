@@ -91,7 +91,7 @@ define pattern Messages as
 end
 ```
 
-**Scope note:** The Java/Graal draft adds a first compiler-level builtin/structural `Serializable` admission check and rejects unimplemented `@Serializable` derivation; neither repository yet implements a canonical portable codec or full source-level enum/actor parity. LLVM's existing fail-closed reservations remain correct while source-level lowering is absent.
+**Scope note (updated):** Java/Graal now implements canonical MessagePack v2 for supported scalar/collection actor messages, including live source-level actor mailbox integration and 39 passing exact-source Maven/JUnit tests. The native LLVM draft now implements a separate C++17 canonical binary codec with six passing cross-backend golden vectors; **LLVM source-level actor lowering and enum/pattern construction/matching are still unimplemented**, and `@Serializable` derivation is still reserved. LLVM's existing fail-closed reservations remain correct while source-level lowering is absent.
 
 ## Transport decision: canonical shape-bound MessagePack v2, no implicit alias sharing
 
@@ -99,7 +99,7 @@ Default to **MessagePack binary serialization**, not JSON/text, for all mailbox 
 
 The reference subset now uses **MessagePack wire v2** `[wire_version=2, schema_id_utf8, SHA256("oreslang.actor.shape.v2/" + canonical_shape) encoded as bin8(32), schema_typed_payload]`. Canonical shape grammar: `B` bool, `I` signed i64, `F` finite f64, `S` UTF-8 string, `T[...]` Tuple, `FA[...]` FixedArray, `FL[...]` FixedList, `A[T]` Array and `L[T]` List. Include exact member ordering and arity in the digest. Version 1 is deliberately rejected (no migration implied). The digest is a type-identity binder, not sender authentication. Decoder rejects noncanonical integers/string/array headers and untrusted array lengths exceeding the remaining byte/node budgets **before allocating**. The decoder validates version, schema, fixed shape/arity, scalar type, valid UTF-8, signed integer range, finite floating point values, depth/node/length/byte quotas and complete input consumption. Type descriptors are compiler-owned and cannot be substituted by untrusted payloads. `contracts/v1/design/messagepack_collection_vectors.json` contains six exact MessagePack binary vectors shared with the Java/Graal repo; the LLVM backend must match them byte-for-byte before parity is claimed. The first Java reference implementation is `dev.oreslang.runtime.MessagePackCollectionCodec`, **not yet integrated with ActorRuntime.send**.
 
-**Native parity admission blockers:** The Java compiler currently erases `Array<T>` versus `List<T>` into `ListType(T)`, and all integer widths/unsigned or `bigint` aliases into `Primitive.INT`. LLVM must not reproduce these erasures in wire type identity: the compiler-generated native descriptor must preserve collection kind, numeric width/signedness and stable package-qualified schema identity. `schema_id` from untrusted input cannot select a host class or codec. Preserve a native bounded decoder state machine and require full byte-for-byte cross-runtime v2 vectors. Java's standalone codec is **not wired into the runtime actor mailboxes**; existing Java host capability transfers are separate from future serializable user messages, not evidence of wire equivalence.
+**Native parity admission blockers:** The Java compiler currently erases `Array<T>` versus `List<T>` into `ListType(T)`, and all integer widths/unsigned or `bigint` aliases into `Primitive.INT`. LLVM must not reproduce these erasures in wire type identity: the compiler-generated native descriptor must preserve collection kind, numeric width/signedness and stable package-qualified schema identity. `schema_id` from untrusted input cannot select a host class or codec. Preserve a native bounded decoder state machine and require full byte-for-byte cross-runtime v2 vectors. Java's compiler-bound source actors now perform MessagePack encode/decode before mailbox admission; existing Java host capability transfers are separate from future serializable user messages, not evidence of wire equivalence.
 
 The on-wire schema is not a memcpy of LLVM native structs, nor `java.io.Serializable`, nor a mutable JVM object frozen and passed by alias. Structs, tagged enum cases, maps, options, decimals, complex values, unsigned widths and opaque capability descriptors need additional compiler-generated codecs before admission on this ABI. Normalize string and number policies across all backends. For union/pattern domains use explicit stable variant or alternative tags when shape tests could overlap.
 
@@ -114,3 +114,13 @@ A later `SHARED` fast path may use `rt copy` **only** when the full value is sta
 5. Run a common positive and negative corpus against Java/Graal and LLVM pinned source heads, including duplicate labels, overlapping/unreachable patterns, nonexhaustive matches, mismatched payload types, unsafe cross-actor pointers, unknown serialized tags, schema version changes and PostgreSQL round trips.
 
 **Milestone status:** the native compiler's current documented general-source subset remains restricted. The tests must show production source compilation and runtime behavior before marking this feature complete. Documentation alone is not implementation evidence.
+
+**Executed native binary parity:** The header-only C++17
+\`src/main/cpp/oreslang/runtime/MessagePackWireV2.hpp\` implements the bounded
+v2 typed subset, using OpenSSL EVP SHA-256 for recursive wire schema hashing.
+It has an optional CMake/CTest target and a Python differential test against
+the exact shared JSON vector manifest.
+[Funded native job #38169364693](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38169364693)
+compiled the exact C++ source and passed six Java/Python golden vectors,
+native round trips and malformed-input cases. This does not prove native
+Oreslang compiler source-level actor send/receive integration.
