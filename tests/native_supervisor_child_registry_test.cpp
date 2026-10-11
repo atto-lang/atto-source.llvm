@@ -232,6 +232,19 @@ int main() {
     check(!registry.reconcile_uncertain_stop(
                 uncertain_child.child, uncertain_actor, 1, 72, no_proof),
           "UNKNOWN reconciliation was treated as committed STOP");
+    must_reject([&] {
+        registry.reconcile_uncertain_stop(
+            uncertain_child.child, uncertain_actor, 1, 72,
+            [](const SupervisorChildRegistry::StopReceipt&) -> bool {
+                throw std::runtime_error("host receipt verification unavailable");
+            });
+    });
+    check(registry.snapshot(uncertain_child.child).phase
+                  == SupervisorChildRegistry::Phase::stopping
+              && registry.stop_receipt(uncertain_child.child).status
+                  == SupervisorChildRegistry::StopReceiptStatus::uncertain,
+          "throwing independent verifier altered UNKNOWN lifecycle state");
+
     check(registry.snapshot(uncertain_child.child).phase
                   == SupervisorChildRegistry::Phase::stopping
               && registry.stop_receipt(uncertain_child.child).status
