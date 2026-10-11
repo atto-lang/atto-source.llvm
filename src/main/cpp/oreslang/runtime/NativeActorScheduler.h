@@ -93,9 +93,16 @@ int ores_native_actor_scheduler_publish_failure(
     OresNativeActorTerminalFailure failure);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
+/* Native scheduler construction configures queues and capacity, but creates
+ * ZERO pthread carriers. First successfully admitted user or CONTROL work
+ * activates workers atomically before publishing that message. A failed
+ * first activation fails closed, without publishing an unserviceable item. */
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn callback, void* ctx);
+
+/* Host diagnostic only. No guest pointer or scheduler internals are exposed. */
+size_t ores_native_actor_scheduler_started_workers(OresNativeActorScheduler* scheduler);
 /* Legacy index admission requires an already-spawned host actor.\n * New hosts should use the generation-checked actor ref send API.\n * O(1), nonblocking admission. Returns 1 on accepted, 0 on capacity or retirement.
  * Does not allocate and never invokes callbacks inline. Capacity includes the
  * currently executing task. Caller retains ownership on rejection.
