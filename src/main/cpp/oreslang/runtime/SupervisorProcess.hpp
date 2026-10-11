@@ -145,6 +145,11 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         return active_;
     }
+    /** True only after a logical await has relinquished its CONTROL carrier. */
+    bool suspended() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return active_ && suspended_ && !failed_ && !closed_;
+    }
     bool healthy() const {
         std::lock_guard<std::mutex> guard(mutex_);
         return !failed_ && !closed_ && !close_after_commit_ && undelivered_ == 0;
