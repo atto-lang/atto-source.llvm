@@ -36,6 +36,28 @@ struct OresNativeActorScheduler {
 static _Thread_local OresNativeActorScheduler* executing;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
+/* Never wrap a scheduler-domain capability back to 1: a stale ActorRef
+ * must not match a new scheduler even after counter exhaustion. The
+ * UINT64_MAX value is permanently reserved as the exhausted sentinel.
+ * A CAS loop also preserves uniqueness under concurrent scheduler opens. */
+static uint64_t allocate_scheduler_domain(void) {
+    uint64_t candidate = atomic_load_explicit(
+        &next_scheduler_domain, memory_order_relaxed);
+    while (candidate != 0 && candidate != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(
+                &next_scheduler_domain, &candidate, candidate + 1,
+                memory_order_relaxed, memory_order_relaxed))
+            return candidate;
+    }
+    return 0;
+}
+#ifdef ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION
+/* Only compiled in the isolated security test binary, never production. */
+void ores_native_actor_scheduler_test_set_next_domain(uint64_t value) {
+    atomic_store_explicit(&next_scheduler_domain, value, memory_order_relaxed);
+}
+#endif
+
 static void lock(OresNativeActorScheduler* s) {
     if (pthread_mutex_lock(&s->lock) != 0) abort();
 }
@@ -124,8 +146,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
     if (!s->actors || !s->slots || !s->threads) goto allocation_failed;
-    s->domain = atomic_fetch_add_explicit(&next_scheduler_domain, 1, memory_order_relaxed);
-    if (!s->domain || s->domain == UINT64_MAX) goto allocation_failed;
+    s->domain = allocate_scheduler_domain();
+    if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
     s->per_actor_capacity = capacity;
     s->worker_count = workers;
