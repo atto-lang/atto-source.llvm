@@ -118,10 +118,10 @@ public:
     /** Finishes a normal/suspended/canceled handler, then promotes FIFO work. */
     FinishResult finish(const Lease& lease) {
         std::lock_guard<std::mutex> guard(lock_);
-        if (!matches_locked(lease)) return {false, std::nullopt};
+        if (!matches_locked(lease)) return {false, std::nullopt, {}};
         active_.reset();
         suspended_ = false;
-        if (pending_.empty() || stopped_) return {true, std::nullopt};
+        if (pending_.empty() || stopped_) return {true, std::nullopt, {}};
         if (generation_ == std::numeric_limits<std::uint64_t>::max()) {
             stopped_ = true; // fail closed rather than wrap a trusted token
             std::deque<QueuedEvent> rejected;
@@ -132,7 +132,7 @@ public:
         pending_.pop_front();
         Lease ticket{actor_id_, incarnation_, ++generation_, next.event_id, next.kind};
         active_ = ticket;
-        return {true, ticket};
+        return {true, ticket, {}};
     }
 
     bool cancel_pending(std::uint64_t event_id) {
