@@ -1,0 +1,6 @@
+define contract MathContract as
+  fnc add(int a, int b) => int;
+end
+define module Math conforms MathContract as
+  pub fnc main(): int { return 42; }
+end
