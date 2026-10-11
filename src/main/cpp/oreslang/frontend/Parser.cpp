@@ -92,7 +92,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -120,14 +120,36 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (accept("define")) {
+        // This is a restricted, *same-file* i64 contract feature. Source imports,
+        // String contracts, and cross-unit linkage are NOT silently admitted.
+        if (token_.text == "import") {
+            fail("native contract imports require a validated cross-unit linker");
+        }
+        while (token_.text == "define"
+                || (token_.text == "pub" && peek_next().text == "define")) {
+            const bool pub = accept("pub");
+            require("define");
+            if (accept("contract")) {
+                program.contracts.push_back(contract());
+                continue;
+            }
             require("module");
+            if (pub) fail("native public module wrapper is not supported in the i64 subset");
             program.module = identifier();
-            accept("as"); // Both 'define module M as' and 'define module M' occur in Java.
+            if (accept("conforms")) {
+                do {
+                    program.conforms.push_back(identifier());
+                } while (accept(","));
+            }
+            accept("as"); // Existing Java-compatible module body.
             wrapped_module = true;
+            break;
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (token_.text == "import") {
+                fail("native contract imports require a validated cross-unit linker");
+            }
             program.functions.push_back(function());
         }
         if (wrapped_module) require("end");
@@ -138,6 +160,52 @@ public:
     }
 
 private:
+    Token peek_next() const {
+        Lexer next_lexer = lexer_;
+        return next_lexer.next();
+    }
+
+    ModuleContract contract() {
+        ModuleContract result;
+        result.name = identifier();
+        require("as");
+        const bool braced = accept("{");
+        std::unordered_set<std::string> seen;
+        while (token_.kind != Kind::End
+               && token_.text != (braced ? "}" : "end")) {
+            ContractMethod method;
+            if (!accept("fnc")) {
+                fail("native i64 contracts only admit fnc signatures");
+            }
+            method.name = identifier();
+            if (!seen.insert(method.name).second) {
+                fail("duplicate native module contract method");
+            }
+            require("(");
+            if (!accept(")")) {
+                do {
+                    Parameter::Mode mode = Parameter::Mode::Value;
+                    if (accept("borrow")) {
+                        mode = accept("mut") ? Parameter::Mode::BorrowMut
+                                             : Parameter::Mode::Borrow;
+                    }
+                    require("int");
+                    (void)identifier();
+                    method.parameter_modes.push_back(mode);
+                } while (accept(","));
+                require(")");
+            }
+            require("=");
+            require(">");
+            require("int");
+            require(";");
+            result.methods.push_back(std::move(method));
+        }
+        require(braced ? "}" : "end");
+        if (result.methods.empty()) fail("empty native module contract is unsupported");
+        return result;
+    }
+
     Function function() {
         Function value;
         value.offset = token_.offset;
@@ -372,6 +440,45 @@ private:
                 if (!params.insert(param.name).second) {
                     throw std::runtime_error("duplicate parameter '" + param.name
                                              + "' at byte " + std::to_string(fn.offset));
+                }
+            }
+        }
+        // Same-file contracts are compile-time structural checks. Requiring
+        // matching *public* members prevents accidental admission through
+        // private functions that external callers cannot invoke.
+        std::unordered_map<std::string, const ModuleContract*> available_contracts;
+        for (const auto& contract : program.contracts) {
+            if (!available_contracts.emplace(contract.name, &contract).second) {
+                throw std::runtime_error("duplicate native module contract '" + contract.name + "'");
+            }
+        }
+        std::unordered_set<std::string> seen_contracts;
+        for (const auto& ref : program.conforms) {
+            if (!seen_contracts.insert(ref).second) {
+                throw std::runtime_error("duplicate native conforms contract '" + ref + "'");
+            }
+            const auto contract_it = available_contracts.find(ref);
+            if (contract_it == available_contracts.end()) {
+                throw std::runtime_error("unknown native module contract '" + ref + "'");
+            }
+            for (const auto& required : contract_it->second->methods) {
+                const auto fn = std::find_if(program.functions.begin(),
+                        program.functions.end(), [&](const Function& candidate) {
+                            return candidate.name == required.name;
+                        });
+                if (fn == program.functions.end() || !fn->exported) {
+                    throw std::runtime_error("missing public native module contract method '"
+                            + ref + "." + required.name + "'");
+                }
+                if (fn->parameters.size() != required.parameter_modes.size()) {
+                    throw std::runtime_error("native module contract parameter arity mismatch '"
+                            + ref + "." + required.name + "'");
+                }
+                for (std::size_t n = 0; n < required.parameter_modes.size(); ++n) {
+                    if (fn->parameters[n].mode != required.parameter_modes[n]) {
+                        throw std::runtime_error("native module contract ownership mode mismatch '"
+                                + ref + "." + required.name + "'");
+                    }
                 }
             }
         }
