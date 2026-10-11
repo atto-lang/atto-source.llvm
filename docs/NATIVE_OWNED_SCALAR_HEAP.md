@@ -77,10 +77,20 @@ the region-close guard to abort instead.
 
 ## CI
 
-The funded exact-source test mirror builds Release LLVM CMake, runs all 43
-CTest contracts, including native execution of nested owned regions, validates
-compiler rejection of unsupported types, and inspects IR for reverse drops,
-closure and absence of tracing-GC statepoints.
+The funded exact-source test mirror validated the real LLVM compiler,
+Clang-native owned-region execution, rejection of experimental `owned int`
+without opt-in, and normal scalar code with no native ownership ABI. This
+**does not** mean the full repository CTest suite has passed.
+
+The complete source-tree CMake/CTest suite now includes
+`native_owned_syntax_cfg_stress`, a seeded 77-case native compiler, Clang and
+fail-closed diagnostic corpus. Its inputs vary between normal `Copy` scalars
+and explicitly opted-in experimental regions, covering multiple guarded
+returns, exact per-path drops, and malformed `==` aliases. The new stress
+corpus and full CTest integration must execute successfully on reconciled
+current heads before this prototype can be merged. Source-org CI can fail
+before any job executes when GitHub Actions capacity is unavailable; a
+zero-step failure is neither a compiler test success nor a regression.
 
 ## Guarded early-return example (experimental)
 
