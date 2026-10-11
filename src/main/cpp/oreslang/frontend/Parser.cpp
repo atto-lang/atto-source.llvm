@@ -151,6 +151,7 @@ private:
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
             ActorField field;
             field.offset = token_.offset;
+            field.mutable_field = token_.text == "let";
             advance();
             field.name = identifier();
             require(":");
@@ -398,6 +399,7 @@ private:
         if (program.actor) {
             const auto& actor = *program.actor;
             std::unordered_set<std::string> fields;
+            std::unordered_map<std::string, bool> mutable_fields;
             const std::unordered_set<std::string> empty;
             const std::unordered_map<std::string, std::size_t> no_calls;
             for (const auto& field : actor.fields) {
@@ -408,6 +410,7 @@ private:
                     throw std::runtime_error("duplicate actor field '" + field.name
                                              + "' at byte " + std::to_string(field.offset));
                 }
+                mutable_fields.emplace(field.name, field.mutable_field);
             }
             std::unordered_set<std::string> names;
             for (const auto& method : actor.methods) {
@@ -426,6 +429,9 @@ private:
                 for (const auto& assignment : method.assignments) {
                     if (!fields.count(assignment.field)) {
                         throw std::runtime_error("unknown actor assignment field '" + assignment.field + "'");
+                    }
+                    if (!mutable_fields.at(assignment.field)) {
+                        throw std::runtime_error("cannot assign immutable actor field '" + assignment.field + "'");
                     }
                     validate_expression(*assignment.value, params, no_calls, &fields);
                 }
