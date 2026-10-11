@@ -132,8 +132,12 @@ public:
                 wrapped_module = true;
             } else if (accept("actor")) {
                 program.actors.push_back(actor());
+            } else if (accept("enum")) {
+                program.enums.push_back(tagged_enum());
+            } else if (accept("pattern")) {
+                program.tagged_patterns.push_back(tagged_pattern());
             } else {
-                fail("expected 'module' or 'actor'");
+                fail("expected 'module', 'actor', 'enum' or 'pattern'");
             }
         }
         while (token_.kind != Kind::End
@@ -141,8 +145,10 @@ public:
             if (accept("declare")) {
                 program.message_patterns.push_back(message_pattern());
             } else if (accept("define")) {
-                require("actor");
-                program.actors.push_back(actor());
+                if (accept("actor")) program.actors.push_back(actor());
+                else if (accept("enum")) program.enums.push_back(tagged_enum());
+                else if (accept("pattern")) program.tagged_patterns.push_back(tagged_pattern());
+                else fail("expected 'actor', 'enum' or 'pattern'");
             } else {
                 program.functions.push_back(function());
             }
@@ -150,13 +156,92 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         if (program.functions.empty() && program.actors.empty()
-            && program.message_patterns.empty())
+            && program.message_patterns.empty() && program.enums.empty()
+            && program.tagged_patterns.empty())
             fail("expected a function or actor");
         validate(program);
         return program;
     }
 
 private:
+    // The tagged source grammar is intentionally declaration-only for now.
+    // Actual guest send/receive matching still needs compile-time lowering to
+    // the canonical MessagePack v2 source ABI; see validate() below.
+    EnumDeclaration tagged_enum() {
+        EnumDeclaration result;
+        result.offset = token_.offset;
+        result.name = identifier();
+        require("as");
+        std::unordered_set<std::string> caseNames;
+        std::unordered_set<std::uint32_t> usedTags;
+        std::uint64_t next = 1;
+        while (token_.kind != Kind::End && token_.text != "end") {
+            EnumCase item;
+            item.name = identifier();
+            if (!caseNames.insert(item.name).second)
+                fail("duplicate enum case");
+            if (accept(":")) {
+                item.has_payload = true;
+                item.payload = message_shape();
+                // Strictly canonical tagged envelope shapes:
+                // array/list is homogeneous, fixed sequences carry slots.
+                if ((item.payload.kind == MessageShape::Kind::Array
+                     || item.payload.kind == MessageShape::Kind::List)
+                    && item.payload.elements.size() != 1)
+                    fail("variable enum message collection must have exactly one element type");
+            }
+            std::uint64_t tag = next;
+            if (accept("=")) {
+                if (token_.kind != Kind::Integer) fail("expected positive enum tag");
+                std::string digits(token_.text);
+                if (digits.front() == '_' || digits.back() == '_'
+                    || digits.find("__") != std::string::npos)
+                    fail("invalid enum wire tag");
+                digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+                const auto parsed = std::from_chars(digits.data(),
+                    digits.data() + digits.size(), tag);
+                if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+                    fail("enum wire tag overflow");
+                advance();
+            }
+            if (tag == 0 || tag > 2147483647ULL)
+                fail("enum wire tag must be a positive signed 32-bit integer");
+            if (tag < next) fail("enum wire tags must increase monotonically");
+            if (!usedTags.insert(static_cast<std::uint32_t>(tag)).second)
+                fail("duplicate enum wire tag");
+            item.tag = static_cast<std::uint32_t>(tag);
+            next = tag + 1;
+            result.cases.push_back(std::move(item));
+            accept(",");
+            accept(";");
+        }
+        if (result.cases.empty()) fail("enum must declare at least one case");
+        require("end");
+        return result;
+    }
+
+    TaggedPattern tagged_pattern() {
+        TaggedPattern result;
+        result.offset = token_.offset;
+        result.name = identifier();
+        require("as");
+        std::unordered_set<std::string> seen;
+        while (token_.kind != Kind::End && token_.text != "end") {
+            const std::string owner = identifier();
+            require(".");
+            const std::string variant = identifier();
+            const std::string qualified = owner + "." + variant;
+            if (!seen.insert(qualified).second)
+                fail("duplicate pattern alternative");
+            result.alternatives.push_back(qualified);
+            accept(",");
+            accept(";");
+        }
+        if (result.alternatives.empty()) fail("pattern must have at least one alternative");
+        require("end");
+        return result;
+    }
+
     MessageShape message_shape() {
         if (accept("bool")) return {MessageShape::Kind::Boolean, {}};
         if (accept("int")) return {MessageShape::Kind::Integer, {}};
@@ -166,6 +251,18 @@ private:
         if (accept("(")) {
             shape.kind = MessageShape::Kind::Tuple;
             close = ")";
+        } else if (accept("Tuple")) {
+            shape.kind = MessageShape::Kind::Tuple;
+            require("[");
+            close = "]";
+        } else if (accept("FixedArray")) {
+            shape.kind = MessageShape::Kind::FixedArray;
+            require("[");
+            close = "]";
+        } else if (accept("FixedList")) {
+            shape.kind = MessageShape::Kind::FixedList;
+            require("[");
+            close = "]";
         } else if (accept("Array")) {
             shape.kind = MessageShape::Kind::Array;
             require("[");
@@ -175,7 +272,7 @@ private:
             require("[");
             close = "]";
         } else {
-            fail("expected message shape (bool, int, string, tuple, Array or List)");
+            fail("expected message shape (bool, int, string, Tuple, FixedArray, FixedList, Array or List)");
         }
         if (accept(close))
             fail("empty structural message pattern is not supported");
@@ -565,6 +662,8 @@ private:
             default: break;
         }
         const char* label = shape.kind == MessageShape::Kind::Tuple ? "Tuple"
+            : shape.kind == MessageShape::Kind::FixedArray ? "FixedArray"
+            : shape.kind == MessageShape::Kind::FixedList ? "FixedList"
             : shape.kind == MessageShape::Kind::Array ? "Array" : "List";
         std::string text(label);
         text += "[";
@@ -594,6 +693,32 @@ private:
     }
 
     static void validate(const Program& program) {
+        // LLVM nominal declarations must resolve independently of source
+        // order, but must NEVER inherit structural shape-first dispatch.
+        std::unordered_set<std::string> declaredNames;
+        std::unordered_map<std::string, const EnumDeclaration*> enumNames;
+        for (const auto& enumeration : program.enums) {
+            if (!declaredNames.insert(enumeration.name).second)
+                throw std::runtime_error("duplicate enum/pattern declaration");
+            enumNames.emplace(enumeration.name, &enumeration);
+        }
+        std::unordered_set<std::string> typedDomains;
+        for (const auto& pattern : program.tagged_patterns) {
+            if (!declaredNames.insert(pattern.name).second)
+                throw std::runtime_error("duplicate enum/pattern declaration");
+            typedDomains.insert(pattern.name);
+            for (const auto& qualified : pattern.alternatives) {
+                const std::size_t dot = qualified.find('.');
+                auto found = enumNames.find(qualified.substr(0, dot));
+                if (found == enumNames.end())
+                    throw std::runtime_error("unknown enum in tagged pattern: " + qualified);
+                const std::string name = qualified.substr(dot + 1);
+                if (std::none_of(found->second->cases.begin(), found->second->cases.end(),
+                                 [&](const EnumCase& c) { return c.name == name; }))
+                    throw std::runtime_error("unknown enum case in tagged pattern: " + qualified);
+            }
+        }
+        for (const auto& [name, ignored] : enumNames) typedDomains.insert(name);
         std::unordered_map<std::string, const MessagePattern*> messagePatterns;
         for (const auto& pattern : program.message_patterns) {
             if (!messagePatterns.emplace(pattern.name, &pattern).second)
@@ -602,6 +727,16 @@ private:
             for (const auto& alternative : pattern.alternatives) {
                 if (!variants.insert(shape_key(alternative)).second)
                     throw std::runtime_error("duplicate message shape in match '" + pattern.name + "'");
+            }
+        }
+        for (const auto& item : program.message_patterns) {
+            if (!declaredNames.insert(item.name).second)
+                throw std::runtime_error("duplicate structural/tagged message contract");
+        }
+        for (const auto& actor : program.actors) {
+            if (typedDomains.count(actor.messages_type)) {
+                throw std::runtime_error(
+                    "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
             }
         }
         std::unordered_set<std::string> declaredActors;
