@@ -92,5 +92,22 @@ int main() {
     assert(bounded_control_diagnostic(malformed) == std::string("valid:") + std::string(3, char(63)) + "!");
     assert(bounded_control_diagnostic(std::string(2048, 'x')).size() ==
            max_control_diagnostic_bytes);
+
+    // Malformed UTF-8 and a truncated final scalar are always normalized
+    // before crossing the native supervisor CONTROL boundary.
+    const std::string truncated_sequence = std::string("ok") + "\xf0\x9f";
+    assert(bounded_control_diagnostic(truncated_sequence) == "ok??");
+    const std::string overlong_encoding = std::string("\xc0\xaf", 2);
+    assert(bounded_control_diagnostic(overlong_encoding) == "??");
+    const std::string invalid_scalar = std::string("\xf4\x90\x80\x80", 4);
+    assert(bounded_control_diagnostic(invalid_scalar) == "????");
+    const auto near_boundary = bounded_control_diagnostic(
+        std::string(1023, 'x') + rocket + "tail");
+    assert(near_boundary == std::string(1023, 'x'));
+    assert(near_boundary.size() < max_control_diagnostic_bytes);
+    const auto invalid_at_boundary = bounded_control_diagnostic(
+        std::string(1023, 'x') + std::string("\xed\xa0\x80", 3) + rocket);
+    assert(invalid_at_boundary == std::string(1023, 'x') + "?");
+    assert(invalid_at_boundary.size() == max_control_diagnostic_bytes);
     return 0;
 }
