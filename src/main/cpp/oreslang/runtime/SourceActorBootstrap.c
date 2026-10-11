@@ -584,6 +584,127 @@ void oreslang_source_actor_send_variant_checked(
     // backpressure/cancellation has a proper compiler continuation.
     ensure(oreslang_source_actor_send_variant(opaque, wire, size));
 }
+
+/* Bounded three-actor pipeline bootstrap. This is a linear, single-flow
+ * compiler-owned route: no graph branching, cycles, or guest-owned refs.
+ * Source main configures the route before sending and joins before stop. */
+void oreslang_source_actor_pipeline_connect(void* first, void* middle, void* last) {
+    SourceActor* a = first;
+    SourceActor* b = middle;
+    SourceActor* c = last;
+    group_lock();
+    ensure(a && b && c && a != b && a != c && b != c
+        && group.scheduler && !group.pipeline_source);
+    SourceActor* chain[3] = {a, b, c};
+    ensure(a->variant_count >= 1 && a->on_variant);
+    for (size_t i = 0; i < 3; ++i) {
+        SourceActor* actor = chain[i];
+        ensure(actor->magic == SOURCE_ACTOR_MAGIC && actor->on_variant
+            && !actor->upstream && !actor->downstream
+            && actor->variant_count == a->variant_count
+            && actor->ref.actor_slot < group.next_slot
+            && group.actors[actor->ref.actor_slot] == actor);
+        for (size_t v = 0; v < a->variant_count; ++v) {
+            const SourceVariantContract* lhs = &a->variants[v];
+            const SourceVariantContract* rhs = &actor->variants[v];
+            ensure(lhs->owned_enum_name && rhs->owned_enum_name
+                && lhs->declared_tag == rhs->declared_tag
+                && strcmp(lhs->owned_enum_name, rhs->owned_enum_name) == 0
+                && strcmp(lhs->value.schema_id, rhs->value.schema_id) == 0
+                && strcmp(lhs->value.shape, rhs->value.shape) == 0);
+        }
+    }
+    a->downstream = b;
+    b->upstream = a;
+    b->downstream = c;
+    c->upstream = b;
+    group.pipeline_source = a;
+    group.pipeline_done = 0;
+    group.pipeline_result = 0;
+    group_unlock();
+}
+static size_t pipeline_write_positive(uint8_t* dst, uint64_t n) {
+    if (n <= 127) { dst[0] = (uint8_t)n; return 1; }
+    unsigned width = n <= UINT8_MAX ? 1 : n <= UINT16_MAX ? 2
+                    : n <= UINT32_MAX ? 4 : 8;
+    dst[0] = width == 1 ? 0xcc : width == 2 ? 0xcd
+           : width == 4 ? 0xce : 0xcf;
+    for (unsigned i = 0; i < width; ++i)
+        dst[1 + i] = (uint8_t)(n >> (8 * (width - i - 1)));
+    return 1 + width;
+}
+static size_t pipeline_write_i64(uint8_t* dst, int64_t number) {
+    if (number >= 0) return pipeline_write_positive(dst, (uint64_t)number);
+    if (number >= -32) { dst[0] = (uint8_t)number; return 1; }
+    unsigned width = number >= INT8_MIN ? 1 : number >= INT16_MIN ? 2
+                    : number >= INT32_MIN ? 4 : 8;
+    dst[0] = width == 1 ? 0xd0 : width == 2 ? 0xd1
+           : width == 4 ? 0xd2 : 0xd3;
+    for (unsigned i = 0; i < width; ++i)
+        dst[1 + i] = (uint8_t)((uint64_t)number >> (8 * (width - i - 1)));
+    return 1 + width;
+}
+static size_t pipeline_write_string(uint8_t* dst, const char* s) {
+    size_t n = strlen(s);
+    ensure(n > 0 && n <= 256);
+    size_t off = 0;
+    if (n <= 31) dst[off++] = (uint8_t)(0xa0 | n);
+    else if (n <= 255) { dst[off++] = 0xd9; dst[off++] = (uint8_t)n; }
+    else { dst[off++] = 0xda; dst[off++] = 1; dst[off++] = 0; }
+    memcpy(dst + off, s, n);
+    return off + n;
+}
+void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
+                                              uint64_t variant, int64_t value) {
+    SourceActor* actor = active_pipeline_actor;
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC
+        && (direction == 1 || direction == 2) && variant < actor->variant_count);
+    SourceActor* target = direction == 1 ? actor->downstream : actor->upstream;
+    ensure(target && target->magic == SOURCE_ACTOR_MAGIC);
+    const SourceVariantContract* contract = &actor->variants[variant];
+    ensure(contract->owned_enum_name && contract->declared_tag
+        && strcmp(contract->value.shape, "T[S,I,I]") == 0);
+    /* Only immutable compiler-registered nominal cases may be emitted.
+     * Snapshot and validate at the recipient before bounded DATA admission. */
+    uint8_t wire[1024];
+    size_t at = 0;
+    wire[at++] = 0x94;
+    wire[at++] = 0x02;
+    at += pipeline_write_string(wire + at, contract->value.schema_id);
+    wire[at++] = 0xc4;
+    wire[at++] = 32;
+    memcpy(wire + at, contract->sha, 32);
+    at += 32;
+    wire[at++] = 0x93;
+    at += pipeline_write_string(wire + at, contract->owned_enum_name);
+    at += pipeline_write_positive(wire + at, contract->declared_tag);
+    at += pipeline_write_i64(wire + at, value);
+    ensure(at < sizeof(wire));
+    /* This first slice is single-flow and fail-closed on saturation.
+     * Future<T>-based suspension/backpressure belongs to the next slice. */
+    ensure(source_send_binary(target, wire, at, (uint8_t)direction));
+}
+void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
+    SourceActor* actor = source;
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC);
+    group_lock();
+    ensure(group.pipeline_source == actor);
+    struct timespec deadline;
+    ensure(clock_gettime(CLOCK_REALTIME, &deadline) == 0);
+    deadline.tv_sec += 20;
+    while (!group.pipeline_done) {
+        int status = pthread_cond_timedwait(
+            &group.pipeline_completed, &group.mutex, &deadline);
+        ensure(status == 0);
+    }
+    ensure(group.pipeline_result == expected);
+    group_unlock();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr, "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=%lld\n",
+        (long long)expected);
+#endif
+}
+
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
