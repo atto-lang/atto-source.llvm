@@ -33,15 +33,21 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
-    std::string class_name; // only stack-constructed, bounded one-field class
+    std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     std::size_t offset = 0;
 };
 
+struct ClassField {
+    std::string name;
+    std::int64_t initial = 0;
+};
+
 struct ClassDecl {
     std::string name;
-    std::string field;
-    std::int64_t initial = 0;
+    // The initial typed class subset admits up to 16 i64 fields.
+    // This vector is ordered: it defines the native LLVM struct layout.
+    std::vector<ClassField> fields;
 };
 
 struct Statement {
@@ -71,7 +77,7 @@ struct Program {
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
-// exactly one-field i64 classes. No escaping class pointers, GC, or suspension.
+// bounded multi-field i64 classes. No escaping class pointers, GC, or suspension.
 Program parse_program(std::string_view source, bool experimental_owned_int = false);
 
 } // namespace oreslang
