@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     const bool experimental_owned_int =
         argc == 3 && std::string(argv[1]) == "--experimental-owned-int";
     if (argc != 2 && !experimental_owned_int && !check_contract) {
-        std::cerr << "usage: oreslang-llvmc [--experimental-owned-int] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--experimental-owned-int|--check-contract] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
