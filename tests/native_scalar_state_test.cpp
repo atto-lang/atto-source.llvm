@@ -106,12 +106,25 @@ int main() {
           "logical critical ticket did not resume on different carrier");
     check(!gate.release(second.token), "unexpected remaining queued critical owner");
 
-    // Native loans pin physical reclamation, but retirement revokes access.
+    // Control-plane cancellation can arrive from another thread while
+    // guest scalar state is still being read. Revocation must be atomic
+    // and must invalidate a previously admitted view, not just new entry.
     const auto finalTurn = ores_actor_arena_enter(arena, actor, incarnation);
+    const auto retirementTicket = gate.request();
+    check(retirementTicket.admission == CriticalGate::Admission::acquired,
+          "retirement test could not reacquire logical admission");
+    {
+        auto view = state.borrow(retirementTicket.token, finalTurn);
+        std::thread canceller([&] { state.retire(); });
+        canceller.join();
+        check(state.retired(), "state cancellation revocation not visible");
+        expect_rejected([&] { (void) view.read(0); });
+    }
+    state.assert_can_suspend();
+    check(!gate.release(retirementTicket.token),
+          "retirement left an unexpected logical waiter");
     const auto loan = ores_actor_arena_borrow(arena, finalTurn, count);
     ores_actor_arena_leave(arena, finalTurn);
-    state.retire();
-    check(state.retired(), "state retirement not recorded");
     expect_rejected([&] {
         auto view = state.borrow(second.token, finalTurn);
         (void) view;
