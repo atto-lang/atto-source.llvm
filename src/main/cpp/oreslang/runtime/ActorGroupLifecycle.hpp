@@ -27,9 +27,15 @@ struct ActorReadyResult {
     std::string error;
 };
 
+struct ActorDoneResult {
+    bool success = false;
+    std::string error;
+};
+
 class NativeActorRef final {
 public:
     using ReadyContinuation = std::function<void(const ActorReadyResult&)>;
+    using DoneContinuation = std::function<void(const ActorDoneResult&)>;
 
     std::uint64_t runtime_id() const noexcept { return runtime_id_; }
     std::uint64_t actor_id() const noexcept { return actor_id_; }
@@ -43,6 +49,25 @@ public:
     /** Host supervisor can detect cancelled/dropped reserved CONTROL events. */
     bool control_delivery_lost() const noexcept {
         return ticket_->control_dropped.load(std::memory_order_acquire);
+    }
+
+    /**
+     * Nonblocking host subscription to DONE. Callbacks must enqueue guest
+     * resumption on the scheduler's exclusive CONTROL lane, never run guest
+     * code inline from the acknowledging or subscribing host thread.
+     */
+    void when_done(DoneContinuation cb) const {
+        if (!cb) throw std::invalid_argument("null done continuation");
+        ActorDoneResult result;
+        {
+            std::lock_guard<std::mutex> guard(ticket_->mutex);
+            if (!ticket_->done_settled) {
+                ticket_->done_waiters.push_back(std::move(cb));
+                return;
+            }
+            result = ticket_->done_result;
+        }
+        cb(result);
     }
 
     bool operator==(const NativeActorRef& other) const noexcept {
@@ -76,6 +101,8 @@ private:
         bool settled = false;
         ActorReadyResult result;
         std::vector<ReadyContinuation> waiters;
+        std::vector<DoneContinuation> done_waiters;
+        ActorDoneResult done_result;
         std::promise<void> ready_promise;
         std::promise<void> done_promise;
         std::shared_future<void> ready_future = ready_promise.get_future().share();
@@ -265,6 +292,7 @@ public:
      */
     bool finalized(const NativeActorRef& ref, std::string failure = "") {
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
+        std::vector<NativeActorRef::DoneContinuation> done_callbacks;
         auto& owners = registry();
         {
             std::scoped_lock guard(mutex_, owners.mutex);
@@ -293,12 +321,13 @@ public:
                     failure = ref.ticket_->result.error;
             }
             // Settle done ONLY on acknowledged physical finalization.
-            settle_done(ref, failure);
+            done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
+        notify_done(done_callbacks, ref.ticket_->done_result);
         return true;
     }
 
@@ -450,6 +479,7 @@ private:
                                      std::uint64_t group_id,
                                      std::string failure) {
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
+        std::vector<NativeActorRef::DoneContinuation> done_callbacks;
         auto& owners = registry();
         {
             std::lock_guard<std::mutex> guard(owners.mutex);
@@ -471,11 +501,12 @@ private:
                 if (!ref.ticket_->result.ready)
                     failure = ref.ticket_->result.error;
             }
-            settle_done(ref, failure);
+            done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
+        notify_done(done_callbacks, ref.ticket_->done_result);
         return true;
     }
 
@@ -495,15 +526,20 @@ private:
         return callbacks;
     }
 
-    static void settle_done(const NativeActorRef& ref, const std::string& error) {
+    static std::vector<NativeActorRef::DoneContinuation> settle_done(
+            const NativeActorRef& ref, const std::string& error) {
         std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
-        if (ref.ticket_->done_settled) return;
+        if (ref.ticket_->done_settled) return {};
         std::exception_ptr failure;
         if (!error.empty())
             failure = std::make_exception_ptr(std::runtime_error(error));
         if (failure) ref.ticket_->done_promise.set_exception(failure);
         else ref.ticket_->done_promise.set_value();
+        ref.ticket_->done_result = ActorDoneResult{error.empty(), error};
         ref.ticket_->done_settled = true;
+        std::vector<NativeActorRef::DoneContinuation> callbacks;
+        callbacks.swap(ref.ticket_->done_waiters);
+        return callbacks;
     }
 
     static void notify(
@@ -512,6 +548,16 @@ private:
         for (const auto& callback : callbacks) {
             try { callback(result); } catch (...) {
                 // Callback dispatch must not strand other waiters or workers.
+            }
+        }
+    }
+
+    static void notify_done(
+            const std::vector<NativeActorRef::DoneContinuation>& callbacks,
+            const ActorDoneResult& result) noexcept {
+        for (const auto& callback : callbacks) {
+            try { callback(result); } catch (...) {
+                // A failed host subscription cannot strand another subscriber.
             }
         }
     }
