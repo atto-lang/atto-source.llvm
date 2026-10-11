@@ -631,6 +631,14 @@ private:
                                     const std::unordered_set<std::string>* fields = nullptr) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
+            case Expression::Kind::Match:
+            case Expression::Kind::Switch: {
+                validate_expression(*expr.left, parameters, functions, fields);
+                for (const auto& arm : expr.arms)
+                    if (arm.value)
+                        validate_expression(*arm.value, parameters, functions, fields);
+                return;
+            }
             case Expression::Kind::ActorField:
                 if (fields == nullptr || !fields->count(expr.name)) {
                     throw std::runtime_error("unknown or forbidden actor field '" + expr.name
@@ -773,7 +781,24 @@ private:
                                              + "' at byte " + std::to_string(local.offset));
                 }
             }
-            validate_expression(*fn.result, available, functions);
+            for (const auto& action : fn.procedural) {
+                validate_expression(*action.dispatch, available, functions);
+                if (action.terminal) {
+                    bool has_fallback = false;
+                    for (const auto& arm : action.dispatch->arms) {
+                        has_fallback |= arm.fallback;
+                        if (!arm.value)
+                            throw std::runtime_error(
+                                    "return do match/switch requires every selected arm to return");
+                    }
+                    if (!has_fallback)
+                        throw std::runtime_error("non-exhaustive return do match/switch");
+                }
+            }
+            if (fn.result)
+                validate_expression(*fn.result, available, functions);
+            else if (fn.procedural.empty() || !fn.procedural.back().terminal)
+                throw std::runtime_error("native function missing result or terminal do");
         }
     }
 
