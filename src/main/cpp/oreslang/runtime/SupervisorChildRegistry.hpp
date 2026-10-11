@@ -55,8 +55,18 @@ public:
             throw std::logic_error("native actor already bound to a logical child");
         ChildRef child{supervisor_id_, runtime_id_, fresh_child_id()};
         Snapshot first{child, actor, 1, Phase::active};
-        children_.emplace(child.logical_child_id, first);
-        active_actors_.emplace(actor_key(actor), child.logical_child_id);
+        // Commit both indexes or neither. A map allocation failure must
+        // never leave an apparently active child without its actor index.
+        auto [active_it, inserted] =
+            active_actors_.emplace(actor_key(actor), child.logical_child_id);
+        if (!inserted)
+            throw std::logic_error("actor already belongs to a logical child");
+        try {
+            children_.emplace(child.logical_child_id, first);
+        } catch (...) {
+            active_actors_.erase(active_it);
+            throw;
+        }
         return first;
     }
 
@@ -88,11 +98,17 @@ public:
             throw std::logic_error("native replacement actor is not fresh");
         if (failed_incarnation == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("logical child incarnation exhausted");
+        // Insert the reverse index before mutating the prior FINALIZED
+        // snapshot. If allocation fails, no lifecycle generation advances.
+        auto [active_it, inserted] = active_actors_.emplace(
+            actor_key(replacement), child.logical_child_id);
+        (void) active_it;
+        if (!inserted)
+            throw std::logic_error("replacement actor already registered");
         auto& stored = children_.at(child.logical_child_id);
         stored.actor = replacement;
         stored.incarnation = failed_incarnation + 1;
         stored.phase = Phase::active;
-        active_actors_.emplace(actor_key(replacement), child.logical_child_id);
         return stored;
     }
 
