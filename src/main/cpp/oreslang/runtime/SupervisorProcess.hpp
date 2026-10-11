@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/SupervisorFailureControl.hpp"
+#include "oreslang/runtime/SupervisorEnqueueGuard.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -71,7 +72,8 @@ public:
         resume_enqueued_ = true;
         try {
             auto self = shared_from_this();
-            if (!enqueue_([self, decision] { self->finish(decision); })) {
+            if (!SupervisorEnqueueGuard::submit(
+                    enqueue_, [self, decision] { self->finish(decision); })) {
                 fail_locked();
                 return false;
             }
@@ -116,7 +118,8 @@ private:
         active_ = true;
         try {
             auto self = shared_from_this();
-            if (!enqueue_([self] { self->begin(); })) fail_locked();
+            if (!SupervisorEnqueueGuard::submit(
+                    enqueue_, [self] { self->begin(); })) fail_locked();
         } catch (...) {
             fail_locked();
         }
