@@ -89,6 +89,18 @@ public:
         return require_current(child);
     }
 
+    /** Trusted admission rollback; not a physical actor finalization. */
+    void detach_active(ChildRef child, OresNativeActorRef actor,
+                       std::uint64_t incarnation) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto current = require_expected(
+            child, actor, incarnation, Phase::active);
+        active_actors_.erase(actor_key(current.actor));
+        children_.erase(child.logical_child_id);
+        // highest_generation_ intentionally survives: stale scheduler
+        // incarnations must not register again even after detachment.
+    }
+
     Snapshot finalized(ChildRef child, OresNativeActorRef actor,
                        std::uint64_t incarnation) {
         std::lock_guard<std::mutex> guard(mutex_);
