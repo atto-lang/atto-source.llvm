@@ -37,15 +37,23 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop(
     return std::make_shared<SupervisorProcess>(
         supervisor_id, runtime_id, capacity,
         std::move(enqueue),
-        [supervisor_id, runtime_id](const SupervisorFailureNotice& notice)
+        [supervisor_id, runtime_id,
+         requires_typed_failure = plan.explicitly_bound_failure]
+         (const SupervisorFailureNotice& notice)
                 -> std::optional<SupervisorProcess::Directive> {
             if (notice.supervisor_id != supervisor_id
                     || notice.runtime_id != runtime_id
                     || notice.actor_id == 0 || notice.generation == 0) {
                 throw std::invalid_argument("foreign or stale typed Failure");
             }
-            // Native terminal failures distinguish panic from cancellation.
-            // Zero identifies the older host-only terminal notice contract.
+            // The explicit guest Failure binder requires an actual typed
+            // PANIC envelope. Legacy zero-kind host notices are supported
+            // solely by the historical no-argument STOP form.
+            if (requires_typed_failure
+                    && notice.native_terminal_kind != ORES_NATIVE_CONTROL_PANIC) {
+                throw std::invalid_argument(
+                    "explicit Failure STOP requires typed PANIC envelope");
+            }
             if (notice.native_terminal_kind != 0
                     && notice.native_terminal_kind != ORES_NATIVE_CONTROL_PANIC) {
                 throw std::invalid_argument(
