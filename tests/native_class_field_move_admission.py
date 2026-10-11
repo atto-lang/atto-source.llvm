@@ -45,7 +45,7 @@ def main():
             decl = ("define class Record as\n" +
                     "".join(f"  pub let int f{i} = {i + 1};\n"
                             for i in range(count)) + "end\n")
-            head = "pub fnc main(): int {\n  let Record p = new Record();\n"
+            head = "pub fnc main(): int {\n  let mut Record p = new Record();\n"
             for result in (
                 "  return rt take p.f0 + 41;\n",
                 "  if (p.f0 eq 1) { return rt take p.f0 + 41; } fi\n"
