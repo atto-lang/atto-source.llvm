@@ -1,5 +1,6 @@
 #include "oreslang/runtime/ExceptionPolicy.hpp"
 
+#include <array>
 #include <cassert>
 #include <optional>
 #include <string>
@@ -29,6 +30,25 @@ int main() {
         rejected_unknown_kind = true;
     }
     assert(rejected_unknown_kind);
+
+    // All 36 rank pairs share the Java OresExceptionPolicy regression lattice.
+    constexpr std::array<FailureKind, 6> kinds = {
+        FailureKind::Throw, FailureKind::Raise, FailureKind::Panic,
+        FailureKind::Cancelled, FailureKind::ProcessExit, FailureKind::HostFatal
+    };
+    for (const auto pending_kind : kinds) {
+        for (const auto cleanup_kind : kinds) {
+            const auto result = combine_failure(
+                Failure::make(pending_kind, "body"),
+                Failure::make(cleanup_kind, "cleanup"));
+            const bool cleanup_wins =
+                failure_priority(cleanup_kind) > failure_priority(pending_kind);
+            assert(result.kind() == (cleanup_wins ? cleanup_kind : pending_kind));
+            assert(result.suppressed().size() == 1);
+            assert(result.suppressed()[0].kind() ==
+                   (cleanup_wins ? pending_kind : cleanup_kind));
+        }
+    }
 
     auto pending_panic = combine_failure(
         Failure::make(FailureKind::Panic, "body invariant"),
