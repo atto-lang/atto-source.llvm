@@ -47,14 +47,23 @@ def main():
         counter = native.counter_response
         counter.argtypes = [ctypes.c_int64]
         counter.restype = ctypes.c_int64
-        observations = {}
-        for n in range(1, 129):
+        # Run the same mandatory edge probes as the shared semantics gate.
+        # Execute the actual public main function rather than deriving its
+        # expected result from counter_response.
+        entrypoint = native.main
+        entrypoint.argtypes = []
+        entrypoint.restype = ctypes.c_int64
+        main_result = entrypoint()
+        if main_result != 43:
+            raise AssertionError(f"native guest main() = {main_result}, expected 43")
+        observations = {"main()": main_result}
+        for n in (-1, 0, *range(1, 129)):
             actual = counter(n)
             expected = 43 * n
             if actual != expected:
                 raise AssertionError(f"native guest counter_response({n}) = {actual}, expected {expected}")
             observations[f"counter_response({n})"] = actual
-        print("LLVM_GUEST_SHARED_HANDLER_PASS cases=128 fixture_blob=" + EXPECTED_BLOB)
+        print(f"LLVM_GUEST_SHARED_HANDLER_PASS cases={len(observations)} fixture_blob={EXPECTED_BLOB}")
         print(json.dumps({"backend": "llvm", "observed": observations}, sort_keys=True))
 
 
