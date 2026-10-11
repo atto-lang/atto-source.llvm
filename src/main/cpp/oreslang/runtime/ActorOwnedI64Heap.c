@@ -145,9 +145,8 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* target = checked_slot(heap, slot);
-    /* A suspended shared read loan still freezes the referent: a new actor
-     * turn is not permission to mutate it. Mutable loans need a separate
-     * exclusive API and source-level alias proof. */
+    /* A suspended shared read loan continues to freeze the referent
+     * across later actor turns, even on a different carrier. */
     if (target->loans != 0) rejected();
     target->value = value;
     unlock_heap(heap);
@@ -229,4 +228,72 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
     memset(heap, 0, bytes);
     free(heap);
     return 1;
+}
+
+
+/* Compiler-facing, non-escaping actor field table. Field slots are installed
+ * under an admitted serial turn, remain persistent across later turns,
+ * and must be dropped before retiring the actor heap. This metadata is native
+ * C allocation: no tracing collector or managed object references. */
+struct OresActorI64Fields {
+    uint64_t domain;
+    uint32_t count;
+    OresActorSlot slots[];
+};
+
+OresActorI64Fields* ores_actor_i64_fields_create(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        const int64_t* initial_values, uint32_t field_count) {
+    if (!initial_values || !field_count || field_count > MAX_SLOTS) rejected();
+    /* MAX_SLOTS=4096 bounds this allocation well below SIZE_MAX. */
+    /* The caller is compiler-generated in a trusted actor turn. Do not
+     * expose these pointers to untrusted guest code or across await. */
+    lock_heap(heap);
+    require_turn(heap, turn);
+    uint32_t available = 0;
+    for (uint64_t i = 0; i < heap->capacity; ++i) {
+        if (!heap->slots[i].live && heap->slots[i].generation != UINT64_MAX)
+            ++available;
+    }
+    if (available < field_count) rejected();
+    unlock_heap(heap);
+    OresActorI64Fields* fields = (OresActorI64Fields*) calloc(
+        1, offsetof(OresActorI64Fields, slots)
+           + (size_t) field_count * sizeof(OresActorSlot));
+    if (!fields) rejected();
+    fields->domain = turn.domain;
+    fields->count = field_count;
+    /* Every success yields a fully initialized record. The serial actor
+     * scheduler must not interleave another turn inside this procedure. */
+    for (uint32_t i = 0; i < field_count; ++i)
+        fields->slots[i] = ores_actor_i64_heap_new(heap, turn, initial_values[i]);
+    return fields;
+}
+static OresActorSlot field_slot(OresActorI64Heap* heap,
+                                const OresActorI64Fields* fields, uint32_t index) {
+    if (!fields || fields->domain != heap->domain || index >= fields->count)
+        rejected();
+    return fields->slots[index];
+}
+int64_t ores_actor_i64_fields_get(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        const OresActorI64Fields* fields, uint32_t field) {
+    return ores_actor_i64_heap_read(heap, turn, field_slot(heap, fields, field));
+}
+void ores_actor_i64_fields_set(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        OresActorI64Fields* fields, uint32_t field, int64_t value) {
+    ores_actor_i64_heap_write(heap, turn, field_slot(heap, fields, field), value);
+}
+void ores_actor_i64_fields_drop(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        OresActorI64Fields* fields) {
+    if (!fields || fields->domain != heap->domain) rejected();
+    for (uint32_t i = fields->count; i > 0; --i) {
+        ores_actor_i64_heap_drop(heap, turn, fields->slots[i - 1]);
+    }
+    const size_t bytes = offsetof(OresActorI64Fields, slots)
+        + (size_t) fields->count * sizeof(OresActorSlot);
+    memset(fields, 0, bytes);
+    free(fields);
 }
