@@ -95,6 +95,10 @@ if(BUILD_TESTING)
             --run 0 --clang "${ORE_CLANG}"
             --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_fields_generated_host.c")
+        oreslang_contract_test(native_exec_actor_group_owned_fields actor-fields-counter.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_group_owned_heap_generated_host.cpp")
 
 
     else()
