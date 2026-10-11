@@ -80,3 +80,24 @@ These are **bounded abstraction and native policy tests**, not a complete
 LLVM source guest execution or a proof that every physical scheduler path
 refines the model. Real HTTP + message admission, resume ticket enforcement
 at guest codegen and restart/cleanup conformance are still release blockers.
+
+## Native issuer-instance identity (2026-10-11)
+
+A numeric lease tuple (actor ID, incarnation, generation, event ID, kind)
+does not uniquely identify the gate that minted it. Two independently
+constructed gates may accidentally have identical public identities after
+a failed restart or duplicated supervisor initialization.
+
+The native `Lease` therefore carries a private shared issuer token
+created once per `SerialActorLifetimeGate`. Every `admitted`,
+`may_execute`, `suspend`, `resume`, and `finish` comparison checks
+**both** issuer identity and the complete numeric tuple. Copies of a valid
+lease preserve its issuer identity; forged default leases and tickets
+from a second same-identity gate are rejected. Shared ownership keeps
+the token alive while any stale lease copy exists, avoiding address-reuse
+ABA for this identity check.
+
+This provides gate provenance, **not** LLVM scheduler task identity or
+end-to-end guest continuation authentication. Native test coverage now
+includes duplicate-public-identity gates and fabricated tickets; full
+compiled guest/HTTP validation remains a release blocker.
