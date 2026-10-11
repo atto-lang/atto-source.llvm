@@ -230,6 +230,10 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-critical-state-effects-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-critical-state-effects-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_critical_handle_state_using_contract COMMAND oreslang-critical-state-effects-test)
+    add_executable(oreslang-critical-state-loan-bridge-test tests/critical_state_loan_bridge_test.cpp)
+    target_include_directories(oreslang-critical-state-loan-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-critical-state-loan-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_critical_state_loan_runtime_bridge COMMAND oreslang-critical-state-loan-bridge-test)
     # Bounded synchronous state-loan guard; not source-level suspend lowering.
     add_executable(oreslang-actor-state-scope-test tests/actor_state_scope_test.c)
     target_compile_options(oreslang-actor-state-scope-test PRIVATE
