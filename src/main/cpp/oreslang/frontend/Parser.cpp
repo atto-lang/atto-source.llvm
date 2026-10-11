@@ -49,7 +49,8 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure"
+        "gpu", "quantum", "over", "structural", "int", "pure",
+        "using", "requires"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
