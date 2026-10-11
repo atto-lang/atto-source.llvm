@@ -42,6 +42,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     oreslang_contract_test(shared_http_counter_kernel_ir http-shared-counter-kernel.ores --ir "call i64 @counter_value")
+    oreslang_contract_test(common_guest_http_handler_ir http-guest-counter-handler.ores --ir "call i64 @counter_response")
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
@@ -93,6 +94,7 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_shared_http_counter_kernel http-shared-counter-kernel.ores --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_common_guest_http_handler http-guest-counter-handler.ores --run 43 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
@@ -134,7 +136,7 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/http_actor_matrix_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor-owned-fields.ores"
-                --kernel-fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/http-shared-counter-kernel.ores"
+                --kernel-fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/http-guest-counter-handler.ores"
                 --clang "${ORE_CLANG}"
                 --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
                 --arena-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorArena.c"
