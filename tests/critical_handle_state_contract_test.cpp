@@ -19,6 +19,24 @@ int main() {
             == CriticalStateAdmission::MissingCallbackCritical);
     CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::Accept);
+    c.intrinsic_critical = false;
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::MissingIntrinsicCritical);
+    c.intrinsic_critical = true;
+    c.one_state_parameter = false;
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::InvalidStateCallback);
+    c.one_state_parameter = true;
+    c.lexical = false;
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::InvalidStateCallback);
+    c.lexical = true;
+    c.escapes = true;
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::CallbackEscape);
+    c.escapes = false;
+    CHECK(admit_critical_handle_state(c, row(READ), true)
+            == CriticalStateAdmission::EffectExceedsUsing);
     // Verified serial admission cannot be inferred from the callback itself;
     // the two-argument untrusted policy still fails closed.
     CHECK(admit_critical_handle_state(c, using_rw)
