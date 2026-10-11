@@ -381,6 +381,12 @@ private:
         if (token_.kind != Kind::Integer)
             fail("native match/switch supports integer literal cases only");
         std::string digits(token_.text);
+        // Literal patterns use the same numeric separator grammar as
+        // ordinary int expressions: malformed spellings must not silently
+        // become a different, apparently exhaustive match case.
+        if (digits.empty() || digits.front() == '_' || digits.back() == '_'
+                || digits.find("__") != std::string::npos)
+            fail("malformed dispatch integer separator");
         digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
         std::uint64_t raw = 0;
         auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), raw);
