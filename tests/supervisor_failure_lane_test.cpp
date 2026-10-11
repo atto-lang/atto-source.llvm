@@ -104,5 +104,40 @@ int main() {
     preallocated.retire_gracefully(key(77, 2));
     CHECK(preallocated.reserved_count() == 0);
 
+    // Same 512-byte scalar-safe CONTROL envelope as the Java supervisor.
+    const std::string rocket = "\xf0\x9f\x9a\xa8";
+    Lane unicode_lane(4);
+    unicode_lane.reserve(key(88));
+    CHECK(unicode_lane.publish_preallocated(
+        key(88), Lane::Kind::Panic, std::string(130, 'x') + rocket));
+    CHECK(unicode_lane.poll()->summary == std::string(130, 'x') + rocket);
+    unicode_lane.ack(key(88));
+
+    unicode_lane.reserve(key(89));
+    CHECK(unicode_lane.publish_preallocated(
+        key(89), Lane::Kind::Panic, std::string(510, 'x') + rocket));
+    CHECK(unicode_lane.poll()->summary == std::string(510, 'x'));
+    unicode_lane.ack(key(89));
+
+    unicode_lane.reserve(key(90));
+    const auto malformed = std::string("\xed\xa0\x80", 3) + rocket;
+    CHECK(unicode_lane.publish_preallocated(
+        key(90), Lane::Kind::Panic, malformed, std::string(127, 'p') + rocket));
+    const auto event = unicode_lane.poll();
+    CHECK(event.has_value());
+    CHECK(event->summary == "???" + rocket);
+    CHECK(event->parent_id == std::string(127, 'p'));
+    unicode_lane.ack(key(90));
+
+    unicode_lane.reserve(key(91));
+    bool rejected = false;
+    try {
+        unicode_lane.publish_preallocated(
+            key(91), static_cast<Lane::Kind>(99), "forged");
+    } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    CHECK(unicode_lane.pending_count() == 0);
+    CHECK(unicode_lane.publish_preallocated(key(91), Lane::Kind::Panic, "valid"));
+    unicode_lane.ack(unicode_lane.poll()->actor);
     return 0;
 }
