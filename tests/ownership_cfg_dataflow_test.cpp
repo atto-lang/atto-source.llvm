@@ -61,6 +61,28 @@ int main() {
     whole.blocks = {{{op(Kind::MoveObject, "p"), op(Kind::Read, "p.b")}, {}}};
     assert(rejected([&] { verify(whole); }));
 
+    // Whole-object reads must not bypass exclusive field borrow checks.
+    Graph object_loan;
+    object_loan.entry = {{"p.a", cell(kOwned)}, {"p.b", cell(kOwned)}};
+    object_loan.blocks = {{{op(Kind::BorrowExclusive, "p.a"),
+                            op(Kind::ReadObject, "p"),
+                            op(Kind::ReleaseExclusive, "p.a")}, {}}};
+    assert(rejected([&] { verify(object_loan); }));
+    // Shared field loans may coexist with immutable whole-object reads.
+    object_loan.blocks = {{{op(Kind::BorrowShared, "p.a"),
+                            op(Kind::ReadObject, "p"),
+                            op(Kind::ReleaseShared, "p.a")}, {}}};
+    verify(object_loan);
+    // Once the exclusive field loan is released, the object is readable.
+    object_loan.blocks = {{{op(Kind::BorrowExclusive, "p.b"),
+                            op(Kind::ReleaseExclusive, "p.b"),
+                            op(Kind::ReadObject, "p")}, {}}};
+    verify(object_loan);
+    // A shared field loan still forbids moving the whole object.
+    object_loan.blocks = {{{op(Kind::BorrowShared, "p.a"),
+                            op(Kind::MoveObject, "p")}, {}}};
+    assert(rejected([&] { verify(object_loan); }));
+
     Graph valid_loop;
     valid_loop.entry = {{"x", cell(kOwned)}};
     valid_loop.blocks = {
@@ -112,6 +134,17 @@ int main() {
     maybe_drop.blocks[3].operations = {op(Kind::DropIfOwned, "x")};
     const auto dropped = verify(maybe_drop);
     assert(dropped.outgoing[3]->at("x").possible == (kMoved | kDropped));
+
+    // Malformed abstract states and contradictory loans must not be
+    // accepted simply because the CFG has no reads or writes.
+    Graph bad_entry;
+    bad_entry.entry = {{"x", cell(static_cast<ValueMask>(kOwned | 0x80))}};
+    bad_entry.blocks = {{{}, {}}};
+    assert(rejected([&] { verify(bad_entry); }));
+    bad_entry.entry.at("x").possible = 0;
+    assert(rejected([&] { verify(bad_entry); }));
+    bad_entry.entry.at("x") = {kOwned, 1, true};
+    assert(rejected([&] { verify(bad_entry); }));
 
     assert(rejected([&] {
         Graph invalid;

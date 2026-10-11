@@ -85,9 +85,15 @@ inline void apply(Operation op, State& state) {
             if (item.first.compare(0, prefix.size(), prefix) != 0) continue;
             saw_field = true;
             require_owned(item.first, item.second);
-            if (item.second.shared_loans || item.second.exclusive_loan)
-                if (op.kind == Operation::Kind::MoveObject)
-                    violation(op.place, "move while any field is borrowed");
+            // Reading an object aliases every field. An active exclusive
+            // field loan forbids a whole-object read; shared field loans
+            // permit reads but prohibit moving/dropping the complete owner.
+            if (op.kind == Operation::Kind::ReadObject &&
+                    item.second.exclusive_loan)
+                violation(op.place, "whole-object read overlaps exclusive field loan");
+            if (op.kind == Operation::Kind::MoveObject &&
+                    (item.second.shared_loans || item.second.exclusive_loan))
+                violation(op.place, "move while any field is borrowed");
         }
         if (!saw_field) violation(op.place, "object has no tracked fields");
         if (op.kind == Operation::Kind::MoveObject)
@@ -174,6 +180,16 @@ inline bool join_into(State& target, const State& incoming) {
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
+    // Reject malformed initial abstract states before any CFG edge is
+    // processed. Unknown bits and contradictory live-loan provenance
+    // must not silently enter the fixed-point lattice.
+    for (const auto& [name, place] : graph.entry) {
+        if (!place.possible || (place.possible &
+                static_cast<ValueMask>(~(kOwned | kMoved | kUninitialized | kDropped))))
+            violation(name, "invalid CFG entry ownership mask");
+        if (place.exclusive_loan && place.shared_loans)
+            violation(name, "conflicting initial borrow states");
+    }
     Analysis result;
     result.incoming.resize(graph.blocks.size());
     result.outgoing.resize(graph.blocks.size());
