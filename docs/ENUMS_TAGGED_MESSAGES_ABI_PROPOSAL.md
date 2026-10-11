@@ -93,6 +93,16 @@ end
 
 **Scope note:** The Java/Graal draft adds a first compiler-level builtin/structural `Serializable` admission check and rejects unimplemented `@Serializable` derivation; neither repository yet implements a canonical portable codec or full source-level enum/actor parity. LLVM's existing fail-closed reservations remain correct while source-level lowering is absent.
 
+## Transport decision: MessagePack v1, no implicit alias sharing
+
+Default to **MessagePack binary serialization**, not JSON/text, for all mailbox deliveries, including same-process SHARED actors. An Oreslang compiler-owned schema/codec descriptor disambiguates `Tuple`, `FixedArray`, `FixedList`, dynamic `Array` and `List`: MessagePack stores all of them as arrays, so native LLVM must preserve nominal/structural container kind using the **expected schema**, not a guess based on decoded bytes.
+
+The initial reference subset uses MessagePack `[wire_version=1, schema_id_utf8, schema_typed_payload]`. The decoder validates version, schema, fixed shape/arity, scalar type, valid UTF-8, signed integer range, finite floating point values, depth/node/length/byte quotas and complete input consumption. Type descriptors are compiler-owned and cannot be substituted by untrusted payloads. `contracts/v1/design/messagepack_collection_vectors.json` contains six exact MessagePack binary vectors shared with the Java/Graal repo; the LLVM backend must match them byte-for-byte before parity is claimed. The first Java reference implementation is `dev.oreslang.runtime.MessagePackCollectionCodec`, **not yet integrated with ActorRuntime.send**.
+
+The on-wire schema is not a memcpy of LLVM native structs, nor `java.io.Serializable`, nor a mutable JVM object frozen and passed by alias. Structs, tagged enum cases, maps, options, decimals, complex values, unsigned widths and opaque capability descriptors need additional compiler-generated codecs before admission on this ABI. Normalize string and number policies across all backends. For union/pattern domains use explicit stable variant or alternative tags when shape tests could overlap.
+
+A later `SHARED` fast path may use `rt copy` **only** when the full value is statically Serializable and the copy is semantically equivalent to encode/decode, including no shared mutable aliases, bounds, validation, cancellation and failure behavior. Benchmark copy vs encode/decode at 8B, 64B, 1KB, 64KB and 1MB under scheduler contention; do not assume either choice wins. Source-visible `send` semantics stay identical across actor placement.
+
 ## Implementation and parity gates
 
 1. Align a single cross-backend grammar: distinct `define pattern` (type only) and `define enum` (type plus variants), nullary and typed payload variants, `type T = A | B`, `match<R>` and `do match`, and `Actor<messages=T>` metadata. Add static tests for pattern includes enum, direct/indirect enum -> pattern rejection, and type-only names being nonconstructible. Ensure rejected syntax emits no IR. Do not conflate parser acceptance with feature support.
