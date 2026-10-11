@@ -880,6 +880,9 @@ private:
         }
         std::unordered_set<std::string> declaredActors;
         for (const auto& actor : program.actors) declaredActors.insert(actor.name);
+        // A route intrinsic is admitted only inside a source-defined actor
+        // with a compiler-checked, owned pipeline role in trusted main.
+        std::unordered_map<std::string, unsigned> pipelineRoles;
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
@@ -926,6 +929,7 @@ private:
                     || fn.pipeline_actors.size() != 3 || !fn.ready_await_actor.empty())
                     throw std::runtime_error("pipeline requires zero-argument main without ready await");
                 std::unordered_set<std::string> unique;
+                std::unordered_set<std::string> uniqueTypes;
                 std::string contract;
                 for (const auto& refName : fn.pipeline_actors) {
                     if (!unique.insert(refName).second || !actorTypes.count(refName))
@@ -934,6 +938,10 @@ private:
                         [&](const Actor& a) { return a.name == actorTypes.at(refName); });
                     if (found == program.actors.end() || !typedDomains.count(found->messages_type))
                         throw std::runtime_error("pipeline actors require nominal typed mailbox");
+                    if (!uniqueTypes.insert(found->name).second)
+                        throw std::runtime_error("linear pipeline requires three distinct actor types");
+                    pipelineRoles.emplace(found->name,
+                        (unsigned)(&refName - &fn.pipeline_actors.front()));
                     if (contract.empty()) contract = found->messages_type;
                     else if (contract != found->messages_type)
                         throw std::runtime_error("pipeline actor message domains must match");
@@ -1185,6 +1193,12 @@ private:
                                 validate_expression(*assignment.value, armAvailable, functions);
                             }
                             if (!arm.route_direction.empty()) {
+                                const auto role = pipelineRoles.find(actor.name);
+                                if (role == pipelineRoles.end())
+                                    throw std::runtime_error("pipeline actor routing requires declared pipeline topology");
+                                if ((role->second == 0 && arm.route_direction == "backward")
+                                    || (role->second == 2 && arm.route_direction == "forward"))
+                                    throw std::runtime_error("pipeline route direction is not authorized for actor role");
                                 if (!arm.route_payload || arm.tuple_destructure)
                                     throw std::runtime_error("pipeline route requires scalar payload expression");
                                 if (arm.route_variant.find('.') == std::string::npos
