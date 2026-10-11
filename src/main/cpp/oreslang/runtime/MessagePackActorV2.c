@@ -274,23 +274,31 @@ static int canonical_shape_sha256(const char* shape, size_t n,
     }
     return 1;
 }
+int ores_mp2_contract_valid(const OresMp2Contract* c) {
+    if (!c || !c->schema_id || !c->shape || !c->shape_sha256) return 0;
+    size_t schema_len = 0;
+    while (schema_len <= 256 && c->schema_id[schema_len]) ++schema_len;
+    if (!schema_len || schema_len > 256) return 0;
+    for (size_t i = 0; i < schema_len; ++i) {
+        unsigned char ch = (unsigned char)c->schema_id[i];
+        if (ch < 33 || ch > 126) return 0;
+    }
+    size_t shape_len = 0;
+    while (shape_len <= 4096 && c->shape[shape_len]) ++shape_len;
+    if (!shape_len || shape_len > 4096) return 0;
+    const char* parsed = c->shape;
+    if (!valid_shape(&parsed, 0) || *parsed != '\0') return 0;
+    uint8_t digest[32];
+    return canonical_shape_sha256(c->shape, shape_len, digest)
+           && memcmp(digest, c->shape_sha256, 32) == 0;
+}
 int ores_mp2_validate_copy(const OresMp2Contract* c,
                            const uint8_t* bytes, size_t size,
                            OresMp2Owned* out) {
-    if (!c || !c->schema_id || !c->shape || !c->shape_sha256 || !bytes
-            || !out || out->bytes || out->size
-            || size > ORES_MP2_MAX_BYTES || size < 40) return 0;
+    if (!bytes || !out || out->bytes || out->size
+            || size > ORES_MP2_MAX_BYTES || size < 40
+            || !ores_mp2_contract_valid(c)) return 0;
     size_t schema_len = strlen(c->schema_id);
-    if (!schema_len || schema_len > 256 || strlen(c->shape) > 4096) return 0;
-    for (size_t i = 0; i < schema_len; ++i)
-        if ((unsigned char)c->schema_id[i] < 33
-                || (unsigned char)c->schema_id[i] > 126) return 0;
-    const char* shape_end = c->shape;
-    if (!valid_shape(&shape_end, 0) || *shape_end) return 0;
-    uint8_t independently_derived[32];
-    if (!canonical_shape_sha256(c->shape, (size_t)(shape_end - c->shape),
-                                independently_derived)
-        || memcmp(independently_derived, c->shape_sha256, 32) != 0) return 0;
     /*
      * Security invariant: decode the very snapshot we enqueue.
      * Validating caller memory and only copying afterwards is a TOCTOU
