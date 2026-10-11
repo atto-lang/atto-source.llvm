@@ -298,4 +298,65 @@ int main() {
               "uninitialized actor must fail both ready and done");
     }
 
+    {
+        // The actual current-main NativeActorGroup owns the reserved CONTROL
+        // lane; GPU producer callbacks can enqueue but cannot run user code.
+        NativeActorGroup group(1201, 2);
+        auto a = group.adopt(1201, 1, 1, [] {});
+        auto b = group.adopt(1201, 2, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b), "CONTROL workers not ready");
+        std::atomic<int> executed{0};
+        std::thread producer([&] {
+            check(group.enqueue_control(a, [&] { ++executed; }), "producer CONTROL enqueue failed");
+        });
+        producer.join();
+        check(executed == 0, "producer ran actor handler on callback thread");
+        check(group.has_pending_control(a), "reserved CONTROL slot missing");
+        check(!group.enqueue_control(a, [] {}), "CONTROL slot accepted over capacity");
+        check(!group.finalized(a), "actor finalized with reserved CONTROL");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::executed,
+              "scheduler did not admit CONTROL");
+        check(executed == 1, "actor callback did not run on scheduler turn");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::idle,
+              "CONTROL queue not cleared");
+        check(group.finalized(a) && group.finalized(b), "CONTROL actors not finalized");
+        a.get_done().get(); b.get_done().get();
+    }
+    {
+        NativeActorGroup group(1202, 2);
+        auto a = group.adopt(1202, 1, 1, [] {});
+        auto b = group.adopt(1202, 2, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b), "CONTROL workers not ready");
+        std::promise<void> entered, release;
+        auto gate = release.get_future().share();
+        check(group.enqueue_control(a, [&] {
+            entered.set_value();
+            gate.wait();
+        }), "unable to enqueue controlled long turn");
+        check(group.enqueue_control(b, [] {}), "unable to enqueue second actor CONTROL");
+        std::thread carrier([&] {
+            check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::executed,
+                  "first carrier rejected CONTROL turn");
+        });
+        entered.get_future().wait();
+        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::busy,
+              "two CONTROL handlers executed concurrently");
+        check(!group.finalized(a), "active CONTROL bypassed physical finalization gate");
+        release.set_value();
+        carrier.join();
+        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::executed,
+              "second CONTROL not admitted after first yielded");
+        check(group.finalized(a) && group.finalized(b), "CONTROL not quiescent");
+    }
+    {
+        NativeActorGroup group(1203, 1);
+        auto a = group.adopt(1203, 1, 1, [] {});
+        check(group.mark_ready(a), "CONTROL close actor not ready");
+        check(group.enqueue_control(a, [] {}), "CONTROL could not reserve");
+        group.close();
+        check(a.control_delivery_lost(), "close silently dropped terminal CONTROL");
+        check(group.finalized(a), "closed group could not retire discarded CONTROL");
+        a.get_done().get();
+    }
+
 }
