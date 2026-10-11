@@ -63,6 +63,14 @@ OresMp2ActorRef ores_mp2_group_spawn(OresMp2ActorGroup* group, size_t slot);
  * Submitters MUST be fenced externally before group destruction. */
 int ores_mp2_group_send(OresMp2ActorGroup* group, OresMp2ActorRef target,
                         const uint8_t* wire, size_t size);
+/* Permanently close new DATA send admission, then wait for all producer
+ * calls that entered before closure to exit their copy/validate/publish
+ * section. Does not stop actors or wait for accepted callbacks. This object
+ * MUST remain alive and all callers must join/fence BEFORE group_destroy;
+ * no C API can safely accept an arbitrary stale pointer after free.
+ * Returns 1 on completed closure, 0 for a null group.
+ */
+int ores_mp2_group_close_admission(OresMp2ActorGroup* group);
 int ores_mp2_group_stop(OresMp2ActorGroup* group, OresMp2ActorRef target);
 int ores_mp2_group_wait_done(OresMp2ActorGroup* group, OresMp2ActorRef target);
 /* Only a trusted, non-carrier caller after producer fencing may destroy.
