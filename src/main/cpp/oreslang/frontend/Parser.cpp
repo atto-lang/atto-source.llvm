@@ -135,28 +135,88 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
-                if (token_.text != "class") fail("expected 'module'");
-                require("class");
-                program.classes.push_back(class_declaration());
+                if (accept("class")) program.classes.push_back(class_declaration());
+                else if (accept("actor")) program.actors.push_back(actor_declaration());
+                else fail("expected 'module', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
-                require("class");
-                program.classes.push_back(class_declaration());
+                if (accept("class")) program.classes.push_back(class_declaration());
+                else if (accept("actor")) program.actors.push_back(actor_declaration());
+                else fail("expected 'class' or 'actor'");
             } else {
                 program.functions.push_back(function());
             }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty()) fail("expected at least one function");
+        if (program.functions.empty() && program.actors.empty()) fail("expected at least one function or actor");
         validate(program);
         return program;
     }
 
 private:
+    ActorDecl actor_declaration() {
+        ActorDecl actor;
+        actor.offset = token_.offset;
+        actor.name = identifier();
+        require("as");
+        const bool braced = accept("{");
+        std::unordered_set<std::string> names;
+        while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+            if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
+            LocalBinding field;
+            field.offset = token_.offset;
+            field.field_mutable = token_.text == "let";
+            advance();
+            field.name = identifier();
+            if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
+            require(":");
+            require("int");
+            require("=");
+            field.initializer = expression();
+            require(";");
+            actor.fields.push_back(std::move(field));
+        }
+        if (actor.fields.empty()) fail("actor requires at least one scalar field");
+        Function method;
+        method.offset = token_.offset;
+        method.exported = accept("pub");
+        if (!method.exported) fail("native actor requires pub on_message(int)");
+        require("fnc");
+        method.name = identifier();
+        if (method.name != "on_message") fail("native actor supports only on_message");
+        require("(");
+        require("int");
+        Parameter param;
+        param.name = identifier();
+        method.parameters.push_back(std::move(param));
+        require(")");
+        require(":");
+        require("int");
+        require("{");
+        while (token_.text != "return") {
+            if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            ActorFieldWrite write;
+            write.offset = token_.offset;
+            write.field = identifier();
+            require("=");
+            write.expression = expression();
+            require(";");
+            method.actor_field_writes.push_back(std::move(write));
+        }
+        require("return");
+        method.result = expression();
+        require(";");
+        require("}");
+        actor.on_message = std::move(method);
+        if (braced) require("}");
+        else require("end");
+        return actor;
+    }
+
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
@@ -205,7 +265,6 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
-        // Modifiers cannot masquerade as ordinary functions.
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
         if (token_.text == "gpu" || token_.text == "quantum") {
@@ -259,6 +318,18 @@ private:
             } else {
                 advance();
                 binding.name = identifier();
+                if (accept("=")) {
+                    require("spawn");
+                    ActorSpawnBinding spawned;
+                    spawned.name = binding.name;
+                    spawned.offset = binding.offset;
+                    spawned.actor_type = identifier();
+                    require("(");
+                    require(")");
+                    require(";");
+                    value.actor_spawns.push_back(std::move(spawned));
+                    continue;
+                }
                 require(":");
                 if (token_.text == "owned" && !experimental_owned_int_) {
                     fail("experimental owned int requires --experimental-owned-int");
@@ -273,13 +344,27 @@ private:
         }
         while (token_.text != "return" && token_.text != "if") {
             if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
-            // Distinguish unsupported effects from ordinary bad expressions.
-            // The reserved words also remain forbidden in parameters/calls.
             if (exceptional_control(token_.text))
                 fail("native exception/control effect unsupported");
+            if (accept("stop")) {
+                value.actor_stops.push_back(identifier());
+                require(";");
+                continue;
+            }
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
+            if (action->kind == Expression::Kind::Field && action->name == "send"
+                    && accept("(")) {
+                ActorSend send;
+                send.offset = statement.offset;
+                send.reference = action->left->name;
+                send.payload = expression();
+                require(")");
+                require(";");
+                value.actor_sends.push_back(std::move(send));
+                continue;
+            }
             if (action->kind == Expression::Kind::Field && accept("=")) {
                 statement.kind = Statement::Kind::FieldWrite;
                 statement.receiver = action->left->name;
@@ -506,9 +591,52 @@ private:
                 }
             }
         }
+        std::unordered_map<std::string, const ActorDecl*> actor_types;
+        for (const auto& actor : program.actors) {
+            if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
+                    || functions.count(actor.name))
+                throw std::runtime_error("duplicate actor/class/function symbol '" + actor.name + "'");
+            std::unordered_set<std::string> fields;
+            std::unordered_set<std::string> mutables;
+            const std::unordered_set<std::string> empty;
+            for (const auto& field : actor.fields) {
+                validate_expression(*field.initializer, empty, {});
+                if (!fields.insert(field.name).second)
+                    throw std::runtime_error("duplicate actor field '" + field.name + "'");
+                if (field.field_mutable) mutables.insert(field.name);
+            }
+            const auto& method = actor.on_message;
+            const std::string& parameter = method.parameters.at(0).name;
+            if (!fields.insert(parameter).second)
+                throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
+            for (const auto& write : method.actor_field_writes) {
+                if (!mutables.count(write.field))
+                    throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
+                validate_expression(*write.expression, fields, functions);
+            }
+            validate_expression(*method.result, fields, functions);
+            if (functions.count("oreslang_actor_" + actor.name + "_init") ||
+                    functions.count("oreslang_actor_" + actor.name + "_on_message"))
+                throw std::runtime_error("conflicting generated actor symbol");
+        }
         for (const auto& fn : program.functions) {
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) params.insert(param.name);
+            std::unordered_set<std::string> live_actors;
+            std::unordered_map<std::string, const ActorDecl*> references;
+            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
+                if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
+                        !fn.early_returns.empty() || !fn.statements.empty())
+                    throw std::runtime_error("source actor bootstrap requires zero-argument int main without early returns");
+            }
+            for (const auto& spawn : fn.actor_spawns) {
+                const auto it = actor_types.find(spawn.actor_type);
+                if (it == actor_types.end())
+                    throw std::runtime_error("unknown actor type '" + spawn.actor_type + "'");
+                if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
+                    throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
+                references.emplace(spawn.name, it->second);
+            }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
                 if (binding.new_class) {
@@ -517,6 +645,8 @@ private:
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }
+                if (live_actors.count(binding.name))
+                    throw std::runtime_error("scalar local shadows actor reference '" + binding.name + "'");
                 if (!params.insert(binding.name).second) {
                     throw std::runtime_error("duplicate owned local '" + binding.name
                         + "' at byte " + std::to_string(binding.offset));
@@ -529,6 +659,17 @@ private:
                 }
                 validate_expression(*stmt.expression, params, functions);
             }
+            for (const auto& send : fn.actor_sends) {
+                if (!references.count(send.reference))
+                    throw std::runtime_error("unknown actor message receiver '" + send.reference + "'");
+                validate_expression(*send.payload, params, functions);
+            }
+            for (const auto& stop : fn.actor_stops) {
+                if (!live_actors.erase(stop))
+                    throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
+            }
+            if (!live_actors.empty())
+                throw std::runtime_error("actor reference must be stopped before return");
             for (const auto& guard : fn.early_returns) {
                 validate_expression(*guard.lhs, params, functions);
                 validate_expression(*guard.rhs, params, functions);

@@ -53,6 +53,11 @@ if(BUILD_TESTING)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
+    add_test(NAME native_explicit_wasm32_target_ir
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_target_ir_test.py"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
@@ -81,10 +86,31 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_local_moved_before_read owned-local-use-after-take.ores --diagnostic "use of explicitly moved int")
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
-    oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
     oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "native async/channel/select boundary unsupported")
+
+    # Real source-compiled Oreslang actors, not host-only C callback tests.
+    # The synchronous stop barrier is allowed only in trusted top-level main.
+    # Source await/select/Futures still fail closed pending pinned-frame lowering.
+    if(ORE_CLANG)
+        add_test(NAME source_actor_compiled_native_lifecycle
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(source_actor_compiled_native_lifecycle PROPERTIES TIMEOUT 90)
+        add_test(NAME source_actor_compiled_native_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
+        set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
+    endif()
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -138,7 +164,7 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-logical-mutex-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-logical-mutex-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_mutex_fifo_and_cancellation COMMAND oreslang-logical-mutex-test)
-    # Control-plane exception policy; this does NOT implement guest exception lowering.
+    # Host policy only; source-level exceptional effects remain rejected.
     add_executable(oreslang-native-exception-policy-test tests/native_exception_policy_test.cpp)
     target_include_directories(oreslang-native-exception-policy-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -384,4 +410,54 @@ if(BUILD_TESTING)
                  COMMAND oreslang-actor-trace-test)
         set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
     endif()
+    # Current-main reconciliation of the native actor substrate from draft
+    # LLVM #118. Never replace the newer main ownership/continuation tests.
+    # This admits host-level actor scheduling and reserved CONTROL only;
+    # source-level spawn/await lowering remains a separate compiler gate.
+    find_package(Threads REQUIRED)
+
+    add_executable(oreslang-native-actor-mailbox-test
+        tests/native_actor_mailbox_test.c
+        src/main/cpp/oreslang/runtime/NativeActorMailbox.c)
+    target_include_directories(oreslang-native-actor-mailbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-mailbox-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-mailbox-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_fifo_mailbox_admission
+        COMMAND oreslang-native-actor-mailbox-test)
+    set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-actor-ready-queue-test
+        tests/native_actor_scheduler_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-ready-queue-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-ready-queue-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-ready-queue-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_nonblocking_ready_queue
+        COMMAND oreslang-native-actor-ready-queue-test)
+    set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-supervisor-control-test
+        tests/native_supervisor_control_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c)
+    target_include_directories(oreslang-native-supervisor-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-control-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_reserved_control_future
+        COMMAND oreslang-native-supervisor-control-test)
+    set_tests_properties(native_supervisor_reserved_control_future PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-supervisor-panic-test
+        tests/native_supervisor_panic_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-supervisor-panic-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-panic-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-panic-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_typed_panic_event
+        COMMAND oreslang-native-supervisor-panic-test)
+    set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
 endif()
