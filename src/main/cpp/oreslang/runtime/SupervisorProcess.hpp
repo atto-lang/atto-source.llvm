@@ -204,7 +204,18 @@ private:
         } catch (...) {
             std::lock_guard<std::mutex> guard(mutex_);
             committing_decision_ = false;
+            // The host side effect may have occurred before the exception.
+            // Never replay it or count it as committed. Complete any
+            // self-requested close after accounting for the failed decision.
             fail_locked();
+            if (close_after_commit_) {
+                closed_ = true;
+                mailbox_.clear();
+                active_ = false;
+                suspended_ = false;
+                resume_enqueued_ = false;
+                close_after_commit_ = false;
+            }
             return;
         }
         {
