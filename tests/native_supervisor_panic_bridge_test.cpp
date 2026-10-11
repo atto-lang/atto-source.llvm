@@ -230,6 +230,51 @@ int main() {
     s.process->close();
     s.control->close();
 
+    // A lifecycle effect that closes its own supervisor and then throws
+    // has unknown commit status. It must not be replayed or marked resolved;
+    // the deferred close must still finish and account for the lost notice.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::shared_ptr<SupervisorProcess> throwing;
+        std::atomic<unsigned> attempts{0};
+        throwing = std::make_shared<SupervisorProcess>(
+            2207, 51, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return SupervisorProcess::Directive::stop;
+            },
+            [&](const SupervisorProcess::Resolution&) {
+                ++attempts;
+                throwing->close();
+                throw std::runtime_error("ambiguous lifecycle side effect");
+            });
+        throwing->accept(SupervisorFailureNotice{
+            2207, 51, 1, 1, std::nullopt, "panic"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (throwing->undelivered() == 0
+               && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(attempts.load() == 1, "throwing lifecycle sink retried");
+        check(throwing->resolved() == 0,
+              "throwing lifecycle sink was falsely committed");
+        check(throwing->undelivered() == 1 && throwing->pending() == 0,
+              "self-close failed to account for and clear abandoned notice");
+        check(!throwing->callback_active() && !throwing->healthy(),
+              "self-closing failed supervisor retained an active lease");
+        bool rejected = false;
+        try {
+            throwing->accept(SupervisorFailureNotice{
+                2207, 51, 2, 1, std::nullopt, "late"});
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        check(rejected, "late CONTROL was accepted after failing self-close");
+        throwing->close();
+        check(throwing->undelivered() == 2,
+              "closing twice double-counted an already-accounted notice");
+        control->close();
+    }
+
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
-              " await=1 replay=0 native_stop=1");
+              " await=1 replay=0 native_stop=1 throwing_self_close=1");
 }
