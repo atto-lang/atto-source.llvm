@@ -25,7 +25,7 @@
 extern void oreslang_actor_Counter_init(OresActorI64Heap*, uint64_t, uint64_t);
 extern int64_t oreslang_actor_Counter_add(OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 /* Compiled from exactly the same .ores guest kernel fixture used by Graal. */
-extern int64_t counter_value(int64_t);
+extern int64_t counter_response(int64_t);
 #define ACTORS 5
 #define CARRIERS 16
 typedef struct { int64_t count, value; } Answer;
@@ -82,7 +82,7 @@ static Answer step(Worker* w, int idx) {
     ores_actor_arena_scratch_write(w->arena, a, temporary, 0, &count, sizeof count);
     ores_actor_arena_write(w->arena, a, w->counter, 0, &count, sizeof count);
     int64_t value = oreslang_actor_Counter_add(w->heap, t.domain, t.epoch, 1);
-    require(value == counter_value(count), "shared guest kernel and actor state disagree");
+    require(value == counter_response(count), "shared Oreslang HTTP handler and actor state disagree");
     ores_actor_arena_leave(w->arena, a);
     ores_actor_i64_heap_leave(w->heap, t);
     Answer ans = {count, value};
