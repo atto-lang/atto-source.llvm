@@ -7,7 +7,10 @@
     "define enum is nominal type and namespace of case values",
     "named patterns may include enum types; enum payloads may not depend on named patterns",
     "source newlines do not separate type unions; require |",
-    "no per-pattern return type; match<R> optional for result"
+    "no per-pattern return type; match<R> optional for result",
+    "Every ActorRef.send payload must be in the actor message domain AND recursively Serializable regardless of process placement",
+    "@Serializable derives codecs for eligible nominal types; mere annotation presence must never be accepted as a codec",
+    "Data-only immutable local freeze is a fast path only when a portable encoding exists; host capabilities never implicitly serialize"
   ],
   "cases": [
     {
@@ -114,6 +117,102 @@
       "source": "define enum State as On Off end\nconst value = State();",
       "rationale": "Enum type itself is not a constructor without a declared case",
       "compiler_status": "not yet implemented in Java/Graal or LLVM"
+    },
+    {
+      "id": "serializable-string-actor-send",
+      "expected": "accept",
+      "source": "define actor Worker as\n  receive(ActorMail<string> msg): void { return; }\nend\npub routine main(): void {\n  const a = await spawn Worker();\n  a.send(\"foo\");\n  return;\n}",
+      "rationale": "Primitive string has a portable codec; admitted by a matching actor domain",
+      "test_layer": "future-full-source-and-runtime",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "serializable-list-of-string",
+      "expected": "accept",
+      "source": "define actor Worker as\n  receive(ActorMail<List<string>> msg): void { return; }\nend\npub routine main(): void {\n  const a = await spawn Worker();\n  a.send([\"a\", \"b\"]);\n  return;\n}",
+      "rationale": "Finite runtime collection values are serializable when all elements have codecs",
+      "test_layer": "future-full-source-and-runtime",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "serializable-enum-values-and-payloads",
+      "expected": "accept",
+      "source": "define enum Event as\n  Started(id: string) = \"started\"\n  Stopped = \"stopped\"\nend\ndefine actor Worker<messages=Event> as\n  receive(Event msg): void { return; }\nend\npub routine main(): void {\n  const a = await spawn Worker();\n  a.send(Event.Started(\"id\"));\n  return;\n}",
+      "rationale": "Stable enum tags plus typed recursively serializable payloads can be sent",
+      "test_layer": "future-full-source-and-runtime",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "serializable-pattern-union-domain",
+      "expected": "accept",
+      "source": "define enum Status as Ready end\ndefine pattern Mail as string | Status | Tuple[bool, string] end\ndefine actor Worker<messages=Mail> as\n  receive(Mail m): void { return; }\nend",
+      "rationale": "Every alternative of a named message pattern must have a codec, including included enum types",
+      "test_layer": "future-typecheck",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "reject-actor-message-domain-mismatch",
+      "expected": "reject",
+      "source": "define actor Worker as\n  receive(ActorMail<string> msg): void { return; }\nend\npub routine main(): void {\n  const a = await spawn Worker();\n  a.send(123);\n  return;\n}",
+      "rationale": "Serializable alone is not enough: payload must belong to receiver domain",
+      "test_layer": "future-full-source",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "reject-nonserializable-actor-ref",
+      "expected": "reject",
+      "source": "define actor Worker as\n  receive(ActorMail<ActorRef<Worker>> msg): void { return; }\nend",
+      "rationale": "Raw ActorRef capability is not an implicitly serializable message value",
+      "test_layer": "typecheck",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "reject-nonserializable-runtime-capability",
+      "expected": "reject",
+      "source": "define actor Worker as\n  receive(ActorMail<ActorId> msg): void { return; }\nend",
+      "rationale": "Opaque actor runtime identities require a separately defined portable address/capability codec",
+      "test_layer": "typecheck",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "reject-nested-nonserializable",
+      "expected": "reject",
+      "source": "define actor Worker as\n  receive(ActorMail<List<ActorId>> msg): void { return; }\nend",
+      "rationale": "Serialization is recursively checked and nested opaque values fail closed",
+      "test_layer": "typecheck",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "reject-nonserializable-pattern-alternative",
+      "expected": "reject",
+      "source": "define pattern Mail as string | Channel<int> end\ndefine actor Worker<messages=Mail> as\n  receive(Mail msg): void { return; }\nend",
+      "rationale": "Pattern domains require all alternatives to have codecs, even if one call passes a valid string",
+      "test_layer": "future-typecheck",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "reject-nonserializable-class-no-codec",
+      "expected": "reject",
+      "source": "define class Payload as\n  value: string\nend\ndefine actor Worker as\n  receive(ActorMail<Payload> msg): void { return; }\nend",
+      "rationale": "Ordinary class values must not be transmitted without generated codec metadata",
+      "test_layer": "typecheck",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "serializable-annotated-struct",
+      "expected": "accept",
+      "source": "@Serializable\ndefine struct Job as\n  id: string\n  retry: int\nend\ndefine actor Worker<messages=Job> as\n  receive(Job message): void { return; }\nend",
+      "rationale": "Only after @Serializable generates checked schema and codec; annotation presence alone is not proof",
+      "test_layer": "future-codec-derivation",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
+    },
+    {
+      "id": "reject-serializable-annotation-with-capability",
+      "expected": "reject",
+      "source": "@Serializable\ndefine struct Bad as\n  raw: ActorRef<Worker>\nend",
+      "rationale": "Codec derive must reject unsupported capability fields transitively",
+      "test_layer": "future-codec-derivation",
+      "compiler_status": "design-pending: executable enum/pattern/codec parity not implemented"
     }
   ]
 }
