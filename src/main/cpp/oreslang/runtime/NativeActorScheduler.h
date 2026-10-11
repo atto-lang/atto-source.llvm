@@ -102,6 +102,9 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open(
     OresNativeActorTaskFn callback, void* ctx);
 
 /* Host diagnostic only. No guest pointer or scheduler internals are exposed. */
+/* Zero at open, one after the first successfully spawned actor. This is a
+ * dedicated blocking scheduler CONTROL thread, never a carrier. */
+size_t ores_native_actor_scheduler_started_control_threads(OresNativeActorScheduler* scheduler);
 size_t ores_native_actor_scheduler_started_workers(OresNativeActorScheduler* scheduler);
 /* Legacy index admission requires an already-spawned host actor.\n * New hosts should use the generation-checked actor ref send API.\n * O(1), nonblocking admission. Returns 1 on accepted, 0 on capacity or retirement.
  * Does not allocate and never invokes callbacks inline. Capacity includes the
