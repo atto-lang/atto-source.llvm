@@ -45,6 +45,31 @@ std::uint64_t actor_layout_v1(const ActorDecl& actor) {
     return hash;
 }
 
+std::uint64_t actor_mail_schema_v1(const ActorDecl& actor) {
+    // An ordered, host-authenticated message contract fingerprint.
+    // Not a serializer by itself; the envelope additionally carries a
+    // version and explicit finite variant index.
+    std::uint64_t hash = UINT64_C(14695981039346656037);
+    auto octet = [&](unsigned char ch) {
+        hash ^= ch;
+        hash *= UINT64_C(1099511628211);
+    };
+    auto name = [&](const std::string& value) {
+        for (unsigned char ch : value) octet(ch);
+        octet(0);
+    };
+    name("ores.actor.mail.v1");
+    name(actor.name);
+    for (const auto& method : actor.methods) {
+        if (method.name != "receive") continue;
+        for (const auto& field : method.accepted_message_variants) {
+            name(field);
+            name("i64");
+        }
+    }
+    return hash;
+}
+
 
 struct ActorContext {
     llvm::Value* heap;
@@ -227,6 +252,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
             llvm::IRBuilder<> builder(
                 llvm::BasicBlock::Create(context, "entry", layout_hash));
             builder.CreateRet(llvm::ConstantInt::get(i64, actor_layout_v1(actor)));
+        }
+        llvm::Function* mail_hash = entrypoint("message_schema_hash", i64, {});
+        {
+            llvm::IRBuilder<> builder(
+                llvm::BasicBlock::Create(context, "entry", mail_hash));
+            builder.CreateRet(llvm::ConstantInt::get(
+                i64, actor_mail_schema_v1(actor)));
         }
         auto params = [](llvm::Function* function) {
             std::vector<llvm::Value*> result;
