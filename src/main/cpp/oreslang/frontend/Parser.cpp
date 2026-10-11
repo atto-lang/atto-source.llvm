@@ -246,8 +246,15 @@ private:
         return result;
     }
 
-    MessageShape message_shape(unsigned depth = 0) {
+    MessageShape message_shape(unsigned depth = 0, std::size_t* shape_nodes = nullptr) {
+        // Match the shared codec's total descriptor node budget, not just
+        // each individual nested sequence's immediate arity. A single huge
+        // tree must not bypass the resource cap via many small subtrees.
+        std::size_t root_nodes = 0;
+        if (!shape_nodes) shape_nodes = &root_nodes;
         if (depth > 64) fail("message shape exceeds maximum type nesting depth");
+        if (++*shape_nodes > 100000)
+            fail("message shape exceeds total descriptor node budget");
         if (accept("bool")) return {MessageShape::Kind::Boolean, {}};
         if (accept("int")) return {MessageShape::Kind::Integer, {}};
         if (accept("string")) return {MessageShape::Kind::String, {}};
@@ -284,9 +291,13 @@ private:
         do {
             if (shape.elements.size() >= 4096)
                 fail("message shape exceeds maximum descriptor elements");
-            shape.elements.push_back(message_shape(depth + 1));
+            shape.elements.push_back(message_shape(depth + 1, shape_nodes));
         } while (accept(","));
         require(close);
+        if ((shape.kind == MessageShape::Kind::Array
+             || shape.kind == MessageShape::Kind::List)
+            && shape.elements.size() != 1)
+            fail("variable enum message collection must have exactly one element type");
         return shape;
     }
 
