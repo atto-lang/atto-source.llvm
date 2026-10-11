@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--native-runtime", action="append")
     parser.add_argument("--native-harness")
     parser.add_argument("--native-harness-cxx")
+    parser.add_argument("--native-sanitizers", action="store_true")
     args = parser.parse_args()
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
@@ -38,6 +39,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
         clang_args = [args.clang, "-x", "ir", "-"]
+        if args.native_sanitizers:
+            clang_args.extend(["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g"])
         for runtime_path in args.native_runtime or []:
             native_source = pathlib.Path(runtime_path)
             clang_args.extend([
@@ -50,10 +53,14 @@ def main():
             assert args.native_runtime, "C++ harness needs native runtime includes"
             native_source = pathlib.Path(args.native_runtime[0])
             cxx_object = str(pathlib.Path(directory) / "actor-group-host.o")
+            host_sanitizers = (
+                ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g"]
+                if args.native_sanitizers else []
+            )
             host_build = subprocess.run(
                 [args.clang, "-x", "c++", "-std=c++17", "-c",
                  args.native_harness_cxx, "-I", str(native_source.parents[2]),
-                 "-pthread", "-o", cxx_object],
+                 "-pthread", "-o", cxx_object] + host_sanitizers,
                 capture_output=True, text=True, check=False, timeout=30,
             )
             assert host_build.returncode == 0, host_build.stderr
