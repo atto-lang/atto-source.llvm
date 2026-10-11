@@ -89,8 +89,11 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal };
     Kind kind;
+    // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
+    // Non-Copy branch-local classes are still rejected until drop glue exists.
+    std::unique_ptr<LocalBinding> branch_local;
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
