@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <future>
 #include <stdexcept>
 #include <thread>
@@ -16,6 +17,72 @@ static void check(bool yes, const char* error) {
 }
 
 int main() {
+    {
+        // Native terminal CONTROL must be value-only and scheduler-enqueued,
+        // not a direct child -> supervisor guest callback.
+        NativeActorGroup group(2501, 3);
+        std::deque<std::function<void()>> jobs;
+        std::vector<oreslang::runtime::SupervisorFailureNotice> seen;
+        group.install_supervisor_failure_handler(
+            [&](const auto& notice) { seen.push_back(notice); },
+            [&](std::function<void()> job) {
+                jobs.push_back(std::move(job));
+                return true;
+            });
+        auto a = group.adopt(2501, 1, 1, [] {});
+        auto b = group.adopt_child(a, 2501, 2, 1, [] {});
+        auto c = group.adopt_child(b, 2501, 3, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b)
+              && group.mark_ready(c), "native supervisor family not ready");
+        check(group.finalized(c, "C terminal"), "terminal native child failed");
+        check(seen.empty(), "supervisor callback executed on child finalizer");
+        check(jobs.size() == 1, "supervisor CONTROL was not enqueued");
+        auto dispatch = std::move(jobs.front());
+        jobs.pop_front();
+        dispatch();
+        check(seen.size() == 1, "supervisor did not observe one terminal notice");
+        check(seen[0].supervisor_id == group.supervisor_id(),
+              "supervisor notice identity drift");
+        check(seen[0].actor_id == c.actor_id()
+              && seen[0].spawned_by == b.actor_id(),
+              "supervisor notice lost terminal/parent identity");
+        check(seen[0].diagnostic == "C terminal",
+              "supervisor notice diagnostic drift");
+        check(group.undelivered_supervisor_failures() == 0,
+              "native supervisor delivery reported false overflow");
+        group.close();
+        check(group.finalized(a) && group.finalized(b),
+              "closed native family could not finalize");
+    }
+    {
+        // Detached runtime finalizer must preserve CONTROL after group close.
+        NativeActorGroup group(2502, 2);
+        std::deque<std::function<void()>> jobs;
+        int notices = 0;
+        group.install_supervisor_failure_handler(
+            [&](const auto& n) {
+                check(n.diagnostic == "after-close", "after-close reason lost");
+                ++notices;
+            },
+            [&](std::function<void()> job) {
+                jobs.push_back(std::move(job));
+                return true;
+            });
+        auto child = group.adopt(2502, 5, 1, [] {});
+        check(group.mark_ready(child), "after-close child not ready");
+        auto finalizer = group.runtime_finalizer(child);
+        group.close();
+        check(finalizer.finalized("after-close"),
+              "runtime finalizer rejected after-close notice");
+        check(!finalizer.finalized("duplicate"),
+              "duplicate finalizer accepted and could duplicate CONTROL");
+        check(notices == 0 && jobs.size() == 1,
+              "CONTROL ran inline or failed to enqueue after close");
+        auto dispatch = std::move(jobs.front());
+        jobs.pop_front();
+        dispatch();
+        check(notices == 1, "supervisor lost after-close terminal notice");
+    }
     {
         // Host-side contract: A -> B -> C remains one ActorGroup, and
         // spawn ancestry does not create independent lifecycle managers.
