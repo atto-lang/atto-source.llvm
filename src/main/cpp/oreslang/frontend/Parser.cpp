@@ -413,10 +413,17 @@ private:
         while (token_.text != "end" && token_.kind != Kind::End) {
             Expression::Arm arm;
             if (is_match) {
-                require("on");
-                (void)accept("is");
-                if (accept("_")) arm.fallback = true;
-                else arm.cases.push_back(parse_dispatch_case());
+                // Default is a designated fallback, even when it precedes
+                // concrete patterns. The legacy 'on _' and 'on default'
+                // spellings are aliases, not source-ordered wildcard guards.
+                if (accept("default")) {
+                    arm.fallback = true;
+                } else {
+                    require("on");
+                    (void)accept("is");
+                    if (accept("_") || accept("default")) arm.fallback = true;
+                    else arm.cases.push_back(parse_dispatch_case());
+                }
             } else {
                 if (accept("default")) arm.fallback = true;
                 else {
@@ -425,12 +432,10 @@ private:
                     while (accept(","));
                 }
             }
-            // Match wildcard remains source-ordered and makes later arms unreachable.
-            // Switch default is a fallback regardless of its source position;
-            // explicit cases may follow it, but a second default is invalid.
-            if (fallback && (is_match || arm.fallback))
-                fail(is_match ? "dispatch arm after catch-all is unreachable"
-                              : "duplicate switch default");
+            // Explicit match patterns remain source ordered, but designated
+            // defaults in both match and switch run only after concrete cases.
+            if (fallback && arm.fallback)
+                fail(is_match ? "duplicate match default" : "duplicate switch default");
             if (arm.fallback) fallback = true;
             for (const auto number : arm.cases)
                 if (!distinct.insert(number).second)
@@ -452,9 +457,9 @@ private:
             if (expr->arms.size() > 256) fail("dispatch arm count exceeds 256");
         }
         require("end");
-        if (!is_match && fallback) {
+        if (fallback) {
             // Preserve the relative order of concrete cases while keeping the
-            // only default last for both SSA result and procedural lowering.
+            // one designated default last for both match and switch lowering.
             auto default_arm = std::find_if(expr->arms.begin(), expr->arms.end(),
                 [](const Expression::Arm& arm) { return arm.fallback; });
             if (default_arm + 1 != expr->arms.end())

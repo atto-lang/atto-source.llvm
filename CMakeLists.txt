@@ -80,8 +80,14 @@ if(BUILD_TESTING)
         --diagnostic "duplicate switch default")
     oreslang_contract_test(reject_value_switch_malformed_case value-switch-malformed-case.ores
         --diagnostic "malformed dispatch integer separator")
-    oreslang_contract_test(reject_value_match_unreachable_catchall value-match-unreachable-catchall.ores
-        --diagnostic "dispatch arm after catch-all is unreachable")
+    oreslang_contract_test(source_value_match_default_first value-match-default-first.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_bare_default_first value-match-bare-default-first.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_on_default_first value-match-on-default-first.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_value_match_duplicate_default value-match-duplicate-default.ores
+        --diagnostic "duplicate match default")
     oreslang_contract_test(reject_value_switch_grouped_duplicate value-switch-grouped-duplicate.ores
         --diagnostic "duplicate dispatch integer case")
     oreslang_contract_test(source_value_switch_default_first_grouped_ir value-switch-default-first-grouped.ores
@@ -138,6 +144,12 @@ if(BUILD_TESTING)
 
     if(ORE_CLANG)
         oreslang_contract_test(native_exec_value_match_return value-match-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_match_default_first value-match-default-first.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_match_bare_default_first value-match-bare-default-first.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_match_on_default_first value-match-on-default-first.ores
+            --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_nested_match_switch value-match-nested-switch-return.ores
             --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_do_switch_nested_value do-switch-nested-value-return.ores

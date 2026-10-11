@@ -87,3 +87,14 @@ against the native actor heap and do not become guest source values. This
 is not Java actor semantic parity: await, spawn, supervision, runtime
 scheduling, exceptions, automatic all-exit cleanup, general object layouts,
 and FFI quiescence remain release gates.
+
+
+## Scalar match default fallback parity (October 11, 2026)
+
+The supported LLVM i64 scalar subset treats `default`, `on default`,
+and `on _` as one designated catch-all. It may precede explicit `on N`
+arms but is considered after the concrete arms when choosing a value.
+Concrete arms retain source order. Duplicate catch-alls fail at parsing;
+there is no fallthrough. Native execution fixtures distinguish the case-first
+result from the fallback. This does **not** implement tagged tuples,
+`match<ret=T>`, owned payloads, suspension, or generic union narrowing.
