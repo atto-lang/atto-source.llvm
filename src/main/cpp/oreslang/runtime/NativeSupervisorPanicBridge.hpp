@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include "oreslang/runtime/SupervisorChildRegistry.hpp"
 #include "oreslang/runtime/SupervisorProcess.hpp"
 
 #include <cstddef>
@@ -9,7 +10,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace oreslang::runtime {
 
@@ -30,7 +31,9 @@ public:
             OresNativeActorScheduler* scheduler,
             OresNativeActorRef parent,
             std::shared_ptr<SupervisorProcess> process)
-        : scheduler_(scheduler), parent_(parent), process_(std::move(process)) {
+        : scheduler_(scheduler), parent_(parent), process_(std::move(process)),
+          child_registry_(process_ ? process_->supervisor_id() : 0,
+                          parent.scheduler_domain) {
         if (!scheduler_ || !process_ || !valid(parent_)
             || process_->runtime_id() != parent_.scheduler_domain)
             throw std::invalid_argument("supervisor bridge domain mismatch");
@@ -45,8 +48,17 @@ public:
                 || !ores_native_actor_scheduler_poll_ready(scheduler_, child))
             throw std::invalid_argument("foreign, stale or stopped child");
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!registered_.insert(Key{child.actor_slot, child.generation}).second)
+        const Key key{child.actor_slot, child.generation};
+        if (registered_.count(key) != 0)
             throw std::logic_error("child generation already registered");
+        const auto snapshot = child_registry_.register_child(child);
+        try {
+            registered_.emplace(key, snapshot);
+        } catch (...) {
+            child_registry_.detach_active(snapshot.child, child,
+                                          snapshot.incarnation);
+            throw;
+        }
     }
 
     /**
@@ -77,6 +89,10 @@ public:
             // absence of a published terminal failure authoritative.
             if (!ores_native_actor_scheduler_seal_normal_exit(scheduler_, child))
                 return false;
+            const auto admitted = registered_.at(key);
+            child_registry_.finalized(admitted.child, child, admitted.incarnation);
+            child_registry_.stop(admitted.child, child, admitted.incarnation);
+            child_registry_.retire_stopped(admitted.child);
             registered_.erase(key);
             return true;
         } catch (...) {
@@ -99,6 +115,7 @@ public:
                     || failure.child.scheduler_domain != parent_.scheduler_domain)
                 return reject();
             Key key{failure.child.actor_slot, failure.child.generation};
+            SupervisorChildRegistry::Snapshot admitted;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (registered_.count(key) == 0) {
@@ -112,9 +129,12 @@ public:
                     ++rejected_;
                     return false;
                 }
-                // Consume the one-shot registration before async admission.
-                // An event rejected by the process must not be replayed, and
-                // keeping every completed generation forever leaks memory.
+                admitted = registered_.at(key);
+                // Finalization must be established while the scheduler has
+                // confirmed physical child teardown. Capture the exact
+                // logical identity before the one-shot key is consumed.
+                child_registry_.finalized(
+                    admitted.child, failure.child, admitted.incarnation);
                 registered_.erase(key);
             }
             SupervisorFailureNotice copied{
@@ -126,7 +146,9 @@ public:
                 "native terminal failure",
                 failure.kind,
                 failure.failure_code,
-                failure.correlation
+                failure.correlation,
+                admitted.child.logical_child_id,
+                admitted.incarnation
             };
             process_->accept(copied); // enqueues only, never invokes policy inline
             {
@@ -137,6 +159,34 @@ public:
         } catch (...) {
             return reject(); // process counts its own failed enqueue
         }
+    }
+
+    /** Host-only immutable view; neither ID alone grants guest authority. */
+    SupervisorChildRegistry::Snapshot child_snapshot(
+            SupervisorChildRegistry::ChildRef child) const {
+        return child_registry_.snapshot(child);
+    }
+
+    /** Commit STOP disposition only for the exact physically finalized child. */
+    SupervisorChildRegistry::Snapshot acknowledge_finalized_stop(
+            const SupervisorProcess::Resolution& resolution) {
+        const auto& notice = resolution.notice;
+        if (resolution.requested != SupervisorProcess::Directive::stop
+                || resolution.turn_generation == 0
+                || notice.supervisor_id != process_->supervisor_id()
+                || notice.runtime_id != process_->runtime_id()
+                || !notice.logical_child_id || !notice.logical_incarnation) {
+            throw std::logic_error("unauthorized finalized supervisor STOP");
+        }
+        SupervisorChildRegistry::ChildRef key{
+            notice.supervisor_id, notice.runtime_id, notice.logical_child_id};
+        OresNativeActorRef actor{
+            notice.runtime_id, notice.actor_id, notice.generation};
+        return child_registry_.stop(key, actor, notice.logical_incarnation);
+    }
+
+    std::size_t tracked_logical_children() const {
+        return child_registry_.tracked_children();
     }
 
     std::size_t registered_children() const {
@@ -179,8 +229,9 @@ private:
     OresNativeActorScheduler* const scheduler_; // borrowed, externally fenced
     const OresNativeActorRef parent_;
     const std::shared_ptr<SupervisorProcess> process_;
+    SupervisorChildRegistry child_registry_;
     mutable std::mutex mutex_;
-    std::unordered_set<Key, KeyHash> registered_;
+    std::unordered_map<Key, SupervisorChildRegistry::Snapshot, KeyHash> registered_;
     std::size_t accepted_ = 0;
     std::size_t rejected_ = 0;
 };
