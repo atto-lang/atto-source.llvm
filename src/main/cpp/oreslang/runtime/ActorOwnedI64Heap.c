@@ -201,6 +201,12 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
     }
     rejected();
 }
+uint32_t ores_actor_i64_heap_loan_count(OresActorI64Heap* heap) {
+    lock_heap(heap);
+    const uint32_t count = heap->active_loans;
+    unlock_heap(heap);
+    return count;
+}
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap) {
     lock_heap(heap);
     heap->retiring = 1; /* no subsequent actor turn may enter */
@@ -275,6 +281,11 @@ int64_t ores_actor_i64_fields_get(
         OresActorI64Heap* heap, OresActorTurn turn,
         const OresActorI64Fields* fields, uint32_t field) {
     return ores_actor_i64_heap_read(heap, turn, field_slot(heap, fields, field));
+}
+OresActorLoan ores_actor_i64_fields_borrow(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        const OresActorI64Fields* fields, uint32_t field) {
+    return ores_actor_i64_heap_borrow(heap, turn, field_slot(heap, fields, field));
 }
 void ores_actor_i64_fields_set(
         OresActorI64Heap* heap, OresActorTurn turn,
