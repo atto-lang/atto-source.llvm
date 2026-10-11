@@ -170,8 +170,17 @@ class ComparatorParityProof(unittest.TestCase):
 
     def test_pending_cannot_smuggle_runtime_or_diagnostic_evidence(self):
         for evidence in ({"observed_exit": 0}, {"diagnostic_class": "unknown_name"}):
-            record = next(item for item in self.reports["graal"]["results"]
-                          if item["status"] == "pending")
+            # Pending coverage may move between backends as individual
+            # conformance cases are promoted. Test the invariant, not which
+            # implementation happens to remain incomplete.
+            candidates = [
+                record
+                for backend in ("llvm", "graal")
+                for record in self.reports[backend]["results"]
+                if record["status"] == "pending"
+            ]
+            self.assertTrue(candidates, "expected a pending cross-backend case")
+            record = candidates[0]
             record.update(evidence)
             self.assertEqual(self.compare()[0], 1)
             for key in evidence:
