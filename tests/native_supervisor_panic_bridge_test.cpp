@@ -120,6 +120,7 @@ int main() {
                     || n.generation != s.child.generation
                     || n.native_terminal_kind != ORES_NATIVE_CONTROL_PANIC
                     || n.failure_code != 37 || n.correlation != 20261011
+                    || !n.logical_child_id || n.logical_incarnation != 1
                     || !s.child_cleanup)
                 ++s.unexpected;
             {
@@ -141,6 +142,18 @@ int main() {
             // A real lifecycle STOP can close its own supervisor from inside
             // the admitted CONTROL decision. The effect must still commit.
             s.process->close();
+            try {
+                auto stopped = s.bridge->acknowledge_finalized_stop(result);
+                if (stopped.phase !=
+                        oreslang::runtime::SupervisorChildRegistry::Phase::stopped
+                    || stopped.actor.actor_slot != s.child.actor_slot
+                    || stopped.actor.generation != s.child.generation
+                    || stopped.incarnation != result.notice.logical_incarnation
+                    || stopped.child.logical_child_id != result.notice.logical_child_id)
+                    ++s.unexpected;
+            } catch (...) {
+                ++s.unexpected;
+            }
             ++s.decisions;
             {
                 std::lock_guard<std::mutex> guard(s.mutex);
@@ -266,6 +279,8 @@ int main() {
           "normal child registration was retired twice");
     check(s.bridge->registered_children() == 0,
           "normally finalized child left an orphan registration");
+    check(s.bridge->tracked_logical_children() == 1,
+          "normal child did not retire or terminal child lost its STOP record");
 
     check(ores_native_actor_scheduler_stop(s.scheduler, s.parent),
           "parent supervisor lane could not stop");
