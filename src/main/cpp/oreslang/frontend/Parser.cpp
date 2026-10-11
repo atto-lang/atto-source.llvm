@@ -1033,10 +1033,18 @@ private:
                                     throw std::runtime_error(
                                         "tagged variant binder arity or tuple shape mismatch");
                                 std::unordered_set<std::string> names;
-                                for (const auto& name : arm.binders)
+                                for (const auto& name : arm.binders) {
+                                    // '_' is an intentionally ignored slot,
+                                    // not a binding. Multiple ignored tuple
+                                    // positions are valid and never shadow.
+                                    if (name == "_") continue;
                                     if (!names.insert(name).second)
                                         throw std::runtime_error(
                                             "duplicate variable in tagged payload destructuring");
+                                    if (available.count(name))
+                                        throw std::runtime_error(
+                                            "tagged payload binder shadows field, local or Message parameter");
+                                }
                             }
                         }
                         if (seen.size() != allowed.size())
