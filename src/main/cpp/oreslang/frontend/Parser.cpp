@@ -99,6 +99,11 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Contiguous '==' is one token, matching the Java/Graal lexer.
+        if (source_.substr(at_, 2) == "==") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         if (std::string_view("(){},:;+-*=.").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
@@ -395,7 +400,7 @@ private:
             require("if");
             require("(");
             guard.lhs = expression();
-            require("eq");
+            if (!accept("eq")) require("==");
             guard.rhs = expression();
             require(")");
             require("{");
