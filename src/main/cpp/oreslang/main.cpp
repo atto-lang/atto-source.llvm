@@ -21,6 +21,12 @@ int main(int argc, char** argv) {
         const std::string text((std::istreambuf_iterator<char>(source)),
                                std::istreambuf_iterator<char>());
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
+        // Target/capability directives are lexical comments in the native
+        // subset. Reject rather than silently discard unverified portability
+        // constraints before parsing or emitting LLVM IR.
+        if (text.find("// ores:") != std::string::npos) {
+            throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
+        }
         auto ast = oreslang::parse_program(text);
         std::cout << oreslang::emit_verified_llvm_ir(ast);
         return 0;

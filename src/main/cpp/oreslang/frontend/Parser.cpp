@@ -1,4 +1,5 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/OwnershipChecker.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -32,7 +33,7 @@ bool reserved(std::string_view name) {
         "define", "class", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "generator",
+        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -40,8 +41,8 @@ bool reserved(std::string_view name) {
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
-        "let", "mut", "self", "true", "false", "null", "obj", "arr",
-        "int"
+        "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
+        "gpu", "quantum", "over", "structural", "owned", "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -91,7 +92,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -141,19 +142,51 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (token_.text == "gpu" || token_.text == "quantum") {
+            fail("native accelerator lowering unsupported");
+        }
+        if (token_.text == "suspends" || token_.text == "suspend") {
+            fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+        }
+        if (token_.text == "critical") {
+            fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
+        }
+        if (token_.text == "actor" || token_.text == "async" ||
+            token_.text == "generator" || token_.text == "isoactor") {
+            fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
+        }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
         value.name = identifier();
         require("(");
         if (!accept(")")) {
             do {
+                Parameter parameter;
+                if (accept("borrow")) {
+                    parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
+                                                    : Parameter::Mode::Borrow;
+                }
                 require("int");
-                value.parameters.push_back(identifier());
+                parameter.name = identifier();
+                value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
         }
         require(":");
         require("int");
         require("{");
+        while (token_.text == "const" || token_.text == "val") {
+            LocalBinding binding;
+            binding.offset = token_.offset;
+            advance();
+            binding.name = identifier();
+            require(":");
+            binding.heap_owned = accept("owned");
+            require("int");
+            require("=");
+            binding.initializer = expression();
+            require(";");
+            value.locals.push_back(std::move(binding));
+        }
         require("return");
         value.result = expression();
         require(";");
@@ -192,6 +225,30 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (token_.text == "rt") {
+            const auto offset = token_.offset;
+            advance();
+            const auto operation = token_.text;
+            if (operation != "borrow" && operation != "copy" &&
+                operation != "take" && operation != "share") {
+                fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
+            }
+            advance();
+            const bool mutable_borrow = operation == "borrow" && accept("mut");
+            auto result = make_expression(
+                operation == "copy" ? Expression::Kind::Copy :
+                operation == "take" ? Expression::Kind::Take :
+                operation == "share" ? Expression::Kind::Share :
+                mutable_borrow ? Expression::Kind::BorrowMut : Expression::Kind::Borrow,
+                offset);
+            if (accept("(")) {
+                result->left = expression();
+                require(")");
+            } else {
+                result->left = unary();
+            }
+            return result;
+        }
         if (token_.text == "-") {
             const auto offset = token_.offset;
             advance();
@@ -286,6 +343,11 @@ private:
                 return;
             }
             case Expression::Kind::Negate:
+            case Expression::Kind::Copy:
+            case Expression::Kind::Take:
+            case Expression::Kind::Share:
+            case Expression::Kind::Borrow:
+            case Expression::Kind::BorrowMut:
                 validate_expression(*expr.left, parameters, functions);
                 return;
             case Expression::Kind::Add:
@@ -307,21 +369,47 @@ private:
             }
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) {
-                if (!params.insert(param).second) {
-                    throw std::runtime_error("duplicate parameter '" + param
+                if (!params.insert(param.name).second) {
+                    throw std::runtime_error("duplicate parameter '" + param.name
                                              + "' at byte " + std::to_string(fn.offset));
                 }
             }
         }
         for (const auto& fn : program.functions) {
-            const std::unordered_set<std::string> params(fn.parameters.begin(),
-                                                         fn.parameters.end());
+            std::unordered_set<std::string> params;
+            for (const auto& param : fn.parameters) params.insert(param.name);
+            for (const auto& binding : fn.locals) {
+                // Validate before publishing the name: reject self/forward reads.
+                validate_expression(*binding.initializer, params, functions);
+                if (!params.insert(binding.name).second) {
+                    throw std::runtime_error("duplicate owned local '" + binding.name
+                        + "' at byte " + std::to_string(binding.offset));
+                }
+            }
             validate_expression(*fn.result, params, functions);
         }
     }
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
+        if (token_.text == "gpu" || token_.text == "quantum") {
+            throw std::runtime_error("native gpu/quantum boundary unsupported: "
+                    "validated effects, ownership, device lowering and explicit "
+                    "backend admission required; no implicit CPU fallback at byte "
+                    + std::to_string(token_.offset));
+        }
+        // Syntactic admission is a safety boundary: rejecting actor/channel
+        // keywords also means no unverified borrowed reference can enter a
+        // suspended/native execution frame or deferred callback.
+        if (token_.text == "select" || token_.text == "readch" ||
+            token_.text == "writech" || token_.text == "nb" ||
+            token_.text == "do" || token_.text == "await" ||
+            token_.text == "yield" || token_.text == "cooperate") {
+            throw std::runtime_error(
+                "native async/channel/select boundary unsupported: "
+                "suspension-aware borrow checking and cancellation/actor lowering required"
+                " at byte " + std::to_string(token_.offset));
+        }
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
@@ -332,7 +420,11 @@ private:
 } // namespace
 
 Program parse_program(std::string_view source) {
-    return Parser(source).parse();
+    Program program = Parser(source).parse();
+    // LLVM lowering is prohibited unless the native subset has passed both
+    // name/arity checking and flow-sensitive explicit ownership admission.
+    validate_i64_ownership(program);
+    return program;
 }
 
 } // namespace oreslang
