@@ -73,6 +73,14 @@ if(BUILD_TESTING)
     # Source await, actor methods, and cross-boundary ref escape remain rejected.
     oreslang_contract_test(source_actor_spawn_ir source-actor-spawn-stop.ores
         --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(source_actor_typed_ref_ir source-actor-typed-ref.ores
+        --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(reject_source_actor_typed_mismatch source-actor-typed-ref-mismatch.ores
+        --diagnostic "ActorRef<T> type mismatch")
+    oreslang_contract_test(reject_source_actor_typed_nonspawn source-actor-typed-ref-nonspawn.ores
+        --diagnostic "ActorRef<T> requires spawn initializer")
+    oreslang_contract_test(reject_future_type_without_await source-future-typed-unimplemented.ores
+        --diagnostic "Future<T> requires native continuation lowering")
     oreslang_contract_test(source_actor_stop_ir source-actor-spawn-stop.ores
         --ir "oreslang_source_actor_stop")
     oreslang_contract_test(reject_source_actor_missing_stop source-actor-spawn-missing-stop.ores
@@ -132,6 +140,12 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        oreslang_contract_test(native_exec_source_actor_typed_ref source-actor-typed-ref.ores
+            --run 43 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=3")
         oreslang_contract_test(native_exec_source_actor_spawn source-actor-spawn-stop.ores
             --run 43 --clang "${ORE_CLANG}"
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"

@@ -91,7 +91,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=.").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -202,27 +202,54 @@ private:
             binding.offset = token_.offset;
             advance();
             binding.name = identifier();
-            const bool scalar_type = accept(":");
-            if (scalar_type) {
-                binding.heap_owned = accept("owned");
-                require("int");
+            const bool has_explicit_type = accept(":");
+            SourceType declared_type;
+            bool actor_ref_type = false;
+            if (has_explicit_type) {
+                if (accept("ActorRef")) {
+                    require("<");
+                    declared_type.kind = SourceType::Kind::ActorRef;
+                    declared_type.argument = identifier();
+                    require(">");
+                    actor_ref_type = true;
+                } else if (accept("Future")) {
+                    // Reserve a genuine typed Future category without
+                    // creating a fake synchronous future value or await.
+                    require("<");
+                    declared_type.kind = SourceType::Kind::Future;
+                    if (accept("int")) declared_type.argument = "int";
+                    else declared_type.argument = identifier();
+                    require(">");
+                    fail("Future<T> requires native continuation lowering");
+                } else {
+                    binding.heap_owned = accept("owned");
+                    require("int");
+                }
             }
             require("=");
             if (token_.text == "await")
                 fail("await requires native compiler continuation lowering");
             if (accept("spawn")) {
-                if (actor_method || scalar_local_seen || scalar_type)
-                    fail("actor spawn requires untyped reference before scalar locals in main");
+                if (actor_method || scalar_local_seen
+                    || (has_explicit_type && !actor_ref_type))
+                    fail("actor spawn requires ActorRef<T> or inferred reference in main");
                 ActorSpawnBinding actor_ref;
                 actor_ref.offset = binding.offset;
                 actor_ref.name = std::move(binding.name);
                 actor_ref.actor_type = identifier();
+                actor_ref.declared_type.kind = SourceType::Kind::ActorRef;
+                actor_ref.declared_type.argument = actor_ref_type
+                    ? declared_type.argument : actor_ref.actor_type;
+                if (actor_ref.declared_type.argument != actor_ref.actor_type)
+                    fail("ActorRef<T> type mismatch with spawned actor");
                 require("(");
                 require(")");
                 require(";");
                 value.actor_spawns.push_back(std::move(actor_ref));
             } else {
-                if (!scalar_type) fail("scalar local requires ': int'");
+                if (actor_ref_type)
+                    fail("ActorRef<T> requires spawn initializer");
+                if (!has_explicit_type) fail("scalar local requires ': int'");
                 scalar_local_seen = true;
                 binding.initializer = expression();
                 require(";");

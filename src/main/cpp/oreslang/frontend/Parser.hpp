@@ -31,9 +31,18 @@ struct LocalBinding {
     std::size_t offset = 0;
 };
 
+// Distinguish source i64 data, generation-fenced actor capabilities, and
+// suspended results in the AST. Future lowering remains a compiler gate.
+struct SourceType {
+    enum class Kind { I64, ActorRef, Future };
+    Kind kind = Kind::I64;
+    std::string argument;
+};
+
 struct ActorSpawnBinding {
     std::string name;
     std::string actor_type;
+    SourceType declared_type;
     std::size_t offset = 0;
 };
 
