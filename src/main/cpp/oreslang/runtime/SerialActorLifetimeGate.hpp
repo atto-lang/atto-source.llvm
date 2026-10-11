@@ -93,9 +93,18 @@ public:
         return true;
     }
 
+    /** An outstanding lifetime reservation may be suspended. */
     bool admitted(const Lease& lease) const {
         std::lock_guard<std::mutex> guard(lock_);
         return matches_locked(lease);
+    }
+
+    /** Authorizes guest execution only for the current unsuspended lease.
+     * The transport/scheduler must check this before any handler or resumed
+     * continuation enters guest code. No guest-supplied ticket is trusted. */
+    bool may_execute(const Lease& lease) const {
+        std::lock_guard<std::mutex> guard(lock_);
+        return matches_locked(lease) && !suspended_;
     }
 
     /** Finishes a normal/suspended/canceled handler, then promotes FIFO work. */
