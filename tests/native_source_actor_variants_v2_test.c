@@ -67,7 +67,7 @@ int main(void) {
     char shape_2[] = "T[B,S]";
     char shape_3[] = "T[S,I,S]";
     uint8_t digest[4][32];
-    const size_t schema_len[3] = {strlen(schema_0), strlen(schema_1),
+    const size_t schema_len[4] = {strlen(schema_0), strlen(schema_1),
                                    strlen(schema_2), strlen(schema_3)};
     for (size_t i = 0; i < 4; ++i) {
         const size_t index = 3 + (schema_len[i] > 31 ? 1 : 0) + schema_len[i];
