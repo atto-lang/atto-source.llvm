@@ -422,17 +422,17 @@ private:
         while (token_.text != "end" && token_.kind != Kind::End) {
             Expression::Arm arm;
             if (is_match) {
-                // Default is a designated fallback, even when it precedes
-                // concrete patterns. The legacy 'on _' and 'on default'
-                // spellings are aliases, not source-ordered wildcard guards.
-                if (accept("default")) {
-                    arm.fallback = true;
-                } else {
-                    require("on");
-                    (void)accept("is");
-                    if (accept("_") || accept("default")) arm.fallback = true;
-                    else arm.cases.push_back(parse_dispatch_case());
-                }
+                // Canonical match is source ordered. Unlike switch default,
+                // an 'on _' arm claims the remainder of the match and makes
+                // any following concrete arm unreachable.
+                if (accept("default"))
+                    fail("match has no default/else keyword; use on _");
+                require("on");
+                (void)accept("is");
+                if (accept("_")) arm.fallback = true;
+                else if (accept("default"))
+                    fail("match has no default/else keyword; use on _");
+                else arm.cases.push_back(parse_dispatch_case());
             } else {
                 if (accept("default")) arm.fallback = true;
                 else {
@@ -446,10 +446,13 @@ private:
                     } while (accept(","));
                 }
             }
-            // Explicit match patterns remain source ordered, but designated
-            // defaults in both match and switch run only after concrete cases.
+            // Match wildcards are source-ordered and terminal. A switch
+            // default is an order-independent fallback; keep the policies
+            // separate even though both lower through a fallback arm.
             if (fallback && arm.fallback)
                 fail(is_match ? "duplicate match default" : "duplicate switch default");
+            if (is_match && fallback)
+                fail("unreachable match arm after wildcard");
             if (arm.fallback) fallback = true;
             for (const auto number : arm.cases) {
                 if (++total_cases > 256)
@@ -474,9 +477,9 @@ private:
             if (expr->arms.size() > 256) fail("dispatch arm count exceeds 256");
         }
         require("end");
-        if (fallback) {
-            // Preserve the relative order of concrete cases while keeping the
-            // one designated default last for both match and switch lowering.
+        if (fallback && !is_match) {
+            // Switch alone has a designated, order-independent fallback.
+            // Ordered match retains exactly its original source arm order.
             auto default_arm = std::find_if(expr->arms.begin(), expr->arms.end(),
                 [](const Expression::Arm& arm) { return arm.fallback; });
             if (default_arm + 1 != expr->arms.end())

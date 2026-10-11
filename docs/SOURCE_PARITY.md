@@ -110,3 +110,15 @@ allocation or recursive native-stack exhaustion. They are native pilot
 implementation budgets, not the long-term Oreslang language specification.
 Invalid programs must terminate compilation with diagnostics and no LLVM IR.
 The limits do not certify other parser forms as recursion-safe.
+
+## Canonical ordered match parity correction (October 11, 2026)
+
+This section supersedes the earlier experimental **Scalar match default fallback
+parity** paragraph above. Canonical `match x over` is **source ordered**:
+`on _` is terminal and any later concrete arm is rejected as unreachable.
+Bare `default` and `on default` are not valid match patterns (use `on _`).
+Duplicate wildcards are rejected. `switch` retains its separate designated
+`default` fallback, which may appear before concrete `case` arms. Both
+backends must reject invalid match source consistently, and native tests now
+exercise explicit first-hit and wildcard-fallback executions. These fixtures
+do not establish the remaining nominal-pattern/async parity.

@@ -63,6 +63,10 @@ if(BUILD_TESTING)
         --diagnostic "dispatch case count exceeds 256")
     oreslang_contract_test(reject_dispatch_nesting_overflow dispatch-nesting-overflow.ores
         --diagnostic "dispatch nesting depth exceeds 64")
+    oreslang_contract_test(source_value_match_wildcard_last_ir value-match-wildcard-last.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_wildcard_miss_ir value-match-wildcard-miss.ores
+        --ir "dispatch.collected.value")
     oreslang_contract_test(source_value_match_ir value-match-return.ores --ir "dispatch.collected.value")
     # Nested arm-local returns must merge into their lexical value dispatch,
     # while an enclosing do arm still returns from the containing function.
@@ -89,16 +93,16 @@ if(BUILD_TESTING)
         --diagnostic "duplicate switch default")
     oreslang_contract_test(reject_value_switch_malformed_case value-switch-malformed-case.ores
         --diagnostic "malformed dispatch integer separator")
-    oreslang_contract_test(source_value_match_default_first value-match-default-first.ores
-        --ir "dispatch.collected.value")
-    oreslang_contract_test(source_value_match_default_first_miss value-match-default-first-miss.ores
-        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_source_value_match_default_first value-match-default-first.ores
+        --diagnostic "unreachable match arm after wildcard")
+    oreslang_contract_test(reject_source_value_match_default_first_miss value-match-default-first-miss.ores
+        --diagnostic "match has no default/else keyword")
     oreslang_contract_test(reject_value_match_duplicate_case value-match-duplicate-case.ores
         --diagnostic "duplicate dispatch integer case")
-    oreslang_contract_test(source_value_match_bare_default_first value-match-bare-default-first.ores
-        --ir "dispatch.collected.value")
-    oreslang_contract_test(source_value_match_on_default_first value-match-on-default-first.ores
-        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_source_value_match_bare_default_first value-match-bare-default-first.ores
+        --diagnostic "match has no default/else keyword")
+    oreslang_contract_test(reject_source_value_match_on_default_first value-match-on-default-first.ores
+        --diagnostic "match has no default/else keyword")
     oreslang_contract_test(reject_value_match_duplicate_default value-match-duplicate-default.ores
         --diagnostic "duplicate match default")
     oreslang_contract_test(reject_value_switch_grouped_duplicate value-switch-grouped-duplicate.ores
@@ -156,15 +160,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
     if(ORE_CLANG)
+        oreslang_contract_test(native_exec_match_wildcard_last value-match-wildcard-last.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_match_wildcard_miss value-match-wildcard-miss.ores
+            --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_value_match_return value-match-return.ores --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(native_exec_value_match_default_first value-match-default-first.ores
-            --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(native_exec_value_match_default_first_miss value-match-default-first-miss.ores
-            --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(native_exec_value_match_bare_default_first value-match-bare-default-first.ores
-            --run 42 --clang "${ORE_CLANG}")
-        oreslang_contract_test(native_exec_value_match_on_default_first value-match-on-default-first.ores
-            --run 42 --clang "${ORE_CLANG}")
+
+
+
+
         oreslang_contract_test(native_exec_nested_match_switch value-match-nested-switch-return.ores
             --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_do_switch_nested_value do-switch-nested-value-return.ores
