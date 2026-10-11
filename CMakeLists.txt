@@ -67,6 +67,24 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_shadow actor-field-shadow.ores --diagnostic "actor parameter shadows field")
     oreslang_contract_test(reject_actor_user_symbol_collision actor-abi-func-collision.ores --diagnostic "conflicting generated actor symbol")
     oreslang_contract_test(reject_actor_actor_symbol_collision actor-abi-actor-collision.ores --diagnostic "conflicting generated actor symbol")
+    # Restricted compiler-generated ActorRef lifecycle: trusted top-level
+    # main may spawn one or more typed actors and must stop each exactly once.
+    # Source await, actor methods, and cross-boundary ref escape remain rejected.
+    oreslang_contract_test(source_actor_spawn_ir source-actor-spawn-stop.ores
+        --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(source_actor_stop_ir source-actor-spawn-stop.ores
+        --ir "oreslang_source_actor_stop")
+    oreslang_contract_test(reject_source_actor_missing_stop source-actor-spawn-missing-stop.ores
+        --diagnostic "actor reference must be stopped before return")
+    oreslang_contract_test(reject_source_actor_unknown source-actor-spawn-unknown.ores
+        --diagnostic "unknown actor type")
+    oreslang_contract_test(reject_source_actor_double_stop source-actor-spawn-double-stop.ores
+        --diagnostic "invalid or repeated actor stop")
+    oreslang_contract_test(reject_source_actor_await source-actor-spawn-unavailable-await.ores
+        --diagnostic "await requires native compiler continuation lowering")
+    oreslang_contract_test(reject_source_actor_escape source-actor-spawn-escape.ores
+        --diagnostic "unknown parameter")
+
     # Ownership remains Java-only. Reject all source ownership forms before
     # LLVM IR emission until a lifetime/provenance-aware typechecker exists.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "expected int expression")
@@ -98,6 +116,18 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        oreslang_contract_test(native_exec_source_actor_spawn source-actor-spawn-stop.ores
+            --run 43 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_ACTOR_SPAWN_STOP_VERIFIED")
+        oreslang_contract_test(native_asan_source_actor_spawn source-actor-spawn-stop.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_ACTOR_SPAWN_STOP_VERIFIED")
         oreslang_contract_test(native_exec_actor_fields actor-owned-fields.ores --run 0 --clang "${ORE_CLANG}"
             --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
