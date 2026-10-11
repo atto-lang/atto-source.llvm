@@ -43,6 +43,30 @@ int main(void) {
     ores_native_actor_scheduler_retire(dormant);
     check(ores_native_actor_scheduler_drain(dormant));
     check(ores_native_actor_scheduler_try_destroy(dormant));
+    /* First admission starts one worker; sustained concurrent outstanding
+     * turns expand to the configured maximum without a GC/helper thread. */
+    State growing = {0};
+    atomic_store(&growing.hold, 1);
+    OresNativeActorScheduler* expanded =
+        ores_native_actor_scheduler_open(4, 4, 4, run, &growing);
+    check(expanded != NULL);
+    OresNativeActorRef growing_refs[4];
+    for (size_t i = 0; i < 4; ++i) {
+        growing_refs[i] = ores_native_actor_scheduler_spawn(expanded, i);
+        check(growing_refs[i].scheduler_domain != 0);
+    }
+    check(ores_native_actor_scheduler_started_workers(expanded) == 0);
+    check(ores_native_actor_scheduler_send(expanded, growing_refs[0], 0));
+    check(ores_native_actor_scheduler_started_workers(expanded) == 1);
+    for (size_t i = 1; i < 4; ++i)
+        check(ores_native_actor_scheduler_send(expanded, growing_refs[i], 0));
+    check(ores_native_actor_scheduler_started_workers(expanded) == 4);
+    atomic_store(&growing.hold, 0);
+    check(ores_native_actor_scheduler_drain(expanded));
+    check(atomic_load(&growing.total) == 4);
+    ores_native_actor_scheduler_retire(expanded);
+    check(ores_native_actor_scheduler_try_destroy(expanded));
+
     State s = {0};
     OresNativeActorScheduler* scheduler =
         ores_native_actor_scheduler_open(ACTORS, EACH, 8, run, &s);
@@ -58,7 +82,8 @@ int main(void) {
     for (int n = 0; n < EACH; ++n)
         for (size_t a = 0; a < ACTORS; ++a)
             check(ores_native_actor_scheduler_send(scheduler, refs[a], (uint64_t)n));
-    check(ores_native_actor_scheduler_started_workers(scheduler) == 8);
+    check(ores_native_actor_scheduler_started_workers(scheduler) >= 1);
+    check(ores_native_actor_scheduler_started_workers(scheduler) <= 8);
     check(ores_native_actor_scheduler_drain(scheduler));
     check(atomic_load(&s.total) == ACTORS * EACH);
     check(atomic_load(&s.errors) == 0);
@@ -92,7 +117,7 @@ int main(void) {
     check(ores_native_actor_scheduler_started_workers(scheduler) == 0);
     check(ores_native_actor_scheduler_try_send(scheduler, one, 0)
           == ORES_NATIVE_SEND_ACCEPTED);
-    check(ores_native_actor_scheduler_started_workers(scheduler) == 2);
+    check(ores_native_actor_scheduler_started_workers(scheduler) == 1);
     /* The admitted or queued first item consumes the full capacity. */
     check(ores_native_actor_scheduler_try_send(scheduler, one, 1)
           == ORES_NATIVE_SEND_MAILBOX_FULL);
