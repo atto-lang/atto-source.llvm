@@ -36,9 +36,13 @@ struct CriticalStateCallback {
 
 inline CriticalStateAdmission admit_critical_handle_state(
         const CriticalStateCallback& callback,
-        FunctionEffects using_effects) noexcept {
+        FunctionEffects using_effects,
+        bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    if (!callback.callback_critical) return CriticalStateAdmission::MissingCallbackCritical;
+    // The serial privilege comes from a trusted actor declaration + scheduler,
+    // never from callback metadata supplied by guest code.
+    if (!callback.callback_critical && !verified_serial_actor)
+        return CriticalStateAdmission::MissingCallbackCritical;
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
