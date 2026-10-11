@@ -359,6 +359,37 @@ private:
         }
         if (token_.text == "await")
             fail("await requires native compiler continuation lowering");
+        // A first executable source matcher: closed bool inbox with
+        // exhaustive true/false arms. No free-form Message access or
+        // unverified implicit default branch.
+        if (value.is_receiver && accept("match")) {
+            value.match_subject = identifier();
+            require("{");
+            while (token_.text != "}") {
+                if (token_.kind == Kind::End) fail("unterminated receive match");
+                ReceiveBooleanArm arm;
+                arm.offset = token_.offset;
+                if (accept("true")) arm.match_value = true;
+                else if (accept("false")) arm.match_value = false;
+                else fail("expected true/false match arm");
+                require("=");
+                require(">");
+                require("{");
+                while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+                    FieldAssignment assignment;
+                    assignment.offset = token_.offset;
+                    assignment.field = identifier();
+                    require("=");
+                    assignment.value = expression();
+                    require(";");
+                    arm.assignments.push_back(std::move(assignment));
+                }
+                require("}");
+                value.boolean_arms.push_back(std::move(arm));
+                accept(";");
+            }
+            require("}");
+        }
         // Restricted synchronous actor methods can update declared `let` fields.
         while (actor_method && token_.kind == Kind::Identifier
                && !reserved(token_.text)) {
@@ -730,6 +761,36 @@ private:
                 }
                 if (method.is_receiver) {
                     const std::string& parameter = method.parameters.at(0);
+                    if (!method.boolean_arms.empty()) {
+                        const MessagePattern& contract =
+                            *messagePatterns.at(actor.messages_type);
+                        if (contract.alternatives.size() != 1 ||
+                            contract.alternatives[0].kind != MessageShape::Kind::Boolean)
+                            throw std::runtime_error(
+                                "receive match true/false requires bool-only contract");
+                        if (method.match_subject != parameter)
+                            throw std::runtime_error(
+                                "receive match must inspect Message parameter");
+                        bool seenTrue = false, seenFalse = false;
+                        for (const auto& arm : method.boolean_arms) {
+                            bool& seen = arm.match_value ? seenTrue : seenFalse;
+                            if (seen) throw std::runtime_error(
+                                "duplicate receive boolean match arm");
+                            seen = true;
+                            for (const auto& assignment : arm.assignments) {
+                                if (!mutableFields.count(assignment.field))
+                                    throw std::runtime_error(
+                                        "cannot assign immutable or unknown actor field in match");
+                                if (reads_name(*assignment.value, parameter))
+                                    throw std::runtime_error(
+                                        "match arm Message payload binding is not narrowed");
+                                validate_expression(*assignment.value, available, functions);
+                            }
+                        }
+                        if (!seenTrue || !seenFalse)
+                            throw std::runtime_error(
+                                "nonexhaustive receive boolean match");
+                    }
                     if (reads_name(*method.result, parameter) ||
                         std::any_of(method.assignments.begin(), method.assignments.end(),
                             [&](const FieldAssignment& a) {
