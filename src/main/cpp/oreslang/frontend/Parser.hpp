@@ -51,6 +51,6 @@ struct Program {
 
 // Parse and statically validate a strict Java-compatible subset: int functions,
 // int parameters, return expressions and same-module calls. Reject everything else.
-Program parse_program(std::string_view source);
+Program parse_program(std::string_view source, bool experimental_owned_int = false);
 
 } // namespace oreslang
