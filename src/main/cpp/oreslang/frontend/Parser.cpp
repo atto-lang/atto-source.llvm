@@ -314,12 +314,20 @@ private:
                 binding.class_name = identifier();
                 binding.name = identifier();
                 require("=");
-                require("new");
-                const std::string ctor = identifier();
-                if (ctor != binding.class_name) fail("class constructor type mismatch");
-                require("(");
-                require(")");
-                binding.new_class = true;
+                if (accept("new")) {
+                    const std::string ctor = identifier();
+                    if (ctor != binding.class_name) fail("class constructor type mismatch");
+                    require("(");
+                    require(")");
+                    binding.new_class = true;
+                } else {
+                    require("rt");
+                    require("take");
+                    const bool parenthesized = accept("(");
+                    binding.move_source = identifier();
+                    if (parenthesized) require(")");
+                    binding.move_class = true;
+                }
             } else {
                 advance();
                 binding.name = identifier();
