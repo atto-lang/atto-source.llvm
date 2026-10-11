@@ -37,6 +37,9 @@ public:
     struct Resolution {
         SupervisorFailureNotice notice;
         Directive requested;
+        // Scoped to supervisor_id + runtime_id; not the actor's generation.
+        // Lifecycle owners can use this for idempotent effect receipts.
+        std::uint64_t turn_generation = 0;
     };
     // Nullopt means logical await: the carrier returns while the lease stays
     // owned. A future resolver calls resume() to schedule an admitted turn.
@@ -228,7 +231,7 @@ private:
                 fail_locked();
                 return;
             }
-            resolution = Resolution{mailbox_.front(), decision};
+            resolution = Resolution{mailbox_.front(), decision, generation};
             suspended_ = false;
         } catch (...) {
             std::lock_guard<std::mutex> guard(mutex_);
