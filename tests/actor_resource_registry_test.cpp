@@ -1,6 +1,10 @@
 #include "oreslang/runtime/ActorResourceRegistry.hpp"
 #include <algorithm>
 #include <atomic>
+// Release CTest builds set NDEBUG; contract assertions must still execute.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <stdexcept>
 #include <thread>
