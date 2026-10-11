@@ -27,13 +27,32 @@ struct Fixture {
     std::unique_ptr<NativeSupervisorPanicBridge> bridge;
     std::atomic<unsigned> terminal_events{0};
     std::atomic<unsigned> accepted{0};
+    std::atomic<unsigned> child_messages{0};
+    std::atomic<bool> child_cleanup_done{false};
     std::atomic<unsigned> applied{0};
     std::atomic<unsigned> failed_checks{0};
     std::atomic<std::uint64_t> observed_child{0};
     std::atomic<std::uint64_t> observed_incarnation{0};
 };
 
-static void ordinary(void*, size_t, std::uint64_t) {}
+static void ordinary(void* raw, size_t slot, std::uint64_t payload) {
+    auto& f = *static_cast<Fixture*>(raw);
+    if (slot != f.child.actor_slot || payload != 99) {
+        ++f.failed_checks;
+        return;
+    }
+    ++f.child_messages;
+    // Publish while still on the dying child's carrier, as happens during
+    // actual terminal actor handling. Parent CONTROL must wait until this
+    // physical callback has returned before invoking the source STOP policy.
+    f.child_cleanup_done.store(true);
+    if (!ores_native_actor_scheduler_stop(f.scheduler, f.child)
+        || !ores_native_actor_scheduler_publish_failure(
+            f.scheduler, f.parent,
+            OresNativeActorTerminalFailure{
+                ORES_NATIVE_CONTROL_PANIC, f.child, 17, 91}))
+        ++f.failed_checks;
+}
 
 static void typed_terminal(void* raw, size_t parent_slot,
                            OresNativeActorTerminalFailure event) {
@@ -84,8 +103,9 @@ static void exercise(bool ambiguous) {
                         && state.actor.generation == f.child.generation
                         && state.incarnation == n.logical_incarnation,
                         "typed terminal failure switched actor incarnations");
-                require(ores_native_actor_scheduler_poll_done(f.scheduler, f.child),
-                        "policy ran before child physical finalization");
+                require(f.child_cleanup_done.load()
+                        && ores_native_actor_scheduler_poll_done(f.scheduler, f.child),
+                        "policy ran before child cleanup and physical finalization");
                 bool restart_denied = false;
                 try {
                     (void) f.registry->begin_restart(child, f.child, n.logical_incarnation);
@@ -108,13 +128,8 @@ static void exercise(bool ambiguous) {
     require(f.registry->tracked_children() == 1,
             "physical child spawn was not registered with supervisor");
 
-    require(ores_native_actor_scheduler_stop(f.scheduler, f.child),
-            "physical child STOP request rejected");
-    require(ores_native_actor_scheduler_publish_failure(
-                f.scheduler, f.parent,
-                OresNativeActorTerminalFailure{
-                    ORES_NATIVE_CONTROL_PANIC, f.child, 17, 91}),
-            "typed terminal event not admitted to native scheduler");
+    require(ores_native_actor_scheduler_send(f.scheduler, f.child, 99),
+            "native child message could not trigger terminal handling");
 
     const auto deadline = std::chrono::steady_clock::now() + 10s;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -125,6 +140,8 @@ static void exercise(bool ambiguous) {
             break;
         std::this_thread::sleep_for(1ms);
     }
+    require(f.child_messages == 1 && f.child_cleanup_done.load(),
+            "terminal actor work did not complete its cleanup");
     require(f.terminal_events == 1 && f.accepted == 1,
             "typed native panic did not pass the bridge exactly once");
     require(f.applied == 1 && f.failed_checks == 0,
