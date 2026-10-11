@@ -70,6 +70,28 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    # Host-only ActorGroup substrate: source actor spawn/await fail closed.
+    oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "native async/channel/select boundary unsupported")
+    add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
+    target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-group-lifecycle-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
+    set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
+    # Prove control-plane stop requests honor existing loan-gated native heaps.
+    add_executable(oreslang-actor-group-heap-quiescence-test
+        tests/actor_group_heap_quiescence_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-group-heap-quiescence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-group-heap-quiescence-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-group-heap-quiescence-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_heap_loan_quiescence
+        COMMAND oreslang-actor-group-heap-quiescence-test)
+    set_tests_properties(native_actor_group_heap_loan_quiescence PROPERTIES TIMEOUT 15)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
