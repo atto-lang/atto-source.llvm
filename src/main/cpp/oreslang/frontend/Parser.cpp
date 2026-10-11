@@ -501,7 +501,7 @@ private:
                 returned = true;
                 break;
             }
-            fail("native function expects do match/switch or return");
+            fail("expected 'return' or a supported 'do match/switch' statement");
         }
         if (!returned) fail("native function requires a final return or return do");
         require("}");
