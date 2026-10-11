@@ -77,6 +77,9 @@ void ores_actor_i64_fields_codegen_drop(
 /* Trusted host-only quiescence probe. No loan or raw field pointer is returned.
  * Do not start guest turns after requesting supervisor stop. */
 uint32_t ores_actor_i64_heap_active_loans(OresActorI64Heap* heap);
+/* Both no active turn and no retained loans are required to drop generated
+ * field records. A supervisor must fence NEW admissions before using this. */
+int ores_actor_i64_heap_quiescent(OresActorI64Heap* heap);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
 /* Returns zero while a turn or loan is outstanding; returns one and frees
  * native memory after quiescence. Never call with an invalidated heap pointer.
