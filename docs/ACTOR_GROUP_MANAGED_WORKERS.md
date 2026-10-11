@@ -8,8 +8,10 @@ Companion to [Java ActorGroup](https://github.com/ores-truffle-oreslang/oreslang
 | --- | --- | --- |
 | `spawn WorkerActor()` | `ActorRef<WorkerActor>` | Nothing; actor startup is scheduled |
 | `await spawn WorkerActor()` | `ActorRef<WorkerActor>` | Successful on_start / constructor readiness |
-| `await ref.ready` | `void` | Readiness (or startup failure) |
-| `await ref.done` | `void` | Finalization (or terminal failure) |
+| `await ref.get_ready()` | `void` | Readiness (or startup failure), via `Future<void>` |
+| `await ref.get_done()` | `void` | Physical finalization (or terminal failure), via `Future<void>` |
+
+**Current native gap:** `NativeActorRef::when_ready(...)` is a host-only callback ticket, not the source-level `get_ready()` future method. `get_done()` and a physical-finalization observer are not implemented by `ActorGroupLifecycle.hpp`; group close only requests shutdown. Do not expose host callbacks or termination-independent group detachment as Oreslang `Future<void>` lifecycle completion. Native lowering must supply separate readiness and done futures with generation fencing and scheduler-only continuation resumption.
 
 Awaiting a spawn **never** means waiting until the actor exits. A
 group must retain worker references until termination; group membership
