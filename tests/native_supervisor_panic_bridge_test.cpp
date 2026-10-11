@@ -23,6 +23,10 @@ static void check(bool okay, const char* reason) {
     if (!okay) throw std::runtime_error(reason);
 }
 
+/* Test-only no-op callbacks for a scheduler whose parent CONTROL is closed. */
+static void unused_message(void*, size_t, std::uint64_t) {}
+static void unused_failure(void*, size_t, OresNativeActorTerminalFailure) {}
+
 struct State {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef parent{}, child{}, sibling{};
@@ -527,6 +531,37 @@ int main() {
         check(process->undelivered() == 1 && process->pending() == 0
               && !process->callback_active() && !process->healthy(),
               "rejected CONTROL process dispatch retained its notice or lease");
+    }
+
+    // Even an unadmitted terminal failure remains classified as a failure:
+    // parent shutdown is not permission to erase the child's registration.
+    {
+        auto* abandoned = ores_native_actor_scheduler_open_typed_control(
+            2, 1, 2, unused_message, nullptr, unused_failure, nullptr);
+        check(abandoned != nullptr, "abandoned CONTROL scheduler startup failed");
+        auto parent = ores_native_actor_scheduler_spawn(abandoned, 0);
+        auto child = ores_native_actor_scheduler_spawn(abandoned, 1);
+        check(parent.scheduler_domain && child.scheduler_domain,
+              "abandoned CONTROL actors failed to spawn");
+        check(ores_native_actor_scheduler_stop(abandoned, child),
+              "terminal child did not stop");
+        check(ores_native_actor_scheduler_wait_done(abandoned, child),
+              "terminal child was not physically finalized");
+        check(ores_native_actor_scheduler_stop(abandoned, parent),
+              "parent did not retire");
+        check(!ores_native_actor_scheduler_publish_failure(
+                      abandoned, parent,
+                      OresNativeActorTerminalFailure{
+                          ORES_NATIVE_CONTROL_PANIC, child, 77, 99
+                      }),
+              "terminal event was delivered to a closed parent");
+        check(!ores_native_actor_scheduler_seal_normal_exit(abandoned, child),
+              "rejected panic was reclassified as a normal exit");
+        ores_native_actor_scheduler_retire(abandoned);
+        check(ores_native_actor_scheduler_drain(abandoned),
+              "abandoned CONTROL scheduler did not drain");
+        check(ores_native_actor_scheduler_try_destroy(abandoned),
+              "abandoned CONTROL scheduler teardown failed");
     }
 
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
