@@ -250,17 +250,69 @@ std::string emit_verified_llvm_ir(const Program& source) {
             locals.emplace(local.name, address);
             slots.push_back({address, local.heap_owned});
         }
-        llvm::Value* result = lower(*fn.result, builder, i64, parameters,
-                                    locals, declarations);
-        for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
-            if (iter->heap) {
-                builder.CreateCall(heapDrop, {region, iter->address});
-            } else {
-                builder.CreateLifetimeEnd(iter->address, llvm::ConstantInt::get(i64, 8));
+        auto release_activation = [&](llvm::IRBuilder<>& emit) {
+            for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
+                if (iter->heap)
+                    emit.CreateCall(heapDrop, {region, iter->address});
+                else
+                    emit.CreateLifetimeEnd(iter->address,
+                                           llvm::ConstantInt::get(i64, 8));
             }
+            if (region != nullptr) emit.CreateCall(heapClose, {region});
+        };
+
+        // Procedural do-dispatch has no collected result/PHI. Returning arms
+        // exit the containing function and reclaim all owned lexical slots;
+        // unmatched or nonreturning arms continue after the entire dispatch.
+        for (const auto& action : fn.procedural) {
+            const auto& dispatch = *action.dispatch;
+            llvm::Value* subject = lower(*dispatch.left, builder, i64,
+                                          parameters, locals, declarations);
+            auto* continuation = llvm::BasicBlock::Create(
+                    context, "dispatch.do.continue", function);
+            bool covered = false;
+            for (const auto& arm : dispatch.arms) {
+                llvm::BasicBlock* next = nullptr;
+                if (arm.fallback) {
+                    covered = true;
+                } else {
+                    llvm::Value* selected = builder.getFalse();
+                    for (const auto number : arm.cases) {
+                        auto* equal = builder.CreateICmpEQ(
+                                subject, llvm::ConstantInt::getSigned(i64, number));
+                        selected = builder.CreateOr(selected, equal);
+                    }
+                    auto* body = llvm::BasicBlock::Create(
+                            context, "dispatch.do.arm", function);
+                    next = llvm::BasicBlock::Create(
+                            context, "dispatch.do.next", function);
+                    builder.CreateCondBr(selected, body, next);
+                    builder.SetInsertPoint(body);
+                }
+                if (arm.value) {
+                    llvm::Value* returned = lower(*arm.value, builder, i64,
+                                                  parameters, locals, declarations);
+                    release_activation(builder);
+                    builder.CreateRet(returned);
+                } else {
+                    builder.CreateBr(continuation);
+                }
+                if (arm.fallback) break;
+                builder.SetInsertPoint(next);
+            }
+            if (!covered) builder.CreateBr(continuation);
+            builder.SetInsertPoint(continuation);
         }
-        if (region != nullptr) builder.CreateCall(heapClose, {region});
-        builder.CreateRet(result);
+
+        if (fn.result) {
+            llvm::Value* result = lower(*fn.result, builder, i64, parameters,
+                                        locals, declarations);
+            release_activation(builder);
+            builder.CreateRet(result);
+        } else {
+            // A terminal return-do already emitted returns for every case.
+            builder.CreateUnreachable();
+        }
     }
 
     if (source.actor) {
