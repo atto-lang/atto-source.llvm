@@ -1,0 +1,8 @@
+// Accepted native subset: compile-time public i64 contract, no cross-file import.
+pub define contract MathContract as
+  fnc add(int a, int b) => int;
+end
+define module Math conforms MathContract as
+  pub fnc add(int a, int b): int { return a + b; }
+  pub fnc main(): int { return add(20, 22); }
+end
