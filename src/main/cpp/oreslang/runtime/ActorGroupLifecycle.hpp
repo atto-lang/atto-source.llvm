@@ -636,6 +636,14 @@ private:
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
+        // Ticket holds the lane even after group close/destruction.
+        // A terminal failure is reported once, only after physical quiescence.
+        if (!failure.empty() && ref.ticket_->supervisor_control) {
+            ref.ticket_->supervisor_control->publish(SupervisorFailureNotice{
+                ref.supervisor_id(), ref.runtime_id(), ref.actor_id(),
+                ref.generation(), ref.ticket_->spawned_by, failure
+            });
+        }
         return true;
     }
 
