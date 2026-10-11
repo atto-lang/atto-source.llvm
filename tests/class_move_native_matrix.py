@@ -65,6 +65,31 @@ pub fnc main(): int {
   return dest.a + dest.b - 1;
 }
 """,
+        "guarded-move-taken": PAIR + """
+pub fnc main(): int {
+  let Pair first = new Pair();
+  let Pair second = rt take(first);
+  if (second.a == 13) { return second.b + 13; } fi
+  return second.a + second.b;
+}
+""",
+        "guarded-move-fallthrough": PAIR + """
+pub fnc main(): int {
+  let Pair first = new Pair();
+  let Pair second = rt take(first);
+  if (second.a eq 0) { return 0; } fi
+  return second.a + second.b;
+}
+""",
+        "guarded-scalar-branch-move": PAIR + """
+pub fnc main(): int {
+  const x: int = 42;
+  let Pair first = new Pair();
+  let Pair second = rt take(first);
+  if (second.a eq 13) { return rt take x; } fi
+  return x;
+}
+""",
     }
     rejections = {
         "use-after-move": (PAIR + """
