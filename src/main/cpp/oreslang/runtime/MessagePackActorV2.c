@@ -1,7 +1,6 @@
 #include "oreslang/runtime/MessagePackActorV2.h"
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include <math.h>
-#include <stdio.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -120,7 +119,8 @@ static int signed_integer(Reader* r) {
 static int valid_shape(const char** s, unsigned depth) {
     if (depth > ORES_MP2_MAX_DEPTH) return 0;
     char t = **s;
-    if (t == 'B' || t == 'I' || t == 'F' || t == 'S') {
+    if (t == 'B' || t == 'I' || t == 'S' ||
+        (t == 'F' && !(!strncmp(*s, "FA[", 3) || !strncmp(*s, "FL[", 3)))) {
         ++*s; return 1;
     }
     if (!strncmp(*s, "FA[", 3) || !strncmp(*s, "FL[", 3))
@@ -148,7 +148,7 @@ static int typed_value(Reader* r, const char** shape, unsigned depth) {
         return octet(r, &b) && (b == 0xc2 || b == 0xc3);
     }
     if (t == 'I') { ++*shape; return signed_integer(r); }
-    if (t == 'F') {
+    if (t == 'F' && strncmp(*shape, "FA[", 3) && strncmp(*shape, "FL[", 3)) {
         uint8_t b; uint64_t bits;
         ++*shape;
         if (!octet(r, &b) || b != 0xcb || !uint_be(r, 8, &bits)) return 0;
@@ -203,7 +203,7 @@ int ores_mp2_validate_copy(const OresMp2Contract* c,
         if ((unsigned char)c->schema_id[i] < 33
                 || (unsigned char)c->schema_id[i] > 126) return 0;
     const char* shape_end = c->shape;
-    if (!valid_shape(&shape_end, 0) || *shape_end) { fprintf(stderr, "MP2 DEBUG invalid shape %s\\n", c->shape); return 0; }
+    if (!valid_shape(&shape_end, 0) || *shape_end) return 0;
     Reader r = {bytes, size, 0, 0};
     size_t n;
     uint8_t version;
@@ -217,9 +217,9 @@ int ores_mp2_validate_copy(const OresMp2Contract* c,
             || !octet(&r, &version) || version != 0xc4
             || !octet(&r, &version) || version != 32
             || !take(&r, 32, &digest)
-            || memcmp(digest, c->shape_sha256, 32)) { fprintf(stderr, "MP2 DEBUG header/identity %s size=%zu pos=%zu\\n", c->schema_id, size, r.at); return 0; }
+            || memcmp(digest, c->shape_sha256, 32)) return 0;
     const char* shape = c->shape;
-    if (!typed_value(&r, &shape, 0) || *shape || r.at != size) { fprintf(stderr, "MP2 DEBUG typed %s shape-at=%s pos=%zu size=%zu nodes=%zu\\n", c->schema_id, shape, r.at, size, r.nodes); return 0; }
+    if (!typed_value(&r, &shape, 0) || *shape || r.at != size) return 0;
     uint8_t* copy = malloc(size);
     if (!copy) return 0;
     memcpy(copy, bytes, size);
