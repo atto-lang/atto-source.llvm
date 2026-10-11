@@ -248,9 +248,20 @@ void ores_mp2_owned_release(OresMp2Owned* v) {
     v->bytes = NULL; v->size = 0;
 }
 
+/*
+ * An actor contract cannot borrow an arbitrary host buffer whose bytes may
+ * change or be freed after registration. Copy schema, shape and digest once.
+ * These slots are configured before actor spawn and become read-only.
+ */
+typedef struct {
+    OresMp2Contract value;
+    char* owned_schema;
+    char* owned_shape;
+    uint8_t owned_sha[32];
+} OwnedContract;
 struct OresMp2ActorGroup {
     OresNativeActorScheduler* scheduler;
-    OresMp2Contract* contracts;
+    OwnedContract* contracts;
     unsigned char* spawned;
     size_t actors;
     OresMp2OnMessage callback;
@@ -290,18 +301,48 @@ OresMp2ActorGroup* ores_mp2_group_open(size_t actors, size_t capacity,
     if (!g->scheduler) { free(g->spawned); free(g->contracts); free(g); return NULL; }
     return g;
 }
+static size_t bounded_len(const char* text, size_t limit) {
+    if (!text) return limit + 1;
+    for (size_t i = 0; i <= limit; ++i)
+        if (text[i] == 0) return i;
+    return limit + 1;
+}
 int ores_mp2_group_contract(OresMp2ActorGroup* g, size_t slot,
                             OresMp2Contract contract) {
-    if (!g || slot >= g->actors || g->contracts[slot].schema_id
+    if (!g || slot >= g->actors || g->contracts[slot].value.schema_id
             || !contract.schema_id || !contract.shape || !contract.shape_sha256
             || g->spawned[slot]) return 0;
-    /* Configuration is single-threaded and must finish before guest send. */
-    g->contracts[slot] = contract;
+    /* Registration is a trusted, single-threaded construction operation:
+     * callers MUST NOT spawn or submit concurrently with registration.
+     */
+    size_t schema_len = bounded_len(contract.schema_id, 256);
+    size_t shape_len = bounded_len(contract.shape, 4096);
+    if (!schema_len || schema_len > 256 || !shape_len || shape_len > 4096)
+        return 0;
+    for (size_t i = 0; i < schema_len; ++i) {
+        unsigned char c = (unsigned char)contract.schema_id[i];
+        if (c < 33 || c > 126) return 0;
+    }
+    const char* end = contract.shape;
+    if (!valid_shape(&end, 0) || *end) return 0;
+    char* schema = malloc(schema_len + 1);
+    char* shape = malloc(shape_len + 1);
+    if (!schema || !shape) {
+        free(schema); free(shape);
+        return 0;
+    }
+    memcpy(schema, contract.schema_id, schema_len + 1);
+    memcpy(shape, contract.shape, shape_len + 1);
+    OwnedContract* owner = &g->contracts[slot];
+    memcpy(owner->owned_sha, contract.shape_sha256, 32);
+    owner->owned_schema = schema;
+    owner->owned_shape = shape;
+    owner->value = (OresMp2Contract){schema, shape, owner->owned_sha};
     return 1;
 }
 OresMp2ActorRef ores_mp2_group_spawn(OresMp2ActorGroup* g, size_t slot) {
     OresMp2ActorRef empty = {0, 0, 0};
-    if (!g || slot >= g->actors || !g->contracts[slot].schema_id || g->spawned[slot]) return empty;
+    if (!g || slot >= g->actors || !g->contracts[slot].value.schema_id || g->spawned[slot]) return empty;
     OresMp2ActorRef ref = wrap(ores_native_actor_scheduler_spawn(g->scheduler, slot));
     if (ref.generation) g->spawned[slot] = 1;
     return ref;
@@ -309,10 +350,10 @@ OresMp2ActorRef ores_mp2_group_spawn(OresMp2ActorGroup* g, size_t slot) {
 int ores_mp2_group_send(OresMp2ActorGroup* g, OresMp2ActorRef target,
                         const uint8_t* wire, size_t size) {
     if (!g || target.actor_slot >= g->actors
-            || !g->contracts[target.actor_slot].schema_id) return 0;
+            || !g->contracts[target.actor_slot].value.schema_id) return 0;
     OresMp2Owned* snapshot = calloc(1, sizeof(*snapshot));
     if (!snapshot) return 0;
-    if (!ores_mp2_validate_copy(&g->contracts[target.actor_slot],
+    if (!ores_mp2_validate_copy(&g->contracts[target.actor_slot].value,
                                 wire, size, snapshot)) {
         free(snapshot); return 0;
     }
@@ -334,6 +375,10 @@ int ores_mp2_group_destroy(OresMp2ActorGroup* g) {
     ores_native_actor_scheduler_retire(g->scheduler);
     if (!ores_native_actor_scheduler_drain(g->scheduler)
             || !ores_native_actor_scheduler_try_destroy(g->scheduler)) return 0;
+    for (size_t i = 0; i < g->actors; ++i) {
+        free(g->contracts[i].owned_schema);
+        free(g->contracts[i].owned_shape);
+    }
     free(g->spawned);
     free(g->contracts);
     free(g);
