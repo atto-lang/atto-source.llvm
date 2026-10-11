@@ -32,6 +32,7 @@ struct OresNativeActorScheduler {
     pthread_t* threads;
     SchedulerDispatch* dispatches;
     size_t dispatch_head, dispatch_tail, dispatch_count;
+    size_t busy_workers; /* currently executing user/CONTROL callbacks */
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     int scheduler_started, activation_failed;
     size_t next_actor, outstanding;
@@ -108,7 +109,10 @@ static void* pool_scheduler_loop(void* raw) {
         int issued = 0;
         size_t actor = 0;
         int control = 0;
-        while (s->dispatch_count < s->started_workers
+        /* Pre-issue tickets only to currently idle carriers. A speculative
+         * normal ticket parked behind a busy carrier could otherwise outrank
+         * a later supervisor CONTROL event when that carrier finishes. */
+        while (s->dispatch_count + s->busy_workers < s->started_workers
                && find_ready(s, &actor, &control)) {
             ActorLane* lane = &s->actors[actor];
             lane->reserved = 1;
@@ -139,6 +143,7 @@ static void* carrier(void* raw) {
         SchedulerDispatch ticket = s->dispatches[s->dispatch_head];
         s->dispatch_head = (s->dispatch_head + 1) % s->worker_count;
         --s->dispatch_count;
+        ++s->busy_workers;
         size_t i = ticket.actor_slot;
         int control = ticket.control;
         ActorLane* lane = &s->actors[i];
@@ -173,11 +178,14 @@ static void* carrier(void* raw) {
         lock(s);
         if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        if (!s->busy_workers) abort();
+        --s->busy_workers;
         s->outstanding--;
         s->completed++;
         if (control) ++s->control_completed;
-        if (lane->queued || lane->has_control)
-            pthread_cond_signal(&s->scheduler_wakeup);
+        /* A physical worker became idle: let the scheduler choose among
+         * all ready actors, prioritizing CONTROL over queued user mail. */
+        pthread_cond_signal(&s->scheduler_wakeup);
         if (lane->retired && !lane->active && !lane->reserved
             && !lane->queued && !lane->has_control)
             pthread_cond_broadcast(&s->drained);
