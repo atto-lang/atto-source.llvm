@@ -143,3 +143,18 @@ for all numeric widths and tagged alternatives; native LLVM actor lowering;
 atomic admission/cancellation with proven byte-quota accounting at all
 bindings; concurrent-mutation races; native image and complete compiler
 conformance; independent approval. The PRs remain **DRAFT**.
+
+
+## Java byte-frame queue versus LLVM parity boundary
+
+The Java source actor runtime now enqueues binary MessagePack v2 bytes and
+decodes them during the receiver's exclusive mailbox turn, with runtime-owned
+frame/decoded-size quota reservations; source compiler bindings derive from
+\`receive(ActorMail<T>)\`. The updated full 76-blob mirror
+[funded Maven #38169821931](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38169821931)
+executed 39 successful JUnit tests. **Native LLVM still only has the
+independent portable v2 codec** proven by
+[funded native #38169364693](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38169364693).
+Lowering LLVM source send/receive to owned binary frames, recipient decoding
+on the exclusive scheduler lane and structured quota/CONTROL cleanup remain
+mandatory unimplemented release blockers. Do not claim full backend parity.
