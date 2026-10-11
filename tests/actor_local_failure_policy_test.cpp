@@ -1,5 +1,6 @@
 #include "oreslang/runtime/ActorLocalFailurePolicy.hpp"
 #include <stdexcept>
+#include <initializer_list>
 
 using namespace oreslang;
 #define CHECK(expr) do { if (!(expr)) throw std::runtime_error("failed: " #expr); } while(false)
