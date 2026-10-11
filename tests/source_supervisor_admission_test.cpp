@@ -86,6 +86,37 @@ int main() {
         end
     )");
     check(implicit.name == "Root", "implicit supervisor CONTROL was not accepted");
+
+    // Explicitly naming the current typed Failure is allowed; it is not
+    // an arbitrary child reference or a guest-visible CONTROL lock.
+    constexpr std::string_view with_failure = R"(
+        define supervisor Root as
+          on_panic(problem: Failure): void {
+            self.stop(problem);
+            return;
+          }
+        end
+    )";
+    const auto targeted = oreslang::parse_stop_only_supervisor(with_failure);
+    check(targeted.name == "Root" && targeted.explicitly_bound_failure,
+          "typed current Failure was not bound to STOP");
+    check(!plan.explicitly_bound_failure,
+          "zero-argument STOP incorrectly claims an explicit Failure binding");
+    reject_supervisor(with_failure); // general native compiler remains closed
+    for (const auto forged : {
+            "self.stop(other); return;",
+            "self.stop(self); return;",
+            "self.stop(problem.child); return;",
+            "self.stop(problem.actor); return;",
+            "self.stop(problem, problem); return;",
+            "self.stop(1); return;",
+            "self.stop(problem); self.stop(problem); return;"
+    }) {
+        const std::string unsupported =
+            "define supervisor Root as on_panic(problem: Failure): void { "
+            + std::string(forged) + " } end";
+        reject_stop_slice(unsupported);
+    }
     reject_supervisor(source); // default compiler remains fail-closed
 
     for (auto source_text : {
