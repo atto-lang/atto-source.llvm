@@ -110,6 +110,7 @@ if(BUILD_TESTING)
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
     endif()
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -401,4 +402,54 @@ if(BUILD_TESTING)
                  COMMAND oreslang-actor-trace-test)
         set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
     endif()
+    # Current-main reconciliation of the native actor substrate from draft
+    # LLVM #118. Never replace the newer main ownership/continuation tests.
+    # This admits host-level actor scheduling and reserved CONTROL only;
+    # source-level spawn/await lowering remains a separate compiler gate.
+    find_package(Threads REQUIRED)
+
+    add_executable(oreslang-native-actor-mailbox-test
+        tests/native_actor_mailbox_test.c
+        src/main/cpp/oreslang/runtime/NativeActorMailbox.c)
+    target_include_directories(oreslang-native-actor-mailbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-mailbox-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-mailbox-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_fifo_mailbox_admission
+        COMMAND oreslang-native-actor-mailbox-test)
+    set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-actor-ready-queue-test
+        tests/native_actor_scheduler_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-ready-queue-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-ready-queue-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-ready-queue-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_nonblocking_ready_queue
+        COMMAND oreslang-native-actor-ready-queue-test)
+    set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-supervisor-control-test
+        tests/native_supervisor_control_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c)
+    target_include_directories(oreslang-native-supervisor-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-control-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_reserved_control_future
+        COMMAND oreslang-native-supervisor-control-test)
+    set_tests_properties(native_supervisor_reserved_control_future PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-supervisor-panic-test
+        tests/native_supervisor_panic_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-supervisor-panic-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-panic-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-panic-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_typed_panic_event
+        COMMAND oreslang-native-supervisor-panic-test)
+    set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
 endif()
