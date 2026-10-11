@@ -21,6 +21,12 @@ struct Token {
     std::size_t offset;
 };
 
+bool exceptional_control(std::string_view word) {
+    return word == "throw" || word == "raise" || word == "panic" ||
+           word == "recover" || word == "defer" || word == "try" ||
+           word == "catch" || word == "finally" || word == "trap";
+}
+
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
 bool identifier_start(char ch) {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
@@ -40,7 +46,8 @@ bool reserved(std::string_view name) {
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
-        "static", "pub", "private", "return", "defer", "val", "const",
+        "static", "pub", "private", "return", "defer", "throw", "raise",
+        "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int"
     };
@@ -258,6 +265,8 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (exceptional_control(token_.text))
+            fail("native exception/control effect unsupported");
         if (token_.text == "gpu" || token_.text == "quantum") {
             fail("native accelerator lowering unsupported");
         }
@@ -335,6 +344,8 @@ private:
         }
         while (token_.text != "return" && token_.text != "if") {
             if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
+            if (exceptional_control(token_.text))
+                fail("native exception/control effect unsupported");
             if (accept("stop")) {
                 value.actor_stops.push_back(identifier());
                 require(";");
