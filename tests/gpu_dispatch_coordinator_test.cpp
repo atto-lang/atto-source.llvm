@@ -53,6 +53,9 @@ int main() {
     p->release_callback(nullptr);
     job.get_done().get();
     check(service.reserved_bytes() == 0 && service.in_flight_frames() == 0);
+    // Provider callback duplication must not double-refund frame/byte credits.
+    p->release_callback(nullptr);
+    check(service.reserved_bytes() == 0 && service.in_flight_frames() == 0);
     service.close();
 
     auto cancelled_provider = std::make_shared<DeferredProvider>();
