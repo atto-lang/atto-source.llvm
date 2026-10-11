@@ -78,6 +78,7 @@ llvm::Value* lower(const Expression& expr,
                         storage, field_storage, functions, moves);
                     builder.CreateCall(moves->drop, {moves->region,
                         builder.CreateLoad(i64, storage.at(expr.left->name), expr.left->name + ".handle")});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), storage.at(expr.left->name));
                     builder.CreateStore(builder.getFalse(), found->second);
                     return value;
                 }
@@ -431,6 +432,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     builder.SetInsertPoint(do_drop);
                     builder.CreateCall(regionDrop, {region,
                         builder.CreateLoad(i64, it->address, it->name + ".drop.handle")});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), it->address);
                     builder.CreateStore(builder.getFalse(), flag);
                     builder.CreateBr(after_drop);
                     builder.SetInsertPoint(after_drop);
