@@ -1,5 +1,7 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/types/OwnershipCfg.hpp"
 
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
