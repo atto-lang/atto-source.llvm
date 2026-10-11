@@ -323,6 +323,9 @@ private:
             } else {
                 advance();
                 binding.name = identifier();
+                // Preserve precise fail-closed diagnostics for unsupported
+                // declarations such as "val SelectPlan name = ...".
+                if (token_.text != ":" && token_.text != "=") require(":");
                 const bool explicit_type = accept(":");
                 SourceType declared_type;
                 bool typed_actor_ref = false;
