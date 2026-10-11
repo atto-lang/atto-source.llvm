@@ -76,16 +76,16 @@ construction later; both spellings must lower to the same tagged IR.
 Legacy `infer struct{}` remains valid for structural mail types, but
 must never ambiguously choose between nominal tagged variants.
 
-## 3. Actor acceptance and exhaustive matching
+## 3. Actor acceptance, match-over syntax, and exhaustive return forms
 
 ```ores
 define actor Counter as
     receive(ActorMail<MessagePatterns> mail): void {
-        match mail.value
-            is MessagePatterns.Reset m -> {
+        match mail.value over
+            on MessagePatterns.Reset as m {
                 // m.reset: int
             }
-            is MessagePatterns.Delta m -> {
+            on MessagePatterns.Delta as m {
                 // m.delta: int
             }
         end
@@ -93,15 +93,54 @@ define actor Counter as
 end
 ```
 
+Every canonical `match value over` arm starts with `on`. The optional
+`is` before a qualified case is equivalent to its omission:
+`on is MessagePatterns.Reset as m { ... }` and
+`on MessagePatterns.Reset as m { ... }` are the same checked nominal
+case pattern. The `as m` clause binds the narrowed payload. Canonical
+arms use a braced body without requiring `->`; the old arrow syntax
+may be retained for backward compatibility. A wildcard is `on _ { ... }`.
+
+Ordinary `match` / `switch` are statements, not result expressions.
+Neither falls through from a selected arm into another arm. An ordinary
+match or switch MAY be partial; if no arm matches, control continues
+after the entire statement.
+
+`return match value over ... end` and `return switch value ... end`
+are **exhaustive control-flow statements**, not expressions whose
+values are returned. For both, the compiler must prove all possible
+inputs select an arm AND that every selected arm returns from the
+surrounding function (or has a separately proven terminal exit).
+For an open scalar such as `string` or `int`, the `return match`
+form needs an unguarded `on _ { ... }` catch-all, and `return switch`
+needs `default`, unless a finite-domain proof is available.
+For closed booleans, tagged enums and `type match` case sets,
+explicit arms covering every case are sufficient without a catch-all.
+Guarded arms alone are not an exhaustive proof unless guards can be
+proved to cover the whole remaining domain.
+
+```ores
+pub fnc classify(string v): string {
+    return match v over
+        on "foo" { return "bar"; }
+        on _ { return "other"; }
+    end
+}
+```
+
+This does NOT mean `return match` returns an implicit arm expression;
+the `return` in each arm is the actual value return. An exhaustive
+match with a non-returning arm is invalid in `return match` form.
+The `switch` spelling obeys the identical return-path contract.
+
 Only the actor-local `receive(ActorMail<T>)` defines accepted user
 message cases; sending an unlisted case fails compilation (and native
 admission checks still defend against forged external payloads).
-Compile-time `match` resolves tags by **nominal case identity**, not
-structural field shape or arm order. It rejects overlapping cases,
-duplicate arms, and missing cases unless a deliberately specified
-fallback explicitly handles them. No arbitrary ActorRef business
-method call is allowed. The user-message API remains `ref.send(value)`;
-lifecycle observers and administrative stop/cancel are not message sends.
+Nominal case matching resolves tags by **case identity**, not record
+shape or arm order. Duplicate or unreachable cases are rejected.
+No arbitrary ActorRef business-method call is allowed. The sole
+user-message dispatch API remains `ref.send(value)`; lifecycle
+observers and administrative stop/cancel are not message sends.
 
 ## 4. Portable binary envelope (future implementation gate)
 
