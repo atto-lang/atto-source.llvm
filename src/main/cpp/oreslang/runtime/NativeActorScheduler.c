@@ -11,6 +11,8 @@ typedef struct {
     unsigned active;
     unsigned has_control;
     uint64_t control_payload;
+    OresNativeActorTerminalFailure failure;
+    unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
 } ActorLane;
@@ -28,6 +30,7 @@ struct OresNativeActorScheduler {
     int retired;
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
+    OresNativeActorPanicFn panic_callback;
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
@@ -71,8 +74,12 @@ static void* carrier(void* raw) {
         }
         ActorLane* lane = &s->actors[i];
         uint64_t payload;
+        OresNativeActorTerminalFailure failure = {0};
+        int typed_failure = control && lane->control_is_failure;
         if (control) {
             payload = lane->control_payload;
+            if (typed_failure) failure = lane->failure;
+            lane->control_is_failure = 0;
             lane->has_control = 0;
         } else {
             payload = lane->messages[lane->head];
@@ -83,7 +90,8 @@ static void* carrier(void* raw) {
         unlock(s);
 
         executing = s;
-        if (control) s->control_callback(s->context, i, payload);
+        if (typed_failure) s->panic_callback(s->context, i, failure);
+        else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
         executing = NULL;
 
@@ -101,10 +109,10 @@ static void* carrier(void* raw) {
         unlock(s);
     }
 }
-OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
+OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
-    void* ctx) {
+    OresNativeActorPanicFn panic_callback, void* ctx) {
     if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
@@ -121,6 +129,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     s->worker_count = workers;
     s->callback = callback;
     s->control_callback = control_callback;
+    s->panic_callback = panic_callback;
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i)
         s->actors[i].messages = s->slots + i * capacity;
@@ -152,6 +161,13 @@ allocation_failed:
     free(s->actors);
     free(s);
     return NULL;
+}
+OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
+    size_t actors, size_t capacity, size_t workers,
+    OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
+    void* ctx) {
+    return ores_native_actor_scheduler_open_typed_control(
+        actors, capacity, workers, callback, control_callback, NULL, ctx);
 }
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
     size_t actors, size_t capacity, size_t workers,
@@ -228,11 +244,37 @@ int ores_native_actor_scheduler_publish_control(
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
         lane->control_payload = payload;
+        lane->control_is_failure = 0;
         lane->has_control = 1;
         ++s->accepted;
         ++s->outstanding;
         pthread_cond_signal(&s->ready);
     } else if (s->rejected != UINT64_MAX) ++s->rejected;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_publish_failure(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorTerminalFailure failure) {
+    if (!s) return 0;
+    lock(s);
+    int ok = s->panic_callback != NULL && !s->retired
+        && matching(s, parent) && matching(s, failure.child)
+        && parent.actor_slot != failure.child.actor_slot
+        && failure.kind >= ORES_NATIVE_CONTROL_PANIC
+        && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
+        && !s->actors[parent.actor_slot].retired
+        && !s->actors[parent.actor_slot].has_control
+        && s->accepted != UINT64_MAX;
+    if (ok) {
+        ActorLane* a = &s->actors[parent.actor_slot];
+        a->failure = failure;
+        a->control_is_failure = 1;
+        a->has_control = 1;
+        s->accepted++;
+        s->outstanding++;
+        pthread_cond_signal(&s->ready);
+    } else if (s->rejected != UINT64_MAX) s->rejected++;
     unlock(s);
     return ok;
 }

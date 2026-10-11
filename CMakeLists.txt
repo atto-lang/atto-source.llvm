@@ -189,6 +189,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-supervisor-control-test)
     set_tests_properties(native_supervisor_reserved_control_future PROPERTIES TIMEOUT 30)
 
+    # Typed child terminal failure to reserved parent CONTROL slot.
+    add_executable(oreslang-native-supervisor-panic-test
+        tests/native_supervisor_panic_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-supervisor-panic-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-panic-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-panic-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_typed_panic_event
+        COMMAND oreslang-native-supervisor-panic-test)
+    set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
+
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
     add_executable(oreslang-actor-owned-heap-test
