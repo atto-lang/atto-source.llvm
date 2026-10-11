@@ -128,3 +128,50 @@ passed **58 targeted JUnit tests, 0 failures, 0 errors, 0 skipped**.
 parity. The LLVM frontend must actually *generate* the pinned nominal ABI and
 execute real guest-source send/receive/match programs before merging. Native
 producer leases also do not make opaque pointers safe after destruction.
+
+## 2026-10-11: compiler-produced tagged integer messages
+
+LLVM #180 now compiles and executes an actual Oreslang guest source fixture,
+`tests/fixtures/source-tagged-int-payload-dispatch.ores`, not merely a C
+callback harness. The intentionally bounded source subset admits
+`ref.send(Enum.Case(19))` for a literal unsigned 31-bit integer payload
+and `on Enum.Case as n { count = count + n; }` for an admitted `int`
+case. It emits compiler-pinned nominal contracts and Java-compatible
+MessagePack v2 `T[S,I,I]` frames and binds `n` from owned, validated
+frame bytes on the actor's execution lane. All variants use the SAME
+mailbox and actor-wide admission budget.
+
+The fixture has source-order-reordered `Signals.Sub`, `Signals.Ping`,
+`Signals.Add` alternatives, with distinct `Add` and `Sub` tags sharing
+the exact same payload shape. It sends `Add(19)`, `Sub(4)`, and
+`Ping`. The native actor processes exactly three messages and ends at
+`count=23`, even though `main` independently returns 43.
+Unknown/wrong-domain variants, payloadless-argument mismatches,
+unsupported payload shapes, missing integer values, nonliteral
+expressions and invalid binders are rejected by the compiler.
+
+**LLVM guest execution:** [funded exact-source CI
+#38183268136](https://github.com/zed-pkg-test/java-app/actions/runs/38183268136)
+PASS: original payloadless fixture; tagged int source compiled to LLVM IR
+then Clang native executable; 20 repeated native runs; independent parser
+admission/negative tests; and 10 repeated guest executions under
+AddressSanitizer/UndefinedBehaviorSanitizer. Exact source blob SHA pins
+precede each build.
+
+**JVM canonical parity:** Java #645 includes the exact wire golden
+vectors for `Add(19)` and `Sub(4)` produced independently by
+`TaggedMessageCodec`. [Funded Java CI
+#38183802496](https://github.com/zed-pkg-test/java-app/actions/runs/38183802496)
+PASS: 83 independently verified exact Git blobs, 59 targeted JUnit
+tests, zero failures/errors/skips.
+
+This is a **first executable primitive payload slice**, NOT full
+`define enum`/`define pattern` support. Unsupported: string and tuple
+payload construction/destructuring; dynamic or signed integer source
+payloads outside the admitted literal subset; typed
+`self.respond`/`self.forward`/`self.done` lowering;
+`Future<T>`/await/cancellation; general lifetime-safe stale native actor
+handles; native 4,096-variant parity (LLVM remains capped at 64); and
+full cross-backend build/native-image and long fuzz regression evidence.
+
+Keep Java #645 and LLVM #180 draft until those merge gates pass.
