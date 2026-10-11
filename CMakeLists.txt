@@ -30,6 +30,17 @@ include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    find_program(ORE_NODE NAMES node nodejs)
+    if(ORE_CLANG AND ORE_NODE)
+        add_test(NAME wasm32_source_class_ownership_runtime
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_owned_classes_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --node "${ORE_NODE}"
+                --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        set_tests_properties(wasm32_source_class_ownership_runtime PROPERTIES TIMEOUT 240)
+    endif()
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
@@ -86,19 +97,16 @@ if(BUILD_TESTING)
                 --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         set_tests_properties(native_owned_scalar_cfg_generated_stress PROPERTIES TIMEOUT 240)
     endif()
-    # Actual source-level local class moves, not only an abstract ownership model.
-    # Both ordinary and sanitized paths execute Clang-linked LLVM IR.
+    # Class moves are compiled and exercised through real native guests.
     if(ORE_CLANG)
         add_test(NAME native_class_move_source_execution
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --clang "${ORE_CLANG}")
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
         add_test(NAME native_class_move_source_asan_ubsan
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --clang "${ORE_CLANG}" --sanitize)
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" --sanitize)
         set_tests_properties(native_class_move_source_execution
             native_class_move_source_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
@@ -145,6 +153,18 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
     set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
+    # Pinned native Future<void> lifecycle frame: host callbacks only record
+    # completion; resumption is admitted on a parent actor's CONTROL lane.
+    # Guest-source await remains compiler-rejected pending typed MIR lowering.
+    add_executable(oreslang-actor-lifecycle-await-test tests/actor_lifecycle_await_test.cpp)
+    target_include_directories(oreslang-actor-lifecycle-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-lifecycle-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-lifecycle-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_pinned_actor_future_control_continuation
+        COMMAND oreslang-actor-lifecycle-await-test)
+    set_tests_properties(native_pinned_actor_future_control_continuation PROPERTIES TIMEOUT 15)
     add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -279,6 +299,14 @@ if(BUILD_TESTING)
     # Source-level bounded class ownership and per-call shared/exclusive loans.
     # All class records are stack allocated; unverified class shapes and
     # by-value object parameters remain compile-time errors with no IR.
+    # Field projections and experimental native region owners may not be moved
+    # until the CFG checker and LLVM emitter agree on partial moves and drops.
+    # Matrix asserts precise ownership diagnostics and no partial LLVM IR.
+    add_test(NAME native_field_and_region_move_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_field_move_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_field_and_region_move_fail_closed PROPERTIES TIMEOUT 90)
     oreslang_contract_test(class_reject_byvalue_mutation class-mutation-byvalue-reject.ores --diagnostic "ownership violation")
     # This is the *exact same Git blob* as the Java/Graal conformance
     # source (contracts/v1/semantics/fixtures/ownership.ores), not a

@@ -16,6 +16,7 @@ using Functions = std::unordered_map<std::string, const Function*>;
 struct LocalOwnership {
     Mode mode = Mode::Value;
     bool moved = false;
+    bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -148,11 +149,23 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
+            // LLVM currently lowers a field projection to an i64 load. It
+            // cannot represent a partially moved object or suppress that
+            // field's destructor. Refuse source-level moves of field places
+            // rather than quietly treating `rt take` as `rt copy`.
+            if (expr.left->kind == Expression::Kind::Field)
+                reject(expr, "ownership violation: class field take requires per-field move/drop lowering");
             check_value(*expr.left, locals, functions);
             if (expr.left->kind == Expression::Kind::Variable) {
                 LocalOwnership& source = local(*expr.left, locals);
                 if (source.mode != Mode::Value)
                     reject(expr, "cannot rt take through a borrowed parameter");
+                // A region-owned scalar is still dropped unconditionally on
+                // every CFG return edge. Until an ownership transfer ABI and
+                // path-local drop flags exist, taking it would silently run
+                // a destructor for a logically moved-out owned allocation.
+                if (source.heap_owned)
+                    reject(expr, "ownership violation: owned int take requires transfer/drop lowering");
                 if (source.exclusive_loan || source.shared_loans != 0)
                     reject(expr, "cannot move int while borrow is active");
                 source.moved = true;
@@ -237,11 +250,12 @@ void validate_i64_ownership(const Program& program) {
         }
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
+            entry.heap_owned = binding.heap_owned;
             entry.class_name = binding.class_name;
             if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
             } else if (binding.move_class) {
-                auto found = locals.find(binding.move_source);
+                const auto found = locals.find(binding.move_source);
                 if (found == locals.end() || found->second.class_name != binding.class_name)
                     throw std::runtime_error("ownership violation: class move type mismatch at byte " +
                         std::to_string(binding.offset));
