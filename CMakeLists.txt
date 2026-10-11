@@ -95,6 +95,11 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+    add_executable(oreslang-logical-mutex-test tests/logical_mutex_test.cpp)
+    target_include_directories(oreslang-logical-mutex-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-logical-mutex-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-logical-mutex-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_logical_mutex_fifo_and_cancellation COMMAND oreslang-logical-mutex-test)
     add_test(NAME native_reserved_java_keywords
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
