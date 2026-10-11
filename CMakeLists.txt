@@ -54,7 +54,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
-    oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    oreslang_contract_test(source_actor_field_ir actor-fields-counter.ores --ir "ores_actor_i64_fields_codegen_set")
+    oreslang_contract_test(reject_actor_field_unknown actor-fields-unknown.ores --diagnostic "unknown or forbidden actor field")
+    oreslang_contract_test(reject_actor_field_duplicate actor-fields-duplicate.ores --diagnostic "duplicate actor field")
+    oreslang_contract_test(reject_actor_field_escape actor-fields-escape.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_actor_lifecycle_collision actor-fields-method-collision.ores --diagnostic "reserved actor lifecycle method")
+    oreslang_contract_test(reject_actor_without_fields unsupported-actor.ores --diagnostic "actor requires at least one int field")
     # Ownership remains Java-only. Reject all source ownership forms before
     # LLVM IR emission until a lifetime/provenance-aware typechecker exists.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "expected int expression")
@@ -85,6 +90,10 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        oreslang_contract_test(native_exec_persistent_actor_fields actor-fields-counter.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_fields_generated_host.c")
 
 
     else()
