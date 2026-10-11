@@ -160,12 +160,18 @@ int main() {
 
         // Internal tag ordinals, not nominal enum wire tag values:
         // both actors have isolated persistent native field records.
-        const std::vector<std::pair<int, std::int64_t>> expected{
-            {0, 20}, {1, 30}, {0, 24}, {1, 7}, {0, 0}, {1, 9}
-        };
+        // Cross-actor CONTROL callback order is nondeterministic, while
+        // each actor's own turns must preserve causal message order.
         {
             std::lock_guard<std::mutex> lock(mutex);
-            check(replies == expected, "per-actor union dispatch order or heap isolation failed");
+            std::vector<std::int64_t> from_a, from_b;
+            for (const auto& entry : replies) {
+                (entry.first == 0 ? from_a : from_b).push_back(entry.second);
+            }
+            check(from_a == std::vector<std::int64_t>({20, 24, 0}),
+                  "actor A typed messages were not serialized");
+            check(from_b == std::vector<std::int64_t>({30, 7, 9}),
+                  "actor B typed messages were not serialized");
         }
         check(!send(0, hash ^ 1, 0, 999), "forged schema was admitted");
         check(!send(1, hash, 99, 999), "out-of-range case index was admitted");
