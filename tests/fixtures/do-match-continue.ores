@@ -1,0 +1,6 @@
+pub fnc main(): int {
+  do match 3 over
+    on 1 { return 7; }
+  end
+  return 42;
+}
