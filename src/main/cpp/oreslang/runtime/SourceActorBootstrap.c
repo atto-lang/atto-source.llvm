@@ -201,9 +201,13 @@ void oreslang_source_actor_stop(void* opaque) {
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.scheduler && slot < group.next_slot && group.actors[slot] == instance);
     ensure(ores_native_actor_scheduler_stop(group.scheduler, instance->ref));
-    /* Wait only for this actor; other actors continue in parallel.
-     * This trusted-main wait is not a source-level await. */
+    /* Never hold the ActorGroup mutex during a blocking host join.
+     * A finishing initializer itself needs that mutex to publish readiness.
+     * Trusted main is the sole source stop owner in this compiler subset. */
+    group_unlock();
     ensure(ores_native_actor_scheduler_wait_done(group.scheduler, instance->ref));
+    group_lock();
+    ensure(group.actors[slot] == instance);
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
     ensure(ores_native_actor_scheduler_poll_done(group.scheduler, instance->ref));
     ores_actor_i64_heap_retire(instance->heap);
