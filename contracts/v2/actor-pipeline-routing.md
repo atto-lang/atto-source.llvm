@@ -1,9 +1,9 @@
 # Actor pipelines: bidirectional routing and lifecycle contract (draft v1)
 
-Status: **design / compiler admission gate, not an implemented guest runtime API**.
+Status: **LLVM bounded linear three-actor guest execution verified; Java/GraalVM pipeline lowering pending; general routing still design**.
 Java/GraalVM and LLVM must give these operators identical observable semantics
-before `self.forward`, `self.backward`, `self.respond`, or `self.done`
-are enabled as guest intrinsics. A stub, dynamically looked-up actor method,
+before all of `self.forward`, `self.backward`, `self.respond`, and `self.done`
+are enabled as general guest intrinsics. A stub, dynamically looked-up actor method,
 ordinary `send` alias, or immediate success without delivery is forbidden.
 
 ## Operations and recipients
@@ -76,6 +76,9 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
 6. The compiler may not synthesize a callable `self.forward`/ `self.backward`
    fallback as an ordinary actor method while the runtime intrinsic is
    unavailable. Unsupported backend/lowering is a compile-time diagnostic.
+   LLVM's limited three-actor typed-i64 pipeline is a specifically authorized
+   compiled lowering; it does not enable dynamic graph routing, Java parity,
+   arbitrary payloads, pipeline Futures, or unrestricted async callers.
 
 ## Compatibility and verification
 
@@ -96,10 +99,42 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
   SHA/blob identities for any funded CI mirror. Do not merge on codec-only
   or handwritten callback harness evidence.
 
+## Verified first LLVM guest-execution milestone (2026-10-11)
+
+- The source program `tests/fixtures/source-actor-pipeline-bidirectional.ores`
+  defines three real actors, compiles their typed receive/match callbacks via
+  LLVM, and uses `self.forward(Signal.Data(value))` downstream and
+  `self.backward(Signal.Result(value))` upstream.
+- A trusted zero-argument main binds exactly three distinct actors with
+  `pipeline(source, transform, sink)`, sends one source message, and
+  waits through `expect_pipeline(source, 19)` for the full owning-turn
+  completion barrier. This is intentionally a single-flow, linear and
+  synchronous *host-main completion* subset; actor turns themselves do not
+  block on the downstream actor. No handwritten host-side actor callbacks.
+- A scheduler-issued worker-local active actor context authorizes each
+  directional emit. The destination must match the compiler-registered
+  nominal MessagePack v2 contract; the existing exclusive DATA scheduler
+  lane enforces mailbox ownership.
+- Success requires **observed** two forward and two backward admissions,
+  source/transform/sink processing of **2/2/1 turns**, the exact result
+  **19**, and **zero outstanding DATA reservations**, checked only after
+  every involved finalizer has completed.
+- Exact-source funded CI
+  [#38185810039](https://github.com/zed-pkg-test/java-app/actions/runs/38185810039)
+  passed compiler building, actual guest LLVM IR generation, **100 native**
+  executions, **30 ASan/UBSan** executions, and compile-time rejection of
+  missing routing topology and unauthorized sink-forward calls.
+- Not yet supported: generic dynamic fan-out/fan-in, actor-incarnation
+  rebinding, bidirectional `Future<T>` admission, cancellation during
+  backpressure, multiple in-flight flows, arbitrary payload shapes, Java
+  compiler guest execution, or full original-repository build matrices.
+  Do not treat the passing slice as proof of these semantics.
+
 ## Current admission status
 
 The Java type checker intentionally rejects `self.forward`,
 `self.backward`, `self.respond`, and `self.done` until the routing
-context and actual guest lowering land. The native LLVM source actor adapter
-supports bounded one-way typed sends but has no equivalent directional
-pipeline route context yet. No release parity or enabled API is claimed.
+context and actual Java guest lowering land. LLVM admits only the
+compiler-checked, fixed linear three-actor `int` pipeline described above;
+all nonmatching pipeline forms continue to fail closed. No general pipeline
+API, Java/LLVM runtime parity, or release readiness is claimed.
