@@ -104,7 +104,7 @@ int main() {
         define actor Worker<messages=P> as
             receive(Message m) { }
         end
-    )", "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+    )", "LLVM tagged source subset requires payloadless cases");
 
     // Static compiler admission proves exact coverage, source-order
     // alternatives and binders before intentionally rejecting execution.
@@ -126,7 +126,7 @@ int main() {
         end
     )";
     rejects(taggedActor,
-        "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+        "LLVM tagged source subset requires payloadless cases");
     const auto arm = std::string("on E.Compute as (text, n) {}");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
             std::string("on E.Stop {}").size(), ""),
@@ -150,7 +150,7 @@ int main() {
     // shape without introducing duplicate bindings or shadowing.
     rejects(std::string(taggedActor).replace(taggedActor.find(arm), arm.size(),
             "on E.Compute as (_, _) {}"),
-            "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+            "LLVM tagged source subset requires payloadless cases");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Ping as label {}"),
             std::string("on E.Ping as label {}").size(), "on E.Ping as m {}"),
             "tagged payload binder shadows field, local or Message parameter");
@@ -167,6 +167,61 @@ int main() {
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
             std::string("on E.Stop {}").size(), "on E.Stop { self.respond(1); }"),
             "expected '}'");
+
+    // The executable, deliberately narrow LLVM source subset now admits
+    // payloadless tagged sends, exhaustive arms and scalar actor state.
+    auto executable = parse_program(R"(
+        define enum Signals as Ping = 1 Pong = 255 Stop = 65536 end
+        define pattern WorkerMessages as Signals.Pong Signals.Ping Signals.Stop end
+        define actor Worker<messages=WorkerMessages> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over {
+                    on Signals.Ping { count = count + 4; }
+                    on Signals.Pong { count = count + 2; }
+                    on Signals.Stop { count = count + 8; }
+                }
+                return count;
+            }
+        end
+        pub fnc main(): int {
+            const worker = spawn Worker();
+            worker.send(Signals.Pong);
+            worker.send(Signals.Ping);
+            worker.send(Signals.Stop);
+            stop worker;
+            return 43;
+        }
+    )");
+    assert(executable.actors.size() == 1 && executable.functions.size() == 1);
+    assert(executable.functions.at(0).actor_sends.size() == 3);
+    assert(executable.functions.at(0).actor_sends.at(0).tagged_variant == "Signals.Pong");
+    assert(!executable.functions.at(0).actor_sends.at(0).payload);
+    assert(executable.actors.at(0).methods.at(0).tagged_arms.size() == 3);
+    assert(executable.actors.at(0).methods.at(0).tagged_arms.at(0).assignments.size() == 1);
+    // Typed source must fail closed if a case is outside the closed pattern.
+    rejects(R"(
+        define enum Signals as Ping Stop end
+        define pattern OnlyPing as Signals.Ping end
+        define actor Worker<messages=OnlyPing> as
+            receive(Message m) {
+                do match m over { on Signals.Ping {} }
+            }
+        end
+        pub fnc main(): int {
+            const worker = spawn Worker();
+            worker.send(Signals.Stop);
+            stop worker;
+            return 43;
+        }
+    )", "actor send case outside closed tagged pattern");
+    rejects(R"(
+        define enum Signals as Ping Stop end
+        define pattern Both as Signals.Ping Signals.Stop end
+        define actor Worker<messages=Both> as
+            receive(Message m) { }
+        end
+    )", "LLVM tagged actor requires exhaustive side-effect-only match");
 
     // Existing bool-only actor receive semantics remain usable.
     auto legacy = parse_program(R"(
