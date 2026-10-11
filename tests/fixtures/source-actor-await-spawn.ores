@@ -1,6 +1,6 @@
 define actor Worker as {
   const base: int = 42;
-  pub fnc read(): int { return base; }
+  pub fnc on_message(int n): int { return base + n; }
 }
 pub fnc main(): int {
   const worker = await spawn Worker();
