@@ -482,6 +482,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-supervisor-replay-guards-test)
     set_tests_properties(native_supervisor_replay_guards PROPERTIES TIMEOUT 15)
 
+    # Distinguish supervisor-owned logical children from physical native
+    # actor slot generations; reject stale finalizers and duplicate restart
+    # identity commits before exposing any guest RESTART operation.
+    add_executable(oreslang-native-supervisor-child-registry-test
+        tests/native_supervisor_child_registry_test.cpp)
+    target_include_directories(oreslang-native-supervisor-child-registry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-child-registry-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-supervisor-child-registry-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-supervisor-child-registry-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_logical_child_incarnation
+        COMMAND oreslang-native-supervisor-child-registry-test)
+    set_tests_properties(native_supervisor_logical_child_incarnation PROPERTIES TIMEOUT 15)
+
 
     # Host-only deterministic actor arena; no source actor lowering implied.
     add_executable(oreslang-native-actor-arena-test
