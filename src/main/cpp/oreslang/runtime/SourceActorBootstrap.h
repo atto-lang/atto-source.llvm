@@ -27,12 +27,19 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
  *
  * Every wire DATA message uses the SAME NativeActorScheduler actor lane,
  * actor-owned i64 heap, lifecycle barriers, and CONTROL initialization as
- * ordinary scalar source actors. The registration contract is verified,
- * copied and pinned at spawn (not borrowed from caller-owned memory).
- * Source compiler must typecheck guest payloads before emitting these calls.
+ * ordinary scalar source actors. A compiler-trusted descriptor is stable
+ * during registration; it is copied first, then independently validated.
+ * Caller-owned descriptor memory is not retained.
  *
- * Borrowed wire bytes are valid only during the admitted callback. If source
- * code retains decoded data, it must allocate in actor-owned memory.
+ * This entrypoint registers ONE schema per actor. General enum/pattern
+ * domains with multiple variants require explicit LLVM compiler lowering
+ * and per-variant dispatch and MUST NOT be represented by an unchecked
+ * caller-selected schema or an extra independent scheduler.
+ *
+ * Wire bytes belong to the admitted callback only. Decode into actor-owned
+ * storage before retaining data beyond the turn. Configuration and stop
+ * require trusted single-owner lifecycle; all producers must be fenced
+ * before stopping/freeing the opaque actor handle.
  */
 typedef int64_t (*OresSourceActorWireMessage)(
     OresActorI64Heap*, uint64_t domain, uint64_t epoch,
