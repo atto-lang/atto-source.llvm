@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <limits.h>
 
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
 #define SOURCE_GROUP_SLOTS 64u
@@ -31,11 +33,14 @@ typedef struct {
 typedef struct {
     OresMp2Owned packet;
     size_t variant_index;
+    uint8_t direction;
 } SourceWireDelivery;
 
-typedef struct {
+typedef struct SourceActor {
     uint64_t magic;
     uint64_t id;
+    struct SourceActor* upstream;
+    struct SourceActor* downstream;
     OresActorI64Heap* heap;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
@@ -65,6 +70,10 @@ typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef root_ref;
     ReadyAwaitFrame* pending_ready;
+    pthread_cond_t pipeline_completed;
+    SourceActor* pipeline_source;
+    int pipeline_done;
+    int64_t pipeline_result;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     size_t next_slot;
     size_t live;
@@ -75,7 +84,13 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .pipeline_completed = PTHREAD_COND_INITIALIZER
+};
+/* The active context is issued only while a scheduler-owned DATA callback
+ * is executing. A source program cannot forge it through message bytes. */
+static _Thread_local SourceActor* active_pipeline_actor;
 static _Atomic uint64_t next_actor_id = 4100;
 static void check_invariant(int condition, const char* predicate, int line) {
     if (!condition) {
@@ -154,20 +169,34 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         ensure(accepted && accepted->packet.bytes && accepted->packet.size);
         ensure(accepted->variant_index < instance->variant_count);
         if (instance->on_variant) {
+            SourceActor* prior = active_pipeline_actor;
+            active_pipeline_actor = instance;
             result = instance->on_variant(instance->heap, turn.domain, turn.epoch,
                     accepted->variant_index, accepted->packet.bytes,
                     accepted->packet.size);
+            active_pipeline_actor = prior;
         } else {
             ensure(accepted->variant_index == 0 && instance->variant_count == 1);
             result = instance->on_wire(instance->heap, turn.domain, turn.epoch,
                     accepted->packet.bytes, accepted->packet.size);
         }
+        const uint8_t direction = accepted->direction;
         ores_actor_i64_heap_leave(instance->heap, turn);
         ores_mp2_owned_release(&accepted->packet);
         free(accepted);
         size_t before = atomic_fetch_sub_explicit(
             &instance->wire_reserved, 1, memory_order_acq_rel);
         ensure(before > 0);
+        if (direction == 2) {
+            group_lock();
+            if (group.pipeline_source == instance) {
+                ensure(!group.pipeline_done);
+                group.pipeline_result = result;
+                group.pipeline_done = 1;
+                ensure(pthread_cond_signal(&group.pipeline_completed) == 0);
+            }
+            group_unlock();
+        }
     } else {
         result = instance->on_message(instance->heap, turn.domain,
                                       turn.epoch, (int64_t)payload);
@@ -451,17 +480,20 @@ static void source_leave_producer(SourceActor* actor) {
     ensure((prior & SOURCE_PRODUCER_COUNT) != 0);
 }
 static int source_send_binary_unlocked(SourceActor* actor,
-                                       const uint8_t* wire, size_t size);
+                                       const uint8_t* wire, size_t size,
+                                       uint8_t direction);
 static int source_send_binary(SourceActor* actor,
-                              const uint8_t* wire, size_t size) {
+                              const uint8_t* wire, size_t size,
+                              uint8_t direction) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !source_enter_producer(actor))
         return 0;
-    int result = source_send_binary_unlocked(actor, wire, size);
+    int result = source_send_binary_unlocked(actor, wire, size, direction);
     source_leave_producer(actor);
     return result;
 }
 static int source_send_binary_unlocked(SourceActor* actor,
-                              const uint8_t* wire, size_t size) {
+                              const uint8_t* wire, size_t size,
+                              uint8_t direction) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
             || (!actor->on_wire && !actor->on_variant) || !wire
             || size > ORES_MP2_MAX_BYTES) return 0;
@@ -515,6 +547,7 @@ static int source_send_binary_unlocked(SourceActor* actor,
         return 0;
     }
     accepted->variant_index = index;
+    accepted->direction = direction;
     if (!ores_native_actor_scheduler_send(group.scheduler, actor->ref,
                                            (uint64_t)(uintptr_t)accepted)) {
         ores_mp2_owned_release(&accepted->packet);
@@ -530,14 +563,14 @@ int oreslang_source_actor_send_wire(void* opaque,
     SourceActor* actor = opaque;
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
             || !actor->on_wire || actor->variant_count != 1) return 0;
-    return source_send_binary(actor, wire, size);
+    return source_send_binary(actor, wire, size, 0);
 }
 int oreslang_source_actor_send_variant(void* opaque,
                                       const uint8_t* wire, size_t size) {
     SourceActor* actor = opaque;
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !actor->on_variant)
         return 0;
-    return source_send_binary(actor, wire, size);
+    return source_send_binary(actor, wire, size, 0);
 }
 int64_t oreslang_source_actor_tagged_i64(const uint8_t* wire, size_t size) {
     int64_t value = 0;
@@ -589,6 +622,10 @@ void oreslang_source_actor_stop(void* opaque) {
         (long long)atomic_load_explicit(&instance->last_result, memory_order_relaxed));
 #endif
     group.actors[slot] = NULL;
+    if (instance == group.pipeline_source) {
+        ensure(group.pipeline_done);
+        group.pipeline_source = NULL;
+    }
     ensure(atomic_load_explicit(&instance->wire_reserved,
                                  memory_order_acquire) == 0);
     release_source_variants(instance->variants, instance->variant_count);
