@@ -32,7 +32,7 @@ int main(void) {
     State s = {0};
     OresNativeActorScheduler* scheduler =
         ores_native_actor_scheduler_open(ACTORS, EACH, 8, run, &s);
-    check(scheduler);
+    check(scheduler != NULL);
     for (int n = 0; n < EACH; ++n)
         for (size_t a = 0; a < ACTORS; ++a)
             check(ores_native_actor_scheduler_submit(scheduler, a, (uint64_t)n));
@@ -50,7 +50,7 @@ int main(void) {
     State pressure = {0};
     atomic_store(&pressure.hold, 1);
     scheduler = ores_native_actor_scheduler_open(1, 1, 2, run, &pressure);
-    check(scheduler);
+    check(scheduler != NULL);
     check(ores_native_actor_scheduler_submit(scheduler, 0, 0));
     /* The admitted or queued first item consumes the full capacity. */
     check(!ores_native_actor_scheduler_submit(scheduler, 0, 1));
