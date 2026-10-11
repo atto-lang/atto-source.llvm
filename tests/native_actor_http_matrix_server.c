@@ -5,7 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include "oreslang/runtime/ActorArena.h"
-#include "oreslang/runtime/NativeActorMailbox.h"
+#include "oreslang/runtime/NativeActorScheduler.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -33,13 +33,13 @@ typedef struct {
     OresActorI64Heap* heap;
     OresActorArena* arena;
     OresArenaHandle counter;
-    OresNativeActorMailbox* gate;
     int ipc;
     pid_t child;
 } Worker;
 static Worker workers[ACTORS];
 static int listener = -1;
 static _Atomic int shutdown_requested;
+static OresNativeActorScheduler* scheduler;
 static int process_mode;
 static void require(int condition, const char* message) {
     if (!condition) { fprintf(stderr, "LLVM HTTP MATRIX FAILED %s errno=%d\n", message, errno); exit(4); }
@@ -109,21 +109,6 @@ static void child_worker(int fd, int idx) {
     close_socket(fd);
     _exit(0);
 }
-static int process_request(int idx, Answer* outcome) {
-    Worker* w = &workers[idx];
-    /* Scheduler admission errors are HTTP 503, not process termination. */
-    if (!ores_native_actor_mailbox_enter(w->gate)) return 0;
-    Answer ans;
-    if (!process_mode) ans = step(w, idx);
-    else {
-        int32_t op = idx;
-        require(full_io(w->ipc, &op, sizeof op, 1), "send to isolated actor");
-        require(full_io(w->ipc, &ans, sizeof ans, 0), "read isolated actor response");
-    }
-    ores_native_actor_mailbox_leave(w->gate);
-    *outcome = ans;
-    return 1;
-}
 static long rss_pid_kb(pid_t pid) {
     char path[80];
     if (pid == 0) snprintf(path, sizeof path, "/proc/self/status");
@@ -158,6 +143,25 @@ static void reply(int fd, int code, const char* body) {
     (void)full_io(fd, header, (size_t)n, 1);
     (void)full_io(fd, (void*)body, strlen(body), 1);
 }
+/* Scheduler owns the accepted descriptor after successful submission.
+ * This callback always closes the socket, including on failed sends. */
+static void actor_task(void* unused, size_t idx, uint64_t payload) {
+    (void)unused;
+    const int fd = (int)payload;
+    Worker* w = &workers[idx];
+    Answer ans;
+    if (!process_mode) ans = step(w, (int)idx);
+    else {
+        int32_t op = (int32_t)idx;
+        require(full_io(w->ipc, &op, sizeof op, 1), "send to isolated actor");
+        require(full_io(w->ipc, &ans, sizeof ans, 0), "read isolated actor response");
+    }
+    char body[100];
+    snprintf(body, sizeof body, "%zu,%" PRId64 ",%" PRId64,
+             idx, ans.count, ans.value);
+    reply(fd, 200, body);
+    close_socket(fd);
+}
 static void client_request(int fd) {
     char input[512];
     ssize_t len = recv(fd, input, sizeof input - 1, 0);
@@ -177,15 +181,13 @@ static void client_request(int fd) {
         char tail = 0;
         if (sscanf(input, "GET /work/%d%c", &index, &tail) == 2 &&
             tail == ' ' && index >= 0 && index < ACTORS) {
-            Answer ans;
-            if (!process_request(index, &ans)) {
-                reply(fd, 503, "actor admission at capacity");
-            } else {
-                char body[100];
-                snprintf(body, sizeof body, "%d,%" PRId64 ",%" PRId64,
-                         index, ans.count, ans.value);
-                reply(fd, 200, body);
+            /* Successful submit transfers ownership of fd to the worker.
+             * The TCP ingress carrier must not wait for actor completion. */
+            if (ores_native_actor_scheduler_submit(scheduler, (size_t)index,
+                                                    (uint64_t)(unsigned int)fd)) {
+                return;
             }
+            reply(fd, 503, "actor admission at capacity");
         } else reply(fd, 404, "missing");
     } else if (!strncmp(input, "GET ", 4)) reply(fd, 404, "missing");
     else if (strchr(input, ' ')) reply(fd, 405, "method");
@@ -221,8 +223,6 @@ int main(int argc, char** argv) {
     socklen_t size = sizeof addr;
     require(getsockname(listener, (struct sockaddr*)&addr, &size) == 0, "getsockname");
     for (int i = 0; i < ACTORS; ++i) {
-        workers[i].gate = ores_native_actor_mailbox_open(64);
-        require(workers[i].gate != NULL, "bounded actor lane open");
         if (!process_mode) { init_worker(&workers[i], i); continue; }
         int fd[2];
         require(socketpair(AF_UNIX, SOCK_STREAM, 0, fd) == 0, "socketpair");
@@ -238,6 +238,11 @@ int main(int argc, char** argv) {
         workers[i].child = child;
         workers[i].ipc = fd[0];
     }
+    /* Spawn workers only after forking the isolated children: no fork with
+     * an active multithreaded host or inherited scheduler mutex state. */
+    scheduler = ores_native_actor_scheduler_open(ACTORS, 1024, CARRIERS,
+                                                 actor_task, NULL);
+    require(scheduler != NULL, "native ready-queue scheduler open");
     printf("PORT=%u MODE=%s\n", (unsigned)ntohs(addr.sin_port), argv[1]);
     fflush(stdout);
     pthread_t threads[CARRIERS];
@@ -246,6 +251,15 @@ int main(int argc, char** argv) {
     for (int i = 0; i < CARRIERS; ++i)
         require(pthread_join(threads[i], NULL) == 0, "carrier joined");
     close_socket(listener);
+    /* All TCP ingress threads are joined, so no new submitters can race
+     * physical reclamation. Previously accepted sockets must finish before
+     * we stop isolated children or retire their native heaps. */
+    ores_native_actor_scheduler_retire(scheduler);
+    require(ores_native_actor_scheduler_drain(scheduler) == 1, "all actor HTTP replies drained");
+    require(ores_native_actor_scheduler_accepted(scheduler)
+            == ores_native_actor_scheduler_completed(scheduler), "accepted requests completed");
+    require(ores_native_actor_scheduler_try_destroy(scheduler) == 1,
+            "worker pool retired and drained");
     for (int i = 0; i < ACTORS; ++i) {
         if (process_mode) {
             int32_t end = -1;
@@ -255,8 +269,6 @@ int main(int argc, char** argv) {
             require(waitpid(workers[i].child, &status, 0) == workers[i].child
                     && WIFEXITED(status) && WEXITSTATUS(status) == 0, "isolated child finalized");
         } else retire_worker(&workers[i]);
-        ores_native_actor_mailbox_retire(workers[i].gate);
-        require(ores_native_actor_mailbox_try_destroy(workers[i].gate) == 1, "actor lane quiescent destroy");
     }
     puts("NATIVE_MATRIX_SHUTDOWN_OK");
     return 0;
