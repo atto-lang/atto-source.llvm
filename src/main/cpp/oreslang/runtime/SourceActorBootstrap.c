@@ -348,11 +348,9 @@ void oreslang_source_actor_send(void* opaque, int64_t payload) {
     ensure(ores_native_actor_scheduler_send(
         group.scheduler, instance->ref, (uint64_t)payload));
 }
-/* Peek the *canonical* envelope schema only to select a compiler-pinned
- * alternative. The selected contract then validates the entire copied
- * MessagePack frame including version, SHA and recursively typed payload.
- * This first read is NEVER authorization: if the sender mutates its frame
- * before snapshot creation, post-copy full validation will fail closed.
+/* Peek the *canonical* schema ONLY from a detached owned wire snapshot.
+ * The selected contract then validates those exact same bytes including
+ * version, SHA and recursive payload shape; never touch caller memory twice.
  */
 static int source_select_variant(const SourceActor* actor,
                                  const uint8_t* wire, size_t size,
@@ -431,26 +429,42 @@ static int source_send_binary_unlocked(SourceActor* actor,
     } while (!atomic_compare_exchange_weak_explicit(
         &actor->wire_reserved, &pending, pending + 1,
         memory_order_acq_rel, memory_order_relaxed));
-    size_t index = 0;
-    if (!source_select_variant(actor, wire, size, &index)) {
-        atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
-                                  memory_order_acq_rel);
-        return 0;
-    }
+    /* Snapshot once BEFORE consulting the nominal schema ID. Previously
+     * selection parsed caller-owned wire bytes before the codec copied
+     * them, leading to two different reads of a mutable sender buffer.
+     * The decoder now consumes only this identical pinned snapshot. */
     SourceWireDelivery* accepted = calloc(1, sizeof(*accepted));
     if (!accepted) {
         atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
                                   memory_order_acq_rel);
         return 0;
     }
-    accepted->variant_index = index;
-    if (!ores_mp2_validate_copy(&actor->variants[index].value, wire, size,
-                                &accepted->packet)) {
+    if (size < 40 || size > ORES_MP2_MAX_BYTES) {
         free(accepted);
         atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
                                   memory_order_acq_rel);
         return 0;
     }
+    accepted->packet.bytes = malloc(size);
+    if (!accepted->packet.bytes) {
+        free(accepted);
+        atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
+                                  memory_order_acq_rel);
+        return 0;
+    }
+    accepted->packet.size = size;
+    memcpy(accepted->packet.bytes, wire, size);
+    size_t index = 0;
+    if (!source_select_variant(actor, accepted->packet.bytes, size, &index)
+            || !ores_mp2_validate_owned(&actor->variants[index].value,
+                                         &accepted->packet)) {
+        ores_mp2_owned_release(&accepted->packet);
+        free(accepted);
+        atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
+                                  memory_order_acq_rel);
+        return 0;
+    }
+    accepted->variant_index = index;
     if (!ores_native_actor_scheduler_send(group.scheduler, actor->ref,
                                            (uint64_t)(uintptr_t)accepted)) {
         ores_mp2_owned_release(&accepted->packet);
