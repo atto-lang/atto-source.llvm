@@ -159,6 +159,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_pipeline_backward_unlowered
         source-actor-pipeline-backward-unavailable.ores
         --diagnostic "self.backward requires native pipeline routing lowering")
+    oreslang_contract_test(reject_pipeline_actor_without_declared_route
+        source-actor-pipeline-unbound.ores
+        --diagnostic "pipeline actor routing requires declared pipeline topology")
+    oreslang_contract_test(reject_pipeline_actor_wrong_route_direction
+        source-actor-pipeline-wrong-direction.ores
+        --diagnostic "pipeline route direction is not authorized for actor role")
     oreslang_contract_test(native_ir_three_actor_bidirectional_pipeline
         source-actor-pipeline-bidirectional.ores
         --ir "oreslang_source_actor_pipeline_emit_i64")
