@@ -214,6 +214,12 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+    # Bounded synchronous state-loan guard; not source-level suspend lowering.
+    add_executable(oreslang-actor-state-scope-test tests/actor_state_scope_test.c)
+    target_compile_options(oreslang-actor-state-scope-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_state_scope_nested_loan_fencing
+        COMMAND oreslang-actor-state-scope-test)
     add_executable(oreslang-logical-mutex-test tests/logical_mutex_test.cpp)
     target_include_directories(oreslang-logical-mutex-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-logical-mutex-test PRIVATE Threads::Threads)
