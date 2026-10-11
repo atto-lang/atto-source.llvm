@@ -146,8 +146,8 @@ int main(int argc, char** argv) {
     std::shared_ptr<Bridge::Receipt> route;
     std::optional<gpu::GpuDispatchCoordinator::Submission> submission;
     const gpu::Identity identity{"tenant", "OpenCL-CPU-explicit", 17};
-    assert(group->run_data_turn(gpu_actor, [&] {
-        *cpu_input = to_gpu.try_receive();
+    assert(group->run_port_turn(gpu_actor, to_gpu, [&](auto& delivery) {
+        *cpu_input = std::move(delivery);
         assert(cpu_input->has_value());
         assert(to_gpu.used_frames() == 1); // held while GPU device uses input
         submission.emplace(coordinator.submit(kernel, identity));
@@ -173,19 +173,17 @@ int main(int argc, char** argv) {
     assert(gpu_turns == 1 && to_collect.used_frames() == 1 && collected == 0);
     // The collector processes ordinary DATA. GPU completion CONTROL only
     // publishes the bounded output; no CONTROL callback runs collector code.
-    assert(group->run_data_turn(collect, [&] {
-                auto final = to_collect.try_receive();
-                assert(final.has_value());
+    assert(group->run_port_turn(collect, to_collect, [&](auto& final) {
                 for (std::uint64_t row = 0; row < layout.rows(); ++row)
                     for (std::uint32_t field = 0; field < layout.fields(); ++field) {
                         float actual = 0;
                         const auto off = static_cast<std::size_t>(layout.byte_offset(row, field));
-                        std::memcpy(&actual, final->value().bytes.data() + off, sizeof(actual));
+                        std::memcpy(&actual, final.value().bytes.data() + off, sizeof(actual));
                         const float expected = static_cast<float>(
                             row * layout.fields() + field) + 1.0f;
                         assert(actual == expected);
                     }
-                assert(final->acknowledge_released());
+                assert(final.acknowledge_released());
                 ++collected;
 
     }) == Group::DataTurn::executed);
