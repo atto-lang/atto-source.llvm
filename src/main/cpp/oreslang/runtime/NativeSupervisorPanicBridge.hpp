@@ -203,6 +203,12 @@ public:
         OresNativeActorRef actor{resolution.notice.runtime_id,
                                  resolution.notice.actor_id,
                                  resolution.notice.generation};
+        // This entrypoint is called only after the host has authoritatively
+        // acknowledged the external STOP effect. Record that receipt for the
+        // same physical incarnation before its terminal registry transition.
+        child_registry_->record_stop_applied(
+            key, actor, resolution.notice.logical_incarnation,
+            resolution.turn_generation);
         return child_registry_->commit_stop(
             key, actor, resolution.notice.logical_incarnation,
             resolution.turn_generation);
