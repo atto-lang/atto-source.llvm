@@ -47,6 +47,9 @@ int main(int argc, char** argv) {
         }
         ++count;
     }
+    // parse must not borrow the caller's temporary string storage.
+    const auto stable = oreslang::TargetAbi::parse(std::string("wasm32-unknown-unknown"));
+    check(stable.triple == "wasm32-unknown-unknown");
     check(count == 5);
     rejects<std::invalid_argument>([] { (void)oreslang::TargetAbi::parse("wasm64-unknown-unknown"); });
     rejects<std::invalid_argument>([] { (void)oreslang::TargetAbi::parse("aarch64-unknown-linux-musl"); });
