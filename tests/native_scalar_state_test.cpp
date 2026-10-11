@@ -102,9 +102,7 @@ int main() {
     state.retire();
     check(state.retired(), "state retirement not recorded");
     expect_rejected([&] {
-        const auto abandoned = gate.request();
-        const auto attemptTurn = ores_actor_arena_enter(arena, actor, incarnation);
-        auto view = state.borrow(abandoned.token, attemptTurn);
+        auto view = state.borrow(second.token, finalTurn);
         (void) view;
     });
     ores_actor_arena_retire(arena);
