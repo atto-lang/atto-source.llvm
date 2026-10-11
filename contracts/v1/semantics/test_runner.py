@@ -64,6 +64,41 @@ class DiagnosticProof(unittest.TestCase):
                 result = run.run_case(case, "llvm", ["fake", "{source}"], "", 3)
                 self.assertEqual("fail", result["status"])
 
+    def test_graal_native_result_requires_real_execution_and_exact_exit(self):
+        case = {"id": "native.add", "kind": "native_exit",
+                "source": "fixtures/add.ores", "expected_exit": 42}
+        check = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        executed = CompletedProcess(args=[], returncode=42, stdout="", stderr="")
+        with patch.object(run.subprocess, "run", side_effect=[check, executed]) as call:
+            result = run.run_case(case, "graal", ["check", "{source}"], "", 3,
+                                  ["guest", "{source}"])
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["observed_exit"], 42)
+        self.assertEqual(call.call_count, 2)
+
+        # No guest command is not silently reported as a passing result.
+        with patch.object(run.subprocess, "run", return_value=check):
+            missing = run.run_case(case, "graal", ["check", "{source}"], "", 3)
+        self.assertEqual(missing["status"], "fail")
+
+        for status, stdout, stderr in [(0, "", ""), (43, "", ""),
+                                       (42, "unexpected", ""), (42, "", "exception")]:
+            with self.subTest(status=status, stdout=stdout, stderr=stderr):
+                wrong = CompletedProcess(args=[], returncode=status,
+                                         stdout=stdout, stderr=stderr)
+                with patch.object(run.subprocess, "run", side_effect=[check, wrong]):
+                    result = run.run_case(case, "graal", ["check", "{source}"], "", 3,
+                                          ["guest", "{source}"])
+                self.assertEqual(result["status"], "fail")
+
+        # A failing compiler check must not run the guest process.
+        reject = CompletedProcess(args=[], returncode=1, stdout="", stderr="type error")
+        with patch.object(run.subprocess, "run", return_value=reject) as mock_run:
+            result = run.run_case(case, "graal", ["check", "{source}"], "", 3,
+                                  ["guest", "{source}"])
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(mock_run.call_count, 1)
+
     def test_native_test_does_not_skip_missing_clang(self):
         case = {"id":"native.add","kind":"native_exit","source":"fixtures/add.ores","expected_exit":42}
         with patch.object(run.subprocess, "run", return_value=CompletedProcess(
