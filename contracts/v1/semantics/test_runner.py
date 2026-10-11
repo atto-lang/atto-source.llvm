@@ -134,7 +134,7 @@ class ComparatorParityProof(unittest.TestCase):
             self.compare(revisions=revisions)
 
     def test_pending_cannot_smuggle_runtime_or_diagnostic_evidence(self):
-        for evidence in ({"observed_exit": None}, {"diagnostic_class": "unknown_name"}):
+        for evidence in ({"observed_exit": 0}, {"diagnostic_class": "unknown_name"}):
             record = next(item for item in self.reports["graal"]["results"]
                           if item["status"] == "pending")
             record.update(evidence)
