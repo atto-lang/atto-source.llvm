@@ -1,0 +1,11 @@
+define class A as
+  pub let int x = 20;
+end
+define class B as
+  pub let int x = 22;
+end
+pub fnc main(): int {
+  let A a = new A();
+  let B b = rt take a;
+  return b.x;
+}

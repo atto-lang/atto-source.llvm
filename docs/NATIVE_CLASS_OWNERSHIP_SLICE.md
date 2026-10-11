@@ -36,9 +36,13 @@ lifetime markers. Ordinary source does not allocate a native GC/arena region.
 
 ## Ownership and control-flow rules
 
-- Classes are **non-`Copy`**. By-value class parameters/returns and
-  `rt take` of class objects are rejected until real move/drop lowering
-  exists. `borrow Player` permits reads; `borrow mut Player` permits
+- Classes are **non-`Copy`**. A bounded local-only `let Pair q = rt take p;`
+  transfers an entire fully initialized stack record of primitive i64 fields.
+  The source lifetime ends immediately after transfer, and the destination is
+  cleaned up on each taken/fallthrough return. Repeated moves, partial-field
+  moves followed by whole-object transfer, active loans, type mismatches and
+  use-after-move fail closed. By-value class parameters/returns, user-defined
+  destructors and actual object drop glue are **still rejected or unsupported**. `borrow Player` permits reads; `borrow mut Player` permits
   reads and writes only while its call-scoped exclusive loan is active.
 - **Whole-object exclusivity is conservative.** Even accesses to different
   fields of the same class cannot bypass a conflicting shared/mutable loan.
@@ -57,8 +61,14 @@ lifetime markers. Ordinary source does not allocate a native GC/arena region.
   the distinct fallthrough branch. This is not general SSA/CFG ownership
   join analysis or support for moving non-`Copy` objects.
 - Each return edge evaluates its result before reverse-order lexical
-  lifetime endings. Experimental native owned-i64 regions have exactly one
-  `drop` per live owner and one `close` per dynamic return path.
+  lifetime endings. An explicitly moved all-i64 stack class ends its source
+  lifetime at the transfer and only ends its live destination on return.
+  `rt take p.field` invalidates that i64 field until a checked `p.field = ...`
+  reinitialization; borrowing a field's owner or moving the whole record while
+  partially initialized is forbidden. These are compiler ownership/lifetime
+  operations on primitive fields, **not destructor invocations**.
+  Experimental native owned-i64 regions retain one `drop` per live owner
+  and one `close` per dynamic return path.
 - All class locals are constructed **before** guards. Branch-local class
   allocations, arbitrary branches/loops, partial initialization, effects,
   `defer`, unwind/exception/panic cleanup, actor hops, `await`, `select`,
@@ -79,7 +89,22 @@ lifetime markers. Ordinary source does not allocate a native GC/arena region.
   passed 11/11 shared fixtures before these new native-only extensions;
   broad parity still needs additional shared executable fixtures.
 
-The next major correctness gate is CFG/HIR ownership-state joins, partial
-object initialization and **exactly-once non-`Copy` move/drop glue**, followed
+The next major correctness gate is general CFG/HIR ownership-state joins,
+  partial object initialization across edges, nontrivial field types and
+  **exactly-once non-`Copy` destructor/drop glue**, followed
 by exception/cancellation unwind, actor-heap provenance and suspension
 integration. Track this in [issue #96](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/96).
+
+## Bounded move and actor-send admission increment (2026-10-11)
+
+The source checker now follows explicit moves of individual i64 class fields,
+reinitialization through assignment, and whole-class local `rt take` moves.
+The LLVM emitter transfers the trivially destructible record and ends the
+moved-from storage lifetime once. Guarded returns clean up the destination
+without revisiting the moved-from storage. The actor-send path also checks
+payload expressions in emitted effect order, rejecting borrowed pointers and
+use-after-move before emitting LLVM IR.
+
+**Limit:** this is not control-flow join support for class moves, a native
+class destructor, actor object transfer, source-level `await`, unwind or
+cancellation cleanup. Existing fail-closed admission for those forms remains.

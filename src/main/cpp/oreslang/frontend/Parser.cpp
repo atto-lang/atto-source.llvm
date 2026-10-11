@@ -309,17 +309,21 @@ private:
             LocalBinding binding;
             binding.offset = token_.offset;
             if (accept("let")) {
-                // Class construction is stack-only. No reference to an
-                // uninitialized, moved, or temporary class can escape.
+                // The bounded stack-class subset permits construction or
+                // an explicit same-type move from a previously owned local.
+                // No class by-value function ABI or arbitrary initializer.
                 binding.class_name = identifier();
                 binding.name = identifier();
                 require("=");
-                require("new");
-                const std::string ctor = identifier();
-                if (ctor != binding.class_name) fail("class constructor type mismatch");
-                require("(");
-                require(")");
-                binding.new_class = true;
+                if (accept("new")) {
+                    const std::string ctor = identifier();
+                    if (ctor != binding.class_name) fail("class constructor type mismatch");
+                    require("(");
+                    require(")");
+                    binding.new_class = true;
+                } else {
+                    binding.initializer = expression();
+                }
             } else {
                 advance();
                 binding.name = identifier();
@@ -648,12 +652,10 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.new_class) {
-                    if (classes.count(binding.class_name) == 0)
-                        throw std::runtime_error("unknown class '" + binding.class_name + "'");
-                } else {
+                if (!binding.class_name.empty() && classes.count(binding.class_name) == 0)
+                    throw std::runtime_error("unknown class '" + binding.class_name + "'");
+                if (!binding.new_class)
                     validate_expression(*binding.initializer, params, functions);
-                }
                 if (live_actors.count(binding.name))
                     throw std::runtime_error("scalar local shadows actor reference '" + binding.name + "'");
                 if (!params.insert(binding.name).second) {

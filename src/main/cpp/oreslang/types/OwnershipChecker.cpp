@@ -20,6 +20,9 @@ struct LocalOwnership {
     bool exclusive_loan = false;
     std::string class_name;
     std::unordered_set<std::string> class_fields;
+    // Only scalar i64 fields may be individually taken. No destructor-bearing
+    // partial objects or field-split loans are admitted in this native slice.
+    std::unordered_set<std::string> moved_fields;
 };
 using Locals = std::unordered_map<std::string, LocalOwnership>;
 
@@ -77,6 +80,11 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
         reject(expr, (source.class_name.empty()
             ? "borrow of explicitly moved int '" : "ownership violation: borrow of moved class '")
             + expr.left->name + "'");
+    // Whole-class loans give the callee access to every field. A partially
+    // moved class cannot satisfy that contract even for a shared borrow.
+    if (!source.moved_fields.empty())
+        reject(expr, "ownership violation: cannot borrow a partially moved class '" +
+            expr.left->name + "'");
     if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
         reject(expr, "conflicting active native borrow of '" + expr.left->name + "'");
     if (exclusive) source.exclusive_loan = true;
@@ -138,6 +146,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         }
         case Expression::Kind::Field: {
             const auto& source = checked_field(expr.left->name, expr.name, expr.offset, locals);
+            if (source.moved_fields.count(expr.name) != 0)
+                reject(expr, "ownership violation: use-after-move class field '" +
+                    expr.left->name + "." + expr.name + "'");
             if (source.exclusive_loan)
                 reject(expr, "ownership violation: field read conflicts with active mutable borrow");
             return;
@@ -156,6 +167,14 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 if (source.exclusive_loan || source.shared_loans != 0)
                     reject(expr, "cannot move int while borrow is active");
                 source.moved = true;
+            } else if (expr.left->kind == Expression::Kind::Field) {
+                const auto& field = *expr.left;
+                LocalOwnership& source = checked_field(field.left->name, field.name, field.offset, locals);
+                if (source.mode != Mode::Value)
+                    reject(expr, "ownership violation: cannot take a class field through a borrowed parameter");
+                if (source.exclusive_loan || source.shared_loans != 0)
+                    reject(expr, "ownership violation: cannot take a class field with active loans");
+                source.moved_fields.insert(field.name);
             }
             return;
         }
@@ -236,11 +255,28 @@ void validate_i64_ownership(const Program& program) {
             locals.emplace(param.name, std::move(entry));
         }
         for (const auto& binding : function.locals) {
-            if (!binding.new_class)
+            if (!binding.class_name.empty() && !binding.new_class) {
+                // Non-Copy record transfer is admitted only as an explicit
+                // same-type, whole-object move before any guarded CFG exits.
+                // Nested field moves leave a partial object and forbid transfer.
+                if (!binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::Take ||
+                        !binding.initializer->left ||
+                        binding.initializer->left->kind != Expression::Kind::Variable)
+                    throw std::runtime_error("ownership violation: class local requires explicit rt take of an owned class");
+                const Expression& operand = *binding.initializer->left;
+                LocalOwnership& source = local(operand, locals);
+                if (source.class_name != binding.class_name || source.mode != Mode::Value ||
+                        source.moved || source.exclusive_loan || source.shared_loans != 0 ||
+                        !source.moved_fields.empty())
+                    reject(operand, "ownership violation: class move requires a fully initialized same-type owned object without loans");
+                source.moved = true;
+            } else if (!binding.new_class) {
                 check_value(*binding.initializer, locals, functions);
+            }
             LocalOwnership entry;
             entry.class_name = binding.class_name;
-            if (binding.new_class)
+            if (!binding.class_name.empty())
                 entry.class_fields = class_fields.at(binding.class_name);
             locals.emplace(binding.name, std::move(entry));
         }
@@ -252,11 +288,22 @@ void validate_i64_ownership(const Program& program) {
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
                 check_value(*stmt.expression, locals, functions);
+                // Full scalar-field assignment reinitializes a previously
+                // explicitly taken i64 field. RHS is checked before publish.
+                recv.moved_fields.erase(stmt.field);
             } else {
                 if (stmt.expression->kind != Expression::Kind::Call)
                     throw std::runtime_error("invalid native call statement");
                 check_call(*stmt.expression, locals, functions);
             }
+        }
+        // Actor sends carry *owned scalar values*, never pointers/loans.
+        // Unlike ordinary calls their payloads were previously checked only
+        // for names/arity, leaving flow-sensitive moves unaccounted for.
+        // Visit them in exactly the order emitted by the LLVM actor bridge.
+        for (const auto& action : function.actor_actions) {
+            if (action.kind == ActorAction::Kind::Send)
+                check_value(*function.actor_sends.at(action.index).payload, locals, functions);
         }
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the

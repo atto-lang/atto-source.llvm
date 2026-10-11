@@ -228,9 +228,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
         struct LocalSlot {
+            std::string name;
             llvm::Value* address;
             bool heap_owned;
             std::uint64_t bytes;
+            bool live;
         };
         std::vector<LocalSlot> lexical_slots;
         const auto heap_count = std::count_if(fn.locals.begin(), fn.locals.end(),
@@ -241,7 +243,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         for (const auto& binding : fn.locals) {
-            if (binding.new_class) {
+            if (!binding.class_name.empty()) {
                 llvm::StructType* shape = class_types.at(binding.class_name);
                 llvm::Value* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record");
                 const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
@@ -249,15 +251,38 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
                 builder.CreateLifetimeStart(slot,
                     llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                if (binding.new_class) {
+                    for (std::size_t i = 0; i < cls->fields.size(); ++i) {
+                        const ClassField& item = cls->fields[i];
+                        llvm::Value* address = builder.CreateStructGEP(shape, slot,
+                            static_cast<unsigned>(i), binding.name + "." + item.name);
+                        builder.CreateStore(llvm::ConstantInt::getSigned(i64, item.initial), address);
+                    }
+                } else {
+                    // Checked prior to IR emission: exactly rt take owned_name
+                    // with matching class layout and no live loans or moved fields.
+                    const std::string& from = binding.initializer->left->name;
+                    llvm::Value* moved = builder.CreateLoad(shape, storage.at(from),
+                        binding.name + ".taken");
+                    builder.CreateStore(moved, slot);
+                    auto owner = std::find_if(lexical_slots.begin(), lexical_slots.end(),
+                        [&](const LocalSlot& record) { return record.name == from; });
+                    if (owner == lexical_slots.end() || !owner->live || owner->heap_owned)
+                        throw std::runtime_error("invalid checked class-move lowering");
+                    // End the source *after* copying its trivially destructible
+                    // i64 fields, not again on any taken/fallthrough return.
+                    builder.CreateLifetimeEnd(owner->address,
+                        llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), owner->bytes));
+                    owner->live = false;
+                }
                 for (std::size_t i = 0; i < cls->fields.size(); ++i) {
                     const ClassField& item = cls->fields[i];
-                    llvm::Value* address = builder.CreateStructGEP(shape, slot,
-                        static_cast<unsigned>(i), binding.name + "." + item.name);
-                    builder.CreateStore(llvm::ConstantInt::getSigned(i64, item.initial), address);
-                    field_storage.emplace(field_key(binding.name, item.name), address);
+                    field_storage.emplace(field_key(binding.name, item.name),
+                        builder.CreateStructGEP(shape, slot, static_cast<unsigned>(i),
+                            binding.name + "." + item.name));
                 }
                 storage.emplace(binding.name, slot);
-                lexical_slots.push_back({slot, false, bytes});
+                lexical_slots.push_back({binding.name, slot, false, bytes, true});
                 continue;
             }
             llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations);
@@ -270,7 +295,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 builder.CreateStore(initial, slot);
             }
             storage.emplace(binding.name, slot);
-            lexical_slots.push_back({slot, binding.heap_owned, 8});
+            lexical_slots.push_back({binding.name, slot, binding.heap_owned, 8, true});
         }
         for (const auto& stmt : fn.statements) {
             if (stmt.kind == Statement::Kind::FieldWrite) {
@@ -298,6 +323,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         // Branch-local class creation / effectful conditions fail admission.
         auto emit_cleanup_return = [&](llvm::Value* value) {
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
+                if (!it->live) continue;
                 if (it->heap_owned) builder.CreateCall(regionDrop, {region, it->address});
                 else builder.CreateLifetimeEnd(it->address,
                     llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));

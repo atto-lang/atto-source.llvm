@@ -33,8 +33,8 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
-    std::string class_name; // only stack-constructed, bounded multi-field i64 class
-    bool new_class = false;
+    std::string class_name; // stack-only, bounded all-i64 class
+    bool new_class = false; // false + class_name: checked local rt take move
     bool field_mutable = false; // actor-owned fields only
     std::size_t offset = 0;
 };

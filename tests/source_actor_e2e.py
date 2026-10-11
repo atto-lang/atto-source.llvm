@@ -22,6 +22,7 @@ def main():
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-interleaved-stop.ores", 2, None, None),
     ]
@@ -37,6 +38,8 @@ def main():
         "source-actor-send-missing-handler.ores": "native actor supports only on_message",
         "source-actor-send-unknown-ref.ores": "unknown actor message receiver",
         "source-actor-send-ref-as-payload.ores": "unknown parameter",
+        "source-actor-send-borrow-reject.ores": "borrowed reference may only be passed",
+        "source-actor-send-after-take-reject.ores": "use of explicitly moved int",
     }
     for name, diagnostic in negatives.items():
         result = run([args.compiler, str(fixtures / name)])
