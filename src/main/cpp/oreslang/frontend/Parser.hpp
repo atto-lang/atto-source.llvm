@@ -42,6 +42,7 @@ struct Function {
 // Restricted actor field fragment: i64 fields and serial methods. No refs,
 // await, exceptions or constructor callbacks enter this grammar.
 struct ActorField {
+    bool mutable_field = false;
     std::string name;
     std::unique_ptr<Expression> initializer;
     std::size_t offset = 0;
