@@ -34,7 +34,13 @@ public:
                 && logical_child_id == rhs.logical_child_id;
         }
     };
-    enum class Phase { active, finalized, stopped };
+    enum class Phase { active, finalized, restarting, stopped };
+    struct RestartReservation {
+        ChildRef child;
+        OresNativeActorRef failed_actor;
+        std::uint64_t incarnation;
+        std::uint64_t nonce;
+    };
     struct Snapshot {
         ChildRef child;
         OresNativeActorRef actor;
@@ -86,29 +92,56 @@ public:
         return stored;
     }
 
-    /** Identity commit only: caller must already have admitted replacement. */
-    Snapshot replace(ChildRef child, OresNativeActorRef failed_actor,
-                     std::uint64_t failed_incarnation,
-                     OresNativeActorRef replacement) {
+    /**
+     * Claim the current finalized generation before the host creates an
+     * actor. Only one claimant may spawn a replacement for that failure.
+     */
+    RestartReservation begin_restart(
+            ChildRef child, OresNativeActorRef failed_actor,
+            std::uint64_t incarnation) {
         std::lock_guard<std::mutex> guard(mutex_);
-        require_expected(child, failed_actor, failed_incarnation, Phase::finalized);
+        require_expected(child, failed_actor, incarnation, Phase::finalized);
+        if (incarnation == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("logical child incarnation exhausted");
+        RestartReservation permit{
+            child, failed_actor, incarnation, fresh_restart_nonce()};
+        auto [it, inserted] = pending_restarts_.emplace(
+            child.logical_child_id, permit.nonce);
+        (void) it;
+        if (!inserted) throw std::logic_error("restart reservation already exists");
+        children_.at(child.logical_child_id).phase = Phase::restarting;
+        return permit;
+    }
+
+    /** Identity commit only; caller must have admitted a fresh actor. */
+    Snapshot replace(RestartReservation permit, OresNativeActorRef replacement) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        check_reservation(permit);
         validate_actor(replacement);
-        if (same_actor(replacement, failed_actor)
+        if (same_actor(replacement, permit.failed_actor)
             || active_actors_.count(actor_key(replacement)))
             throw std::logic_error("native replacement actor is not fresh");
-        if (failed_incarnation == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("logical child incarnation exhausted");
-        // Insert the reverse index before mutating the prior FINALIZED
-        // snapshot. If allocation fails, no lifecycle generation advances.
+        // Insert the reverse index before mutating the prior snapshot:
+        // allocation failure leaves the reservation intact for abort.
         auto [active_it, inserted] = active_actors_.emplace(
-            actor_key(replacement), child.logical_child_id);
+            actor_key(replacement), permit.child.logical_child_id);
         (void) active_it;
-        if (!inserted)
-            throw std::logic_error("replacement actor already registered");
-        auto& stored = children_.at(child.logical_child_id);
+        if (!inserted) throw std::logic_error("replacement actor already registered");
+        auto& stored = children_.at(permit.child.logical_child_id);
         stored.actor = replacement;
-        stored.incarnation = failed_incarnation + 1;
+        stored.incarnation = permit.incarnation + 1;
         stored.phase = Phase::active;
+        pending_restarts_.erase(permit.child.logical_child_id);
+        return stored;
+    }
+
+    /** Trusted owner rolls back failed spawn/admission, never guest code. */
+    Snapshot abort_restart(RestartReservation permit) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        check_reservation(permit);
+        auto& stored = children_.at(permit.child.logical_child_id);
+        stored.phase = Phase::finalized;
+        pending_restarts_.erase(permit.child.logical_child_id);
         return stored;
     }
 
@@ -135,6 +168,26 @@ public:
     }
 
 private:
+    void check_reservation(const RestartReservation& permit) const {
+        require_expected(permit.child, permit.failed_actor,
+                         permit.incarnation, Phase::restarting);
+        const auto it = pending_restarts_.find(permit.child.logical_child_id);
+        if (!permit.nonce || it == pending_restarts_.end()
+            || it->second != permit.nonce)
+            throw std::logic_error("stale or foreign restart reservation");
+    }
+
+    static std::uint64_t fresh_restart_nonce() {
+        auto current = next_restart_nonce_.load(std::memory_order_relaxed);
+        while (true) {
+            if (current == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("restart reservation nonce exhausted");
+            if (next_restart_nonce_.compare_exchange_weak(
+                    current, current + 1, std::memory_order_relaxed))
+                return current + 1;
+        }
+    }
+
     // Native logical-child IDs are process-unique, not registry-local.
     // Otherwise a replacement supervisor registry with the same owner IDs
     // could reuse child 1, letting a stale ChildRef target unrelated work.
@@ -182,6 +235,8 @@ private:
     const std::uint64_t runtime_id_;
     mutable std::mutex mutex_;
     inline static std::atomic<std::uint64_t> next_global_child_id_{0};
+    inline static std::atomic<std::uint64_t> next_restart_nonce_{0};
+    std::unordered_map<std::uint64_t, std::uint64_t> pending_restarts_;
     std::unordered_map<std::uint64_t, Snapshot> children_;
     std::map<std::pair<std::uint64_t, std::uint64_t>,
              std::uint64_t> active_actors_;
