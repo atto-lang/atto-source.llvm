@@ -1,5 +1,6 @@
 #include "oreslang/runtime/LogicalMutex.hpp"
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
 #include <thread>
 
@@ -59,5 +60,42 @@ int main() {
     check(mutex.with_owner(next.token, [](int& value) { return value; }) == 12,
           "state changed after cancelled/stale waiter");
     check(!mutex.release(next.token), "unexpected successor");
+
+    // Stress release-vs-callback on a different physical carrier. A permit
+    // must remain with the original logical owner until the callback unwinds.
+    for (int round = 0; round < 1500; ++round) {
+        auto executing = mutex.request();
+        auto successor = mutex.request();
+        std::atomic<bool> entered{false}, finish{false};
+        std::thread carrier([&] {
+            mutex.with_owner(executing.token, [&](int& value) {
+                entered.store(true, std::memory_order_release);
+                while (!finish.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                ++value;
+            });
+        });
+        while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
+        bool denied = false;
+        try { (void) mutex.release(executing.token); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied, "early logical permit release must be rejected");
+        check(!mutex.owns(successor.token), "second caller admitted before turn ended");
+        denied = false;
+        try { mutex.with_owner(executing.token, [](int&) {}); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied, "overlapping protected callback was admitted");
+        finish.store(true, std::memory_order_release);
+        carrier.join();
+        check(mutex.release(executing.token) == successor.token,
+              "handoff lost after active callback finished");
+        check(!mutex.release(successor.token), "unexpected queued task");
+    }
+    auto unwinding = mutex.request();
+    try {
+        mutex.with_owner(unwinding.token, [](int&) { throw std::runtime_error("guest failure"); });
+    } catch (const std::runtime_error&) {}
+    check(!mutex.release(unwinding.token), "exception must retire callback lease");
     return 0;
 }

@@ -3,6 +3,7 @@
 #include "oreslang/runtime/CriticalGate.hpp"
 
 #include <cstddef>
+#include <mutex>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -45,7 +46,13 @@ public:
      * Scheduler-only handoff. If an owner is released, return the next eligible
      * ticket, which the scheduler must resume separately (never inline).
      */
-    [[nodiscard]] Token release(Token token) { return queue_.release(token); }
+    [[nodiscard]] Token release(Token token) {
+        std::lock_guard<std::mutex> lock(lease_mu_);
+        if (active_ && queue_.holds(token)) {
+            throw std::logic_error("cannot release logical mutex during protected callback");
+        }
+        return queue_.release(token);
+    }
 
     /**
      * Only an *already-admitted* logical invocation may inspect or mutate T.
@@ -59,9 +66,23 @@ public:
         using Result = std::invoke_result_t<Fn&, T&>;
         static_assert(!std::is_reference_v<Result> && !std::is_pointer_v<Result>,
                       "native logical mutex protected references cannot escape");
-        if (!queue_.holds(token)) {
-            throw std::logic_error("native logical mutex access without owning ticket");
+        {
+            std::lock_guard<std::mutex> lock(lease_mu_);
+            if (!queue_.holds(token)) {
+                throw std::logic_error("native logical mutex access without owning ticket");
+            }
+            if (active_) {
+                throw std::logic_error("simultaneous logical mutex protected callbacks");
+            }
+            active_ = true;
         }
+        struct LeaseEnd final {
+            LogicalMutex& mutex;
+            ~LeaseEnd() noexcept {
+                std::lock_guard<std::mutex> lock(mutex.lease_mu_);
+                mutex.active_ = false;
+            }
+        } leaseEnd{*this};
         if constexpr (std::is_void_v<Result>) {
             std::forward<Fn>(fn)(state_);
         } else {
@@ -71,6 +92,8 @@ public:
 
 private:
     CriticalGate queue_;
+    mutable std::mutex lease_mu_;
+    bool active_ = false;
     T state_;
 };
 
