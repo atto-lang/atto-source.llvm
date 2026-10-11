@@ -68,6 +68,20 @@ static void wait_atomic(atomic_int* counter, int expected) {
     }
     abort();
 }
+typedef struct {
+    OresMp2ActorGroup* group;
+    OresMp2ActorRef actor;
+    const uint8_t* wire;
+    size_t size;
+    atomic_int* rejected;
+} FloodArgs;
+static void* saturated_sender(void* raw) {
+    FloodArgs* args = raw;
+    if (ores_mp2_group_send(args->group, args->actor, args->wire, args->size))
+        abort(); /* capacity=1, slot's original turn is still active */
+    atomic_fetch_add(args->rejected, 1);
+    return NULL;
+}
 int main(void) {
     uint8_t wire[7][1024]; size_t sizes[7];
     OresMp2Contract schemas[7];
@@ -187,6 +201,27 @@ int main(void) {
     /* Capacity counts an actively executing turn: cannot acquire a second
      * buffer/admission in the same lane. Independent actor may still run. */
     assert(!ores_mp2_group_send(group, a, wire[0], sizes[0]));
+    /* Concurrent producers cannot create unbounded pre-admission snapshots
+     * while one accepted DATA callback occupies the only capacity slot.
+     */
+    enum { SENDERS = 12 };
+    pthread_t flood_threads[SENDERS];
+    atomic_int flood_rejected = 0;
+    FloodArgs flood = {group, a, wire[0], sizes[0], &flood_rejected};
+    for (size_t i = 0; i < SENDERS; ++i)
+        assert(pthread_create(&flood_threads[i], NULL, saturated_sender, &flood) == 0);
+    for (size_t i = 0; i < SENDERS; ++i)
+        assert(pthread_join(flood_threads[i], NULL) == 0);
+    assert(atomic_load(&flood_rejected) == SENDERS);
+    OresMp2ActorRef stale = b;
+    stale.generation++;
+    assert(!ores_mp2_group_send(group, stale, wire[5], sizes[5]));
+    OresMp2ActorRef foreign = b;
+    foreign.scheduler_domain++;
+    assert(!ores_mp2_group_send(group, foreign, wire[5], sizes[5]));
+    /* Failed stale/foreign sends must release their reservation, allowing
+     * the valid generation-fenced destination to accept the same payload.
+     */
     assert(ores_mp2_group_send(group, b, wire[5], sizes[5]));
     wait_atomic(&state.finished[1], 1);
     wire[0][sizes[0] - 1] ^= 0xff; /* mutate sender after acceptance */
