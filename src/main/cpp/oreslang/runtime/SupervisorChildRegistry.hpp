@@ -256,19 +256,20 @@ public:
     }
 
     /**
-     * Reconcile an uncertain STOP ONLY after an independent authoritative
+     * Reconcile a PENDING or UNCERTAIN STOP ONLY after an independent authoritative
      * host receipt check. No automatic retry and no rollback to FINALIZED.
      * The verifier runs outside the registry lock. A stale/changed turn is
      * rejected again under the lock before the disposition can commit.
      */
-    bool reconcile_uncertain_stop(
+    bool reconcile_unresolved_stop(
             ChildRef child, OresNativeActorRef actor,
             std::uint64_t incarnation, std::uint64_t turn_generation,
             const std::function<bool(const StopReceipt&)>& verify_applied) {
         if (!verify_applied)
             throw std::invalid_argument("missing independent STOP verifier");
         const auto receipt = stop_receipt(child);
-        if (receipt.status != StopReceiptStatus::uncertain
+        if ((receipt.status != StopReceiptStatus::uncertain
+                && receipt.status != StopReceiptStatus::pending)
                 || receipt.incarnation != incarnation
                 || receipt.turn_generation != turn_generation
                 || !same_actor(receipt.failed_actor, actor))
@@ -281,13 +282,29 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         auto& verified = require_stop_receipt(
             child, actor, incarnation, turn_generation);
-        if (verified.status != StopReceiptStatus::uncertain)
+        if (verified.status != receipt.status
+                || (verified.status != StopReceiptStatus::uncertain
+                    && verified.status != StopReceiptStatus::pending))
             throw std::logic_error("STOP changed while being reconciled");
         auto& state = children_.at(child.logical_child_id);
         state.phase = Phase::stopped;
         verified.status = StopReceiptStatus::acknowledged;
         pending_stops_.erase(child.logical_child_id);
         return true;
+    }
+
+    /**
+     * Compatibility entrypoint for receipts already classified UNCERTAIN.
+     * PENDING crash recovery must explicitly use reconcile_unresolved_stop.
+     */
+    bool reconcile_uncertain_stop(
+            ChildRef child, OresNativeActorRef actor,
+            std::uint64_t incarnation, std::uint64_t turn_generation,
+            const std::function<bool(const StopReceipt&)>& verify_applied) {
+        if (stop_receipt(child).status != StopReceiptStatus::uncertain)
+            throw std::logic_error("only UNCERTAIN STOP accepted here");
+        return reconcile_unresolved_stop(
+            child, actor, incarnation, turn_generation, verify_applied);
     }
 
     Snapshot commit_stop(ChildRef child, OresNativeActorRef failed_actor,
