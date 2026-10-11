@@ -265,6 +265,8 @@ public:
     }
 
     std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t group_id() const noexcept { return group_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
 
     NativeActorGroup(const NativeActorGroup&) = delete;
     NativeActorGroup& operator=(const NativeActorGroup&) = delete;
