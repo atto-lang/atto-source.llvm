@@ -31,6 +31,13 @@ enum { ORES_MP2_MAX_BYTES=1048576, ORES_MP2_MAX_NODES=100000, ORES_MP2_MAX_DEPTH
  */
 int ores_mp2_contract_valid(const OresMp2Contract* contract);
 
+/* Validate an already detached/owned snapshot IN PLACE. No new copy is
+ * made. The caller retains ownership whether the frame is valid or not and
+ * must call ores_mp2_owned_release exactly once on every exit path. Never
+ * invoke on a caller-owned concurrently mutable send buffer. This is used
+ * after reserve-and-snapshot by source actor variant dispatch. */
+int ores_mp2_validate_owned(const OresMp2Contract* contract,
+                            const OresMp2Owned* snapshot);
 int ores_mp2_validate_copy(const OresMp2Contract* contract,
                            const uint8_t* bytes, size_t size, OresMp2Owned* out);
 void ores_mp2_owned_release(OresMp2Owned* value);
