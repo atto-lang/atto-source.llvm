@@ -350,6 +350,35 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 locals.emplace(local.name, address);
                 ownedSlots.push_back({address, local.heap_owned});
             }
+            if (!method.boolean_arms.empty()) {
+                auto* subject = parameters.at(method.match_subject);
+                auto* condition = builder.CreateICmpNE(
+                    subject, llvm::ConstantInt::get(i64, 0), "message.match.bool");
+                auto* whenTrue = llvm::BasicBlock::Create(context, "match.true", fn);
+                auto* whenFalse = llvm::BasicBlock::Create(context, "match.false", fn);
+                auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
+                builder.CreateCondBr(condition, whenTrue, whenFalse);
+                // The parser proves exactly two exhaustive, nonoverlapping
+                // bool arms; no implicit fallthrough or untyped default.
+                for (const auto& arm : method.boolean_arms) {
+                    builder.SetInsertPoint(arm.match_value ? whenTrue : whenFalse);
+                    for (const auto& assignment : arm.assignments) {
+                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                            [&](const LocalBinding& f) { return f.name == assignment.field; });
+                        if (field == actor.fields.end() || !field->field_mutable)
+                            throw std::runtime_error("invalid receive match field mutation");
+                        auto* updated = lower(*assignment.value, builder, i64,
+                                              parameters, locals, declarations);
+                        builder.CreateCall(fieldWrite,
+                            {heap, currentDomain, currentEpoch,
+                             llvm::ConstantInt::get(i64,
+                                std::distance(actor.fields.begin(), field)), updated});
+                        builder.CreateStore(updated, locals.at(assignment.field));
+                    }
+                    builder.CreateBr(joined);
+                }
+                builder.SetInsertPoint(joined);
+            }
             for (const auto& assignment : method.assignments) {
                 const auto match = std::find_if(actor.fields.begin(), actor.fields.end(),
                     [&](const LocalBinding& f) { return f.name == assignment.field; });
