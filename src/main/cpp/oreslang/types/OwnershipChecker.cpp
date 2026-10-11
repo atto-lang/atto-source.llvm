@@ -293,6 +293,15 @@ void validate_i64_ownership(const Program& program) {
         }
         std::vector<const Statement*> deferred_effects;
         auto check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::ScopedLocal) {
+                const LocalBinding& local = *stmt.branch_local;
+                if (state.count(local.name))
+                    throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
+                        std::to_string(local.offset));
+                check_value(*local.initializer, state, functions);
+                state.emplace(local.name, LocalOwnership{});
+                return;
+            }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
                 if (recv.mode == Mode::Borrow)
@@ -329,6 +338,15 @@ void validate_i64_ownership(const Program& program) {
                     check_effect(arm, then_state);
                 for (const auto& arm : stmt.else_statements)
                     check_effect(arm, else_state);
+                // Scoped i64 locals have complete lexical lifetime in their
+                // own arm; they may not influence the predecessor join or
+                // be observable on later exit cleanup paths.
+                for (const auto& arm : stmt.then_statements)
+                    if (arm.kind == Statement::Kind::ScopedLocal)
+                        then_state.erase(arm.branch_local->name);
+                for (const auto& arm : stmt.else_statements)
+                    if (arm.kind == Statement::Kind::ScopedLocal)
+                        else_state.erase(arm.branch_local->name);
                 for (const auto& item : then_state) {
                     const auto found = else_state.find(item.first);
                     if (found == else_state.end() ||
