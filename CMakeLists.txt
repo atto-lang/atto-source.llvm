@@ -54,6 +54,16 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
+    oreslang_contract_test(source_value_match_ir value-match-return.ores --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_switch_ir value-switch-return.ores --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_value_match_nonexhaustive value-match-nonexhaustive.ores
+        --diagnostic "non-exhaustive value match/switch")
+    oreslang_contract_test(reject_return_do_switch_nonexhaustive return-do-switch-nonexhaustive.ores
+        --diagnostic "non-exhaustive return do match/switch")
+    oreslang_contract_test(reject_return_do_match_nonterminal return-do-match-nonterminal.ores
+        --diagnostic "return do match/switch requires every selected arm to return")
+    oreslang_contract_test(reject_value_switch_duplicate value-switch-duplicate.ores
+        --diagnostic "duplicate dispatch integer case")
     oreslang_contract_test(source_actor_field_ir actor-fields-counter.ores --ir "ores_actor_i64_fields_codegen_set")
     oreslang_contract_test(source_actor_union_receive_ir actor-message-union.ores --ir "message_reset")
     oreslang_contract_test(reject_actor_union_nonexhaustive actor-message-union-missing-arm.ores
@@ -103,6 +113,13 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
     if(ORE_CLANG)
+        oreslang_contract_test(native_exec_value_match_return value-match-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_switch_return value-switch-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_match_capture value-match-capture.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_do_match_continue do-match-continue.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_do_switch_return do-switch-early-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_return_do_match return-do-match.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_return_do_switch return-do-switch.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
