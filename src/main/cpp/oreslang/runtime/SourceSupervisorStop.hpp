@@ -2,6 +2,7 @@
 
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include "oreslang/runtime/SupervisorChildRegistry.hpp"
 #include "oreslang/runtime/SupervisorProcess.hpp"
 
 #include <cstddef>
@@ -71,6 +72,78 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop(
                 throw std::logic_error("invalid compiled source STOP decision");
             }
             sink(resolution);
+        });
+}
+
+/**
+ * Registry-bound source STOP for a lifecycle owner that can prove each
+ * terminal Failure's exact finalized child incarnation.
+ *
+ * Unlike the legacy host-only overload, this opt-in boundary verifies the
+ * current phase/actor identity before issuing STOP and again immediately
+ * before the host effect. The host sink must execute the authoritative STOP
+ * action synchronously (or throw); only after it returns do we commit the
+ * finalized->stopped registry transition.
+ *
+ * This is a synchronous native source slice, NOT native guest await lowering.
+ */
+inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verified(
+        std::string_view source,
+        std::uint64_t supervisor_id,
+        std::uint64_t runtime_id,
+        std::size_t capacity,
+        SupervisorProcess::Enqueue enqueue,
+        std::shared_ptr<SupervisorChildRegistry> children,
+        SupervisorProcess::DecisionSink decision_sink) {
+    const oreslang::StopOnlySupervisor plan =
+        oreslang::parse_stop_only_supervisor(source);
+    if (plan.name.empty() || !children || !decision_sink) {
+        throw std::invalid_argument("missing verified supervisor STOP authority");
+    }
+    auto verify = [children, supervisor_id, runtime_id](
+                      const SupervisorFailureNotice& notice) {
+        if (notice.supervisor_id != supervisor_id
+            || notice.runtime_id != runtime_id || !notice.actor_id
+            || !notice.generation || !notice.logical_child_id
+            || !notice.logical_incarnation
+            || notice.native_terminal_kind != ORES_NATIVE_CONTROL_PANIC) {
+            throw std::invalid_argument("invalid finalized native Failure STOP target");
+        }
+        const auto child = SupervisorChildRegistry::ChildRef{
+            supervisor_id, runtime_id, notice.logical_child_id
+        };
+        const auto snapshot = children->snapshot(child);
+        if (snapshot.phase != SupervisorChildRegistry::Phase::finalized
+            || snapshot.incarnation != notice.logical_incarnation
+            || snapshot.actor.scheduler_domain != notice.runtime_id
+            || snapshot.actor.actor_slot != notice.actor_id
+            || snapshot.actor.generation != notice.generation) {
+            throw std::logic_error("stale or unfinalized native STOP incarnation");
+        }
+    };
+    return std::make_shared<SupervisorProcess>(
+        supervisor_id, runtime_id, capacity, std::move(enqueue),
+        [verify](const SupervisorFailureNotice& notice)
+                -> std::optional<SupervisorProcess::Directive> {
+            verify(notice);
+            return SupervisorProcess::Directive::stop;
+        },
+        [verify, children, supervisor_id, runtime_id,
+         sink = std::move(decision_sink)](
+                const SupervisorProcess::Resolution& resolution) {
+            if (resolution.requested != SupervisorProcess::Directive::stop) {
+                throw std::logic_error("invalid verified source STOP directive");
+            }
+            // Host effects are NOT invoked for an already-stopped or replaced
+            // child. Recheck after policy dispatch to fence lifecycle races.
+            verify(resolution.notice);
+            sink(resolution);
+            const auto& n = resolution.notice;
+            children->stop(
+                SupervisorChildRegistry::ChildRef{
+                    supervisor_id, runtime_id, n.logical_child_id},
+                OresNativeActorRef{runtime_id, n.actor_id, n.generation},
+                n.logical_incarnation);
         });
 }
 
