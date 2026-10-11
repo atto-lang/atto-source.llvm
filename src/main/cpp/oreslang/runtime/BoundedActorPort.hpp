@@ -97,7 +97,7 @@ public:
     BoundedActorPort(const BoundedActorPort&) = delete;
     BoundedActorPort& operator=(const BoundedActorPort&) = delete;
 
-    bool offer(T payload, std::size_t bytes) {
+    bool offer(T&& payload, std::size_t bytes) {
         if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
         std::lock_guard<std::mutex> guard(state_->mutex);
         if (state_->closed) throw std::logic_error("actor port closed");
@@ -118,7 +118,7 @@ public:
         if (state_->queue.empty()) return std::nullopt;
         auto frame = std::move(state_->queue.front());
         state_->queue.pop_front();
-        return std::optional<Delivery>(std::in_place, state_, std::move(frame));
+        return std::optional<Delivery>(Delivery(state_, std::move(frame)));
     }
 
     std::size_t used_frames() const {
