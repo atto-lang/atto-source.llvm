@@ -93,6 +93,13 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-effect-unwind-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-effect-unwind-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_typed_exception_unwind COMMAND oreslang-effect-unwind-test)
+    # Typed host-runtime bridge; native guest actor compiler lowering is still gated.
+    add_executable(oreslang-effect-supervision-bridge-test tests/effect_supervision_bridge_test.cpp)
+    target_include_directories(oreslang-effect-supervision-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-effect-supervision-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-effect-supervision-bridge-test PRIVATE Threads::Threads)
+    add_test(NAME native_effect_unwind_supervisor_control_bridge
+        COMMAND oreslang-effect-supervision-bridge-test)
     add_executable(oreslang-supervisor-failure-lane-test tests/supervisor_failure_lane_test.cpp)
     target_include_directories(oreslang-supervisor-failure-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-supervisor-failure-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
