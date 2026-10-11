@@ -107,6 +107,13 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
     if (plan.name.empty() || !children || !decision_sink) {
         throw std::invalid_argument("missing verified supervisor STOP authority");
     }
+    // Fail at construction, not after a terminal actor PANIC has been
+    // admitted, if caller wired the wrong supervisor/domain registry.
+    if (children->supervisor_id() != supervisor_id
+            || children->runtime_id() != runtime_id) {
+        throw std::invalid_argument(
+            "source STOP registry belongs to another supervisor or runtime");
+    }
     auto verify = [children, supervisor_id, runtime_id](
                       const SupervisorFailureNotice& notice) {
         if (notice.supervisor_id != supervisor_id
