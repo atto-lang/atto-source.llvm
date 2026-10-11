@@ -656,9 +656,11 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.new_class) {
+                if (binding.new_class || binding.move_class) {
                     if (classes.count(binding.class_name) == 0)
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
+                    if (binding.move_class && !params.count(binding.move_source))
+                        throw std::runtime_error("unknown class move source '" + binding.move_source + "'");
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }
