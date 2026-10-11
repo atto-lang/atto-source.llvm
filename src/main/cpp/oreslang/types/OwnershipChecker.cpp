@@ -177,6 +177,36 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
     reject(expr, "invalid native ownership expression kind");
 }
 
+// Guard conditions must not mutate ownership or execute calls with hidden
+// effects. A taken return has its own ownership snapshot and cannot poison
+// the distinct fallthrough path. This is *not* general branch-lifetime proof.
+void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions) {
+    switch (expr.kind) {
+        case Expression::Kind::Integer:
+        case Expression::Kind::Variable:
+        case Expression::Kind::Field:
+            check_value(expr, locals, functions);
+            return;
+        case Expression::Kind::Negate:
+        case Expression::Kind::Copy:
+        case Expression::Kind::Share:
+            check_pure_guard(*expr.left, locals, functions);
+            return;
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            check_pure_guard(*expr.left, locals, functions);
+            check_pure_guard(*expr.right, locals, functions);
+            return;
+        case Expression::Kind::Take:
+        case Expression::Kind::Call:
+        case Expression::Kind::Borrow:
+        case Expression::Kind::BorrowMut:
+            reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
+    }
+    reject(expr, "unsupported guarded condition");
+}
+
 } // namespace
 
 void validate_i64_ownership(const Program& program) {
@@ -227,6 +257,15 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("invalid native call statement");
                 check_call(*stmt.expression, locals, functions);
             }
+        }
+        // Analyze each taken return independently. Even an explicit scalar
+        // rt take in one return branch does not move that value in the
+        // fallthrough path, which has a different live ownership state.
+        for (const auto& guard : function.early_returns) {
+            check_pure_guard(*guard.lhs, locals, functions);
+            check_pure_guard(*guard.rhs, locals, functions);
+            Locals taken = locals;
+            check_value(*guard.result, taken, functions);
         }
         if (function.result) check_value(*function.result, locals, functions);
     }
