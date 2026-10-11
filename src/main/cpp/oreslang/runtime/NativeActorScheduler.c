@@ -3,11 +3,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <stdatomic.h>
 
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
+    unsigned spawned, retired;
+    uint64_t generation;
 } ActorLane;
 struct OresNativeActorScheduler {
     pthread_mutex_t lock;
@@ -18,12 +21,14 @@ struct OresNativeActorScheduler {
     pthread_t* threads;
     size_t actor_count, per_actor_capacity, worker_count;
     size_t next_actor, outstanding;
+    uint64_t domain;
     uint64_t accepted, rejected, completed;
     int retired;
     OresNativeActorTaskFn callback;
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
+static _Atomic(uint64_t) next_scheduler_domain = 1;
 
 static void lock(OresNativeActorScheduler* s) {
     if (pthread_mutex_lock(&s->lock) != 0) abort();
@@ -90,6 +95,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open(
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
     if (!s->actors || !s->slots || !s->threads) goto allocation_failed;
+    s->domain = atomic_fetch_add_explicit(&next_scheduler_domain, 1, memory_order_relaxed);
+    if (!s->domain || s->domain == UINT64_MAX) goto allocation_failed;
     s->actor_count = actors;
     s->per_actor_capacity = capacity;
     s->worker_count = workers;
@@ -126,32 +133,97 @@ allocation_failed:
     free(s);
     return NULL;
 }
-int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
-                                       size_t i, uint64_t message) {
-    if (!s) return 0;
-    lock(s);
+static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
+    return s && ref.scheduler_domain == s->domain
+        && ref.actor_slot < s->actor_count
+        && ref.generation != 0
+        && s->actors[ref.actor_slot].spawned
+        && s->actors[ref.actor_slot].generation == ref.generation;
+}
+static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
-        || s->actors[i < s->actor_count ? i : 0].queued
-          + s->actors[i < s->actor_count ? i : 0].active >= s->per_actor_capacity
+        || !s->actors[i].spawned || s->actors[i].retired
+        || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
         || s->accepted == UINT64_MAX) {
-        if (s->rejected != UINT64_MAX) ++s->rejected;
-        unlock(s);
+        if (s->rejected != UINT64_MAX) s->rejected++;
         return 0;
     }
     ActorLane* a = &s->actors[i];
-    a->messages[a->tail] = message;
+    a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
     s->accepted++;
     s->outstanding++;
     pthread_cond_signal(&s->ready);
+    return 1;
+}
+OresNativeActorRef ores_native_actor_scheduler_spawn(
+    OresNativeActorScheduler* s, size_t i) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s) return missing;
+    lock(s);
+    if (s->retired || i >= s->actor_count || s->actors[i].spawned) {
+        unlock(s);
+        return missing;
+    }
+    ActorLane* a = &s->actors[i];
+    a->spawned = 1;
+    a->generation = 1;
+    OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
+    unlock(s);
+    return ref;
+}
+int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
+                                     OresNativeActorRef actor, uint64_t payload) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor)
+        ? enqueue_locked(s, (size_t)actor.actor_slot, payload) : 0;
+    if (!matching(s, actor) && s->rejected != UINT64_MAX) s->rejected++;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
+                                       size_t i, uint64_t message) {
+    if (!s) return 0;
+    lock(s);
+    int ok = enqueue_locked(s, i, message);
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
+                                     OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    if (!matching(s, actor) || s->actors[actor.actor_slot].retired) {
+        unlock(s); return 0;
+    }
+    s->actors[actor.actor_slot].retired = 1;
     unlock(s);
     return 1;
+}
+int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
+                                           OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ready = matching(s, actor) && !s->retired && !s->actors[actor.actor_slot].retired;
+    unlock(s);
+    return ready;
+}
+int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
+                                          OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int done = matching(s, actor) && s->actors[actor.actor_slot].retired
+        && !s->actors[actor.actor_slot].queued && !s->actors[actor.actor_slot].active;
+    unlock(s);
+    return done;
 }
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     if (!s) abort();
     lock(s);
     s->retired = 1;
+    for (size_t i = 0; i < s->actor_count; ++i) s->actors[i].retired = 1;
     pthread_cond_broadcast(&s->ready);
     unlock(s);
 }

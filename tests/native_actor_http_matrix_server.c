@@ -33,6 +33,7 @@ typedef struct {
     OresActorI64Heap* heap;
     OresActorArena* arena;
     OresArenaHandle counter;
+    OresNativeActorRef actor_ref;
     int ipc;
     pid_t child;
 } Worker;
@@ -183,8 +184,8 @@ static void client_request(int fd) {
             tail == ' ' && index >= 0 && index < ACTORS) {
             /* Successful submit transfers ownership of fd to the worker.
              * The TCP ingress carrier must not wait for actor completion. */
-            if (ores_native_actor_scheduler_submit(scheduler, (size_t)index,
-                                                    (uint64_t)(unsigned int)fd)) {
+            if (ores_native_actor_scheduler_send(scheduler, workers[index].actor_ref,
+                                                  (uint64_t)(unsigned int)fd)) {
                 return;
             }
             reply(fd, 503, "actor admission at capacity");
@@ -243,6 +244,12 @@ int main(int argc, char** argv) {
     scheduler = ores_native_actor_scheduler_open(ACTORS, 1024, CARRIERS,
                                                  actor_task, NULL);
     require(scheduler != NULL, "native ready-queue scheduler open");
+    for (int i = 0; i < ACTORS; ++i) {
+        workers[i].actor_ref = ores_native_actor_scheduler_spawn(scheduler, (size_t)i);
+        require(workers[i].actor_ref.scheduler_domain != 0
+                && ores_native_actor_scheduler_poll_ready(scheduler, workers[i].actor_ref),
+                "actor ref initialized and ready");
+    }
     printf("PORT=%u MODE=%s\n", (unsigned)ntohs(addr.sin_port), argv[1]);
     fflush(stdout);
     pthread_t threads[CARRIERS];
@@ -254,10 +261,16 @@ int main(int argc, char** argv) {
     /* All TCP ingress threads are joined, so no new submitters can race
      * physical reclamation. Previously accepted sockets must finish before
      * we stop isolated children or retire their native heaps. */
+    for (int i = 0; i < ACTORS; ++i)
+        require(ores_native_actor_scheduler_stop(scheduler, workers[i].actor_ref),
+                "actor ref retired");
     ores_native_actor_scheduler_retire(scheduler);
     require(ores_native_actor_scheduler_drain(scheduler) == 1, "all actor HTTP replies drained");
     require(ores_native_actor_scheduler_accepted(scheduler)
             == ores_native_actor_scheduler_completed(scheduler), "accepted requests completed");
+    for (int i = 0; i < ACTORS; ++i)
+        require(ores_native_actor_scheduler_poll_done(scheduler, workers[i].actor_ref),
+                "native actor completion barrier");
     require(ores_native_actor_scheduler_try_destroy(scheduler) == 1,
             "worker pool retired and drained");
     for (int i = 0; i < ACTORS; ++i) {
