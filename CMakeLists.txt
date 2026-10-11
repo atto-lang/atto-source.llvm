@@ -424,6 +424,22 @@ if(BUILD_TESTING)
                 --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
                 --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" --sanitize)
         set_tests_properties(native_owned_region_conditional_drop_sanitized PROPERTIES TIMEOUT 240)
+        add_test(NAME native_single_cleanup_epilogue
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_single_cleanup_epilogue_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        add_test(NAME native_single_cleanup_epilogue_sanitized
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_single_cleanup_epilogue_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" --sanitize)
+        set_tests_properties(native_single_cleanup_epilogue
+            native_single_cleanup_epilogue_sanitized PROPERTIES TIMEOUT 240)
     endif()
     oreslang_contract_test(class_reject_byvalue_mutation class-mutation-byvalue-reject.ores --diagnostic "ownership violation")
     # This is the *exact same Git blob* as the Java/Graal conformance
