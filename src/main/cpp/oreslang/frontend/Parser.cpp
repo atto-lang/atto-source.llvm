@@ -779,12 +779,6 @@ private:
             if (!declaredNames.insert(item.name).second)
                 throw std::runtime_error("duplicate structural/tagged message contract");
         }
-        for (const auto& actor : program.actors) {
-            if (typedDomains.count(actor.messages_type)) {
-                throw std::runtime_error(
-                    "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
-            }
-        }
         std::unordered_set<std::string> declaredActors;
         for (const auto& actor : program.actors) declaredActors.insert(actor.name);
         std::unordered_map<std::string, std::size_t> functions;
@@ -849,6 +843,9 @@ private:
                     [&](const Actor& a) { return a.name == ref->second; });
                 if (actor == program.actors.end()) throw std::runtime_error("unknown actor type");
                 if (!actor->messages_type.empty()) {
+                    if (typedDomains.count(actor->messages_type))
+                        throw std::runtime_error(
+                            "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
                     auto found = messagePatterns.find(actor->messages_type);
                     if (found == messagePatterns.end())
                         throw std::runtime_error("unknown actor message match contract");
@@ -890,7 +887,8 @@ private:
         };
         for (const auto& actor : program.actors) {
             if (!actor.messages_type.empty()) {
-                if (!messagePatterns.count(actor.messages_type))
+                if (!messagePatterns.count(actor.messages_type)
+                        && !typedDomains.count(actor.messages_type))
                     throw std::runtime_error(
                         "unknown actor message match contract '" + actor.messages_type + "'");
                 const auto count = std::count_if(actor.methods.begin(), actor.methods.end(),
@@ -943,6 +941,8 @@ private:
                 if (method.is_receiver) {
                     const std::string& parameter = method.parameters.at(0);
                     if (!method.boolean_arms.empty()) {
+                        if (typedDomains.count(actor.messages_type))
+                            throw std::runtime_error("boolean match cannot inspect tagged enum");
                         const MessagePattern& contract =
                             *messagePatterns.at(actor.messages_type);
                         if (contract.alternatives.size() != 1 ||
@@ -972,6 +972,65 @@ private:
                             throw std::runtime_error(
                                 "nonexhaustive receive boolean match");
                     }
+                    if (!method.tagged_arms.empty()) {
+                        if (!typedDomains.count(actor.messages_type))
+                            throw std::runtime_error(
+                                "tagged receive match requires named enum or pattern");
+                        if (method.match_subject != parameter)
+                            throw std::runtime_error(
+                                "tagged receive match must inspect Message parameter");
+                        std::unordered_set<std::string> allowed;
+                        for (const auto& pattern : program.tagged_patterns) {
+                            if (pattern.name == actor.messages_type)
+                                allowed.insert(pattern.alternatives.begin(),
+                                               pattern.alternatives.end());
+                        }
+                        const auto directEnum = enumNames.find(actor.messages_type);
+                        if (directEnum != enumNames.end()) {
+                            for (const auto& c : directEnum->second->cases)
+                                allowed.insert(directEnum->first + "." + c.name);
+                        }
+                        std::unordered_set<std::string> seen;
+                        for (const auto& arm : method.tagged_arms) {
+                            if (!allowed.count(arm.qualified_case))
+                                throw std::runtime_error(
+                                    "receive match arm is outside closed tagged pattern");
+                            if (!seen.insert(arm.qualified_case).second)
+                                throw std::runtime_error(
+                                    "duplicate or unreachable tagged receive match arm");
+                            const auto dot = arm.qualified_case.find('.');
+                            const auto enumName = arm.qualified_case.substr(0, dot);
+                            const auto variant = arm.qualified_case.substr(dot + 1);
+                            const auto enumeration = enumNames.at(enumName);
+                            const auto matched = std::find_if(enumeration->cases.begin(),
+                                enumeration->cases.end(),
+                                [&](const EnumCase& c) { return c.name == variant; });
+                            if (matched == enumeration->cases.end())
+                                throw std::runtime_error("unresolved tagged enum case");
+                            if (arm.binds_payload) {
+                                if (!matched->has_payload)
+                                    throw std::runtime_error(
+                                        "cannot destructure payloadless enum variant");
+                                const auto kind = matched->payload.kind;
+                                const bool fixed = kind == MessageShape::Kind::Tuple
+                                    || kind == MessageShape::Kind::FixedArray
+                                    || kind == MessageShape::Kind::FixedList;
+                                const std::size_t expected = fixed
+                                    ? matched->payload.elements.size() : 1;
+                                if (arm.binders.size() != expected
+                                    || (fixed != arm.tuple_destructure))
+                                    throw std::runtime_error(
+                                        "tagged variant binder arity or tuple shape mismatch");
+                                std::unordered_set<std::string> names;
+                                for (const auto& name : arm.binders)
+                                    if (!names.insert(name).second)
+                                        throw std::runtime_error(
+                                            "duplicate variable in tagged payload destructuring");
+                            }
+                        }
+                        if (seen.size() != allowed.size())
+                            throw std::runtime_error("nonexhaustive tagged receive match");
+                    }
                     if (reads_name(*method.result, parameter) ||
                         std::any_of(method.assignments.begin(), method.assignments.end(),
                             [&](const FieldAssignment& a) {
@@ -988,6 +1047,12 @@ private:
                 }
                 validate_expression(*method.result, available, functions);
             }
+            // Static variant coverage alone cannot authorize execution:
+            // per-case MessagePack DATA and typed continuation lowering
+            // must be implemented before guest source reaches LLVM IR.
+            if (typedDomains.count(actor.messages_type))
+                throw std::runtime_error(
+                    "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
         }
     }
 
