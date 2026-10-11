@@ -83,6 +83,8 @@ private:
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
         std::atomic<bool> physically_done{false};
+        // True only after the group worker table was detached by close().
+        std::atomic<bool> detached_from_group{false};
         std::atomic<bool> control_active{false};
         std::atomic<bool> control_reserved{false};
         std::atomic<bool> control_dropped{false};
@@ -112,6 +114,25 @@ public:
     using StopRequest = std::function<void()>;
 
     enum class ControlTurn { idle, executed, busy, retired };
+
+    /**
+     * Generation-fenced runtime retirement capability. Never holds a pointer
+     * to NativeActorGroup; safe to retain after the group has been destroyed.
+     * Trusted runtime only: call finalized() after physical quiescence.
+     */
+    class RuntimeFinalizer final {
+    public:
+        bool finalized(std::string failure = "") const {
+            return NativeActorGroup::finalized_after_close(
+                ref_, group_id_, std::move(failure));
+        }
+    private:
+        friend class NativeActorGroup;
+        RuntimeFinalizer(NativeActorRef ref, std::uint64_t group_id)
+            : ref_(std::move(ref)), group_id_(group_id) {}
+        NativeActorRef ref_;
+        std::uint64_t group_id_;
+    };
 
     /** Enqueue-only reserved CONTROL slot. A GPU callback posts here but
      * cannot execute actor/user handlers on its carrier thread. */
@@ -205,6 +226,20 @@ public:
     }
 
     /**
+     * Capture before closing the group. This capability belongs to the
+     * trusted scheduler/actor runtime, never Oreslang guest user code.
+     * The ordinary group.finalized(ref) remains the primary live-group API.
+     */
+    RuntimeFinalizer runtime_finalizer(const NativeActorRef& ref) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto it = workers_.find(ref.actor_id());
+        if (ref.runtime_id() != runtime_id_ || it == workers_.end()
+            || !(it->second.ref == ref) || it->second.ref.ticket_ != ref.ticket_)
+            throw std::invalid_argument("unknown or stale runtime finalizer");
+        return RuntimeFinalizer(ref, group_id_);
+    }
+
+    /**
      * Successful startup settles the readiness ticket; await spawn yields
      * its existing handle. The native executor/continuation scheduler must
      * invoke this on successful actor initialization.
@@ -238,6 +273,11 @@ public:
                 || it->second.generation != ref.generation()
                 || it->second.ticket != ref.ticket_)
                 return false;
+            // Do not mutate readiness or completion state if CONTROL work
+            // is still active or reserved. Failed admission is side-effect-free.
+            if (ref.ticket_->control_active.load(std::memory_order_acquire)
+                || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                return false;
             // Close may settle readiness after detaching the worker table,
             // outside the group lock. The ticket mutex decides the winner.
             ActorReadyResult rejected{false,
@@ -252,11 +292,6 @@ public:
                 if (!ref.ticket_->result.ready)
                     failure = ref.ticket_->result.error;
             }
-            // Physical finalization must not overtake an admitted or queued
-            // CONTROL turn, including device-result and panic reporting.
-            if (ref.ticket_->control_active.load(std::memory_order_acquire)
-                || ref.ticket_->control_reserved.load(std::memory_order_acquire))
-                return false;
             // Settle done ONLY on acknowledged physical finalization.
             settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
@@ -332,6 +367,11 @@ public:
             if (closed_) return;
             closed_ = true;
             detached.swap(workers_);
+            // Publish only AFTER detaching group ownership. The runtime-held
+            // finalizer may retire an actor following true physical quiescence.
+            for (const auto& item : detached)
+                item.second.ref.ticket_->detached_from_group.store(
+                    true, std::memory_order_release);
         }
         for (auto& item : detached) {
             Entry& worker = item.second;
@@ -399,6 +439,44 @@ private:
         if (it == workers_.end() || !(it->second.ref == ref)
             || it->second.ref.ticket_ != ref.ticket_) return nullptr;
         return &it->second;
+    }
+
+    /**
+     * Same authoritative owner registry as group.finalized(), but without a
+     * NativeActorGroup pointer. A token cannot retire live group workers or
+     * another generation, and duplicates cannot settle DONE twice.
+     */
+    static bool finalized_after_close(const NativeActorRef& ref,
+                                     std::uint64_t group_id,
+                                     std::string failure) {
+        std::vector<NativeActorRef::ReadyContinuation> callbacks;
+        auto& owners = registry();
+        {
+            std::lock_guard<std::mutex> guard(owners.mutex);
+            const auto it = owners.live.find(Key{ref.runtime_id(), ref.actor_id()});
+            if (it == owners.live.end()
+                || it->second.group_id != group_id
+                || it->second.generation != ref.generation()
+                || it->second.ticket != ref.ticket_
+                || !ref.ticket_->detached_from_group.load(std::memory_order_acquire)
+                || ref.ticket_->physically_done.load(std::memory_order_acquire)
+                || ref.ticket_->control_active.load(std::memory_order_acquire)
+                || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                return false;
+            ActorReadyResult rejected{false,
+                failure.empty() ? "actor terminated before ready" : failure};
+            callbacks = settle_ticket(ref, std::move(rejected));
+            if (failure.empty()) {
+                std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
+                if (!ref.ticket_->result.ready)
+                    failure = ref.ticket_->result.error;
+            }
+            settle_done(ref, failure);
+            ref.ticket_->physically_done.store(true, std::memory_order_release);
+            owners.live.erase(it);
+        }
+        notify(callbacks, ref.ticket_->result);
+        return true;
     }
 
     static std::vector<NativeActorRef::ReadyContinuation> settle_ticket(
