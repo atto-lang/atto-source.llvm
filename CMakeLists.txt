@@ -526,4 +526,14 @@ if(BUILD_TESTING)
     add_test(NAME native_scalar_source_actor_backwards_compatibility
         COMMAND oreslang-source-scalar-compat-test)
 
+    add_executable(oreslang-tagged-messagepack-v2-test
+        tests/native_tagged_message_v2_conformance_test.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-tagged-messagepack-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-tagged-messagepack-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_tagged_enum_messagepack_v2_java_parity
+        COMMAND oreslang-tagged-messagepack-v2-test)
+
 endif()
