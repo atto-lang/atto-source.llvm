@@ -331,6 +331,8 @@ public:
         : group_(std::make_shared<NativeActorGroup>(runtime_id, maximum_workers)),
           runtime_id_(runtime_id) {}
 
+    ~NativeActorOwnedHeapGroup() noexcept { group_->close(); }
+
     NativeActorOwnedHeapGroup(const NativeActorOwnedHeapGroup&) = delete;
     NativeActorOwnedHeapGroup& operator=(const NativeActorOwnedHeapGroup&) = delete;
 
