@@ -51,12 +51,12 @@ public:
         return nanos.count() < 0 ? std::chrono::nanoseconds::zero() : nanos;
     }
 
-    std::uint32_t completedBackedgesThisDispatch() const noexcept { return backedges_; }
+    std::uint64_t completedBackedgesThisDispatch() const noexcept { return backedges_; }
 
 private:
     time_point lastCooperate_;
     time_point dispatchStarted_;
-    std::uint32_t backedges_ = 0;
+    std::uint64_t backedges_ = 0;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
