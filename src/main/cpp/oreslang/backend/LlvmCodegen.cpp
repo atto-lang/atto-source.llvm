@@ -129,7 +129,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
-    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
+    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourcePipe;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty()) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -145,6 +145,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        sourcePipe = module.getOrInsertFunction("oreslang_source_actor_pipe",
+            llvm::FunctionType::get(voidTy, {native_ptr, native_ptr}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         for (const auto& actor : source.actors) {
@@ -281,6 +283,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             }
         }
 
+        for (const auto& pipe : fn.actor_pipes)
+            builder.CreateCall(sourcePipe, {actorRefs.at(pipe.producer),
+                                            actorRefs.at(pipe.consumer)});
         for (const auto& send : fn.actor_sends) {
             llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations);
             builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
