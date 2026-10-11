@@ -138,7 +138,27 @@ if(BUILD_TESTING)
         --diagnostic "native defer requires a direct function call or class field assignment")
     oreslang_contract_test(reject_native_finally_override
         native-defer-finally-unsupported.ores
-        --diagnostic "native exception/control effect unsupported")
+        --diagnostic "cannot escape finally")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_try_finally_return_snapshot
+            native-try-finally-return-snapshot.ores
+            --run 246 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(reject_finally_return_override
+        native-finally-return-reject.ores --diagnostic "cannot escape finally")
+    oreslang_contract_test(reject_finally_break_override
+        native-finally-break-reject.ores --diagnostic "cannot escape finally")
+    oreslang_contract_test(reject_finally_continue_override
+        native-finally-continue-reject.ores --diagnostic "cannot escape finally")
+    oreslang_contract_test(reject_try_nonempty_catch
+        native-try-nonempty-catch-reject.ores
+        --diagnostic "native nonthrowing catch requires only an integer literal return")
+    oreslang_contract_test(reject_try_effectful_body
+        native-try-effectful-body-reject.ores
+        --diagnostic "native terminal try supports only return guards and final return")
+    oreslang_contract_test(reject_try_throw_capable_return
+        native-try-throw-capable-return-reject.ores
+        --diagnostic "native protected try return requires nonthrowing scalar/field read")
     # Native source if/else CFG: separate branch states must join safely.
     # Real Clang execution, ASan/UBSan and no-partial-IR rejection matrix.
     if(ORE_CLANG)

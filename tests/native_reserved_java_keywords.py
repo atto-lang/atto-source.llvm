@@ -73,7 +73,7 @@ CASES = {
     ),
     "try-statement": (
         "pub fnc main(): int { try { return 42; } catch (err) { return 0; } }",
-        "native exception/control effect unsupported",
+        "expected 'finally'",
     ),
     "recover-statement": (
         "pub fnc main(): int { recover 42; return 0; }",
