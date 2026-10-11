@@ -1,0 +1,11 @@
+define actor Counter as
+  let count: int = 5;
+  pub fnc add(int by): int { return self.count + by; }
+end
+fnc main(): int {
+  const worker = spawn Counter();
+  await worker.get_ready();
+  const result: int = await worker.add(20);
+  worker.stop();
+  return result;
+}
