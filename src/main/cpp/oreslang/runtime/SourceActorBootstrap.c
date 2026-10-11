@@ -1,15 +1,20 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
+#define SOURCE_GROUP_SLOTS 64u
+#define SOURCE_GROUP_CARRIERS 4u
+#define SOURCE_GROUP_MAILBOX 128u
+
 typedef struct {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
-    OresNativeActorScheduler* scheduler;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
@@ -18,20 +23,42 @@ typedef struct {
     atomic_int_fast64_t last_result;
 } SourceActor;
 
+typedef struct {
+    pthread_mutex_t mutex;
+    OresNativeActorScheduler* scheduler;
+    SourceActor* actors[SOURCE_GROUP_SLOTS];
+    size_t next_slot;
+    size_t live;
+    size_t peak;
+} SourceActorGroup;
+
+/* Process-local trusted-main group; the compiler only supports linear refs
+ * in a zero-argument top-level main. There is exactly one worker pool per
+ * active group, not one pool per actor.
+ */
+static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static void ensure(int condition) { if (!condition) abort(); }
-static void initialize(void* raw, size_t actor, uint64_t payload) {
-    SourceActor* instance = (SourceActor*)raw;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(actor == 0 && payload == 0);
+static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
+static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
+
+static SourceActor* lookup(size_t index) {
+    ensure(index < SOURCE_GROUP_SLOTS);
+    SourceActor* actor = group.actors[index];
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC);
+    return actor;
+}
+static void initialize(void* raw, size_t slot, uint64_t payload) {
+    ensure(raw == &group && payload == 0);
+    SourceActor* instance = lookup(slot);
     OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     instance->constructor(instance->heap, turn.domain, turn.epoch);
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(&instance->initialized, 1, memory_order_release);
 }
-static void deliver(void* raw, size_t actor, uint64_t payload) {
-    SourceActor* instance = (SourceActor*)raw;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC && actor == 0);
+static void deliver(void* raw, size_t slot, uint64_t payload) {
+    ensure(raw == &group);
+    SourceActor* instance = lookup(slot);
     ensure(instance->on_message != NULL);
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
@@ -45,6 +72,16 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+    group_lock();
+    if (!group.scheduler) {
+        ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
+        group.scheduler = ores_native_actor_scheduler_open_control(
+            SOURCE_GROUP_SLOTS, SOURCE_GROUP_MAILBOX, SOURCE_GROUP_CARRIERS,
+            deliver, initialize, &group);
+        ensure(group.scheduler != NULL);
+    }
+    ensure(group.next_slot < SOURCE_GROUP_SLOTS);
+    const size_t slot = group.next_slot++;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
     instance->magic = SOURCE_ACTOR_MAGIC;
@@ -53,37 +90,38 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
     instance->constructor = constructor;
     instance->on_message = on_message;
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
-    instance->scheduler = ores_native_actor_scheduler_open_control(
-        1, 128, 1, deliver, initialize, instance);
-    ensure(instance->scheduler != NULL);
-    instance->ref = ores_native_actor_scheduler_spawn(instance->scheduler, 0);
-    ensure(instance->ref.scheduler_domain != 0);
-    // Initializer runs in reserved CONTROL, which the scheduler admits
-    // ahead of ordinary messages without blocking a source submitter.
+    group.actors[slot] = instance;
+    instance->ref = ores_native_actor_scheduler_spawn(group.scheduler, slot);
+    ensure(instance->ref.scheduler_domain && instance->ref.actor_slot == slot);
+    group.live++;
+    if (group.live > group.peak) group.peak = group.live;
+    /* CONTROL initializes the actual compiler-emitted actor constructor
+     * ahead of normal messages, without blocking the submitting carrier. */
     ensure(ores_native_actor_scheduler_publish_control(
-        instance->scheduler, instance->ref, 0));
-    /* Admission returned immediately. The compiler-generated source main is
-     * not a carrier; an explicit trusted stop provides a teardown barrier.
-     * There is NO source await here and no claim of async get_ready()/get_done().
-     */
+        group.scheduler, instance->ref, 0));
+    group_unlock();
     return instance;
 }
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message != NULL);
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC && instance->on_message);
+    /* The source language still only permits one trusted-main submitter.
+     * Nonblocking bounded sends fail closed on overload. */
     ensure(ores_native_actor_scheduler_send(
-        instance->scheduler, instance->ref, (uint64_t)payload));
+        group.scheduler, instance->ref, (uint64_t)payload));
 }
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(ores_native_actor_scheduler_drain(instance->scheduler));
+    group_lock();
+    const size_t slot = (size_t)instance->ref.actor_slot;
+    ensure(group.scheduler && slot < group.next_slot && group.actors[slot] == instance);
+    ensure(ores_native_actor_scheduler_stop(group.scheduler, instance->ref));
+    /* Wait only for this actor; other actors continue in parallel.
+     * This trusted-main wait is not a source-level await. */
+    ensure(ores_native_actor_scheduler_wait_done(group.scheduler, instance->ref));
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
-    ensure(ores_native_actor_scheduler_stop(instance->scheduler, instance->ref));
-    ensure(ores_native_actor_scheduler_poll_done(instance->scheduler, instance->ref));
-    ores_native_actor_scheduler_retire(instance->scheduler);
-    ensure(ores_native_actor_scheduler_try_destroy(instance->scheduler));
+    ensure(ores_native_actor_scheduler_poll_done(group.scheduler, instance->ref));
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -92,6 +130,24 @@ void oreslang_source_actor_stop(void* opaque) {
         (unsigned long long)atomic_load_explicit(&instance->processed, memory_order_acquire),
         (long long)atomic_load_explicit(&instance->last_result, memory_order_relaxed));
 #endif
+    group.actors[slot] = NULL;
     instance->magic = 0;
     free(instance);
+    ensure(group.live > 0);
+    group.live--;
+    if (group.live == 0) {
+        /* The original group owner has joined every individual actor turn,
+         * so no worker can retain an actor heap before pool destruction. */
+        ores_native_actor_scheduler_retire(group.scheduler);
+        ensure(ores_native_actor_scheduler_try_destroy(group.scheduler));
+        group.scheduler = NULL;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        fprintf(stderr,
+            "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\n",
+            group.next_slot, group.peak, SOURCE_GROUP_CARRIERS);
+#endif
+        group.next_slot = 0;
+        group.peak = 0;
+    }
+    group_unlock();
 }
