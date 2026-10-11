@@ -239,10 +239,10 @@ int main() {
             }
         end
         pub fnc main(): int {
-            const actor = spawn Counter();
-            actor.send(Values.Increment(9));
-            actor.send(Values.Decrement(3));
-            stop actor;
+            const worker = spawn Counter();
+            worker.send(Values.Increment(9));
+            worker.send(Values.Decrement(3));
+            stop worker;
             return 43;
         }
     )");
@@ -256,9 +256,9 @@ int main() {
             receive(Message m) { do match m over { on Values.Increment as n {} } }
         end
         pub fnc main(): int {
-            const actor = spawn Counter();
-            actor.send(Values.Increment(true));
-            stop actor;
+            const worker = spawn Counter();
+            worker.send(Values.Increment(true));
+            stop worker;
             return 43;
         }
     )", "LLVM tagged int send requires a positive or zero int literal");
@@ -268,9 +268,9 @@ int main() {
             receive(Message m) { do match m over { on Values.Increment as n {} } }
         end
         pub fnc main(): int {
-            const actor = spawn Counter();
-            actor.send(Values.Increment);
-            stop actor;
+            const worker = spawn Counter();
+            worker.send(Values.Increment);
+            stop worker;
             return 43;
         }
     )", "LLVM tagged int send requires a positive or zero int literal");
