@@ -19,15 +19,15 @@ struct TargetAbi {
 
     static TargetAbi parse(std::string_view triple) {
         if (triple == "x86_64-unknown-linux-gnu")
-            return {triple, 64, "little", "sysv", "unimplemented"};
+            return {"x86_64-unknown-linux-gnu", 64, "little", "sysv", "unimplemented"};
         if (triple == "aarch64-unknown-linux-gnu")
-            return {triple, 64, "little", "aapcs64", "unimplemented"};
+            return {"aarch64-unknown-linux-gnu", 64, "little", "aapcs64", "unimplemented"};
         if (triple == "i686-unknown-linux-gnu")
-            return {triple, 32, "little", "sysv", "unimplemented"};
+            return {"i686-unknown-linux-gnu", 32, "little", "sysv", "unimplemented"};
         if (triple == "armv7-unknown-linux-gnueabihf")
-            return {triple, 32, "little", "aapcs32-hardfp", "unimplemented"};
+            return {"armv7-unknown-linux-gnueabihf", 32, "little", "aapcs32-hardfp", "unimplemented"};
         if (triple == "wasm32-unknown-unknown")
-            return {triple, 32, "little", "wasm-c", "experimental-wasm32-ir"};
+            return {"wasm32-unknown-unknown", 32, "little", "wasm-c", "experimental-wasm32-ir"};
         throw std::invalid_argument("unsupported target triple");
     }
 
