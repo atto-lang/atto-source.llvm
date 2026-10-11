@@ -65,6 +65,15 @@ int oreslang_source_actor_send_wire(
  * contracts must remain stable for the duration of the registration call.
  * Duplicate schema IDs, invalid digests, empty/oversized domains and
  * unsupported descriptors fail closed without spawning an actor.
+ *
+ * send_variant returns zero for unknown/forged/noncanonical envelopes or
+ * queue saturation; it never dispatches by payload-shape guessing. The
+ * registered ordinal is independent of the declared enum wire tag.
+ *
+ * Trusted stop closes producer admission and waits for already-entered
+ * source send calls before releasing contracts. Callers must still fence
+ * *new* calls to opaque actor pointers before teardown starts: there is no
+ * stale-pointer-safe ref-counted guest handle ABI yet.
  */
 typedef int64_t (*OresSourceActorVariantMessage)(
     OresActorI64Heap*, uint64_t domain, uint64_t epoch,
