@@ -238,6 +238,7 @@ void ores_mp2_owned_release(OresMp2Owned* v) {
 struct OresMp2ActorGroup {
     OresNativeActorScheduler* scheduler;
     OresMp2Contract* contracts;
+    unsigned char* spawned;
     size_t actors;
     OresMp2OnMessage callback;
     void* callback_context;
@@ -268,28 +269,29 @@ OresMp2ActorGroup* ores_mp2_group_open(size_t actors, size_t capacity,
     OresMp2ActorGroup* g = calloc(1, sizeof(*g));
     if (!g) return NULL;
     g->contracts = calloc(actors, sizeof(*g->contracts));
-    if (!g->contracts) { free(g); return NULL; }
+    g->spawned = calloc(actors, 1);
+    if (!g->contracts || !g->spawned) { free(g->spawned); free(g->contracts); free(g); return NULL; }
     g->actors = actors; g->callback = callback; g->callback_context = context;
     g->scheduler = ores_native_actor_scheduler_open(actors, capacity, carriers,
                                                     deliver, g);
-    if (!g->scheduler) { free(g->contracts); free(g); return NULL; }
+    if (!g->scheduler) { free(g->spawned); free(g->contracts); free(g); return NULL; }
     return g;
 }
 int ores_mp2_group_contract(OresMp2ActorGroup* g, size_t slot,
                             OresMp2Contract contract) {
     if (!g || slot >= g->actors || g->contracts[slot].schema_id
             || !contract.schema_id || !contract.shape || !contract.shape_sha256
-            || ores_native_actor_scheduler_poll_ready(g->scheduler,
-                    (OresNativeActorRef){0, slot, 0})) return 0;
-    /* Callers must install contracts before spawn. poll_ready with null
-     * generation is always false; group_spawn independently enforces it. */
+            || g->spawned[slot]) return 0;
+    /* Configuration is single-threaded and must finish before guest send. */
     g->contracts[slot] = contract;
     return 1;
 }
 OresMp2ActorRef ores_mp2_group_spawn(OresMp2ActorGroup* g, size_t slot) {
     OresMp2ActorRef empty = {0, 0, 0};
-    if (!g || slot >= g->actors || !g->contracts[slot].schema_id) return empty;
-    return wrap(ores_native_actor_scheduler_spawn(g->scheduler, slot));
+    if (!g || slot >= g->actors || !g->contracts[slot].schema_id || g->spawned[slot]) return empty;
+    OresMp2ActorRef ref = wrap(ores_native_actor_scheduler_spawn(g->scheduler, slot));
+    if (ref.generation) g->spawned[slot] = 1;
+    return ref;
 }
 int ores_mp2_group_send(OresMp2ActorGroup* g, OresMp2ActorRef target,
                         const uint8_t* wire, size_t size) {
@@ -319,6 +321,7 @@ int ores_mp2_group_destroy(OresMp2ActorGroup* g) {
     ores_native_actor_scheduler_retire(g->scheduler);
     if (!ores_native_actor_scheduler_drain(g->scheduler)
             || !ores_native_actor_scheduler_try_destroy(g->scheduler)) return 0;
+    free(g->spawned);
     free(g->contracts);
     free(g);
     return 1;
