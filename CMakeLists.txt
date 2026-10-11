@@ -147,14 +147,14 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_source_await_ready source-actor-await-ready.ores
-            --run 43 --clang "${ORE_CLANG}" --runs 25
+            --run 43 --clang "${ORE_CLANG}" --runs 100
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "SOURCE_AWAIT_READY_CONTINUATION_PASS root_lane=1 real_future=1"
             --stderr-count 1)
         oreslang_contract_test(native_asan_source_await_ready source-actor-await-ready.ores
-            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 10
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
