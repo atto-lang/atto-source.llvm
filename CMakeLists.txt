@@ -92,6 +92,16 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
     set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
+    add_executable(oreslang-native-actor-lane-test
+        tests/native_actor_control_data_lane_test.cpp)
+    target_include_directories(oreslang-native-actor-lane-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-lane-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-lane-test PRIVATE Threads::Threads)
+    add_test(NAME native_per_actor_control_data_scheduler_lanes COMMAND oreslang-native-actor-lane-test)
+    set_tests_properties(native_per_actor_control_data_scheduler_lanes PROPERTIES TIMEOUT 25)
+
     add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
