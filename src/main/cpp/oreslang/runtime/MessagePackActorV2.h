@@ -38,6 +38,15 @@ int ores_mp2_contract_valid(const OresMp2Contract* contract);
  * after reserve-and-snapshot by source actor variant dispatch. */
 int ores_mp2_validate_owned(const OresMp2Contract* contract,
                             const OresMp2Owned* snapshot);
+/* Companion to validate_owned: verify the compiler-pinned NOMINAL identity
+ * stored inside Java tagged enum payload [enum_name, int_tag, data?].
+ * Only call on a snapshot that already passed ores_mp2_validate_owned.
+ * The schema/digest alone cannot attest a declared enum tag: two different
+ * numbers are both valid shape I. This function fails closed on an incorrect
+ * tuple arity, enum owner or declared positive signed-32 tag. */
+int ores_mp2_tagged_identity_matches_validated(
+    const OresMp2Contract* contract, const OresMp2Owned* validated,
+    const char* enum_name, uint32_t declared_tag);
 int ores_mp2_validate_copy(const OresMp2Contract* contract,
                            const uint8_t* bytes, size_t size, OresMp2Owned* out);
 void ores_mp2_owned_release(OresMp2Owned* value);
