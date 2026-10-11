@@ -175,6 +175,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
 
+    # Reserved supervisor CONTROL lane and lifecycle Future wakeup.
+    add_executable(oreslang-native-supervisor-control-test
+        tests/native_supervisor_control_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c)
+    target_include_directories(oreslang-native-supervisor-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-control-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_reserved_control_future
+        COMMAND oreslang-native-supervisor-control-test)
+    set_tests_properties(native_supervisor_reserved_control_future PROPERTIES TIMEOUT 30)
+
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
     add_executable(oreslang-actor-owned-heap-test
