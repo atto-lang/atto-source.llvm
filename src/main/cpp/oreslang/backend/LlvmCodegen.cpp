@@ -292,17 +292,48 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             lexical_slots.push_back({slot, binding.heap_owned, 8});
         }
         std::vector<const Expression*> deferred_calls;
+        auto lower_effect = [&](const Statement& effect) {
+            if (effect.kind == Statement::Kind::FieldWrite) {
+                llvm::Value* updated = lower(*effect.expression, builder, i64,
+                    storage, field_storage, declarations);
+                builder.CreateStore(updated, field_storage.at(
+                    field_key(effect.receiver, effect.field)));
+            } else if (effect.kind == Statement::Kind::Call) {
+                lower(*effect.expression, builder, i64, storage, field_storage, declarations);
+            } else {
+                throw std::runtime_error("unsupported native conditional arm");
+            }
+        };
         for (const auto& stmt : fn.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
                 deferred_calls.push_back(stmt.expression.get());
                 continue;
             }
-            if (stmt.kind == Statement::Kind::FieldWrite) {
-                llvm::Value* updated = lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
-                builder.CreateStore(updated, field_storage.at(field_key(stmt.receiver, stmt.field)));
-            } else {
-                lower(*stmt.expression, builder, i64, storage, field_storage, declarations);
+            if (stmt.kind == Statement::Kind::Conditional) {
+                llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
+                    storage, field_storage, declarations);
+                llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
+                    storage, field_storage, declarations);
+                llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "if.else.eq");
+                llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
+                    context, "if.then", function);
+                llvm::BasicBlock* elseBlock = llvm::BasicBlock::Create(
+                    context, "if.else", function);
+                llvm::BasicBlock* mergeBlock = llvm::BasicBlock::Create(
+                    context, "if.merge", function);
+                builder.CreateCondBr(condition, thenBlock, elseBlock);
+                builder.SetInsertPoint(thenBlock);
+                for (const auto& effect : stmt.then_statements)
+                    lower_effect(effect);
+                builder.CreateBr(mergeBlock);
+                builder.SetInsertPoint(elseBlock);
+                for (const auto& effect : stmt.else_statements)
+                    lower_effect(effect);
+                builder.CreateBr(mergeBlock);
+                builder.SetInsertPoint(mergeBlock);
+                continue;
             }
+            lower_effect(stmt);
         }
 
         // Emit observable actor effects in source order. Reordering all sends
