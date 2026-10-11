@@ -275,6 +275,44 @@ int main() {
         control->close();
     }
 
+    // A decision callback may request self-close before it returns.
+    // That request must fence *new* CONTROL admission immediately, even
+    // though the current authorized effect has not committed yet.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::shared_ptr<SupervisorProcess> process;
+        std::atomic<unsigned> rejected{0};
+        process = std::make_shared<SupervisorProcess>(
+            5507, 55, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return SupervisorProcess::Directive::stop;
+            },
+            [&](const SupervisorProcess::Resolution&) {
+                process->close();
+                if (process->healthy()) {
+                    throw std::runtime_error("self-close still reports healthy");
+                }
+                try {
+                    process->accept(SupervisorFailureNotice{
+                        5507, 55, 2, 1, std::nullopt, "late after close"});
+                } catch (const std::logic_error&) {
+                    ++rejected;
+                }
+            });
+        process->accept(SupervisorFailureNotice{
+            5507, 55, 1, 1, std::nullopt, "first"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (process->resolved() == 0
+                && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(rejected.load() == 1 && process->resolved() == 1,
+              "native reentrant close admitted another CONTROL notice");
+        check(process->undelivered() == 1 && process->pending() == 0,
+              "native close request lost rejected CONTROL accounting");
+        control->close();
+    }
+
     // Terminal policy failure must release its lease and discard retained
     // owned notice data without making an ambiguous lifecycle decision.
     {
