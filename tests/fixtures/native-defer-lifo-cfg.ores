@@ -16,7 +16,7 @@ fnc tick(borrow mut Counter c, int guard): int {
   return 1;
 }
 pub fnc main(): int {
-  let Counter c = new Counter();
+  let mut Counter c = new Counter();
   tick(rt borrow mut c, 0);
   tick(rt borrow mut c, 1);
   return c.value;
