@@ -58,6 +58,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
+    # Field-wise native destruction verifier and concrete owner flags.
+    # Separate from unsupported source-level nontrivial class drop glue.
+    add_executable(oreslang-ownership-drop-plan-test
+        tests/ownership_drop_plan_test.cpp)
+    target_include_directories(oreslang-ownership-drop-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-ownership-drop-plan-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_cfg_exact_once_field_destruction
+        COMMAND oreslang-ownership-drop-plan-test)
     add_executable(oreslang-dop-kernel-test tests/dop_kernel_lowering_test.cpp)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
