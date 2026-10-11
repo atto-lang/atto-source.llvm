@@ -228,6 +228,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_pipe_role_and_type_contract
         COMMAND oreslang-native-actor-pipe-contract-test)
+    add_executable(oreslang-native-actor-pipe-transport-test
+        tests/native_actor_pipe_transport_test.cpp)
+    target_include_directories(oreslang-native-actor-pipe-transport-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pipe-transport-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-pipe-transport-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_pipe_bounded_transport
+        COMMAND oreslang-native-actor-pipe-transport-test)
+    set_tests_properties(native_actor_pipe_bounded_transport PROPERTIES TIMEOUT 25)
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
