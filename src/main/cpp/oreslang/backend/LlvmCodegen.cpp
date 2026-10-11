@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/frontend/ClientContractHeader.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -214,6 +215,38 @@ std::string emit_verified_llvm_ir(const Program& source) {
     if (llvm::verifyModule(module, &errors)) {
         errors.flush();
         throw std::runtime_error("invalid generated LLVM module: " + diagnostics);
+    }
+    std::string result;
+    llvm::raw_string_ostream output(result);
+    module.print(output, nullptr);
+    output.flush();
+    return result;
+}
+
+
+std::string emit_verified_client_contract_llvm_ir(const ClientContractHeader& source) {
+    llvm::LLVMContext context;
+    llvm::Module module("oreslang-client-contract-signatures", context);
+    // Proposed native wire-independent String ABI: a pointer plus byte length.
+    // Signature lowering is deliberately declaration-only. Ownership, validity,
+    // allocator, call frames and RPC dispatch must be implemented and tested
+    // before any generated SDK can be admitted.
+    llvm::Type* data = llvm::Type::getInt8PtrTy(context);
+    llvm::Type* length = llvm::Type::getInt64Ty(context);
+    llvm::StructType* string_type = llvm::StructType::create(
+        context, {data, length}, "oreslang.string");
+    for (const auto& method : source.methods) {
+        std::vector<llvm::Type*> parameters(method.parameters.size(), string_type);
+        llvm::FunctionType* signature = llvm::FunctionType::get(
+            string_type, parameters, false);
+        llvm::Function::Create(signature, llvm::Function::ExternalLinkage,
+                               source.name + "." + method.name, module);
+    }
+    std::string diagnostic;
+    llvm::raw_string_ostream errors(diagnostic);
+    if (llvm::verifyModule(module, &errors)) {
+        errors.flush();
+        throw std::runtime_error("invalid generated LLVM contract IR: " + diagnostic);
     }
     std::string result;
     llvm::raw_string_ostream output(result);

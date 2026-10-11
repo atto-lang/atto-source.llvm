@@ -24,3 +24,15 @@ Native parity requires String representation and lifetime semantics, actual
 RPC client methods, serialization+validation, cancellation and suspension
 effects, JNI/FFI boundary tests where applicable, plus cross-backend
 positive/negative fixture execution with TJSV current-input admission.
+
+
+## Experimental verified LLVM contract signatures
+
+`oreslang-llvmc --emit-contract-llvm generated-client-contract.ores` emits
+LLVM module declarations with a proposed `%oreslang.string = type { ptr, i64 }`
+(pointer, byte length) representation. This path calls LLVM's module verifier
+and preserves the exact contract method names and argument arity. The command
+never creates executable RPC functions; an external implementation, allocator,
+UTF-8 representation/ownership proof, wire codec, async cancellation, and
+GraalVM parity tests remain required. **Do not use LLVM declaration success as
+TJSV evidence or admit this target for publishing.**

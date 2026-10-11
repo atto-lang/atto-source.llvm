@@ -28,6 +28,10 @@ int main(int argc, char** argv) {
         throw std::runtime_error("generated golden contract declaration mismatch");
     }
     reject("pub define contract C as fnc async() => String; end");
+    for (const auto* word : {"over", "structural", "gpu", "quantum", "borrow", "int"}) {
+        reject(std::string("pub define contract C as fnc ") + word + "() => String; end");
+        reject(std::string("pub define contract C as fnc ok(String ") + word + ") => String; end");
+    }
     reject("pub define contract C as fnc a(String x, String x) => String; end");
     reject("pub define contract C as fnc a() => String; fnc a() => String; end");
     reject("pub define contract C as async fnc a() => String; end");

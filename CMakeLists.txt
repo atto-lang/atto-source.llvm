@@ -38,6 +38,11 @@ if(BUILD_TESTING)
         COMMAND oreslang-contract-header-test
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generated-client-contract.ores")
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME generated_oreslang_string_contract_llvm_ir
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract_signature_ir.py"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generated-client-contract.ores")
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}

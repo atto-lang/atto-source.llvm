@@ -94,7 +94,8 @@ const std::unordered_set<std::string> KEYWORDS = {
     "void",
     "writech",
     "yield",
-    "String", "suspend", "owned", "critical"
+    "String", "suspend", "owned", "critical", "over", "structural",
+    "gpu", "quantum", "borrow", "int"
 };
 bool identifier_start(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
