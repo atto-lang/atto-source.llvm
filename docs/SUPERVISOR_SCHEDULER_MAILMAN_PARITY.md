@@ -66,3 +66,23 @@ See Java's detailed [OTP-inspired architecture proposal](https://github.com/ores
 (the linked path will exist on Java main after its accompanying PR merges).
 In-place policy code replacement with safepoints, state migration, pinned
 continuations and rollback is **not** implemented by this native registry.
+
+## Typed actor pipeline parity extension
+
+`ActorPipeContract.hpp` implements native host/compiler role admission for
+readable/transform/writable/duplex stages with adjacent payload type checks.
+It forbids SUPERVISOR and ordinary unmarked actors in all stage positions.
+`native_actor_pipe_role_and_type_contract` is added to CTest. Java's
+`ActorPipelineContract` mirrors the nominal stage compatibility rules.
+
+Both frontends deliberately reject new source `define readable pipe actor`
+and `spawn A() pipe spawn B()` syntax pending dedicated PipelineExpr
+lowering, bounded directional data transport, explicit reverse reply
+capability and the ActorGroup-supervisor admission transaction.
+See Java's [typed pipeline contract](https://github.com/ores-truffle-oreslang/oreslang-source.java/blob/hardening/supervisor-group-binding-20261011/docs/ACTOR_PIPELINES_TYPED_SUPERVISION.md).
+
+Pipeline actors are supervised *workers*; supervision trees do not
+participate in normal forward-data routing, and an ordinary actor's reply
+target is not automatically its supervising actor. Context code generation,
+bidirectional replies, terminal shutdown and hot reload are future
+runtime implementation gates, **not** proven by the admission test.
