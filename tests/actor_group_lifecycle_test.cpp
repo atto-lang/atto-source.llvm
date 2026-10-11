@@ -67,7 +67,7 @@ int main() {
         run_one(); // process handles C and suspends
         check(process->callback_active() && entered == 1 && decisions.empty(),
               "await released the exclusive logical supervisor lease");
-        check(dispatcher.size() == 1,
+        check(dispatcher.empty() && process->pending() == 2,
               "second supervisor policy was executed while first suspended");
         check(process->resume(
               oreslang::runtime::SupervisorProcess::Directive::escalate),
