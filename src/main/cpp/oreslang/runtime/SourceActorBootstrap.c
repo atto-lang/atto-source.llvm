@@ -148,6 +148,16 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
 }
+/* Compiler contracts are stable for the duration of the construction
+ * call, but not necessarily afterwards. Validate only our own immutable
+ * snapshot, not borrowed fields that can change after an initial check.
+ */
+static size_t source_bounded_length(const char* string, size_t max_length) {
+    if (!string) return max_length + 1;
+    for (size_t i = 0; i <= max_length; ++i)
+        if (string[i] == '\0') return i;
+    return max_length + 1;
+}
 /* Returns zero only for invalid trusted registration. Configuration and
  * teardown are single-owner operations; concurrent host senders must be
  * fenced before stop to avoid use-after-free of the opaque actor handle.
@@ -158,8 +168,35 @@ static void* source_spawn(
     const OresMp2Contract* contract) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
     ensure((on_message != NULL) != (on_wire != NULL));
-    if (on_wire && (!contract || !ores_mp2_contract_valid(contract)))
-        return NULL;
+    char* registered_schema = NULL;
+    char* registered_shape = NULL;
+    uint8_t registered_digest[32];
+    if (on_wire) {
+        if (!contract || !contract->schema_id || !contract->shape
+                || !contract->shape_sha256) return NULL;
+        size_t slen = source_bounded_length(contract->schema_id, 256);
+        size_t tlen = source_bounded_length(contract->shape, 4096);
+        if (!slen || slen > 256 || !tlen || tlen > 4096) return NULL;
+        registered_schema = malloc(slen + 1);
+        registered_shape = malloc(tlen + 1);
+        if (!registered_schema || !registered_shape) {
+            free(registered_schema);
+            free(registered_shape);
+            return NULL;
+        }
+        memcpy(registered_schema, contract->schema_id, slen + 1);
+        memcpy(registered_shape, contract->shape, tlen + 1);
+        memcpy(registered_digest, contract->shape_sha256, sizeof(registered_digest));
+        OresMp2Contract snapshot = {
+            registered_schema, registered_shape, registered_digest
+        };
+        if (!ores_mp2_contract_valid(&snapshot)) {
+            free(registered_schema);
+            free(registered_shape);
+            memset(registered_digest, 0, sizeof(registered_digest));
+            return NULL;
+        }
+    }
     group_lock();
     if (!group.scheduler) {
         ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0
@@ -184,14 +221,10 @@ static void* source_spawn(
     instance->on_wire = on_wire;
     atomic_init(&instance->wire_reserved, 0);
     if (on_wire) {
-        const size_t schema_size = strlen(contract->schema_id) + 1;
-        const size_t shape_size = strlen(contract->shape) + 1;
-        instance->owned_schema = malloc(schema_size);
-        instance->owned_shape = malloc(shape_size);
-        ensure(instance->owned_schema && instance->owned_shape);
-        memcpy(instance->owned_schema, contract->schema_id, schema_size);
-        memcpy(instance->owned_shape, contract->shape, shape_size);
-        memcpy(instance->wire_sha, contract->shape_sha256, 32);
+        instance->owned_schema = registered_schema;
+        instance->owned_shape = registered_shape;
+        memcpy(instance->wire_sha, registered_digest, sizeof(instance->wire_sha));
+        memset(registered_digest, 0, sizeof(registered_digest));
         instance->wire_contract = (OresMp2Contract){
             instance->owned_schema, instance->owned_shape, instance->wire_sha
         };
