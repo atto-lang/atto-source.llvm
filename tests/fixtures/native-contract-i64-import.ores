@@ -1,0 +1,4 @@
+import contract MathContract from "./MathContract.ores";
+define module Math conforms MathContract as
+  pub fnc main(): int { return 42; }
+end
