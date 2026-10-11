@@ -36,7 +36,8 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-contract-header-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME generated_oreslang_string_contract_header
         COMMAND oreslang-contract-header-test
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generated-client-contract.ores")
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/generated-client-contract.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/oreslang-route-contract.ores")
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME generated_oreslang_string_contract_llvm_ir
         COMMAND "${Python3_EXECUTABLE}"
