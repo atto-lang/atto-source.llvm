@@ -478,4 +478,70 @@ int main() {
         actor->get_done().get();
     }
 
+
+    {
+        // Nonblocking DONE subscriber must enqueue CONTROL, not invoke guest
+        // continuation inline on the retiring child's completion thread.
+        NativeActorGroup parent(8401, 1);
+        auto supervisor = parent.adopt(8401, 1, 1, [] {});
+        check(parent.mark_ready(supervisor), "supervisor not ready");
+        int resumed = 0;
+        int observed = 0;
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> child;
+        {
+            NativeActorGroup children(8402, 1);
+            auto worker = children.adopt(8402, 1, 1, [] {});
+            child.emplace(worker);
+            finalizer.emplace(children.runtime_finalizer(worker));
+            check(children.mark_ready(worker), "child not ready");
+            worker.when_done([&](const auto& done) {
+                check(done.success && done.error.empty(),
+                      "successful child DONE reported failure");
+                ++observed;
+                check(parent.enqueue_control(supervisor, [&] { ++resumed; }),
+                      "DONE could not enqueue parent CONTROL continuation");
+            });
+            children.close();
+            check(observed == 0, "close prematurely published DONE callback");
+        }
+        check(finalizer->finalized(), "late child completion was not accepted");
+        check(observed == 1 && resumed == 0,
+              "child finalizer ran a guest continuation on host thread");
+        check(parent.has_pending_control(supervisor),
+              "nonblocking DONE callback did not reserve supervisor CONTROL");
+        check(parent.run_control_turn(supervisor) == NativeActorGroup::ControlTurn::executed,
+              "scheduler did not run resumed DONE on parent turn");
+        check(resumed == 1, "DONE resumed more or fewer than once");
+        int late = 0;
+        child->when_done([&](const auto& done) {
+            check(done.success, "late DONE observer did not see successful result");
+            ++late;
+        });
+        check(late == 1, "late DONE subscription was not settled immediately");
+        check(!finalizer->finalized(), "duplicate DONE ack was admitted");
+        check(parent.finalized(supervisor), "supervisor could not retire after continuation");
+    }
+    {
+        // Failed child startup propagates to nonblocking DONE subscribers
+        // once, even when the group has already been destroyed.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        int failed = 0;
+        {
+            NativeActorGroup group(8403, 1);
+            auto child = group.adopt(8403, 1, 1, [] {});
+            finalizer.emplace(group.runtime_finalizer(child));
+            child.when_done([&](const auto& result) {
+                check(!result.success && !result.error.empty(),
+                      "failed child DONE lost its terminal error");
+                ++failed;
+            });
+            group.close();
+            check(failed == 0, "stop or close fabricated failed DONE");
+        }
+        check(finalizer->finalized("startup failed"), "failure completion lost");
+        check(failed == 1, "terminal error subscriber notified incorrectly");
+        check(!finalizer->finalized("duplicate"), "duplicate failure ack accepted");
+    }
+
 }
