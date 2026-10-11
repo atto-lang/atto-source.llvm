@@ -443,6 +443,14 @@ private:
                 validate_expression(*expr.left, parameters, functions);
                 return;
             case Expression::Kind::Call: {
+                // Local bindings and parameters shadow global functions.
+                // A scalar with the same name is not a callable value; do not
+                // silently bypass lexical lookup to invoke an unrelated fnc.
+                if (parameters.count(expr.name) != 0) {
+                    throw std::runtime_error("cannot call shadowed local '"
+                                             + expr.name + "' at byte "
+                                             + std::to_string(expr.offset));
+                }
                 const auto found = functions.find(expr.name);
                 if (found == functions.end() || found->second != expr.arguments.size()) {
                     throw std::runtime_error("unknown function or wrong call arity '"
