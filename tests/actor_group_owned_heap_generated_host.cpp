@@ -9,6 +9,8 @@
 
 extern "C" {
 OresActorI64Fields* ores_actor_Counter_init(OresActorI64Heap*, std::uint64_t, std::uint64_t);
+std::uint64_t ores_actor_Counter_layout_hash();
+std::uint32_t ores_actor_Counter_layout_version();
 std::int64_t ores_actor_Counter_add(OresActorI64Heap*, std::uint64_t, std::uint64_t,
                                     OresActorI64Fields*, std::int64_t);
 void ores_actor_Counter_drop(OresActorI64Heap*, std::uint64_t, std::uint64_t,
@@ -37,9 +39,27 @@ static OresActorI64Fields* failed_init(OresActorI64Heap*, std::uint64_t, std::ui
 int main() {
     try {
         std::atomic<int> queued{0};
+        constexpr std::uint64_t shared_java_llvm_expected = UINT64_C(0xb2d57409773a17ed);
         NativeActorFieldEntrypoints generated{
-            &ores_actor_Counter_init, &ores_actor_Counter_drop
+            &ores_actor_Counter_init, &ores_actor_Counter_drop,
+            &ores_actor_Counter_layout_hash, &ores_actor_Counter_layout_version,
+            2, shared_java_llvm_expected
         };
+        check(ores_actor_Counter_layout_hash() == shared_java_llvm_expected,
+              "LLVM layout hash diverges from Java/Graal v1 contract");
+        check(ores_actor_Counter_layout_version() == 1, "wrong LLVM layout revision");
+        {
+            NativeActorOwnedHeapGroup wrong_group(510, 1);
+            auto broken = generated;
+            broken.expected_layout_hash ^= 1;
+            bool blocked = false;
+            try {
+                (void) wrong_group.spawn(9, 1, 16, broken, [&] { ++queued; });
+            } catch (const std::invalid_argument&) { blocked = true; }
+            check(blocked, "mismatched Java/LLVM actor layout was admitted");
+            check(wrong_group.lifecycle().worker_count() == 0,
+                  "rejected layout left an actor registered");
+        }
         {
             NativeActorOwnedHeapGroup group(511, 4);
             auto worker = group.spawn(11, 3, 16, generated, [&] { ++queued; });
@@ -115,7 +135,8 @@ int main() {
         }
         {
             NativeActorOwnedHeapGroup group(514, 2);
-            NativeActorFieldEntrypoints broken{&failed_init, &ores_actor_Counter_drop};
+            auto broken = generated;
+            broken.init = &failed_init;
             auto worker = group.spawn(41, 9, 16, broken, [&] { ++queued; });
             auto ref = worker->ref();
             check(!worker->initialize(), "throwing initializer was accepted");
