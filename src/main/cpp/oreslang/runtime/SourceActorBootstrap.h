@@ -113,6 +113,17 @@ void* oreslang_source_actor_spawn_tagged_variants(
     OresSourceActorVariantMessage on_variant, uint64_t fields,
     const OresMp2Contract* contracts,
     const OresSourceNominalCase* identities, size_t contract_count);
+
+/* Compiler-only bounded linear pipeline; trusted zero-arg main configures
+ * exactly three live nominal-compatible actors before any DATA ingress.
+ * Route emission requires a scheduler-issued active actor DATA callback.
+ * No guest can forge a pointer, router port or source reply authority.
+ * This milestone supports a single in-flight round trip per pipeline. */
+void oreslang_source_actor_pipeline_connect(void* source, void* transform, void* sink);
+void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
+                                               uint64_t variant, int64_t value);
+void oreslang_source_actor_pipeline_expect(void* source, int64_t expected);
+
 void oreslang_source_actor_stop(void* actor);
 /* A source-compiled continuation runs on the root ActorGroup CONTROL lane.
  * Only the outer trusted-main ABI waits to return the program's i64 result;
