@@ -91,7 +91,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){}<> ,:;+-*=.").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){}<>|,:;+-*=.").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -248,51 +248,97 @@ private:
             require("(");
             require("ActorMail");
             require("<");
-            require("{");
-            value.accepted_message_field = identifier();
-            require(":");
-            require("int");
-            require("}");
+            do {
+                require("{");
+                const std::string field = identifier();
+                require(":");
+                require("int");
+                require("}");
+                if (std::find(value.accepted_message_variants.begin(),
+                              value.accepted_message_variants.end(), field)
+                        != value.accepted_message_variants.end())
+                    fail("ambiguous duplicate actor message variant");
+                value.accepted_message_variants.push_back(field);
+                if (value.accepted_message_variants.size() > 16)
+                    fail("actor message union exceeds 16 variants");
+            } while (accept("|"));
+            value.accepted_message_field = value.accepted_message_variants.front();
             require(">");
             const std::string envelope = identifier();
             require(")");
             require(":");
             require("void");
             require("{");
-            // The i64 field is the single typed message payload in this
-            // pilot. ActorMail<{by:int}> guarantees mail.value.by at compile
-            // time; source cannot access other keys or a native heap pointer.
             current_mail_envelope_ = envelope;
-            current_mail_field_ = value.accepted_message_field;
-            value.parameters.push_back(value.accepted_message_field);
-            while (token_.text == "self") {
-                // A receive handler may mutate its owned i64 fields; the
-                // terminal self.end() is mandatory in this one-shot pilot.
-                const auto offset = token_.offset;
-                advance();
+            for (const auto& field : value.accepted_message_variants)
+                value.parameters.push_back(field);
+            if (value.accepted_message_variants.size() > 1) {
+                require("match");
+                require(envelope);
                 require(".");
-                const bool actor_end = accept("end");
-                const std::string target = actor_end ? "end" : identifier();
-                if (actor_end) {
-                    require("(");
-                    require(")");
-                    require(";");
-                    value.ends_after_receive = true;
-                    break;
+                require("value");
+                while (accept("is")) {
+                    ActorVariantArm arm;
+                    arm.offset = token_.offset;
+                    require("{");
+                    arm.field = identifier();
+                    require(":");
+                    require("int");
+                    require("}");
+                    require("-");
+                    require(">");
+                    require("{");
+                    current_mail_field_ = arm.field;
+                    while (token_.text == "self") {
+                        ActorAssignment assignment;
+                        assignment.offset = token_.offset;
+                        advance();
+                        require(".");
+                        assignment.field = identifier();
+                        require("=");
+                        assignment.value = expression();
+                        require(";");
+                        arm.assignments.push_back(std::move(assignment));
+                    }
+                    require("}");
+                    value.variant_arms.push_back(std::move(arm));
                 }
-                ActorAssignment assignment;
-                assignment.offset = offset;
-                assignment.field = target;
-                require("=");
-                assignment.value = expression();
+                require("end");
+                // Multi-message actors remain alive across receives. They
+                // must be stopped by supervisor/control rather than a match.
+                require("return");
                 require(";");
-                value.assignments.push_back(std::move(assignment));
+                require("}");
+            } else {
+                // Preserve the original one-shot typed message pilot.
+                current_mail_field_ = value.accepted_message_field;
+                while (token_.text == "self") {
+                    const auto offset = token_.offset;
+                    advance();
+                    require(".");
+                    const bool actor_end = accept("end");
+                    const std::string target = actor_end ? "end" : identifier();
+                    if (actor_end) {
+                        require("(");
+                        require(")");
+                        require(";");
+                        value.ends_after_receive = true;
+                        break;
+                    }
+                    ActorAssignment assignment;
+                    assignment.offset = offset;
+                    assignment.field = target;
+                    require("=");
+                    assignment.value = expression();
+                    require(";");
+                    value.assignments.push_back(std::move(assignment));
+                }
+                if (!value.ends_after_receive)
+                    fail("typed single-message pilot requires self.end() after state handling");
+                require("return");
+                require(";");
+                require("}");
             }
-            if (!value.ends_after_receive)
-                fail("typed receive pilot requires self.end() after state handling");
-            require("return");
-            require(";");
-            require("}");
             current_mail_envelope_.clear();
             current_mail_field_.clear();
             value.result = make_expression(Expression::Kind::Integer, value.offset);
@@ -570,6 +616,27 @@ private:
                     validate_expression(*assignment.value, params, no_calls, &fields);
                 }
                 validate_expression(*method.result, params, no_calls, &fields);
+                if (method.name == "receive" && method.accepted_message_variants.size() > 1) {
+                    std::unordered_set<std::string> matched;
+                    for (const auto& arm : method.variant_arms) {
+                        if (std::find(method.accepted_message_variants.begin(),
+                                      method.accepted_message_variants.end(), arm.field)
+                                == method.accepted_message_variants.end())
+                            throw std::runtime_error("match arm selects undeclared actor message variant '" + arm.field + "'");
+                        if (!matched.insert(arm.field).second)
+                            throw std::runtime_error("duplicate actor message match arm '" + arm.field + "'");
+                        std::unordered_set<std::string> arm_bindings{arm.field};
+                        for (const auto& assignment : arm.assignments) {
+                            if (!fields.count(assignment.field))
+                                throw std::runtime_error("unknown actor assignment field '" + assignment.field + "'");
+                            if (!mutable_fields.at(assignment.field))
+                                throw std::runtime_error("cannot assign immutable actor field '" + assignment.field + "'");
+                            validate_expression(*assignment.value, arm_bindings, no_calls, &fields);
+                        }
+                    }
+                    if (matched.size() != method.accepted_message_variants.size())
+                        throw std::runtime_error("non-exhaustive actor message match");
+                }
             }
             if (program.script) {
                 const auto& script = *program.script;
