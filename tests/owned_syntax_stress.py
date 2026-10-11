@@ -140,14 +140,14 @@ pub fnc main(): int {
                     # opaque ptr. Count actual call sites, not IR type text.
                     allocation_calls = sum(
                         "call " in line and
-                        "@oreslang_owned_i64_region_new(" in line
+                        "@oreslang_owned_i64_region_new_handle(" in line
                         for line in ir.splitlines())
                     check(allocation_calls == owned_count,
                           f"native owners mismatch in {path}")
                     # A shared exit epilogue handles all guarded-return
                     # paths; concrete per-owner flags still prevent double
                     # drops after an explicit move.
-                    check(ir.count("call void @oreslang_owned_i64_region_drop")
+                    check(ir.count("call void @oreslang_owned_i64_region_drop_handle(")
                           == owned_count,
                           f"missing or duplicate shared owner drops: {path}")
                     check(ir.count("call void @oreslang_owned_i64_region_close")

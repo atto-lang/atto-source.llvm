@@ -98,7 +98,7 @@ def main():
                 close_calls = re.findall(
                     r"\bcall void @oreslang_owned_i64_region_close\(", ir)
                 drop_calls = re.findall(
-                    r"\bcall void @oreslang_owned_i64_region_drop\(", ir)
+                    r"\bcall void @oreslang_owned_i64_region_drop_handle\(", ir)
                 # Move-time drops can add call sites, but the common cleanup
                 # ladder contributes exactly owner_count call sites.
                 assert len(close_calls) == 1, (label, "duplicate region close", len(close_calls))

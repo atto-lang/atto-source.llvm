@@ -45,7 +45,7 @@ def main():
                 ir = compiled.stdout
                 assert ir.count("exit.cleanup:") == 1, (
                     source.name, "missing one shared exit cleanup block")
-                assert ir.count("call void @oreslang_owned_i64_region_drop(") == 1, (
+                assert ir.count("call void @oreslang_owned_i64_region_drop_handle(") == 1, (
                     source.name, "missing or duplicate ownership drop")
                 assert ir.count("call void @oreslang_owned_i64_region_close(") == 1, (
                     source.name, "missing or duplicate region closure")
