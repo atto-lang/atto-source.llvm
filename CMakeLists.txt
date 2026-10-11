@@ -134,6 +134,7 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/http_actor_matrix_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor-owned-fields.ores"
+                --kernel-fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/http-shared-counter-kernel.ores"
                 --clang "${ORE_CLANG}"
                 --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
                 --arena-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorArena.c"
