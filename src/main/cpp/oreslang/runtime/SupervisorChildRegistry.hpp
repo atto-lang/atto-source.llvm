@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/NativeActorScheduler.h"
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -52,9 +53,7 @@ public:
         validate_actor(actor);
         if (active_actors_.count(actor_key(actor)))
             throw std::logic_error("native actor already bound to a logical child");
-        if (next_id_ == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("logical child ID exhausted");
-        ChildRef child{supervisor_id_, runtime_id_, ++next_id_};
+        ChildRef child{supervisor_id_, runtime_id_, fresh_child_id()};
         Snapshot first{child, actor, 1, Phase::active};
         children_.emplace(child.logical_child_id, first);
         active_actors_.emplace(actor_key(actor), child.logical_child_id);
@@ -120,6 +119,19 @@ public:
     }
 
 private:
+    // Native logical-child IDs are process-unique, not registry-local.
+    // Otherwise a replacement supervisor registry with the same owner IDs
+    // could reuse child 1, letting a stale ChildRef target unrelated work.
+    static std::uint64_t fresh_child_id() {
+        auto current = next_global_child_id_.load(std::memory_order_relaxed);
+        while (true) {
+            if (current == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("logical child ID exhausted");
+            if (next_global_child_id_.compare_exchange_weak(
+                    current, current + 1, std::memory_order_relaxed))
+                return current + 1;
+        }
+    }
     static bool same_actor(OresNativeActorRef a, OresNativeActorRef b) noexcept {
         return a.scheduler_domain == b.scheduler_domain
             && a.actor_slot == b.actor_slot && a.generation == b.generation;
@@ -153,7 +165,7 @@ private:
     const std::uint64_t supervisor_id_;
     const std::uint64_t runtime_id_;
     mutable std::mutex mutex_;
-    std::uint64_t next_id_ = 0;
+    inline static std::atomic<std::uint64_t> next_global_child_id_{0};
     std::unordered_map<std::uint64_t, Snapshot> children_;
     std::map<std::pair<std::uint64_t, std::uint64_t>,
              std::uint64_t> active_actors_;
