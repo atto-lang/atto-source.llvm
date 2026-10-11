@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -82,6 +83,11 @@ inline std::string bounded_control_diagnostic(std::string_view message) {
 class Failure {
 public:
     static Failure make(FailureKind kind, std::string_view message) {
+        // Native/FFI callers can construct invalid enum values by cast.
+        // Never let an unknown tag enter the failure priority lattice.
+        if (failure_priority(kind) == 0) {
+            throw std::invalid_argument("unknown native failure kind");
+        }
         return Failure(kind, bounded_control_diagnostic(message));
     }
 
