@@ -1,0 +1,6 @@
+pub fnc main(): int {
+  return match 1 over
+    on _ { return 42; }
+    on 1 { return 0; }
+  end
+}
