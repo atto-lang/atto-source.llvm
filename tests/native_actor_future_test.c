@@ -55,7 +55,7 @@ static void control(void* raw,size_t parent,OresNativeActorControlKind kind,
 int main(void) {
     State s={0};
     s.scheduler=ores_native_actor_scheduler_open(2,2,3,regular,&s);
-    check(s.scheduler);
+    check(s.scheduler != NULL);
     check(ores_native_actor_scheduler_set_control_handler(s.scheduler,control));
     s.parent=ores_native_actor_scheduler_spawn(s.scheduler,0);
     s.child=ores_native_actor_scheduler_spawn_pending(s.scheduler,1);
