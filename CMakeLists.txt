@@ -94,6 +94,10 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_defer_lifo_guarded_execution native-defer-lifo-cfg.ores
             --ir "call void @multiply_ten" --run 111 --clang "${ORE_CLANG}")
     endif()
+    if(ORE_CLANG)
+        oreslang_contract_test(native_defer_multiguard_cfg_exit_execution native-defer-multiguard-cfg.ores
+            --ir "call void @multiply_two" --run 15 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(reject_native_defer_noncall native-defer-noncall-reject.ores
         --diagnostic "native defer requires a direct function call")
     oreslang_contract_test(reject_native_defer_moved_return native-defer-moved-after-return.ores

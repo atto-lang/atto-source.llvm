@@ -394,9 +394,15 @@ void validate_i64_ownership(const Program& program) {
             add_effects(*guard.rhs, condition.operations);
             condition.successors = {2 * i + 1, 2 * i + 2};
             add_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
+            // Deferred arguments are evaluated *after* each return value.
+            // Preserve LIFO reads and loans on every distinct CFG exit.
+            for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+                add_effects(**it, cfg.blocks[2 * i + 1].operations);
         }
         if (function.result)
             add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
+        for (auto it = deferred_calls.rbegin(); it != deferred_calls.rend(); ++it)
+            add_effects(**it, cfg.blocks[guard_count * 2].operations);
         ownership::verify(cfg);
 
     }
