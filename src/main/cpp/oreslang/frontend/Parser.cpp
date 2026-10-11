@@ -105,7 +105,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*=.").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -335,25 +335,54 @@ private:
             } else {
                 advance();
                 binding.name = identifier();
-                if (accept("=")) {
-                    require("spawn");
+                // Distinguish actor capabilities from scalar data before IR.
+                // Unsupported generic futures never become fake blocking calls.
+                if (token_.text != ":" && token_.text != "=") require(":");
+                const bool explicit_type = accept(":");
+                SourceType declared_type;
+                bool typed_actor_ref = false;
+                if (explicit_type) {
+                    if (accept("ActorRef")) {
+                        require("<");
+                        declared_type.kind = SourceType::Kind::ActorRef;
+                        declared_type.argument = identifier();
+                        require(">");
+                        typed_actor_ref = true;
+                    } else if (accept("Future")) {
+                        require("<");
+                        declared_type.kind = SourceType::Kind::Future;
+                        if (accept("int")) declared_type.argument = "int";
+                        else declared_type.argument = identifier();
+                        require(">");
+                        fail("Future<T> requires native continuation lowering");
+                    } else {
+                        if (token_.text == "owned" && !experimental_owned_int_)
+                            fail("experimental owned int requires --experimental-owned-int");
+                        binding.heap_owned = experimental_owned_int_ && accept("owned");
+                        require("int");
+                    }
+                }
+                require("=");
+                if (accept("spawn")) {
+                    if (explicit_type && !typed_actor_ref)
+                        fail("spawn initializer requires ActorRef<T> type or inference");
                     ActorSpawnBinding spawned;
                     spawned.name = binding.name;
                     spawned.offset = binding.offset;
                     spawned.actor_type = identifier();
+                    spawned.declared_type.kind = SourceType::Kind::ActorRef;
+                    spawned.declared_type.argument =
+                        typed_actor_ref ? declared_type.argument : spawned.actor_type;
+                    if (spawned.declared_type.argument != spawned.actor_type)
+                        fail("ActorRef<T> type mismatch with spawned actor");
                     require("(");
                     require(")");
                     require(";");
                     value.actor_spawns.push_back(std::move(spawned));
                     continue;
                 }
-                require(":");
-                if (token_.text == "owned" && !experimental_owned_int_) {
-                    fail("experimental owned int requires --experimental-owned-int");
-                }
-                binding.heap_owned = experimental_owned_int_ && accept("owned");
-                require("int");
-                require("=");
+                if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
+                if (!explicit_type) fail("scalar local requires ': int'");
                 binding.initializer = expression();
             }
             require(";");
