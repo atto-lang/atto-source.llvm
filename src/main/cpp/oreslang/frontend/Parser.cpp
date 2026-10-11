@@ -1,5 +1,6 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/AcceleratorSourceLowering.hpp"
+#include "oreslang/frontend/PipelineSourceLowering.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 
 #include <algorithm>
@@ -431,6 +432,13 @@ std::string compile_quantum_source_openqasm3(std::string_view source) {
     // Source undergoes bounded circuit and terminal-measurement admission;
     // the result is a codegen artifact, not a QPU or simulator invocation.
     return accel_source::compile_quantum(source).emit_openqasm3();
+}
+
+pipeline_source::Plan compile_pipeline_source(
+        std::string_view source, dop::Plan layout, dop::GpuTarget target) {
+    // A deliberately narrow, source-checked host execution plan. The general
+    // native guest parser still cannot admit arbitrary actors or GPU effects.
+    return pipeline_source::compile(source, layout, target);
 }
 
 Program parse_program(std::string_view source) {
