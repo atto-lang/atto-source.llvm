@@ -199,13 +199,16 @@ static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
         && s->actors[ref.actor_slot].spawned
         && s->actors[ref.actor_slot].generation == ref.generation;
 }
-/* Caller holds s->lock. Never publish runnable work until every requested
- * carrier has been created. Partial creation is fenced and the started
- * workers are still joined on retirement. No allocation or pthread creation
- * occurs during ordinary subsequent submissions. */
+/* Caller holds s->lock. A cold pool starts ONE worker for its first
+ * admission; a backlog activates at most one further worker per additional
+ * outstanding item, capped by the configured maximum. No guest work is
+ * published before its required activation completes. Failure fences new
+ * admission and retains already-started workers until retirement. */
 static int ensure_workers_started_locked(OresNativeActorScheduler* s) {
     if (s->activation_failed || s->retired) return 0;
-    while (s->started_workers < s->worker_count) {
+    size_t desired = s->worker_count;
+    if (s->outstanding < desired) desired = (size_t)s->outstanding + 1;
+    while (s->started_workers < desired) {
         size_t slot = s->started_workers;
         if (pthread_create(&s->threads[slot], NULL, carrier, s) != 0) {
             s->activation_failed = 1;
