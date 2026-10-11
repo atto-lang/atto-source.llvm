@@ -96,11 +96,33 @@ int main(void) {
         memcpy(corrupted, wire[i], sizes[i]);
         corrupted[3 + strlen(golden[i].schema) + 2] ^= 1; /* forged shape hash */
         assert(!ores_mp2_validate_copy(&schemas[i], corrupted, sizes[i], &owned));
+        size_t digest_at = 3 + strlen(golden[i].schema) + 2;
+        assert(digest_at + 32 <= sizes[i]);
+        for (size_t byte = 0; byte < 32; ++byte) {
+            memcpy(corrupted, wire[i], sizes[i]);
+            corrupted[digest_at + byte] ^= 1;
+            assert(!ores_mp2_validate_copy(&schemas[i], corrupted, sizes[i], &owned));
+        }
         memcpy(corrupted, wire[i], sizes[i]);
         corrupted[sizes[i]] = 0; /* trailing value */
         assert(!ores_mp2_validate_copy(&schemas[i], corrupted, sizes[i] + 1, &owned));
         assert(!ores_mp2_validate_copy(&schemas[(i + 1) % 7], wire[i], sizes[i], &owned));
     }
+    /* Strict UTF-8 rejects overlong two-byte sequences at the receiver. */
+    OresMp2Owned invalid_text = {0};
+    uint8_t malformed_utf8[1024];
+    memcpy(malformed_utf8, wire[5], sizes[5]);
+    malformed_utf8[sizes[5] - 3] = 0xc0;
+    malformed_utf8[sizes[5] - 2] = 0xaf;
+    assert(!ores_mp2_validate_copy(&schemas[5], malformed_utf8,
+                                    sizes[5], &invalid_text));
+    uint8_t* enormous = calloc((size_t)ORES_MP2_MAX_BYTES + 1, 1);
+    assert(enormous);
+    assert(!ores_mp2_validate_copy(&schemas[5], enormous,
+                                    (size_t)ORES_MP2_MAX_BYTES + 1, &invalid_text));
+    free(enormous);
+    assert(!invalid_text.bytes && invalid_text.size == 0);
+
     /* A non-finite IEEE-754 binary64 must be rejected even with an
      * otherwise valid schema ID and independently verified shape hash.
      * The final eight bytes of the finite 1.5 golden contain the double.
