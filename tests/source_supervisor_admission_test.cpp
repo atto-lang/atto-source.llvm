@@ -223,48 +223,20 @@ int main() {
 
 
 
-    // The restricted f.child projection must come from the exact verified
-    // logical-child binding in the host terminal PANIC envelope.
-    unsigned child_applied = 0;
-    auto child_process = oreslang::runtime::install_source_supervisor_stop(
-        with_child, 107, 72, 2, enqueue,
-        [&](const oreslang::runtime::SupervisorProcess::Resolution& decision) {
-            check(decision.notice.actor_id == 29
-                      && decision.notice.generation == 11
-                      && decision.notice.logical_child_id == 7001
-                      && decision.notice.logical_incarnation == 3,
-                  "checked child STOP lost its exact logical/physical identity");
-            ++child_applied;
-        });
-    child_process->accept(oreslang::runtime::SupervisorFailureNotice{
-        107, 72, 29, 11, std::nullopt, "logical child failure",
-        ORES_NATIVE_CONTROL_PANIC, 49, 20261011, 7001, 3});
-    while (!queued.empty()) {
-        check(++ticks < 70, "runaway logical child CONTROL");
-        auto task = std::move(queued.front());
-        queued.pop_front();
-        task();
+    // A guest source Failure.child projection is not authorized merely by
+    // typed envelope fields: it must use an actual verified child registry.
+    bool legacy_child_rejected = false;
+    try {
+        (void) oreslang::runtime::install_source_supervisor_stop(
+            with_child, 107, 72, 2, enqueue,
+            [](const oreslang::runtime::SupervisorProcess::Resolution&) {
+                throw std::runtime_error("unverified child STOP reached host effect");
+            });
+    } catch (const std::invalid_argument&) {
+        legacy_child_rejected = true;
     }
-    check(child_applied == 1 && child_process->resolved() == 1,
-          "bound f.child STOP failed exactly once");
-
-    auto missing_child = oreslang::runtime::install_source_supervisor_stop(
-        with_child, 108, 73, 2, enqueue,
-        [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
-            throw std::runtime_error("unbound Failure.child was applied");
-        });
-    missing_child->accept(oreslang::runtime::SupervisorFailureNotice{
-        108, 73, 30, 12, std::nullopt, "unbound logical child",
-        ORES_NATIVE_CONTROL_PANIC, 50, 20261011});
-    while (!queued.empty()) {
-        check(++ticks < 90, "runaway missing logical child CONTROL");
-        auto task = std::move(queued.front());
-        queued.pop_front();
-        task();
-    }
-    check(missing_child->resolved() == 0 && missing_child->undelivered() == 1
-              && !missing_child->healthy(),
-          "f.child projection accepted missing trusted identity");
+    check(legacy_child_rejected,
+          "unverified native STOP installer accepted source Failure.child");
 
     // A legacy untyped host notice may use the historical no-argument
     // STOP compatibility form, but must not impersonate a typed Failure
@@ -358,7 +330,7 @@ int main() {
         };
         int sink_calls = 0;
         auto verified = oreslang::runtime::install_source_supervisor_stop_verified(
-            source, supervisor, domain, 2, enqueue_verified,
+            with_child, supervisor, domain, 2, enqueue_verified,
             children,
             [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
                 ++sink_calls;
