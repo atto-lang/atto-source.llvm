@@ -401,6 +401,14 @@ private:
     }
 
     std::unique_ptr<Expression> dispatch(bool procedural) {
+        // Nested dispatch is recursive-descent. Reject adversarial source
+        // before the parser exhausts its native stack.
+        if (dispatch_depth_ >= 64) fail("dispatch nesting depth exceeds 64");
+        ++dispatch_depth_;
+        struct DepthGuard {
+            std::size_t& value;
+            ~DepthGuard() { --value; }
+        } depth_guard{dispatch_depth_};
         const auto offset = token_.offset;
         const bool is_match = accept("match");
         if (!is_match) require("switch");
@@ -409,6 +417,7 @@ private:
         expr->left = expression();
         if (is_match) require("over");
         std::unordered_set<std::int64_t> distinct;
+        std::size_t total_cases = 0;
         bool fallback = false;
         while (token_.text != "end" && token_.kind != Kind::End) {
             Expression::Arm arm;
@@ -428,8 +437,13 @@ private:
                 if (accept("default")) arm.fallback = true;
                 else {
                     require("case");
-                    do { arm.cases.push_back(parse_dispatch_case()); }
-                    while (accept(","));
+                    do {
+                        // Bound each group BEFORE parsing another literal;
+                        // otherwise a single arm can consume unbounded memory.
+                        if (arm.cases.size() >= 256)
+                            fail("dispatch case count exceeds 256");
+                        arm.cases.push_back(parse_dispatch_case());
+                    } while (accept(","));
                 }
             }
             // Explicit match patterns remain source ordered, but designated
@@ -437,9 +451,12 @@ private:
             if (fallback && arm.fallback)
                 fail(is_match ? "duplicate match default" : "duplicate switch default");
             if (arm.fallback) fallback = true;
-            for (const auto number : arm.cases)
+            for (const auto number : arm.cases) {
+                if (++total_cases > 256)
+                    fail("dispatch case count exceeds 256");
                 if (!distinct.insert(number).second)
                     fail("duplicate dispatch integer case");
+            }
             (void)accept("->");
             require("{");
             if (accept("return")) {
@@ -837,6 +854,7 @@ private:
 
     Lexer lexer_;
     Token token_;
+    std::size_t dispatch_depth_ = 0;
     std::string current_mail_envelope_;
     std::string current_mail_field_;
 };

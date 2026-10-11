@@ -98,3 +98,15 @@ Concrete arms retain source order. Duplicate catch-alls fail at parsing;
 there is no fallthrough. Native execution fixtures distinguish the case-first
 result from the fallback. This does **not** implement tagged tuples,
 `match<ret=T>`, owned payloads, suspension, or generic union narrowing.
+
+## Scalar-dispatch compiler admission budgets (October 11, 2026)
+
+The experimental native parser rejects more than **256 total concrete case
+comparisons per individual `match`/`switch`**, more than **256 grouped
+`case` literals** before parsing another literal, more than **256 arms**, or
+more than **64 lexically nested dispatch expressions**. These limits prevent
+pathological scalar guest source from triggering unbounded case-list
+allocation or recursive native-stack exhaustion. They are native pilot
+implementation budgets, not the long-term Oreslang language specification.
+Invalid programs must terminate compilation with diagnostics and no LLVM IR.
+The limits do not certify other parser forms as recursion-safe.

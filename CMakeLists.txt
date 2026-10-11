@@ -54,6 +54,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
+    # Compiler admission budgets: bound dispatch comparisons and recursive descent.
+    oreslang_contract_test(source_grouped_case_limit dispatch-grouped-case-max.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_grouped_case_overflow dispatch-grouped-case-overflow.ores
+        --diagnostic "dispatch case count exceeds 256")
+    oreslang_contract_test(reject_total_case_overflow dispatch-total-case-overflow.ores
+        --diagnostic "dispatch case count exceeds 256")
+    oreslang_contract_test(reject_dispatch_nesting_overflow dispatch-nesting-overflow.ores
+        --diagnostic "dispatch nesting depth exceeds 64")
     oreslang_contract_test(source_value_match_ir value-match-return.ores --ir "dispatch.collected.value")
     # Nested arm-local returns must merge into their lexical value dispatch,
     # while an enclosing do arm still returns from the containing function.
