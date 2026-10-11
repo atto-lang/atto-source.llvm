@@ -890,6 +890,13 @@ public:
         require(".");
         require("stop");
         require("(");
+        if (token_.text != ")") {
+            // Only the *same* typed Failure parameter from on_panic may
+            // identify a lifecycle target. Reject fields, aliases, host IDs
+            // and ordinary values until general typed CONTROL lowering.
+            require(failure_binding);
+            result.explicitly_bound_failure = true;
+        }
         require(")");
         require(";");
         require("return");
