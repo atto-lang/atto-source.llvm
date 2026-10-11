@@ -299,6 +299,31 @@ int main() {
           cancelled->undelivered() == 1 && !cancelled->callback_active(),
           "native STOP-only hook accepted cancellation");
 
+    // A registry wired from the wrong supervisor or scheduler domain must
+    // fail at installation, before accepting any guest failure notice.
+    {
+        auto other_owner = std::make_shared<
+            oreslang::runtime::SupervisorChildRegistry>(6001, 7001);
+        bool rejected = false;
+        try {
+            (void) oreslang::runtime::install_source_supervisor_stop_verified(
+                with_child, 6002, 7001, 2, enqueue, other_owner,
+                [](const oreslang::runtime::SupervisorProcess::Resolution&) {});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        check(rejected, "verified source STOP accepted foreign supervisor registry");
+        rejected = false;
+        try {
+            (void) oreslang::runtime::install_source_supervisor_stop_verified(
+                with_child, 6001, 7002, 2, enqueue, other_owner,
+                [](const oreslang::runtime::SupervisorProcess::Resolution&) {});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        check(rejected, "verified source STOP accepted foreign runtime registry");
+    }
+
     // Trusted registry-bound STOP: an identity in the envelope is not
     // authority without a live, exactly-finalized registry snapshot.
     for (int case_id = 0; case_id < 7; ++case_id) {
