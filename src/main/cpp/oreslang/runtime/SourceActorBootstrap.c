@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
 #define SOURCE_GROUP_SLOTS 64u
@@ -20,6 +21,12 @@ typedef struct {
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
+    OresSourceActorWireMessage on_wire;
+    OresMp2Contract wire_contract;
+    char* owned_schema;
+    char* owned_shape;
+    uint8_t wire_sha[32];
+    atomic_size_t wire_reserved;
     atomic_int initialized;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
@@ -118,19 +125,41 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 static void deliver(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group);
     SourceActor* instance = lookup(slot);
-    ensure(instance->on_message != NULL);
+    ensure((instance->on_message != NULL) != (instance->on_wire != NULL));
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
-    const int64_t result = instance->on_message(
-        instance->heap, turn.domain, turn.epoch, (int64_t)payload);
-    ores_actor_i64_heap_leave(instance->heap, turn);
+    int64_t result;
+    if (instance->on_wire) {
+        OresMp2Owned* accepted = (OresMp2Owned*)(uintptr_t)payload;
+        ensure(accepted && accepted->bytes && accepted->size);
+        result = instance->on_wire(instance->heap, turn.domain, turn.epoch,
+                                   accepted->bytes, accepted->size);
+        ores_actor_i64_heap_leave(instance->heap, turn);
+        ores_mp2_owned_release(accepted);
+        free(accepted);
+        size_t before = atomic_fetch_sub_explicit(
+            &instance->wire_reserved, 1, memory_order_acq_rel);
+        ensure(before > 0);
+    } else {
+        result = instance->on_message(instance->heap, turn.domain,
+                                      turn.epoch, (int64_t)payload);
+        ores_actor_i64_heap_leave(instance->heap, turn);
+    }
     atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
 }
-void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
-                                  OresSourceActorMessage on_message,
-                                  uint64_t fields) {
+/* Returns zero only for invalid trusted registration. Configuration and
+ * teardown are single-owner operations; concurrent host senders must be
+ * fenced before stop to avoid use-after-free of the opaque actor handle.
+ */
+static void* source_spawn(
+    OresSourceActorInit constructor, OresSourceActorMessage on_message,
+    OresSourceActorWireMessage on_wire, uint64_t fields,
+    const OresMp2Contract* contract) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+    ensure((on_message != NULL) != (on_wire != NULL));
+    if (on_wire && (!contract || !ores_mp2_contract_valid(contract)))
+        return NULL;
     group_lock();
     if (!group.scheduler) {
         ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0
@@ -152,6 +181,21 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->on_wire = on_wire;
+    atomic_init(&instance->wire_reserved, 0);
+    if (on_wire) {
+        const size_t schema_size = strlen(contract->schema_id) + 1;
+        const size_t shape_size = strlen(contract->shape) + 1;
+        instance->owned_schema = malloc(schema_size);
+        instance->owned_shape = malloc(shape_size);
+        ensure(instance->owned_schema && instance->owned_shape);
+        memcpy(instance->owned_schema, contract->schema_id, schema_size);
+        memcpy(instance->owned_shape, contract->shape, shape_size);
+        memcpy(instance->wire_sha, contract->shape_sha256, 32);
+        instance->wire_contract = (OresMp2Contract){
+            instance->owned_schema, instance->owned_shape, instance->wire_sha
+        };
+    }
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref = ores_native_actor_scheduler_spawn(group.scheduler, slot);
@@ -164,6 +208,17 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
         group.scheduler, instance->ref, 0));
     group_unlock();
     return instance;
+}
+void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
+                                  OresSourceActorMessage on_message,
+                                  uint64_t fields) {
+    return source_spawn(constructor, on_message, NULL, fields, NULL);
+}
+void* oreslang_source_actor_spawn_wire(
+    OresSourceActorInit constructor, OresSourceActorWireMessage on_wire,
+    uint64_t fields, const OresMp2Contract* contract) {
+    if (!on_wire || !contract) return NULL;
+    return source_spawn(constructor, NULL, on_wire, fields, contract);
 }
 int64_t oreslang_source_actor_await_ready(
     void* opaque, OresSourceActorContinuation continuation) {
@@ -200,11 +255,51 @@ int64_t oreslang_source_actor_await_ready(
 }
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC && instance->on_message);
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
+        && instance->on_message && !instance->on_wire);
     /* The source language still only permits one trusted-main submitter.
      * Nonblocking bounded sends fail closed on overload. */
     ensure(ores_native_actor_scheduler_send(
         group.scheduler, instance->ref, (uint64_t)payload));
+}
+int oreslang_source_actor_send_wire(void* opaque,
+                                   const uint8_t* wire, size_t size) {
+    SourceActor* instance = opaque;
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC
+            || !instance->on_wire || !wire || size > ORES_MP2_MAX_BYTES)
+        return 0;
+    /* Bound bytes being prepared BEFORE allocating. The reservation survives
+     * admission and is returned only after the admitted actor's callback.
+     * All messages share this actor's original single-flight DATA lane.
+     */
+    size_t pending = atomic_load_explicit(&instance->wire_reserved,
+                                          memory_order_relaxed);
+    do {
+        if (pending >= SOURCE_GROUP_MAILBOX) return 0;
+    } while (!atomic_compare_exchange_weak_explicit(
+        &instance->wire_reserved, &pending, pending + 1,
+        memory_order_acq_rel, memory_order_relaxed));
+    OresMp2Owned* snapshot = calloc(1, sizeof(*snapshot));
+    if (!snapshot) {
+        atomic_fetch_sub_explicit(&instance->wire_reserved, 1,
+                                  memory_order_acq_rel);
+        return 0;
+    }
+    if (!ores_mp2_validate_copy(&instance->wire_contract, wire, size, snapshot)) {
+        free(snapshot);
+        atomic_fetch_sub_explicit(&instance->wire_reserved, 1,
+                                  memory_order_acq_rel);
+        return 0;
+    }
+    if (!ores_native_actor_scheduler_send(group.scheduler, instance->ref,
+                                           (uint64_t)(uintptr_t)snapshot)) {
+        ores_mp2_owned_release(snapshot);
+        free(snapshot);
+        atomic_fetch_sub_explicit(&instance->wire_reserved, 1,
+                                  memory_order_acq_rel);
+        return 0;
+    }
+    return 1;
 }
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
@@ -231,6 +326,10 @@ void oreslang_source_actor_stop(void* opaque) {
         (long long)atomic_load_explicit(&instance->last_result, memory_order_relaxed));
 #endif
     group.actors[slot] = NULL;
+    ensure(atomic_load_explicit(&instance->wire_reserved,
+                                 memory_order_acquire) == 0);
+    free(instance->owned_schema);
+    free(instance->owned_shape);
     instance->magic = 0;
     free(instance);
     ensure(group.live > 0);
