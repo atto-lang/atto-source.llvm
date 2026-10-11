@@ -13,21 +13,21 @@ struct Router final : SupervisorControlTurn::Hooks {
     int escalations = 0;
     int user_turns = 0;
 
-    Decision on_throw(const SupervisorFailureLane::Failure&) override {
-        return Decision::Escalate;
+    SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
+        return SupervisorControlTurn::Decision::Escalate;
     }
-    Decision on_raise(const SupervisorFailureLane::Failure&) override {
-        return Decision::Escalate;
+    SupervisorControlTurn::Decision on_raise(const SupervisorFailureLane::Failure&) override {
+        return SupervisorControlTurn::Decision::Escalate;
     }
-    Decision on_panic(const SupervisorFailureLane::Failure&) override {
+    SupervisorControlTurn::Decision on_panic(const SupervisorFailureLane::Failure&) override {
         ++panics;
         return acknowledge ? Decision::Acknowledge : Decision::Escalate;
     }
-    Decision on_cancel(const SupervisorFailureLane::Failure&) override {
-        return Decision::Escalate;
+    SupervisorControlTurn::Decision on_cancel(const SupervisorFailureLane::Failure&) override {
+        return SupervisorControlTurn::Decision::Escalate;
     }
-    Decision on_host_failure(const SupervisorFailureLane::Failure&) override {
-        return Decision::Escalate;
+    SupervisorControlTurn::Decision on_host_failure(const SupervisorFailureLane::Failure&) override {
+        return SupervisorControlTurn::Decision::Escalate;
     }
     void on_escalate(const SupervisorFailureLane::Failure& failure) override {
         ++escalations;
