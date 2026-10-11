@@ -238,6 +238,16 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_pipe_bounded_transport
         COMMAND oreslang-native-actor-pipe-transport-test)
     set_tests_properties(native_actor_pipe_bounded_transport PROPERTIES TIMEOUT 25)
+    add_executable(oreslang-native-supervisor-code-slot-test
+        tests/native_supervisor_code_slot_test.cpp)
+    target_include_directories(oreslang-native-supervisor-code-slot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-supervisor-code-slot-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-supervisor-code-slot-test PRIVATE Threads::Threads)
+    add_test(NAME native_supervisor_pinned_code_revision_and_rollback
+        COMMAND oreslang-native-supervisor-code-slot-test)
+    set_tests_properties(native_supervisor_pinned_code_revision_and_rollback PROPERTIES TIMEOUT 15)
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
