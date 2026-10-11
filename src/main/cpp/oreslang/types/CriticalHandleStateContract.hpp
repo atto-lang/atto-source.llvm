@@ -26,6 +26,10 @@ enum class CriticalStateAdmission : std::uint8_t {
 struct CriticalStateCallback {
     bool intrinsic_critical = true;  // sealed runtime intrinsic
     bool callback_critical = false;
+    // Compiler-proven builtin serial actor superclass, not guest-provided flags.
+    bool actor_is_serial = false;
+    // Trusted scheduler must hold the actor-wide request/message lifetime lease.
+    bool serial_lifetime_admission_proven = false;
     bool lexical = true;
     bool one_state_parameter = false;
     bool escapes = false;
@@ -38,7 +42,10 @@ inline CriticalStateAdmission admit_critical_handle_state(
         const CriticalStateCallback& callback,
         FunctionEffects using_effects) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    if (!callback.callback_critical) return CriticalStateAdmission::MissingCallbackCritical;
+    if (!callback.callback_critical
+            && !(callback.actor_is_serial && callback.serial_lifetime_admission_proven)) {
+        return CriticalStateAdmission::MissingCallbackCritical;
+    }
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
