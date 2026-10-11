@@ -66,6 +66,35 @@ This validates an explicit supervisor-to-heap adapter, **not** automatic
 compiler lowering, scheduler-owned callbacks, cross-group ownership
 exclusivity, or a universal `memoryReclaimed()` guest future.
 
+## Unified lifecycle authority (native host ABI)
+
+The single host-side lifecycle authority is `ActorGroupLifecycle.hpp`; do not
+compile or merge the competing experimental `ActorGroup.hpp` from draft #54.
+`NativeActorRef::get_ready()` and `get_done()` return shared observer
+futures. The former resolves only on successful initialization; the latter
+is **not** settled by `stop_workers()` or `close()`. It requires a trusted
+`NativeActorGroup::finalized(ref[, terminal_error])` acknowledgment after
+all turns, continuations, wakers, native loans, heap destruction and carrier
+cleanup. The group can accept that terminal acknowledgment after `close()`
+has released its worker table, without retaining an actor heap.
+
+Across groups, a process-local registry keyed by runtime and actor identity
+fences exclusive management until the physical terminal acknowledgment, even
+when a group closes. Incarnation generation and observer-ticket identity
+prevent stale termination of a replacement actor. The registry retains only
+small lifecycle tickets for closed but unacknowledged workers; missing final
+acknowledgment deliberately fails closed and retains this control-plane entry
+rather than permitting a second owner. Stop callbacks are delivered at most
+once outside group locks, including under reentrant close.
+
+The C++ `std::shared_future<void>` accessors are **host observers**, not an
+implemented guest Future runtime. Do not call blocking `get()` on any actor
+carrier. Scheduler integration must translate their readiness/done signals
+to nonblocking continuation admissions on the exclusive supervisor lane;
+native actor syntax remains fail-closed. The supervisor runtime is responsible
+for proving physical quiescence before signaling `finalized()`, not the
+ActorGroup header itself.
+
 ## Explicit limitations
 
 This is a host-side C++ runtime primitive, **not working source-level
