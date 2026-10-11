@@ -573,6 +573,21 @@ private:
                 require("}");
             }
         }
+        // Directional pipeline operations require a scheduler-issued route
+        // context, not a bare native call or scalar actor-field assignment.
+        // Emit a specific compile-time rejection until both the routing
+        // context and continuation-aware guest lowering are implemented.
+        if (actor_method && token_.text == "self") {
+            Lexer probe = lexer_;
+            const Token dot = probe.next();
+            const Token operation = probe.next();
+            if (dot.text == "." &&
+                    (operation.text == "forward" || operation.text == "backward"
+                     || operation.text == "respond" || operation.text == "done")) {
+                fail("self." + operation.text
+                    + " requires native pipeline routing lowering");
+            }
+        }
         // Restricted synchronous actor methods can update declared `let` fields.
         while (actor_method && token_.kind == Kind::Identifier
                && !reserved(token_.text)) {
