@@ -63,7 +63,13 @@ public:
         void close() noexcept {
             if (!live_) return;
             live_ = false;
-            if (state_->active_ == this) state_->active_ = previous_;
+            if (state_->active_ == this) {
+                // Out-of-order outer closure must not resurrect an expired
+                // ancestor when its nested view eventually unwinds.
+                Scope* prior = previous_;
+                while (prior && !prior->live_) prior = prior->previous_;
+                state_->active_ = prior;
+            }
         }
 
     private:
