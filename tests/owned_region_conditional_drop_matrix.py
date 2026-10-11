@@ -57,7 +57,7 @@ def main():
             "native owned int borrow requires handle loan lowering",
         ),
         "borrow-handle-as-pointer": (
-            "const x: owned int = 42; return inspect(rt borrow x);",
+            "const x: owned int = 42; inspect(rt borrow x); return 42;",
             "native owned int borrow requires handle loan lowering",
         ),
     }
