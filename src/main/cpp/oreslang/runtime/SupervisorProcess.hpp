@@ -134,6 +134,9 @@ public:
         closed_ = true;
         if (!failed_) undelivered_ += mailbox_.size();
         mailbox_.clear();
+        active_ = false;
+        suspended_ = false;
+        resume_enqueued_ = false;
     }
 
 private:
@@ -240,6 +243,10 @@ private:
         if (failed_ || closed_) return;
         failed_ = true;
         undelivered_ += mailbox_.size();
+        mailbox_.clear(); // Failed CONTROL never retains owned notice data.
+        active_ = false;
+        suspended_ = false;
+        resume_enqueued_ = false;
     }
 
     const std::uint64_t supervisor_id_;
