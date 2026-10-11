@@ -121,6 +121,8 @@ public:
             if (closed_) throw std::logic_error("native supervisor code slot closed");
             if (current_->number != expected_revision)
                 throw std::logic_error("stale native supervisor code revision");
+            if (current_->number == UINT64_MAX)
+                throw std::overflow_error("native supervisor code revision space exhausted");
             if (current_->abi != abi)
                 throw std::invalid_argument("native supervisor policy ABI migration required");
             prune_locked();
