@@ -47,6 +47,9 @@ public:
             throw std::invalid_argument("invalid supervisor process admission");
     }
 
+    std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
+
     /** Trusted CONTROL receiver; does not run a user callback inline. */
     void accept(const SupervisorFailureNotice& notice) {
         std::lock_guard<std::mutex> guard(mutex_);
