@@ -1,6 +1,7 @@
 #include "oreslang/runtime/NativeOwnedI64Region.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -84,6 +85,17 @@ void oreslang_owned_i64_region_close(OresOwnedI64Region* region) {
 #define ORES_REGION_SLOT_BITS UINT64_C(12)
 #define ORES_REGION_SLOT_MASK UINT64_C(4095)
 #define ORES_REGION_MAX_GENERATION (UINT64_MAX >> ORES_REGION_SLOT_BITS)
+static _Atomic(uint64_t) next_region_generation = 1;
+static uint64_t allocate_generation(void) {
+    uint64_t candidate = atomic_load_explicit(&next_region_generation, memory_order_relaxed);
+    while (candidate != 0 && candidate <= ORES_REGION_MAX_GENERATION) {
+        if (atomic_compare_exchange_weak_explicit(&next_region_generation,
+                &candidate, candidate + 1, memory_order_relaxed, memory_order_relaxed))
+            return candidate;
+    }
+    fail_closed();
+    return 0;
+}
 static OwnedI64Slot* checked_handle(OresOwnedI64Region* region, uint64_t handle) {
     if (!region || !region->handle_only || handle == 0) fail_closed();
     const uint64_t index = handle & ORES_REGION_SLOT_MASK;
@@ -103,9 +115,9 @@ uint64_t oreslang_owned_i64_region_new_handle(OresOwnedI64Region* region, int64_
         fail_closed();
     for (uint64_t index = 0; index < region->capacity; ++index) {
         OwnedI64Slot* slot = &region->slots[index];
-        if (slot->alive || slot->generation >= ORES_REGION_MAX_GENERATION)
+        if (slot->alive)
             continue;
-        ++slot->generation;
+        slot->generation = allocate_generation();
         slot->value = value;
         slot->alive = 1;
         ++region->live_count;
@@ -130,6 +142,7 @@ void oreslang_owned_i64_region_test_set_generation(OresOwnedI64Region* region,
     if (!region || !region->handle_only || slot >= region->capacity ||
         region->slots[slot].alive || generation > ORES_REGION_MAX_GENERATION)
         fail_closed();
-    region->slots[slot].generation = generation;
+    (void)slot;
+    atomic_store_explicit(&next_region_generation, generation, memory_order_relaxed);
 }
 #endif
