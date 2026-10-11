@@ -333,9 +333,11 @@ private:
             require(";");
             value.locals.push_back(std::move(binding));
         }
+        bool sent_message = false, stopped_actor = false;
         while (token_.text != "return" && token_.text != "if") {
             if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
             if (accept("stop")) {
+                stopped_actor = true;
                 value.actor_stops.push_back(identifier());
                 require(";");
                 continue;
@@ -343,8 +345,24 @@ private:
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
+            if (action->kind == Expression::Kind::Variable && accept("pipe")) {
+                // Actor graph formation is a distinct, contextual infix
+                // operator, not functional first-argument piping (|>).
+                if (sent_message || stopped_actor)
+                    fail("actor pipe must be formed before sends and stops");
+                ActorPipe link;
+                link.offset = statement.offset;
+                link.producer = action->name;
+                link.consumer = identifier();
+                require(";");
+                value.actor_pipes.push_back(std::move(link));
+                continue;
+            }
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
+                if (stopped_actor)
+                    fail("actor send after stop is unsupported");
+                sent_message = true;
                 ActorSend send;
                 send.offset = statement.offset;
                 send.reference = action->left->name;
@@ -613,7 +631,8 @@ private:
             for (const auto& param : fn.parameters) params.insert(param.name);
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
-            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
+            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
+                    || !fn.actor_pipes.empty() || !fn.actor_stops.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
                         !fn.early_returns.empty() || !fn.statements.empty())
                     throw std::runtime_error("source actor bootstrap requires zero-argument int main without early returns");
@@ -647,6 +666,21 @@ private:
                         throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
                 }
                 validate_expression(*stmt.expression, params, functions);
+            }
+            if (!fn.actor_pipes.empty()) {
+                if (fn.actor_pipes.size() != 1 || fn.actor_spawns.size() != 2
+                        || fn.actor_stops.size() != 2 || fn.actor_sends.empty())
+                    throw std::runtime_error("native actor pipe requires exactly two actors, at least one message and ordered stops");
+                const auto& link = fn.actor_pipes.front();
+                if (!references.count(link.producer) || !references.count(link.consumer)
+                        || link.producer == link.consumer)
+                    throw std::runtime_error("unknown, self-connected or unowned actor pipe endpoint");
+                if (fn.actor_stops[0] != link.producer || fn.actor_stops[1] != link.consumer)
+                    throw std::runtime_error("native actor pipe requires producer stop before consumer stop");
+                for (const auto& send : fn.actor_sends) {
+                    if (send.reference != link.producer)
+                        throw std::runtime_error("native actor pipe consumer must receive only forwarded messages");
+                }
             }
             for (const auto& send : fn.actor_sends) {
                 if (!references.count(send.reference))
