@@ -52,7 +52,6 @@ public:
                        std::string_view parent_id = {}) {
         const bool admitted = child_failures_.publish_preallocated(
             child, kind, summary, parent_id);
-        if (admitted) urgent_.store(true, std::memory_order_release);
         return admitted;
     }
 
@@ -60,8 +59,11 @@ public:
         child_failures_.retire_gracefully(child);
     }
 
-    bool urgent() const noexcept {
-        return urgent_.load(std::memory_order_acquire);
+    // Linearize readiness with publish_child() under the lane mutex.
+    // A cached atomic ready bit can be cleared by a consumer *after* a
+    // concurrent producer sets it, stranding a pending CONTROL event.
+    bool urgent() const {
+        return child_failures_.pending_count() != 0;
     }
 
     std::size_t pending_count() const { return child_failures_.pending_count(); }
@@ -106,15 +108,10 @@ public:
                 child_failures_.ack(next->actor);
             } catch (...) {
                 child_failures_.retry(next->actor);
-                urgent_.store(true, std::memory_order_release);
                 throw;
             }
-            urgent_.store(
-                child_failures_.pending_count() != 0,
-                std::memory_order_release);
             return Admitted::Control;
         }
-        urgent_.store(false, std::memory_order_release);
         if (!ordinary_mail_ready) return Admitted::None;
         hooks.on_user_turn();
         return Admitted::User;
@@ -138,7 +135,7 @@ private:
     const std::size_t restart_budget_;
     std::size_t restarts_used_ = 0; // single-writer supervisor turn
     std::atomic_flag lease_ = ATOMIC_FLAG_INIT;
-    std::atomic<bool> urgent_{false};
+
 };
 
 } // namespace oreslang
