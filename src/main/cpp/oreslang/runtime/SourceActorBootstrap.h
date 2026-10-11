@@ -89,6 +89,10 @@ int oreslang_source_actor_send_variant(
  * `ref.send(Enum.Case)` when the bounded mailbox rejects a message.
  * Only trusted main may invoke this synchronous, no-retry admission form.
  * Future<T> backpressure is a separate, not-yet-lowered path. */
+/* Only compiled receive arms may call this after nominal admission.
+ * Fails closed if an invalid or differently shaped payload reaches an
+ * int64 binder; arbitrary caller memory is not an acceptable input. */
+int64_t oreslang_source_actor_tagged_i64(const uint8_t* wire, size_t size);
 void oreslang_source_actor_send_variant_checked(
     void* actor, const uint8_t* wire, size_t size);
 /* REQUIRED path for Java-compatible 'define enum' / 'define pattern':
