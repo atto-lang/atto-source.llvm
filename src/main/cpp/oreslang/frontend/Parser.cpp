@@ -122,6 +122,10 @@ public:
         if (accept("define")) {
             if (accept("actor")) {
                 program.actor = std::make_unique<ActorDecl>(actor_declaration());
+                if (token_.text == "fnc") {
+                    program.script = std::make_unique<ActorScript>(
+                        actor_script(program.actor->name));
+                }
                 if (token_.kind != Kind::End) fail("unexpected trailing actor source");
                 validate(program);
                 return program;
@@ -169,6 +173,74 @@ private:
         require("end");
         if (actor.methods.empty()) fail("actor requires at least one method");
         return actor;
+    }
+
+    ActorScript actor_script(const std::string& actor_name) {
+        ActorScript script;
+        script.offset = token_.offset;
+        script.actor_name = actor_name;
+        require("fnc");
+        require("main");
+        require("(");
+        require(")");
+        require(":");
+        require("int");
+        require("{");
+        if (!accept("const") && !accept("val"))
+            fail("expected const actor worker binding");
+        script.worker_name = identifier();
+        require("=");
+        script.await_spawn = accept("await");
+        require("spawn");
+        const std::string selected = identifier();
+        if (selected != actor_name)
+            fail("source spawn actor must match enclosing actor declaration");
+        require("(");
+        require(")");
+        require(";");
+        if (!script.await_spawn) {
+            require("await");
+            require(script.worker_name);
+            require(".");
+            require("get_ready");
+            require("(");
+            require(")");
+            require(";");
+        }
+        if (!accept("const") && !accept("val"))
+            fail("expected const awaited actor result");
+        const std::string result = identifier();
+        if (result == script.worker_name)
+            fail("actor result shadows worker ref");
+        require(":");
+        require("int");
+        require("=");
+        require("await");
+        require(script.worker_name);
+        require(".");
+        script.method = identifier();
+        require("(");
+        script.argument = expression();
+        require(")");
+        require(";");
+        require(script.worker_name);
+        require(".");
+        require("stop");
+        require("(");
+        require(")");
+        require(";");
+        require("await");
+        require(script.worker_name);
+        require(".");
+        require("get_done");
+        require("(");
+        require(")");
+        require(";");
+        require("return");
+        require(result);
+        require(";");
+        require("}");
+        return script;
     }
 
     ActorMethod actor_method() {
@@ -437,6 +509,14 @@ private:
                     validate_expression(*assignment.value, params, no_calls, &fields);
                 }
                 validate_expression(*method.result, params, no_calls, &fields);
+            }
+            if (program.script) {
+                const auto& script = *program.script;
+                const auto method = std::find_if(actor.methods.begin(), actor.methods.end(),
+                    [&](const ActorMethod& entry) { return entry.name == script.method; });
+                if (method == actor.methods.end() || method->parameters.size() != 1)
+                    throw std::runtime_error("source actor await method requires exactly one int parameter");
+                validate_expression(*script.argument, empty, no_calls);
             }
             return;
         }
