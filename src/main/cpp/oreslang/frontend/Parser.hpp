@@ -86,7 +86,7 @@ struct Function {
 // Closed structural variants, not arbitrary runtime object references.
 // Tuple/Array/List alternatives retain ordered element types and arity.
 struct MessageShape {
-    enum class Kind { Boolean, Integer, String, Tuple, Array, List };
+    enum class Kind { Boolean, Integer, String, Tuple, Array, List, FixedArray, FixedList };
     Kind kind;
     std::vector<MessageShape> elements;
 };
@@ -94,6 +94,26 @@ struct MessageShape {
 struct MessagePattern {
     std::string name;
     std::vector<MessageShape> alternatives;
+    std::size_t offset = 0;
+};
+
+// Parsed nominal tagged contracts. These are compile-time declarations only;
+// until LLVM's full typed DATA lowering is implemented they are deliberately
+// rejected when used as an actor mailbox instead of silently using scalar ABI.
+struct EnumCase {
+    std::string name;
+    MessageShape payload;
+    bool has_payload = false;
+    std::uint32_t tag = 0;
+};
+struct EnumDeclaration {
+    std::string name;
+    std::vector<EnumCase> cases;
+    std::size_t offset = 0;
+};
+struct TaggedPattern {
+    std::string name;
+    std::vector<std::string> alternatives;
     std::size_t offset = 0;
 };
 
@@ -110,6 +130,8 @@ struct Program {
     std::vector<Function> functions;
     std::vector<Actor> actors;
     std::vector<MessagePattern> message_patterns;
+    std::vector<EnumDeclaration> enums;
+    std::vector<TaggedPattern> tagged_patterns;
 };
 
 // Parse and statically validate a strict Java-compatible subset: int functions,
