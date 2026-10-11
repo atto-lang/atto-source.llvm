@@ -309,6 +309,10 @@ private:
             LocalBinding binding;
             binding.offset = token_.offset;
             if (accept("let")) {
+                // Explicit mutable owner marker matches Java/Graal source.
+                // The native class subset still admits legacy unmarked locals;
+                // enforcing mutability for every field write is a later gate.
+                accept("mut");
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
                 binding.class_name = identifier();
