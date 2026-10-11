@@ -197,7 +197,7 @@ private:
         if (token_.text == "suspend" || token_.text == "suspends") {
             fail("native suspends actor method requires continuation lowering");
         }
-        accept("fnc") || accept("method"); // optional method marker
+        if (!accept("fnc")) accept("method"); // optional method marker
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
