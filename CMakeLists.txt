@@ -38,6 +38,18 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_slot_security
         COMMAND oreslang-owned-i64-region-security-test)
     set_tests_properties(native_owned_region_slot_security PROPERTIES TIMEOUT 25)
+    add_executable(oreslang-native-region-handles-test
+        tests/native_owned_region_handles_test.c
+        src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+    target_include_directories(oreslang-native-region-handles-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-region-handles-test PRIVATE
+        ORESLANG_NATIVE_TEST_REGION_GENERATION=1)
+    target_compile_options(oreslang-native-region-handles-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_region_generation_handles
+        COMMAND oreslang-native-region-handles-test)
+    set_tests_properties(native_owned_region_generation_handles PROPERTIES TIMEOUT 30)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)

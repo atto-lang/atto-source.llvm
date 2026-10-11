@@ -34,6 +34,7 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 struct RegionMoveLowering {
     llvm::Value* region = nullptr;
     llvm::FunctionCallee drop;
+    llvm::FunctionCallee read;
     const std::unordered_map<std::string, llvm::Value*>* live_flags = nullptr;
 };
 
@@ -48,6 +49,10 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable:
+            if (moves && moves->live_flags && moves->live_flags->count(expr.name))
+                return builder.CreateCall(moves->read, {moves->region,
+                    builder.CreateLoad(i64, storage.at(expr.name), expr.name + ".handle")},
+                    expr.name + ".read");
             return builder.CreateLoad(i64, storage.at(expr.name), expr.name + ".read");
         case Expression::Kind::Field:
             return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
@@ -71,7 +76,8 @@ llvm::Value* lower(const Expression& expr,
                 if (found != moves->live_flags->end()) {
                     llvm::Value* value = lower(*expr.left, builder, i64,
                         storage, field_storage, functions, moves);
-                    builder.CreateCall(moves->drop, {moves->region, storage.at(expr.left->name)});
+                    builder.CreateCall(moves->drop, {moves->region,
+                        builder.CreateLoad(i64, storage.at(expr.left->name), expr.left->name + ".handle")});
                     builder.CreateStore(builder.getFalse(), found->second);
                     return value;
                 }
@@ -149,14 +155,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             return std::any_of(fn.locals.begin(), fn.locals.end(),
                 [](const LocalBinding& binding) { return binding.heap_owned; });
         });
-    llvm::FunctionCallee regionOpen, regionNew, regionDrop, regionClose;
+    llvm::FunctionCallee regionOpen, regionNew, regionRead, regionDrop, regionClose;
     if (has_region_bindings) {
-        regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
+        regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open_handles",
             llvm::FunctionType::get(native_ptr, {i64}, false));
-        regionNew = module.getOrInsertFunction("oreslang_owned_i64_region_new",
-            llvm::FunctionType::get(native_ptr, {native_ptr, i64}, false));
-        regionDrop = module.getOrInsertFunction("oreslang_owned_i64_region_drop",
-            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, native_ptr}, false));
+        regionNew = module.getOrInsertFunction("oreslang_owned_i64_region_new_handle",
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
+        regionRead = module.getOrInsertFunction("oreslang_owned_i64_region_read_handle",
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
+        regionDrop = module.getOrInsertFunction("oreslang_owned_i64_region_drop_handle",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, i64}, false));
         regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
     }
@@ -277,7 +285,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             region = builder.CreateCall(regionOpen,
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
-        const RegionMoveLowering region_moves{region, regionDrop, &owned_live_flags};
+        const RegionMoveLowering region_moves{region, regionDrop, regionRead, &owned_live_flags};
         for (const auto& binding : fn.locals) {
             if (binding.new_class || binding.move_class) {
                 llvm::StructType* shape = class_types.at(binding.class_name);
@@ -307,7 +315,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
-                slot = builder.CreateCall(regionNew, {region, initial}, binding.name + ".heap.owned");
+                llvm::Value* handle = builder.CreateCall(regionNew, {region, initial},
+                    binding.name + ".heap.handle");
+                slot = builder.CreateAlloca(i64, nullptr, binding.name + ".heap.handle.slot");
+                builder.CreateStore(handle, slot);
                 llvm::Value* live = builder.CreateAlloca(builder.getInt1Ty(), nullptr,
                     binding.name + ".owned.live");
                 builder.CreateStore(builder.getTrue(), live);
@@ -418,7 +429,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         context, it->name + ".drop.next", function);
                     builder.CreateCondBr(live, do_drop, after_drop);
                     builder.SetInsertPoint(do_drop);
-                    builder.CreateCall(regionDrop, {region, it->address});
+                    builder.CreateCall(regionDrop, {region,
+                        builder.CreateLoad(i64, it->address, it->name + ".drop.handle")});
                     builder.CreateStore(builder.getFalse(), flag);
                     builder.CreateBr(after_drop);
                     builder.SetInsertPoint(after_drop);
