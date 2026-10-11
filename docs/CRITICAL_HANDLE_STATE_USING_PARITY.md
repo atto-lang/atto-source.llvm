@@ -267,3 +267,62 @@ guest-source parity.
   integration are **still not verified**. Upstream source Actions jobs
   have failed with no runner steps; the mirror's unrelated
   secrets-audit has also failed. Do not mark PRs merge-ready.
+
+
+## Verified Java serial mailbox + HTTP transport integration (2026-10-11)
+
+**This milestone supersedes the earlier "HTTP ingress not yet wired" Java
+prototype caveat above.** Java/GraalVM now uses the same persistent actor
+mailbox for every request dispatched through a *single*
+`http.handler("Counter")` whose target declaration is `serial actor Counter`,
+and for ordinary messages delivered using supervisor
+`handler.send("tick")`. No second handler for that actor instance may enter
+while a user receive is logically active. The handler's persistent actor
+instance retains the one state aggregate for its lifetime.
+
+The underlying implementation uses scheduler/continuation mail, **not an OS
+mutex around guest code**. `ActorRuntime.suspendCurrentUserMailboxUntil`
+registers independent completion barriers, preserving one admitted user
+envelope while its method continuation or its HTTP exchange is incomplete.
+Only when every barrier has settled can the next user message/HTTP envelope
+be admitted. Continuation mail retains priority to make progress.
+Nested synchronous actor calls execute on their existing turn; they do not
+create a new user admission. State loans must still retire before await.
+
+Per-request HTTP timeout, abort, and client disconnect never cancel the
+shared persistent actor. A request that expires *before* reaching
+`receive()` is consumed as an authenticated transport tombstone, not sent
+to `http.claim`; teardown fences stale completion callbacks and releases
+any unclaimed transfer tickets. Server and HTTP context shutdown cancel
+persistent actors; normal `stop`/supervisor cancellation still terminate
+the actor and drain mail.
+
+The serial actor supervisor transport API is
+`http.handler("Counter").dispatch(rt borrow mut request)` together with
+`handler.send("tick")`. Its `send` operation only addresses that handler's
+persistent serial actor and cannot be invoked from an actor turn. The
+transport neither exports a freely castable guest actor pointer nor claims
+that two independent `http.handler(...)` registrations identify the same
+actor instance. A separate global/registry actor-name identity feature would
+need its own admission and lifecycle contract.
+
+**Executed Java/GraalVM validation:**
+[funded source-mirror CI #38181207023](https://github.com/zed-pkg-test/java-app/actions/runs/38181207023)
+verified **403 exact Git source blobs** for the Java PR, passed
+the 15 focused actor-state/continuation tests and 7 HTTP guest integration
+tests, and then completed full Maven `verify`: **1,418 tests,
+0 failures, 0 errors, 1 skipped**. The serial HTTP test exercised two
+responses and a queued non-HTTP actor message against one persistent
+stateful actor and checked FIFO counter values 1, 2, 3.
+`SerialActorMailboxBarrierTest` additionally verified that one completed
+Future does not open the lane while another remains pending, and that
+cancellation cannot revive user mail after actor teardown.
+
+**Remaining parity and rollout constraints:** LLVM has native scalar
+state/critical admission primitives but **still rejects executable guest
+`serial actor` syntax**, because full source lowering and HTTP/mail
+integration are not implemented. Do not claim LLVM parity on the basis of
+this Java run. Native-image/AOT, stress/fuzz testing with concurrent
+HTTP requests, restart/interleaving under real network failures, and
+cross-backend executable fixtures remain release gates. Keep both PRs draft
+until corresponding backend and dependency gates are complete.
