@@ -11,7 +11,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call };
+    enum class Kind { Integer, Boolean, Variable, Negate, Add, Subtract, Multiply, Call };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -72,10 +72,26 @@ struct Function {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
+    bool is_receiver = false;
+};
+
+// Closed structural variants, not arbitrary runtime object references.
+// Tuple/Array/List alternatives retain ordered element types and arity.
+struct MessageShape {
+    enum class Kind { Boolean, Integer, String, Tuple, Array, List };
+    Kind kind;
+    std::vector<MessageShape> elements;
+};
+
+struct MessagePattern {
+    std::string name;
+    std::vector<MessageShape> alternatives;
+    std::size_t offset = 0;
 };
 
 struct Actor {
     std::string name;
+    std::string messages_type;
     std::vector<LocalBinding> fields;
     std::vector<Function> methods;
     std::size_t offset = 0;
@@ -85,6 +101,7 @@ struct Program {
     std::string module;
     std::vector<Function> functions;
     std::vector<Actor> actors;
+    std::vector<MessagePattern> message_patterns;
 };
 
 // Parse and statically validate a strict Java-compatible subset: int functions,

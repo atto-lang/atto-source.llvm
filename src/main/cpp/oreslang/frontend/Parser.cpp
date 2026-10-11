@@ -41,7 +41,8 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "self", "true", "false", "null", "obj", "arr",
-        "int", "owned"
+        "int", "owned", "declare", "receive", "Message", "bool", "string",
+        "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -55,6 +56,11 @@ public:
             if (at_ == source_.size()) return {Kind::End, {}, at_};
             const unsigned char ch = static_cast<unsigned char>(source_[at_]);
             if (std::isspace(ch)) { ++at_; continue; }
+            if (source_[at_] == '#') {
+                const auto end = source_.find('\n', at_ + 1);
+                at_ = end == std::string_view::npos ? source_.size() : end;
+                continue;
+            }
             if (source_.substr(at_, 2) == "//") {
                 const auto end = source_.find('\n', at_ + 2);
                 at_ = end == std::string_view::npos ? source_.size() : end;
@@ -91,7 +97,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("()[]{},:;+-*=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -132,7 +138,9 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            if (accept("define")) {
+            if (accept("declare")) {
+                program.message_patterns.push_back(message_pattern());
+            } else if (accept("define")) {
                 require("actor");
                 program.actors.push_back(actor());
             } else {
@@ -141,17 +149,70 @@ public:
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty())
+        if (program.functions.empty() && program.actors.empty()
+            && program.message_patterns.empty())
             fail("expected a function or actor");
         validate(program);
         return program;
     }
 
 private:
+    MessageShape message_shape() {
+        if (accept("bool")) return {MessageShape::Kind::Boolean, {}};
+        if (accept("int")) return {MessageShape::Kind::Integer, {}};
+        if (accept("string")) return {MessageShape::Kind::String, {}};
+        MessageShape shape;
+        std::string_view close;
+        if (accept("(")) {
+            shape.kind = MessageShape::Kind::Tuple;
+            close = ")";
+        } else if (accept("Array")) {
+            shape.kind = MessageShape::Kind::Array;
+            require("[");
+            close = "]";
+        } else if (accept("List")) {
+            shape.kind = MessageShape::Kind::List;
+            require("[");
+            close = "]";
+        } else {
+            fail("expected message shape (bool, int, string, tuple, Array or List)");
+        }
+        if (accept(close))
+            fail("empty structural message pattern is not supported");
+        do {
+            shape.elements.push_back(message_shape());
+        } while (accept(","));
+        require(close);
+        return shape;
+    }
+
+    MessagePattern message_pattern() {
+        MessagePattern pattern;
+        pattern.offset = token_.offset;
+        require("type");
+        require("match");
+        pattern.name = identifier();
+        require("as");
+        while (token_.kind != Kind::End && token_.text != "end") {
+            pattern.alternatives.push_back(message_shape());
+            accept(";");
+        }
+        if (pattern.alternatives.empty())
+            fail("message match contract must declare at least one alternative");
+        require("end");
+        return pattern;
+    }
+
     Actor actor() {
         Actor value;
         value.offset = token_.offset;
         value.name = identifier();
+        if (accept("<")) {
+            require("messages");
+            require("=");
+            value.messages_type = identifier();
+            require(">");
+        }
         require("as");
         const bool braced = accept("{");
         // The first native actor subset deliberately admits only immutable
@@ -170,7 +231,8 @@ private:
             value.fields.push_back(std::move(field));
         }
         if (value.fields.empty()) fail("actor requires at least one scalar field");
-        while (token_.text == "fnc" || token_.text == "routine" || token_.text == "pub") {
+        while (token_.text == "fnc" || token_.text == "routine"
+               || token_.text == "pub" || token_.text == "receive") {
             value.methods.push_back(function(true));
         }
         if (value.methods.empty()) fail("actor requires at least one read-only method");
@@ -183,18 +245,30 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
-        if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
-        value.name = identifier();
-        require("(");
-        if (!accept(")")) {
-            do {
-                require("int");
-                value.parameters.push_back(identifier());
-            } while (accept(","));
-            require(")");
+        value.is_receiver = actor_method && accept("receive");
+        if (value.is_receiver) {
+            value.name = "receive";
+            value.exported = true;
+        } else {
+            if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+            value.name = identifier();
         }
-        require(":");
-        require("int");
+        require("(");
+        if (value.is_receiver) {
+            require("Message");
+            value.parameters.push_back(identifier());
+            require(")");
+        } else {
+            if (!accept(")")) {
+                do {
+                    require("int");
+                    value.parameters.push_back(identifier());
+                } while (accept(","));
+                require(")");
+            }
+            require(":");
+            require("int");
+        }
         require("{");
         bool scalar_local_seen = false;
         while (token_.text == "const" || token_.text == "val") {
@@ -295,9 +369,14 @@ private:
             require(";");
             value.assignments.push_back(std::move(assignment));
         }
-        require("return");
-        value.result = expression();
-        require(";");
+        if (value.is_receiver && token_.text == "}") {
+            value.result = make_expression(Expression::Kind::Integer, token_.offset);
+            value.result->integer = 0;
+        } else {
+            require("return");
+            value.result = expression();
+            require(";");
+        }
         require("}");
         return value;
     }
@@ -349,6 +428,12 @@ private:
             auto inner = expression();
             require(")");
             return inner;
+        }
+        if (token_.text == "true" || token_.text == "false") {
+            auto expr = make_expression(Expression::Kind::Boolean, offset);
+            expr->integer = token_.text == "true" ? 1 : 0;
+            advance();
+            return expr;
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
@@ -407,7 +492,8 @@ private:
                                     const std::unordered_set<std::string>& parameters,
                                     const std::unordered_map<std::string, std::size_t>& functions) {
         switch (expr.kind) {
-            case Expression::Kind::Integer: return;
+            case Expression::Kind::Integer:
+            case Expression::Kind::Boolean: return;
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
