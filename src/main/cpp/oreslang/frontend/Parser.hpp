@@ -31,6 +31,12 @@ struct LocalBinding {
     std::size_t offset = 0;
 };
 
+struct ActorSpawnBinding {
+    std::string name;
+    std::string actor_type;
+    std::size_t offset = 0;
+};
+
 struct FieldAssignment {
     std::string field;
     std::unique_ptr<Expression> value;
@@ -41,6 +47,8 @@ struct Function {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<LocalBinding> locals;
+    std::vector<ActorSpawnBinding> actor_spawns;
+    std::vector<std::string> actor_stops;
     std::vector<FieldAssignment> assignments;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;

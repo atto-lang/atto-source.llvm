@@ -196,21 +196,45 @@ private:
         require(":");
         require("int");
         require("{");
+        bool scalar_local_seen = false;
         while (token_.text == "const" || token_.text == "val") {
             LocalBinding binding;
             binding.offset = token_.offset;
             advance();
             binding.name = identifier();
-            require(":");
-            // 'owned int' is a heap-owned scalar, intentionally explicit.
-            // It never decays into the ordinary alloca-backed int type.
-            binding.heap_owned = accept("owned");
-            require("int");
+            const bool scalar_type = accept(":");
+            if (scalar_type) {
+                binding.heap_owned = accept("owned");
+                require("int");
+            }
             require("=");
-            binding.initializer = expression();
-            require(";");
-            value.locals.push_back(std::move(binding));
+            if (accept("spawn")) {
+                if (actor_method || scalar_local_seen || scalar_type)
+                    fail("actor spawn requires untyped reference before scalar locals in main");
+                ActorSpawnBinding actor_ref;
+                actor_ref.offset = binding.offset;
+                actor_ref.name = std::move(binding.name);
+                actor_ref.actor_type = identifier();
+                require("(");
+                require(")");
+                require(";");
+                value.actor_spawns.push_back(std::move(actor_ref));
+            } else {
+                if (!scalar_type) fail("scalar local requires ': int'");
+                scalar_local_seen = true;
+                binding.initializer = expression();
+                require(";");
+                value.locals.push_back(std::move(binding));
+            }
         }
+        if (!actor_method) {
+            while (accept("stop")) {
+                value.actor_stops.push_back(identifier());
+                require(";");
+            }
+        }
+        if (token_.text == "await")
+            fail("await requires native compiler continuation lowering");
         // Restricted synchronous actor methods can update declared `let` fields.
         while (actor_method && token_.kind == Kind::Identifier
                && !reserved(token_.text)) {
@@ -367,6 +391,8 @@ private:
     }
 
     static void validate(const Program& program) {
+        std::unordered_set<std::string> declaredActors;
+        for (const auto& actor : program.actors) declaredActors.insert(actor.name);
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
@@ -384,6 +410,20 @@ private:
         for (const auto& fn : program.functions) {
             std::unordered_set<std::string> available(fn.parameters.begin(),
                                                       fn.parameters.end());
+            if (!fn.actor_spawns.empty() || !fn.actor_stops.empty()) {
+                if (fn.name != "main" || !fn.parameters.empty())
+                    throw std::runtime_error("source actor spawn requires zero-argument main");
+            }
+            std::unordered_set<std::string> liveActors;
+            for (const auto& spawn : fn.actor_spawns) {
+                if (!declaredActors.count(spawn.actor_type))
+                    throw std::runtime_error("unknown actor type '" + spawn.actor_type + "'");
+                if (!liveActors.insert(spawn.name).second ||
+                    !available.insert(spawn.name).second)
+                    throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
+            }
+            // Actor references cannot be cast to i64 or used as scalar values.
+            for (const auto& actor : liveActors) available.erase(actor);
             for (const auto& local : fn.locals) {
                 // The initializer is checked BEFORE publication: x=x+1 or
                 // forward references cannot read uninitialized stack memory.
@@ -394,6 +434,12 @@ private:
                 }
             }
             validate_expression(*fn.result, available, functions);
+            for (const auto& name : fn.actor_stops) {
+                if (!liveActors.erase(name))
+                    throw std::runtime_error("invalid or repeated actor stop '" + name + "'");
+            }
+            if (!liveActors.empty())
+                throw std::runtime_error("actor reference must be stopped before return");
         }
 
         std::unordered_set<std::string> actorNames;
