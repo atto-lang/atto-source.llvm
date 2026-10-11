@@ -37,8 +37,10 @@ int main(void) {
         ores_native_actor_scheduler_open(2, 4, 8, run, &dormant_state);
     check(dormant != NULL);
     check(ores_native_actor_scheduler_started_workers(dormant) == 0);
+    check(ores_native_actor_scheduler_started_control_threads(dormant) == 0);
     OresNativeActorRef idle = ores_native_actor_scheduler_spawn(dormant, 0);
     check(idle.scheduler_domain != 0);
+    check(ores_native_actor_scheduler_started_control_threads(dormant) == 1);
     check(ores_native_actor_scheduler_started_workers(dormant) == 0);
     ores_native_actor_scheduler_retire(dormant);
     check(ores_native_actor_scheduler_drain(dormant));
@@ -56,6 +58,7 @@ int main(void) {
         check(growing_refs[i].scheduler_domain != 0);
     }
     check(ores_native_actor_scheduler_started_workers(expanded) == 0);
+    check(ores_native_actor_scheduler_started_control_threads(expanded) == 1);
     check(ores_native_actor_scheduler_send(expanded, growing_refs[0], 0));
     check(ores_native_actor_scheduler_started_workers(expanded) == 1);
     for (size_t i = 1; i < 4; ++i)
@@ -79,6 +82,7 @@ int main(void) {
         check(!ores_native_actor_scheduler_spawn(scheduler, (size_t)a).scheduler_domain);
     }
     check(ores_native_actor_scheduler_started_workers(scheduler) == 0);
+    check(ores_native_actor_scheduler_started_control_threads(scheduler) == 1);
     for (int n = 0; n < EACH; ++n)
         for (size_t a = 0; a < ACTORS; ++a)
             check(ores_native_actor_scheduler_send(scheduler, refs[a], (uint64_t)n));
