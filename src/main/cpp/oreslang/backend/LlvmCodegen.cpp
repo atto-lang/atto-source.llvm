@@ -35,8 +35,10 @@ struct GuestNominalCase {
     std::string owner;
     std::string schema;
     std::uint32_t tag;
+    std::string shape;
     std::array<std::uint8_t, 32> shape_hash;
     std::vector<std::uint8_t> wire;
+    bool i64_payload = false;
 };
 std::array<std::uint8_t, 32> sha(std::string_view text) {
     return llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(
@@ -96,7 +98,6 @@ std::vector<GuestNominalCase> tagged_cases(
     for (const auto& name : sorted)
         fingerprint += std::to_string(name.size()) + ":" + name + ";";
     const std::string domain_hash = hex(sha(fingerprint));
-    const auto shape_hash = sha("oreslang.actor.shape.v2/T[S,I]");
     std::vector<GuestNominalCase> result;
     for (const auto& name : names) {
         const auto dot = name.find('.');
@@ -108,8 +109,13 @@ std::vector<GuestNominalCase> tagged_cases(
             throw std::runtime_error("unresolved enum identity while emitting LLVM");
         const auto item = std::find_if(decl->cases.begin(), decl->cases.end(),
             [&](const EnumCase& c) { return c.name == variant; });
-        if (item == decl->cases.end() || item->has_payload)
-            throw std::runtime_error("LLVM typed source subset requires payloadless cases");
+        if (item == decl->cases.end()
+                || (item->has_payload
+                    && item->payload.kind != MessageShape::Kind::Integer))
+            throw std::runtime_error("LLVM typed source subset requires payloadless or int cases");
+        const bool i64_payload = item->has_payload;
+        const std::string shape = i64_payload ? "T[S,I,I]" : "T[S,I]";
+        const auto shape_hash = sha("oreslang.actor.shape.v2/" + shape);
         const std::uint32_t tag = item->tag;
         const std::string schema = "oreslang.enum." + domain_hash + "."
                                   + hex(sha(name + "#" + std::to_string(tag)));
@@ -117,10 +123,11 @@ std::vector<GuestNominalCase> tagged_cases(
         mp_string(wire, schema);
         wire.push_back(0xc4); wire.push_back(32);
         wire.insert(wire.end(), shape_hash.begin(), shape_hash.end());
-        wire.push_back(0x92); // [nominal enum owner, declared tag]
+        wire.push_back(i64_payload ? 0x93 : 0x92);
         mp_string(wire, owner);
         mp_tag(wire, tag);
-        result.push_back({name, owner, schema, tag, shape_hash, std::move(wire)});
+        result.push_back({name, owner, schema, tag, shape, shape_hash,
+                          std::move(wire), i64_payload});
     }
     return result;
 }
@@ -223,13 +230,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
         if (cases.empty()) continue;
         std::vector<llvm::Constant*> contracts, identities;
         const auto prefix = actor.name + ".tagged.";
-        const auto shapePtr = constants.CreateGlobalStringPtr("T[S,I]",
-            prefix + "shape", 0, &module);
         for (std::size_t i = 0; i < cases.size(); ++i) {
             const auto& c = cases[i];
             const std::string symbol = prefix + std::to_string(i);
             const auto schema = constants.CreateGlobalStringPtr(c.schema,
                 symbol + ".schema", 0, &module);
+            const auto shapePtr = constants.CreateGlobalStringPtr(c.shape,
+                symbol + ".shape", 0, &module);
             const auto owner = constants.CreateGlobalStringPtr(c.owner,
                 symbol + ".owner", 0, &module);
             auto* rawHash = llvm::ConstantDataArray::get(context,
@@ -395,10 +402,25 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     [&](const GuestNominalCase& c) { return c.qualified == send.tagged_variant; });
                 if (it == cases.end())
                     throw std::runtime_error("source tagged send outside closed domain");
+                llvm::Value* wirePtr = taggedFrames.at(actorType).at(send.tagged_variant);
+                std::size_t wireBytes = it->wire.size();
+                if (it->i64_payload) {
+                    if (!send.payload || send.payload->kind != Expression::Kind::Integer
+                            || send.payload->integer < 0
+                            || send.payload->integer > INT32_MAX)
+                        throw std::runtime_error("tagged int message requires int literal");
+                    std::vector<std::uint8_t> frame = it->wire;
+                    mp_tag(frame, static_cast<std::uint32_t>(send.payload->integer));
+                    wireBytes = frame.size();
+                    const std::string bytes(reinterpret_cast<const char*>(frame.data()),
+                                            frame.size());
+                    wirePtr = at.CreateGlobalStringPtr(bytes);
+                } else if (send.payload) {
+                    throw std::runtime_error("payloadless tagged case cannot carry data");
+                }
                 at.CreateCall(sourceSendTaggedChecked,
-                    {refs.at(send.reference),
-                     taggedFrames.at(actorType).at(send.tagged_variant),
-                     llvm::ConstantInt::get(i64, it->wire.size())});
+                    {refs.at(send.reference), wirePtr,
+                     llvm::ConstantInt::get(i64, wireBytes)});
             } else {
                 auto* payload = lower(*send.payload, at, i64, params, slots, declarations);
                 at.CreateCall(sourceSend, {refs.at(send.reference), payload});
