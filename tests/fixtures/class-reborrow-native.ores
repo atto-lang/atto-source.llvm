@@ -8,7 +8,7 @@ fnc outer(borrow mut Box b): int {
   return inspect(rt borrow b);
 }
 pub fnc main(): int {
-  let Box b = new Box();
+  let mut Box b = new Box();
   b.value = 42;
   return outer(rt borrow mut b);
 }

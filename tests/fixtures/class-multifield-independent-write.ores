@@ -9,7 +9,7 @@ fnc edit(borrow mut Box b): void {
   return;
 }
 pub fnc main(): int {
-  let Box b = new Box();
+  let mut Box b = new Box();
   edit(rt borrow mut b);
   return b.left + b.last;
 }

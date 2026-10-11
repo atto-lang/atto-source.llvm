@@ -7,7 +7,7 @@ fnc damage(borrow mut Player p): void {
   return;
 }
 pub fnc main(): int {
-  let Player p = new Player();
+  let mut Player p = new Player();
   damage(rt borrow mut p);
   if (p.health eq 90) { return 1; } fi
   if (p.health eq 80) { return 42; } fi
