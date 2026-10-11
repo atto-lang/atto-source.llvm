@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
-typedef struct {
+typedef struct SourceActor {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
@@ -16,6 +16,9 @@ typedef struct {
     atomic_int initialized;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
+    _Atomic(struct SourceActor*) downstream;
+    _Atomic(struct SourceActor*) upstream;
+    atomic_uint_fast64_t forward_reserved;
 } SourceActor;
 
 static _Atomic uint64_t next_actor_id = 4100;
@@ -40,6 +43,19 @@ static void deliver(void* raw, size_t actor, uint64_t payload) {
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
+    // This is an admitted producer DATA turn. Routing is nonblocking; a
+    // reservation was made BEFORE the source message entered its mailbox.
+    SourceActor* sink = atomic_load_explicit(&instance->downstream, memory_order_acquire);
+    if (sink != NULL) {
+        ensure(ores_native_actor_scheduler_send(
+            sink->scheduler, sink->ref, (uint64_t)result));
+    }
+    SourceActor* producer = atomic_load_explicit(&instance->upstream, memory_order_acquire);
+    if (producer != NULL) {
+        const uint64_t prior = atomic_fetch_sub_explicit(
+            &producer->forward_reserved, 1, memory_order_acq_rel);
+        ensure(prior > 0);
+    }
 }
 void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
                                   OresSourceActorMessage on_message,
@@ -68,17 +84,75 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
      */
     return instance;
 }
+void oreslang_source_actor_pipe(void* upstream, void* downstream) {
+    SourceActor* producer = (SourceActor*)upstream;
+    SourceActor* consumer = (SourceActor*)downstream;
+    ensure(producer && consumer && producer != consumer
+        && producer->magic == SOURCE_ACTOR_MAGIC
+        && consumer->magic == SOURCE_ACTOR_MAGIC
+        && producer->on_message && consumer->on_message);
+    // A single, acyclic, main-owned i64 edge. Ref/actor ownership never
+    // crosses between actor-owned heaps and no payload aliases mutable memory.
+    ensure(atomic_load_explicit(&producer->downstream, memory_order_acquire) == NULL);
+    ensure(atomic_load_explicit(&producer->upstream, memory_order_acquire) == NULL);
+    ensure(atomic_load_explicit(&consumer->upstream, memory_order_acquire) == NULL);
+    ensure(atomic_load_explicit(&consumer->downstream, memory_order_acquire) == NULL);
+    atomic_store_explicit(&consumer->upstream, producer, memory_order_release);
+    atomic_store_explicit(&producer->downstream, consumer, memory_order_release);
+}
+
+int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
+    SourceActor* actor = (SourceActor*)opaque;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !actor->on_message)
+        return 0;
+    // A downstream-bound actor is not also a public producer. Mixed writers
+    // would invalidate the one-to-one forwarding quota proof.
+    if (atomic_load_explicit(&actor->upstream, memory_order_acquire) != NULL)
+        return 0;
+    const bool forwarding =
+        atomic_load_explicit(&actor->downstream, memory_order_acquire) != NULL;
+    if (forwarding) {
+        // At most 128 accepted but not yet sink-acknowledged messages. There
+        // cannot be downstream saturation if this is the only writer.
+        uint64_t used = atomic_load_explicit(&actor->forward_reserved, memory_order_acquire);
+        do {
+            if (used >= 128) return 0;
+        } while (!atomic_compare_exchange_weak_explicit(
+            &actor->forward_reserved, &used, used + 1,
+            memory_order_acq_rel, memory_order_acquire));
+    }
+    if (ores_native_actor_scheduler_send(
+            actor->scheduler, actor->ref, (uint64_t)payload))
+        return 1;
+    if (forwarding) {
+        const uint64_t prior = atomic_fetch_sub_explicit(
+            &actor->forward_reserved, 1, memory_order_acq_rel);
+        ensure(prior > 0);
+    }
+    return 0;
+}
+
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message != NULL);
-    ensure(ores_native_actor_scheduler_send(
-        instance->scheduler, instance->ref, (uint64_t)payload));
+    // Source send is still a void statement in the tiny guest compiler.
+    // An overload cannot be acknowledged without a typed return: refuse
+    // loss rather than silently dropping or blocking a native carrier.
+    ensure(oreslang_source_actor_try_send(opaque, payload));
 }
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(atomic_load_explicit(&instance->upstream, memory_order_acquire) == NULL);
     ensure(ores_native_actor_scheduler_drain(instance->scheduler));
+    // The source has stopped producing; after its own drain, every accepted
+    // forwarded result has been admitted to the consumer scheduler. This is
+    // a HOST stop barrier, never an actor continuation/carrier wait.
+    SourceActor* sink = atomic_load_explicit(&instance->downstream, memory_order_acquire);
+    if (sink != NULL) {
+        ensure(ores_native_actor_scheduler_drain(sink->scheduler));
+        ensure(atomic_load_explicit(&instance->forward_reserved, memory_order_acquire) == 0);
+        atomic_store_explicit(&sink->upstream, NULL, memory_order_release);
+        atomic_store_explicit(&instance->downstream, NULL, memory_order_release);
+    }
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
     ensure(ores_native_actor_scheduler_stop(instance->scheduler, instance->ref));
     ensure(ores_native_actor_scheduler_poll_done(instance->scheduler, instance->ref));
