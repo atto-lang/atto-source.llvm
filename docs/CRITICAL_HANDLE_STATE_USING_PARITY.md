@@ -179,3 +179,57 @@ Release gates: full Java/Graal guest execution CI; LLVM actor state source
 lowering; scheduler-owned await/loan retirement and continuation ID proof;
 live restart/cancel/panic/teardown races; FFM/native arena budget accounting;
 identical actor source/output/failure fixtures through both backends.
+
+
+## Serial actors: implicit critical callback admission (2026-10-11)
+
+`serial` is an actor-wide **scheduling** attribute, orthogonal to actor kind
+(shared/private/untrusted), not a synonym for the `critical` keyword:
+
+```ores
+define serial actor Counter as
+    state { count: int = 0; }
+    pub increment(): int using state.read, state.write {
+        return self.handle_state(|s| -> {
+            s.count = s.count + 1;
+            return s.count;
+        });
+    }
+end
+```
+
+The same serial actor may explicitly write
+`self.handle_state(critical |s| -> ...)`. The sealed `handle_state`
+intrinsic still owns state admission, loan fencing, no-escape rules, and
+the `using` effect upper bound. A **non-serial** actor still MUST supply an
+explicit `critical` inline callback. An unmarked lambda is not generally
+critical and cannot be smuggled through an arbitrary higher-order call.
+
+The Java AST retains a `serial` boolean independently from
+`Ast.ActorKind`, preserving it through annotation expansion. Java lexer,
+parser, state-checker, effect verifier, TypeChecker, and the synchronous
+source evaluator accept the scoped omission. Java accepts both
+`define serial actor Counter as ... end` and
+`define serial actor Counter as { ... }`.
+The LLVM native admission ABI receives serial proof from trusted actor
+runtime storage, NEVER from a callback-supplied Boolean. LLVM's restricted
+native source compiler reserves `serial` and rejects the guest form until
+real source actor+transport lowering exists.
+
+**Serialization rule:** a serial actor has one actor-wide admission lane
+for *both* HTTP requests and actor messages. Only one active user request
+or message handler can exist. After `await` or I/O yields a carrier, the
+logical handler still owns the lane until completion, failure,
+cancellation, or finalization. No subsequent `receive()` or HTTP handler
+may start until that completion. Supervisory CONTROL may interrupt safely
+without admitting another user handler, and all continuations must resume
+on scheduler-issued generation-fenced tickets.
+
+**Important integration gap:** Java's existing source actor mailbox already
+suppresses later user mail while a source receive is suspended. Its HTTP
+transport is not yet proven to route requests through that same per-actor
+admission lane. The serial metadata/callback waiver and native ABI tests do
+**not** by themselves establish HTTP + mailbox single-flight behavior.
+Until ingress adapters are integrated and cross-protocol concurrency tests
+pass, do not claim complete runtime serial guarantees or LLVM executable
+guest-source parity.
