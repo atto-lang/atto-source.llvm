@@ -141,6 +141,8 @@ int main() {
     s.bridge = std::make_unique<NativeSupervisorPanicBridge>(
         s.scheduler, s.parent, s.process);
     s.bridge->register_child(s.child);
+    check(s.bridge->registered_children() == 1,
+          "live child was not tracked for terminal notification");
     OresNativeActorTerminalFailure premature{
         ORES_NATIVE_CONTROL_PANIC, s.child, 37, 20261011
     };
@@ -207,6 +209,8 @@ int main() {
     check(s.control_events.load() == 1 && s.policy_calls.load() == 1
           && s.decisions.load() == 1,
           "terminal failure delivered or resolved more than once");
+    check(s.bridge->registered_children() == 0,
+          "terminal child generation remains pinned in bridge memory");
     check(s.bridge->accepted() == 1 && s.bridge->rejected() == 3,
           "native supervisor bridge replay/forgery accounting drift");
     check(s.process->resolved() == 1 && !s.process->healthy()
