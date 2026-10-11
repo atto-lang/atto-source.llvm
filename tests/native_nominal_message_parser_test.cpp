@@ -104,7 +104,7 @@ int main() {
         define actor Worker<messages=P> as
             receive(Message m) { }
         end
-    )", "LLVM tagged source subset requires payloadless cases");
+    )", "LLVM tagged source subset requires payloadless or int cases");
 
     // Static compiler admission proves exact coverage, source-order
     // alternatives and binders before intentionally rejecting execution.
@@ -126,7 +126,7 @@ int main() {
         end
     )";
     rejects(taggedActor,
-        "LLVM tagged source subset requires payloadless cases");
+        "LLVM tagged source subset requires payloadless or int cases");
     const auto arm = std::string("on E.Compute as (text, n) {}");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
             std::string("on E.Stop {}").size(), ""),
@@ -150,7 +150,7 @@ int main() {
     // shape without introducing duplicate bindings or shadowing.
     rejects(std::string(taggedActor).replace(taggedActor.find(arm), arm.size(),
             "on E.Compute as (_, _) {}"),
-            "LLVM tagged source subset requires payloadless cases");
+            "LLVM tagged source subset requires payloadless or int cases");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Ping as label {}"),
             std::string("on E.Ping as label {}").size(), "on E.Ping as m {}"),
             "tagged payload binder shadows field, local or Message parameter");
@@ -222,6 +222,58 @@ int main() {
             receive(Message m) { }
         end
     )", "LLVM tagged actor requires exhaustive side-effect-only match");
+
+    // Compiler-executable typechecked scalar payload variant: binder is
+    // scoped to its own exhaustive receive arm and cannot leak elsewhere.
+    auto typedInt = parse_program(R"(
+        define enum Values as Increment: int = 4 Decrement: int = 7 end
+        define pattern Inbox as Values.Decrement Values.Increment end
+        define actor Counter<messages=Inbox> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over {
+                    on Values.Increment as n { count = count + n; }
+                    on Values.Decrement as n { count = count - n; }
+                }
+                return count;
+            }
+        end
+        pub fnc main(): int {
+            const actor = spawn Counter();
+            actor.send(Values.Increment(9));
+            actor.send(Values.Decrement(3));
+            stop actor;
+            return 43;
+        }
+    )");
+    assert(typedInt.actors.size() == 1);
+    assert(typedInt.functions.at(0).actor_sends.size() == 2);
+    assert(typedInt.functions.at(0).actor_sends.at(0).payload->integer == 9);
+    assert(typedInt.actors.at(0).methods.at(0).tagged_arms.at(0).binders.at(0) == "n");
+    rejects(R"(
+        define enum Values as Increment: int end
+        define actor Counter<messages=Values> as
+            receive(Message m) { do match m over { on Values.Increment as n {} } }
+        end
+        pub fnc main(): int {
+            const actor = spawn Counter();
+            actor.send(Values.Increment(true));
+            stop actor;
+            return 43;
+        }
+    )", "LLVM tagged int send requires a positive or zero int literal");
+    rejects(R"(
+        define enum Values as Increment: int end
+        define actor Counter<messages=Values> as
+            receive(Message m) { do match m over { on Values.Increment as n {} } }
+        end
+        pub fnc main(): int {
+            const actor = spawn Counter();
+            actor.send(Values.Increment);
+            stop actor;
+            return 43;
+        }
+    )", "LLVM tagged int send requires a positive or zero int literal");
 
     // Existing bool-only actor receive semantics remain usable.
     auto legacy = parse_program(R"(
