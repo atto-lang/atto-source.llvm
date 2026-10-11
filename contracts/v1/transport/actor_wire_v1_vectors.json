@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "format": "OMSG/1",
+  "header_bytes": 24,
+  "max_frame_bytes": 1048576,
+  "max_nodes": 4096,
+  "max_depth": 64,
+  "golden": {
+    "schema_id_hex": "0102030405060708",
+    "variant_id_hex": "11223344",
+    "source_shape": "Tuple<string,int64,Array<bool>,List<string>>",
+    "value": "(\"hi\", 7, Array[true,false], List[\"ok\"])",
+    "frame_hex": "4f4d5347010000000102030405060708112233440000002a040000000403000000026869020000000000000007050000000201010100060000000103000000026f6b"
+  },
+  "rejected": [
+    "schema-mismatch",
+    "variant-mismatch",
+    "unknown-tag",
+    "truncated-frame",
+    "trailing-frame",
+    "invalid-utf8",
+    "noncanonical-boolean",
+    "invalid-container-count",
+    "unsupported-flags",
+    "zero-schema-id",
+    "zero-variant-id"
+  ]
+}
