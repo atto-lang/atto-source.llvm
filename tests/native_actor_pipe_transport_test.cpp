@@ -33,12 +33,20 @@ int main() {
         auto second = pipe.write_async(0, "second");
         check(second.wait_for(0ms) == std::future_status::timeout,
               "pipeline write bypassed bounded backpressure");
+        bool overloaded = false;
+        try { pipe.write_async(0, "overflow").get(); }
+        catch (const std::logic_error&) { overloaded = true; }
+        check(overloaded, "pending writers bypassed bounded edge budget");
         check(pipe.read_async(0).get() == "first", "lost FIFO pipe message");
         second.get();
         check(pipe.read_async(0).get() == "second", "stalled writer did not resume");
         auto pending_read = pipe.read_async(1);
         check(pending_read.wait_for(0ms) == std::future_status::timeout,
               "empty edge must suspend receiver");
+        bool read_overloaded = false;
+        try { pipe.read_async(1).get(); }
+        catch (const std::logic_error&) { read_overloaded = true; }
+        check(read_overloaded, "pending readers bypassed bounded edge budget");
         pipe.write_async(1, "transformed").get();
         check(pending_read.get() == "transformed", "reader waiter missed delivery");
         auto buffered = pipe.write_async(0, "retained");
