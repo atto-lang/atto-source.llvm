@@ -230,7 +230,8 @@ private:
             require(";");
             value.fields.push_back(std::move(field));
         }
-        if (value.fields.empty()) fail("actor requires at least one scalar field");
+        if (value.fields.empty() && value.messages_type.empty())
+            fail("actor requires at least one scalar field");
         while (token_.text == "fnc" || token_.text == "routine"
                || token_.text == "pub" || token_.text == "receive") {
             value.methods.push_back(function(true));
@@ -525,7 +526,53 @@ private:
         throw std::runtime_error("internal invalid expression kind");
     }
 
+    static std::string shape_key(const MessageShape& shape) {
+        switch (shape.kind) {
+            case MessageShape::Kind::Boolean: return "bool";
+            case MessageShape::Kind::Integer: return "int";
+            case MessageShape::Kind::String: return "string";
+            default: break;
+        }
+        const char* label = shape.kind == MessageShape::Kind::Tuple ? "Tuple"
+            : shape.kind == MessageShape::Kind::Array ? "Array" : "List";
+        std::string text(label);
+        text += "[";
+        for (const auto& element : shape.elements) {
+            if (text.back() != '[') text += ",";
+            text += shape_key(element);
+        }
+        return text + "]";
+    }
+
+    static bool contains_boolean(const Expression& e) {
+        if (e.kind == Expression::Kind::Boolean) return true;
+        if (e.left && contains_boolean(*e.left)) return true;
+        if (e.right && contains_boolean(*e.right)) return true;
+        for (const auto& arg : e.arguments)
+            if (contains_boolean(*arg)) return true;
+        return false;
+    }
+
+    static bool reads_name(const Expression& e, const std::string& name) {
+        if (e.kind == Expression::Kind::Variable && e.name == name) return true;
+        if (e.left && reads_name(*e.left, name)) return true;
+        if (e.right && reads_name(*e.right, name)) return true;
+        for (const auto& arg : e.arguments)
+            if (reads_name(*arg, name)) return true;
+        return false;
+    }
+
     static void validate(const Program& program) {
+        std::unordered_map<std::string, const MessagePattern*> messagePatterns;
+        for (const auto& pattern : program.message_patterns) {
+            if (!messagePatterns.emplace(pattern.name, &pattern).second)
+                throw std::runtime_error("duplicate message match contract '" + pattern.name + "'");
+            std::unordered_set<std::string> variants;
+            for (const auto& alternative : pattern.alternatives) {
+                if (!variants.insert(shape_key(alternative)).second)
+                    throw std::runtime_error("duplicate message shape in match '" + pattern.name + "'");
+            }
+        }
         std::unordered_set<std::string> declaredActors;
         for (const auto& actor : program.actors) declaredActors.insert(actor.name);
         std::unordered_map<std::string, std::size_t> functions;
@@ -589,11 +636,29 @@ private:
                 const auto actor = std::find_if(program.actors.begin(), program.actors.end(),
                     [&](const Actor& a) { return a.name == ref->second; });
                 if (actor == program.actors.end()) throw std::runtime_error("unknown actor type");
-                const auto method = std::find_if(actor->methods.begin(), actor->methods.end(),
-                    [](const Function& fn) { return fn.name == "on_message"; });
-                if (method == actor->methods.end() || !method->exported ||
-                    method->parameters.size() != 1)
-                    throw std::runtime_error("actor send requires pub on_message(int)");
+                if (!actor->messages_type.empty()) {
+                    auto found = messagePatterns.find(actor->messages_type);
+                    if (found == messagePatterns.end())
+                        throw std::runtime_error("unknown actor message match contract");
+                    const MessagePattern& contract = *found->second;
+                    if (contract.alternatives.size() != 1 ||
+                        (contract.alternatives.front().kind != MessageShape::Kind::Boolean
+                         && contract.alternatives.front().kind != MessageShape::Kind::Integer))
+                        throw std::runtime_error(
+                            "typed structural/union message transport requires tagged envelope lowering");
+                    const bool expectedBool =
+                        contract.alternatives.front().kind == MessageShape::Kind::Boolean;
+                    if (expectedBool && send.payload->kind != Expression::Kind::Boolean)
+                        throw std::runtime_error("actor send expects bool message");
+                    if (!expectedBool && contains_boolean(*send.payload))
+                        throw std::runtime_error("actor send expects int message");
+                } else {
+                    const auto method = std::find_if(actor->methods.begin(), actor->methods.end(),
+                        [](const Function& fn) { return fn.name == "on_message"; });
+                    if (method == actor->methods.end() || !method->exported ||
+                        method->parameters.size() != 1)
+                        throw std::runtime_error("actor send requires pub on_message(int)");
+                }
                 validate_expression(*send.payload, available, functions);
             }
             validate_expression(*fn.result, available, functions);
@@ -612,6 +677,22 @@ private:
                 throw std::runtime_error("conflicting generated actor symbol '" + name + "'");
         };
         for (const auto& actor : program.actors) {
+            if (!actor.messages_type.empty()) {
+                if (!messagePatterns.count(actor.messages_type))
+                    throw std::runtime_error(
+                        "unknown actor message match contract '" + actor.messages_type + "'");
+                const auto count = std::count_if(actor.methods.begin(), actor.methods.end(),
+                    [](const Function& f) { return f.is_receiver; });
+                if (count != 1)
+                    throw std::runtime_error("typed actor requires exactly one receive(Message m)");
+                if (std::any_of(actor.methods.begin(), actor.methods.end(),
+                    [](const Function& f) { return f.name == "on_message"; }))
+                    throw std::runtime_error(
+                        "typed actor must use receive, not on_message");
+            } else if (std::any_of(actor.methods.begin(), actor.methods.end(),
+                    [](const Function& f) { return f.is_receiver; })) {
+                throw std::runtime_error("receive requires actor messages=Contract");
+            }
             if (!actorNames.insert(actor.name).second
                 || functions.count(actor.name) != 0) {
                 throw std::runtime_error("duplicate actor symbol '" + actor.name + "'");
@@ -644,6 +725,16 @@ private:
                     validate_expression(*local.initializer, available, functions);
                     if (!available.insert(local.name).second)
                         throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
+                }
+                if (method.is_receiver) {
+                    const std::string& parameter = method.parameters.at(0);
+                    if (reads_name(*method.result, parameter) ||
+                        std::any_of(method.assignments.begin(), method.assignments.end(),
+                            [&](const FieldAssignment& a) {
+                                return reads_name(*a.value, parameter);
+                            }))
+                        throw std::runtime_error(
+                            "receive Message payload inspection requires match lowering");
                 }
                 for (const auto& assignment : method.assignments) {
                     if (!mutableFields.count(assignment.field)) {
