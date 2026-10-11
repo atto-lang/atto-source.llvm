@@ -159,6 +159,72 @@ static void readiness_racing_close_cannot_resurrect_a_worker() {
     }
 }
 
+static void gpu_device_callbacks_only_post_to_reserved_control_lane() {
+    ActorGroup group(2);
+    auto worker = group.register_spawn([] {});
+    auto other = group.register_spawn([] {});
+    assert(group.mark_ready(worker) && group.mark_ready(other));
+    std::atomic<int> actor_calls{0};
+    std::thread device_callback([&] {
+        assert(group.enqueue_control(worker, [&] { ++actor_calls; }));
+    });
+    device_callback.join();
+    assert(actor_calls == 0); // provider did not execute actor handler
+    assert(group.has_pending_control(worker));
+    assert(!group.enqueue_control(worker, [] {})); // bounded slot
+    assert(!group.finalized(worker)); // reserved event must be consumed
+    assert(group.run_control_turn(worker) == ActorGroup::ControlTurn::executed);
+    assert(actor_calls == 1);
+    assert(!group.has_pending_control(worker));
+    assert(group.run_control_turn(worker) == ActorGroup::ControlTurn::idle);
+    assert(group.finalized(worker));
+    assert(!group.enqueue_control(worker, [] {}));
+    assert(group.run_control_turn(worker) == ActorGroup::ControlTurn::retired);
+    assert(group.finalized(other));
+}
+
+static void group_control_lane_is_single_flight_even_on_different_carriers() {
+    ActorGroup group(2);
+    auto a = group.register_spawn([] {});
+    auto b = group.register_spawn([] {});
+    assert(group.mark_ready(a) && group.mark_ready(b));
+    std::promise<void> entered, release;
+    std::shared_future<void> unblock = release.get_future().share();
+    std::atomic<int> simultaneous{0};
+    assert(group.enqueue_control(a, [&] {
+        ++simultaneous;
+        entered.set_value();
+        unblock.wait();
+        --simultaneous;
+    }));
+    assert(group.enqueue_control(b, [&] {
+        assert(simultaneous == 0);
+        ++simultaneous;
+        --simultaneous;
+    }));
+    std::thread carrier([&] {
+        assert(group.run_control_turn(a) == ActorGroup::ControlTurn::executed);
+    });
+    entered.get_future().wait();
+    assert(group.run_control_turn(b) == ActorGroup::ControlTurn::busy);
+    assert(!group.finalized(a)); // Cannot finalize active lane.
+    release.set_value();
+    carrier.join();
+    assert(group.run_control_turn(b) == ActorGroup::ControlTurn::executed);
+    assert(group.finalized(a));
+    assert(group.finalized(b));
+}
+
+static void control_handler_exceptions_retire_the_turn() {
+    ActorGroup group(1);
+    auto worker = group.register_spawn([] {});
+    assert(group.mark_ready(worker));
+    assert(group.enqueue_control(worker, [] { throw std::runtime_error("device failure"); }));
+    require_throws([&] { (void)group.run_control_turn(worker); });
+    assert(!group.has_pending_control(worker));
+    assert(group.finalized(worker));
+}
+
 int main() {
     spawn_ref_is_pending_until_startup_and_done_is_independent();
     startup_failure_propagates_to_both_observers();
@@ -167,4 +233,7 @@ int main() {
     close_fences_admission_and_only_requests_stop();
     stale_foreign_and_quota_cases_fail_closed();
     readiness_racing_close_cannot_resurrect_a_worker();
+    gpu_device_callbacks_only_post_to_reserved_control_lane();
+    group_control_lane_is_single_flight_even_on_different_carriers();
+    control_handler_exceptions_retire_the_turn();
 }
