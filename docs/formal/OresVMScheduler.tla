@@ -11,12 +11,14 @@ EXTENDS Naturals, FiniteSets, TLC
  * this deliberately checks host scheduler safety rather than pretending to
  * prove complete guest-language semantics.
  *)
-CONSTANTS Pools, Actors, Owner, MaxWorkers
+CONSTANTS Pools, Actors, ActorA, ActorB, PoolA, PoolB, MaxWorkers
+Owner == [a \in Actors |-> IF a = ActorA THEN PoolA ELSE PoolB]
 ASSUME /\ MaxWorkers \in Nat
        /\ MaxWorkers > 0
-       /\ Actors # {}
-       /\ Pools # {}
-       /\ Owner \in [Actors -> Pools]
+       /\ ActorA # ActorB
+       /\ Actors = {ActorA, ActorB}
+       /\ PoolA \in Pools
+       /\ PoolB \in Pools
 
 VARIABLES vm, masterAlive, poolActive, workers, status, lease,
           queued, wakeMaster, wakePool, cancelled
