@@ -209,6 +209,22 @@ if(BUILD_TESTING)
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "processed=3 last=14")
+        # Int-payload tagged messages share identical wire shape across
+        # distinct enum cases, yet dispatch to distinct typed receive arms.
+        oreslang_contract_test(source_tagged_int_payload_ir source-tagged-int-payload-dispatch.ores
+            --ir "oreslang_source_actor_tagged_i64")
+        oreslang_contract_test(native_tagged_int_payload source-tagged-int-payload-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
+        oreslang_contract_test(native_asan_tagged_int_payload source-tagged-int-payload-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
         oreslang_contract_test(native_asan_tagged_nominal_actor source-tagged-payloadless-dispatch.ores
             --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
