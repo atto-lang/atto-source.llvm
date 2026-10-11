@@ -271,8 +271,9 @@ private:
                 const auto offset = token_.offset;
                 advance();
                 require(".");
-                const std::string target = identifier();
-                if (target == "end") {
+                const bool actor_end = accept("end");
+                const std::string target = actor_end ? "end" : identifier();
+                if (actor_end) {
                     require("(");
                     require(")");
                     require(";");
