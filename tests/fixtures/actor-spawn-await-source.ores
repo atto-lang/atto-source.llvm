@@ -1,0 +1,19 @@
+// Source fnc main is compiler-lowered into a resumable native continuation.
+// No host-side hand-written sequence of actor operations is permitted.
+define actor Counter as
+  let count: int = 5;
+  let offset: int = 7;
+  pub fnc add(int by): int {
+    self.count = self.count + by;
+    return self.count + self.offset;
+  }
+end
+
+fnc main(): int {
+  const worker = spawn Counter();
+  await worker.get_ready();
+  const result: int = await worker.add(20);
+  worker.stop();
+  await worker.get_done();
+  return result;
+}
