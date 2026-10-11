@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/ExceptionPolicy.hpp"
+#include "oreslang/runtime/SupervisorEnqueueGuard.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -94,7 +95,7 @@ private:
         scheduled_ = true;
         try {
             auto self = shared_from_this();
-            if (!enqueue_([self] { self->drain(); })) {
+            if (!SupervisorEnqueueGuard::submit(enqueue_, [self] { self->drain(); })) {
                 scheduled_ = false;
                 failed_ = true;
                 undelivered_ += queue_.size();
