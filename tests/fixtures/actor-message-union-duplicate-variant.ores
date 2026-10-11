@@ -1,0 +1,6 @@
+define actor Counter as
+  let count: int = 0;
+  receive(ActorMail<{delta: int} | {delta: int}> mail): void {
+    return;
+  }
+end
