@@ -194,6 +194,18 @@ pub fnc main(): int {
   if (x eq 4) { return x; }
   return 0;
 }
+""",
+            """pub fnc main(): int {
+  const x: owned int = 4;
+  if (x = = 4) { return x; } fi
+  return 0;
+}
+""",
+            """pub fnc main(): int {
+  const x: owned int = 4;
+  if (x === 4) { return x; } fi
+  return 0;
+}
 """
         ]
         for i, source in enumerate(invalid):
