@@ -1,0 +1,26 @@
+// Both actor bodies are parsed, checked and compiled to native LLVM IR.
+// The producer's on_message result is the sole bounded input to Consumer.
+define actor Producer as {
+  let accumulated: int = 0;
+  pub fnc on_message(int n): int {
+    accumulated = accumulated + n;
+    return accumulated * 2;
+  }
+}
+define actor Consumer as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const p = spawn Producer();
+  const c = spawn Consumer();
+  p pipe c;
+  p.send(1);
+  p.send(2);
+  stop p;
+  stop c;
+  return 43;
+}
