@@ -44,6 +44,7 @@ int main() {
     assert(result.status == Reclaim::complete);
     assert(result.closed == 3);
     assert(result.errors.size() == 1);
+    assert(result.failures == 1);
     assert(result.errors[0] == "close failure");
     assert((closed == std::vector<int>{3, 2, 1}));
     assert(registry.try_reclaim().closed == 3);
@@ -83,6 +84,23 @@ int main() {
     second.release_loan(foreign);
     second.retire();
     assert(second.try_reclaim().status == Reclaim::complete);
+
+    // A malicious or buggy native closer can return huge error text; keep
+    // diagnostics bounded and still attempt every remaining registered close.
+    ActorResourceRegistry boundedErrors(25, 1, 3);
+    std::string hugeError(8192, 'x');
+    int successfulClosers = 0;
+    boundedErrors.register_resource(Kind::file, [&] { ++successfulClosers; });
+    boundedErrors.register_resource(Kind::socket, [&] { throw std::runtime_error(hugeError); });
+    boundedErrors.register_resource(Kind::timer, [&] { ++successfulClosers; });
+    boundedErrors.retire();
+    auto boundedResult = boundedErrors.try_reclaim();
+    assert(boundedResult.status == Reclaim::complete);
+    assert(boundedResult.failures == 1);
+    assert(boundedResult.errors.size() == 1);
+    assert(boundedResult.errors[0].size() == 256);
+    assert(successfulClosers == 2);
+    assert(boundedErrors.try_reclaim().failures == 1);
 
     ActorResourceRegistry concurrent(16, 1, 2);
     std::atomic<int> finishes{0};
