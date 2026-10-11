@@ -64,6 +64,17 @@ struct ReceiveBooleanArm {
     std::size_t offset = 0;
 };
 
+// Static admission representation for source `match m over { on Enum.Case
+// as (...) { } }`. Bodies remain unavailable to native codegen; matching
+// contracts are checked before the explicit fail-closed lowering gate.
+struct TaggedReceiveArm {
+    std::string qualified_case;
+    std::vector<std::string> binders;
+    bool binds_payload = false;
+    bool tuple_destructure = false;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
@@ -77,6 +88,7 @@ struct Function {
     std::vector<FieldAssignment> assignments;
     std::string match_subject;
     std::vector<ReceiveBooleanArm> boolean_arms;
+    std::vector<TaggedReceiveArm> tagged_arms;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
