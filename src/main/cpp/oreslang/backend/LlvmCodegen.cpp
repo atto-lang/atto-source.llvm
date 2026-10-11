@@ -493,6 +493,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
         for (const auto& method : actor.methods) {
             std::vector<llvm::Type*> types{ptr, i64, i64};
             types.insert(types.end(), method.parameters.size(), i64);
+            if (method.is_receiver && taggedCases.count(actor.name)) {
+                // Callback receives compiler-local case ordinal, owned frame
+                // bytes and length. The mailbox validates the nominal
+                // contract before the callback runs.
+                types.push_back(ptr);
+                types.push_back(i64);
+            }
             auto* signature = llvm::FunctionType::get(i64, types, false);
             auto existing = actorMessageHandlers.find(actor.name);
             auto* fn = (method.name == "on_message" || method.name == "receive")
@@ -542,6 +549,49 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 }
                 locals.emplace(local.name, address);
                 ownedSlots.push_back({address, local.heap_owned});
+            }
+            if (!method.tagged_arms.empty()) {
+                const auto& cases = taggedCases.at(actor.name);
+                auto* invalid = llvm::BasicBlock::Create(context, "match.invalid", fn);
+                auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
+                auto* dispatch = builder.CreateSwitch(
+                    parameters.at(method.match_subject), invalid,
+                    static_cast<unsigned>(method.tagged_arms.size()));
+                for (const auto& arm : method.tagged_arms) {
+                    const auto selected = std::find_if(cases.begin(), cases.end(),
+                        [&](const GuestNominalCase& c) {
+                            return c.qualified == arm.qualified_case;
+                        });
+                    if (selected == cases.end())
+                        throw std::runtime_error("compiler enum arm escaped closed domain");
+                    const std::size_t ordinal = std::distance(cases.begin(), selected);
+                    auto* armBlock = llvm::BasicBlock::Create(context,
+                        "match.nominal." + std::to_string(ordinal), fn);
+                    dispatch->addCase(llvm::ConstantInt::get(i64, ordinal), armBlock);
+                    builder.SetInsertPoint(armBlock);
+                    for (const auto& assignment : arm.assignments) {
+                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                            [&](const LocalBinding& f) {
+                                return f.name == assignment.field;
+                            });
+                        if (field == actor.fields.end() || !field->field_mutable)
+                            throw std::runtime_error("invalid tagged actor field mutation");
+                        auto* updated = lower(*assignment.value, builder, i64,
+                                              parameters, locals, declarations);
+                        builder.CreateCall(fieldWrite,
+                            {heap, currentDomain, currentEpoch,
+                             llvm::ConstantInt::get(i64,
+                                 std::distance(actor.fields.begin(), field)), updated});
+                        builder.CreateStore(updated, locals.at(assignment.field));
+                    }
+                    builder.CreateBr(joined);
+                }
+                builder.SetInsertPoint(invalid);
+                // Runtime's trusted nominal schema table makes this
+                // unreachable in well-formed deliveries, but never invoke
+                // an arbitrary arm on an out-of-range case ordinal.
+                builder.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
+                builder.SetInsertPoint(joined);
             }
             if (!method.boolean_arms.empty()) {
                 auto* subject = parameters.at(method.match_subject);
