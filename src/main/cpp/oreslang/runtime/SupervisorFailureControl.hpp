@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -32,7 +33,7 @@ struct SupervisorFailureNotice {
  * The lane is retained by actor lifecycle tickets after group close. Pending
  * notices are NOT silently treated as delivered when dispatch fails.
  */
-class SupervisorFailureControl final {
+class SupervisorFailureControl final : public std::enable_shared_from_this<SupervisorFailureControl> {
 public:
     using Handler = std::function<void(const SupervisorFailureNotice&)>;
     using Enqueue = std::function<bool(std::function<void()>)>;
@@ -92,7 +93,8 @@ private:
         if (!handler_ || scheduled_ || failed_ || queue_.empty()) return;
         scheduled_ = true;
         try {
-            if (!enqueue_([this] { drain(); })) {
+            auto self = shared_from_this();
+            if (!enqueue_([self] { self->drain(); })) {
                 scheduled_ = false;
                 failed_ = true;
                 undelivered_ += queue_.size();
