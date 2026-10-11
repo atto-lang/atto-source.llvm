@@ -140,6 +140,7 @@ if(BUILD_TESTING)
                 --arena-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorArena.c"
                 --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
                 --mailbox-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorMailbox.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
                 --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_http_matrix_server.c"
                 --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
         set_tests_properties(native_http_llvm_five_actor_placement_matrix
@@ -159,6 +160,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_fifo_mailbox_admission
         COMMAND oreslang-native-actor-mailbox-test)
     set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
+
+    # Nonblocking admission: fixed-size per-actor message rings, one turn per
+    # actor, and preallocated native worker pool. HTTP ingress never parks.
+    add_executable(oreslang-native-actor-ready-queue-test
+        tests/native_actor_scheduler_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-ready-queue-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-ready-queue-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-ready-queue-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_nonblocking_ready_queue
+        COMMAND oreslang-native-actor-ready-queue-test)
+    set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
 
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
