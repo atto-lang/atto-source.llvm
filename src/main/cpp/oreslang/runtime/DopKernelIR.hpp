@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/DopLayout.hpp"
+#include "oreslang/runtime/TargetAbi.hpp"
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -56,9 +57,7 @@ class HostBuffer {
         std::size_t loans = 0;
         bool closed = false;
         static std::size_t checked_host_size(const Plan& layout) {
-            if (layout.byte_length() > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-                throw std::overflow_error("layout exceeds addressable host size");
-            return static_cast<std::size_t>(layout.byte_length());
+            return oreslang::TargetAbi::checked_host_bytes(layout.byte_length());
         }
         explicit State(Plan value)
             : layout(value), bytes(checked_host_size(value), 0) { }

@@ -18,3 +18,15 @@ for flag in ("--target=wasm32", "--does-not-exist"):
     invalid = subprocess.run([compiler, flag, flag, source], capture_output=True, text=True)
     assert invalid.returncode != 0 and not invalid.stdout
 print("wasm32 LLVM IR switch and negative flags verified")
+
+# Named target profiles do not authorize unimplemented native cross-target ABIs.
+for target in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+               "i686-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf"):
+    rejected = subprocess.run([compiler, "--target=" + target, source], capture_output=True, text=True)
+    assert rejected.returncode != 0 and not rejected.stdout
+    assert "no certified IR/ABI lowering" in rejected.stderr
+
+canonical = subprocess.run([compiler, "--target=wasm32-unknown-unknown", source],
+                           capture_output=True, text=True)
+assert canonical.returncode == 0, canonical.stderr
+assert 'target triple = "wasm32-unknown-unknown"' in canonical.stdout

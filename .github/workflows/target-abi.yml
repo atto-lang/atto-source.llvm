@@ -1,0 +1,20 @@
+name: Target ABI (x86-64 and ARM64)
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  target-abi:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build standalone ABI verifier
+        run: |
+          c++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -I src/main/cpp tests/target_abi_test.cpp -o /tmp/oreslang-target-abi-test
+      - name: Test versioned target profiles and checked allocations
+        run: /tmp/oreslang-target-abi-test contracts/architecture/v1/targets.tsv
