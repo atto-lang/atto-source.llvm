@@ -32,6 +32,30 @@ int main() {
     const FunctionEffects readonly{static_cast<std::uint32_t>(FunctionEffect::StateRead)};
 
     check(state.ready_to_suspend(actor));
+    // The serial guarantee is stored on the actor's runtime instance, not
+    // supplied by a guest callback. It admits the optional critical marker.
+    State serial_actor(actor + 1, {
+        {"count", {State::Type::Int, std::int64_t{0}}}
+    }, true);
+    auto plain = checked;
+    plain.callback_critical = false;
+    auto incremented = serial_actor.critical(actor + 1, 300, plain, allowed,
+            [&](State::Access& access) -> State::Value {
+        const auto count = std::get<std::int64_t>(access.read("count"));
+        access.write("count", count + 1);
+        return access.read("count");
+    });
+    check(std::get<std::int64_t>(incremented) == 1);
+    // Explicit critical continues to be legal on serial actors.
+    check(std::get<std::int64_t>(serial_actor.critical(
+            actor + 1, 301, checked, allowed,
+            [](State::Access& access) -> State::Value {
+        return access.read("count");
+    })) == 1);
+    rejects([&] {
+        (void) state.critical(actor, 300, plain, allowed,
+                [](State::Access&) -> State::Value { return std::int64_t{0}; });
+    });
     for (int i = 0; i < 100; ++i) {
         const auto next = state.critical(actor, 100, checked, allowed,
                 [&](State::Access& access) -> State::Value {
