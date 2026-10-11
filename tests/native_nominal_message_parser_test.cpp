@@ -86,6 +86,53 @@ int main() {
         end
     )", "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
 
+    // Static compiler admission proves exact coverage, source-order
+    // alternatives and binders before intentionally rejecting execution.
+    const std::string taggedActor = R"(
+        define enum E as
+            Compute: Tuple[string, int] = 1
+            Ping: string = 2
+            Stop = 3
+        end
+        define pattern Messages as E.Compute E.Ping E.Stop end
+        define actor Worker<messages=Messages> as
+            receive(Message m) {
+                do match m over {
+                    on E.Compute as (text, n) {}
+                    on E.Ping as label {}
+                    on E.Stop {}
+                }
+            }
+        end
+    )";
+    rejects(taggedActor,
+        "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+    const auto arm = std::string("on E.Compute as (text, n) {}");
+    rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
+            std::string("on E.Stop {}").size(), ""),
+            "nonexhaustive tagged receive match");
+    rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
+            std::string("on E.Stop {}").size(), "on E.Ping {}"),
+            "duplicate or unreachable tagged receive match arm");
+    rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
+            std::string("on E.Stop {}").size(), "on E.NotListed {}"),
+            "receive match arm is outside closed tagged pattern");
+    rejects(std::string(taggedActor).replace(taggedActor.find(arm), arm.size(),
+            "on E.Compute as (text) {}"),
+            "tagged variant binder arity or tuple shape mismatch");
+    rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
+            std::string("on E.Stop {}").size(), "on E.Stop as x {}"),
+            "cannot destructure payloadless enum variant");
+    rejects(std::string(taggedActor).replace(taggedActor.find("on E.Compute as (text, n) {}"),
+            arm.size(), "on E.Compute as (x, x) {}"),
+            "duplicate variable in tagged payload destructuring");
+    rejects(std::string(taggedActor).replace(taggedActor.find("match m over"),
+            std::string("match m over").size(), "match unknown over"),
+            "tagged receive match must inspect Message parameter");
+    rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
+            std::string("on E.Stop {}").size(), "on E.Stop { self.respond(1); }"),
+            "expected '}'");
+
     // Existing bool-only actor receive semantics remain usable.
     auto legacy = parse_program(R"(
         declare type match Signals as bool end
