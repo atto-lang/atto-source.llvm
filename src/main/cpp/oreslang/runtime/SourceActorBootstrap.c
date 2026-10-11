@@ -539,6 +539,13 @@ int oreslang_source_actor_send_variant(void* opaque,
         return 0;
     return source_send_binary(actor, wire, size);
 }
+void oreslang_source_actor_send_variant_checked(
+    void* opaque, const uint8_t* wire, size_t size) {
+    // A one-way source-level send must have observable failure semantics.
+    // This narrow bootstrap uses terminal host error until Future<T>
+    // backpressure/cancellation has a proper compiler continuation.
+    ensure(oreslang_source_actor_send_variant(opaque, wire, size));
+}
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
