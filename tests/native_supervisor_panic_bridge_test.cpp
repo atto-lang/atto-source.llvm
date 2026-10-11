@@ -275,6 +275,69 @@ int main() {
         control->close();
     }
 
+    // Terminal policy failure must release its lease and discard retained
+    // owned notice data without making an ambiguous lifecycle decision.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        auto process = std::make_shared<SupervisorProcess>(
+            3307, 53, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                throw std::runtime_error("policy failed");
+            },
+            [](const SupervisorProcess::Resolution&) {
+                throw std::runtime_error("failed policy reached lifecycle sink");
+            });
+        process->accept(SupervisorFailureNotice{
+            3307, 53, 1, 1, std::nullopt, "policy failure"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (process->undelivered() == 0
+                && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(process->undelivered() == 1 && process->pending() == 0,
+              "native terminal failure retained a CONTROL notice");
+        check(!process->callback_active() && !process->healthy(),
+              "native terminal failure retained logical lease");
+        process->close();
+        check(process->undelivered() == 1,
+              "native close double-counted failed notification");
+        control->close();
+    }
+
+    // Closing a suspended hook invalidates its logical lease immediately.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::atomic<unsigned> entered{0};
+        auto process = std::make_shared<SupervisorProcess>(
+            4407, 54, 2, control->adapter(),
+            [&](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                ++entered;
+                return std::nullopt;
+            },
+            [](const SupervisorProcess::Resolution&) {
+                throw std::runtime_error("closed supervisor reached lifecycle sink");
+            });
+        process->accept(SupervisorFailureNotice{
+            4407, 54, 1, 1, std::nullopt, "suspend"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (entered.load() == 0 && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(entered.load() == 1 && process->callback_active(),
+              "suspended native callback never acquired its logical lease");
+        const auto epoch = process->current_epoch();
+        check(epoch != 0, "suspended native callback lost generation");
+        process->close();
+        check(!process->callback_active() && process->pending() == 0,
+              "native close retained suspended logical lease or notice");
+        check(process->undelivered() == 1 && !process->healthy(),
+              "native close misaccounted abandoned continuation");
+        check(!process->resume(epoch, SupervisorProcess::Directive::restart),
+              "stale native callback resumed after close");
+        control->close();
+    }
+
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
-              " await=1 replay=0 native_stop=1 throwing_self_close=1");
+              " await=1 replay=0 native_stop=1 throwing_self_close=1"
+              " terminal_cleanup=1 suspended_close=1");
 }
