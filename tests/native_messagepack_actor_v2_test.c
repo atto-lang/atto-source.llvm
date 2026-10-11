@@ -16,7 +16,8 @@ static const Golden golden[] = {
     {"demo.FixedListNested.v1", "FL[L[S],B]", "9402b764656d6f2e46697865644c6973744e65737465642e7631c4202007a0279d88d3eca7d21cf32b37327b996593c1353963dd78555f56f1ba6ddc9292a161a162c2"},
     {"demo.ArrayStrings.v1", "A[S]", "9402b464656d6f2e4172726179537472696e67732e7631c420139722a10b9ef4d4af0cea1bfbc50ff92a0459aabf837f63a6fec052fe5dc5c992a161a162"},
     {"demo.ListStrings.v1", "L[S]", "9402b364656d6f2e4c697374537472696e67732e7631c4204efbea59591d5c31d9f13ee93ef5c1d954e653144d380bb2d064ea4fa6d56b8c92a161a162"},
-    {"demo.String.v1", "S", "9402ae64656d6f2e537472696e672e7631c42021c2efdbff08dd4e1320d8abe1ba0cc6aea8e4cf104b984be7b7079968fad3cda3666f6f"}
+    {"demo.String.v1", "S", "9402ae64656d6f2e537472696e672e7631c42021c2efdbff08dd4e1320d8abe1ba0cc6aea8e4cf104b984be7b7079968fad3cda3666f6f"},
+    {"demo.Float64.v1", "F", "9402af64656d6f2e466c6f617436342e7631c42085e27ecf506d7dfa7e3db8c1449d9f3cdf7639765689c429f693b6cbf5d68f91cb3ff8000000000000"}
 };
 static uint8_t read_hex_digit(char c) {
     if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
@@ -68,9 +69,9 @@ static void wait_atomic(atomic_int* counter, int expected) {
     abort();
 }
 int main(void) {
-    uint8_t wire[6][1024]; size_t sizes[6];
-    OresMp2Contract schemas[6];
-    for (size_t i = 0; i < 6; ++i) {
+    uint8_t wire[7][1024]; size_t sizes[7];
+    OresMp2Contract schemas[7];
+    for (size_t i = 0; i < 7; ++i) {
         sizes[i] = decode_hex(golden[i].hex, wire[i], sizeof(wire[i]));
         schemas[i] = contract(i, wire[i], sizes[i]);
         OresMp2Owned owned = {0};
@@ -98,8 +99,26 @@ int main(void) {
         memcpy(corrupted, wire[i], sizes[i]);
         corrupted[sizes[i]] = 0; /* trailing value */
         assert(!ores_mp2_validate_copy(&schemas[i], corrupted, sizes[i] + 1, &owned));
-        assert(!ores_mp2_validate_copy(&schemas[(i + 1) % 6], wire[i], sizes[i], &owned));
+        assert(!ores_mp2_validate_copy(&schemas[(i + 1) % 7], wire[i], sizes[i], &owned));
     }
+    /* A non-finite IEEE-754 binary64 must be rejected even with an
+     * otherwise valid schema ID and independently verified shape hash.
+     * The final eight bytes of the finite 1.5 golden contain the double.
+     */
+    OresMp2Owned invalid_float = {0};
+    uint8_t nonfinite[1024];
+    memcpy(nonfinite, wire[6], sizes[6]);
+    nonfinite[sizes[6] - 8] = 0x7f;
+    nonfinite[sizes[6] - 7] = 0xf8;
+    for (size_t i = sizes[6] - 6; i < sizes[6]; ++i) nonfinite[i] = 0;
+    assert(!ores_mp2_validate_copy(&schemas[6], nonfinite, sizes[6], &invalid_float));
+    assert(!invalid_float.bytes && !invalid_float.size);
+    /* Noncanonical positive one as uint8 is forbidden; Java rejects it. */
+    uint8_t inflated_integer[1024];
+    memcpy(inflated_integer, wire[1], sizes[1]);
+    inflated_integer[sizes[1]-3] = 0xcc;
+    inflated_integer[sizes[1]-2] = 1;
+    assert(!ores_mp2_validate_copy(&schemas[1], inflated_integer, sizes[1], &invalid_float));
     State state = {0};
     state.expected_size[0] = sizes[0]; state.expected_size[1] = sizes[5];
     memcpy(state.expected[0], wire[0], sizes[0]);
@@ -158,6 +177,6 @@ int main(void) {
     assert(atomic_load(&state.finished[1]) == 1);
     assert(atomic_load(&state.max_active[0]) == 1);
     assert(atomic_load(&state.max_active[1]) == 1);
-    puts("MESSAGEPACK_V2_NATIVE_PASS vectors=6 owned=1 scheduler=1 overload=1 independent=1");
+    puts("MESSAGEPACK_V2_NATIVE_PASS vectors=7 owned=1 scheduler=1 overload=1 independent=1");
     return 0;
 }
