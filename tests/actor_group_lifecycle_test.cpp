@@ -3,6 +3,8 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -357,6 +359,123 @@ int main() {
         check(a.control_delivery_lost(), "close silently dropped terminal CONTROL");
         check(group.finalized(a), "closed group could not retire discarded CONTROL");
         a.get_done().get();
+    }
+
+
+    {
+        // Runtime owns a token independent of the group object. Destroying a
+        // closed group must not strand actor identity, readiness or DONE.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> original;
+        {
+            NativeActorGroup group(8101, 1);
+            auto worker = group.adopt(8101, 9, 41, [] {});
+            original.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            check(!finalizer->finalized(),
+                  "runtime finalizer bypassed live group ownership");
+            check(group.mark_ready(worker), "runtime finalizer actor not ready");
+            group.close();
+            check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "group close fabricated physical retirement");
+        }
+        NativeActorGroup successor(8101, 1);
+        bool blocked = false;
+        try { (void) successor.adopt(8101, 9, 42, [] {}); }
+        catch (const std::logic_error&) { blocked = true; }
+        check(blocked, "actor ID reused before runtime physical ack");
+        check(finalizer->finalized(), "runtime finalizer lost retired group");
+        original->get_ready().get();
+        original->get_done().get();
+        check(!finalizer->finalized(), "runtime finalizer double-acked DONE");
+        auto next = successor.adopt(8101, 9, 42, [] {});
+        check(!finalizer->finalized(), "stale finalizer retired new generation");
+        check(successor.mark_ready(next), "reused generation not ready");
+        check(successor.finalized(next), "reused generation failed to finalize");
+        next.get_done().get();
+    }
+    {
+        // Failed startup remains failed after closing and destroying a
+        // group, and its completion is settled only on a runtime quiescence
+        // acknowledgement rather than on close().
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> original;
+        int notified = 0;
+        {
+            NativeActorGroup group(8102, 1);
+            auto worker = group.adopt(8102, 2, 3, [] {});
+            original.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            worker.when_ready([&](const auto& result) {
+                check(!result.ready, "closed initializing actor became ready");
+                ++notified;
+            });
+            group.close();
+        }
+        check(notified == 1, "close lost startup rejection notification");
+        check(original->get_done().wait_for(0ms) == std::future_status::timeout,
+              "failed startup manufactured DONE without release");
+        check(finalizer->finalized(), "late failed-startup ack not accepted");
+        bool ready_failed = false, done_failed = false;
+        try { original->get_ready().get(); }
+        catch (const std::runtime_error&) { ready_failed = true; }
+        try { original->get_done().get(); }
+        catch (const std::runtime_error&) { done_failed = true; }
+        check(ready_failed && done_failed,
+              "late failed startup did not fail both lifecycle futures");
+    }
+    {
+        // A trusted runtime finalizer racing with close must not free a
+        // still-group-owned actor; retries can succeed once close detaches.
+        // This test has no executing carrier work or retained native loans.
+        for (int round = 0; round < 64; ++round) {
+            const auto runtime = static_cast<std::uint64_t>(8200 + round);
+            NativeActorGroup group(runtime, 1);
+            auto worker = group.adopt(runtime, 5, 1, [] {});
+            auto finalizer = group.runtime_finalizer(worker);
+            check(group.mark_ready(worker), "race worker init failed");
+            std::atomic<bool> retired{false};
+            std::thread runtime_ack([&] {
+                for (int attempt = 0; attempt < 100000; ++attempt) {
+                    if (finalizer.finalized()) {
+                        retired.store(true, std::memory_order_release);
+                        return;
+                    }
+                    std::this_thread::yield();
+                }
+            });
+            group.close();
+            runtime_ack.join();
+            check(retired.load(std::memory_order_acquire),
+                  "runtime finalization raced with close and stayed pending");
+            check(!group.finalized(worker), "double finalization accepted");
+            worker.get_done().get();
+        }
+    }
+    {
+        // Close drops undelivered CONTROL work, but only a post-close
+        // runtime finalizer can acknowledge physical retirement. Neither
+        // token nor close may execute the actor handler inline.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> actor;
+        int ran = 0;
+        {
+            NativeActorGroup group(8103, 1);
+            auto worker = group.adopt(8103, 4, 1, [] {});
+            actor.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            check(group.mark_ready(worker), "CONTROL worker not ready");
+            check(group.enqueue_control(worker, [&] { ++ran; }),
+                  "CONTROL reservation failed");
+            check(!group.finalized(worker), "queued CONTROL was bypassed");
+            check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "failed physical ack settled DONE");
+            group.close();
+        }
+        check(ran == 0, "close executed guest CONTROL inline");
+        check(actor->control_delivery_lost(), "CONTROL loss unreported");
+        check(finalizer->finalized(), "late ack blocked after CONTROL dropped");
+        actor->get_done().get();
     }
 
 }
