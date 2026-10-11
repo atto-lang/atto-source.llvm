@@ -71,6 +71,43 @@ int main() {
     CHECK(fresh.finish(*newTicket.lease).accepted);
     CHECK(!fresh.may_execute(*newTicket.lease));
 
+    // Two independently created gates with identical *public* identity,
+    // generation, event ID and kind must never recognize one another's leases.
+    // This also covers accidental incarnation reuse during a failed restart.
+    SerialActorLifetimeGate twinA(91, 7, 2);
+    SerialActorLifetimeGate twinB(91, 7, 2);
+    const auto a = twinA.submit(Kind::Http, 1);
+    const auto b = twinB.submit(Kind::Http, 1);
+    CHECK(a.lease && b.lease);
+    CHECK(a.lease->actor_id == b.lease->actor_id);
+    CHECK(a.lease->incarnation == b.lease->incarnation);
+    CHECK(a.lease->generation == b.lease->generation);
+    CHECK(a.lease->event_id == b.lease->event_id);
+    CHECK(a.lease->kind == b.lease->kind);
+    CHECK(!twinA.admitted(*b.lease));
+    CHECK(!twinB.may_execute(*a.lease));
+    CHECK(!twinA.suspend(*b.lease));
+    CHECK(!twinA.resume(*b.lease));
+    CHECK(!twinA.finish(*b.lease).accepted);
+    CHECK(twinA.may_execute(*a.lease));
+    CHECK(twinB.may_execute(*b.lease));
+    CHECK(twinA.finish(*a.lease).accepted);
+    CHECK(twinB.finish(*b.lease).accepted);
+    // An application cannot construct a ticket simply by guessing its fields.
+    SerialActorLifetimeGate::Lease fabricated{};
+    fabricated.actor_id = 91;
+    fabricated.incarnation = 7;
+    fabricated.generation = 1;
+    fabricated.event_id = 1;
+    fabricated.kind = Kind::Http;
+    SerialActorLifetimeGate forgedGate(91, 7, 2);
+    const auto minted = forgedGate.submit(Kind::Http, 1);
+    CHECK(minted.lease);
+    CHECK(!forgedGate.admitted(fabricated));
+    CHECK(!forgedGate.finish(fabricated).accepted);
+    CHECK(forgedGate.may_execute(*minted.lease));
+    CHECK(forgedGate.finish(*minted.lease).accepted);
+
     // Mixed concurrent enqueuers: exactly one actor-wide lifetime token.
     SerialActorLifetimeGate many(700, 1, 1000);
     auto leader = many.submit(Kind::Http, 1);
