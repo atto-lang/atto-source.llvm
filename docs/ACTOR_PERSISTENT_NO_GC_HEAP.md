@@ -130,3 +130,65 @@ ActorGroup pointer. The caller must still keep the CONTROL-dispatch callback
 and its external queue alive until all pinned callbacks finish and physical
 finalization has been acknowledged. A never-released loan cannot be forcibly
 reclaimed without violating memory safety.
+
+
+## Source-level native continuation + bounded exclusive scheduling (October 10–11)
+
+`ActorExclusiveScheduler.hpp` is a host-owned bounded DATA mailbox with
+a reserved, coalesced CONTROL slot. Exactly one logical turn per lane is
+submitted to a shared carrier executor; an actor waiting for admission
+does not occupy a carrier. The child actor and each supervising parent
+require **different** lane instances, so parent CONTROL is not blocked by
+a child that is running expensive guest work. Closing the lane rejects
+new DATA and invokes cancellation callbacks for admitted-but-undispatched
+messages without executing those handlers. A host must provide an
+executor that accepts and eventually runs scheduled jobs; the scheduler
+does not itself create physical carrier threads.
+
+The LLVM compiler has a **restricted source-level pilot** for a single
+actor declaration and a `fnc main(): int` with exactly this sequence:
+
+```ores
+const worker = spawn Counter();
+await worker.get_ready();
+const result: int = await worker.add(20);
+worker.stop();
+await worker.get_done();
+return result;
+```
+
+Alternatively `const worker = await spawn Counter();` replaces the
+spawn+ready lines. The caller may use exactly one single-i64-argument
+actor method, with a pure integer argument and an integer result.
+The generated LLVM `ores_actor_Counter_program_step(ctx, state, result)`
+is a **six-phase yielding continuation**, returning 0 while awaiting,
+1 after physical finalization, and -1 on host failure. Each host
+operation is nonblocking/poll-only; host completion callbacks enqueue
+scheduler wakes, never call guest code directly. The compiler emits a
+host-only cancellation request on terminal error. The native test
+harness binds these compiler-generated entrypoints to the canonical
+ActorGroup, actor DATA lane and independent parent CONTROL lane, using
+three reusable native carriers.
+
+Execution tests cover both source spawn spellings, native result 32,
+ready barrier, awaited method delivery, cooperative stop, physical
+`get_done()`, and controlled C++ handler panic with error propagation
+and physical cleanup. LLVM's negative fixtures reject foreign actor
+types and omitted termination barriers. There are separate bounded
+mailbox saturation, reserved CONTROL capacity, carrier independence,
+logical single-flight and queued-cancellation tests. ASan/UBSan are
+separate tests and must be reported only after actually executed.
+
+**Critical scope boundary:** This is a narrow compiler/test-host
+integration—not full Java/GraalVM language parity, production async
+runtime integration, or a general-purpose source-level typechecker.
+The script AST does not yet represent arbitrary actor references,
+multiple actors, arbitrary program statements, timers, channels,
+cancellable every-kind-of-future, nested awaits, async callbacks,
+exception propagation through native C aborts, or source FFI.
+`get_done()` currently uses a host future poll rather than a fully
+general guest Continuation API. The worker C++ lifecycle bridge
+still has its own mutex-backed turn admission inside the mailbox
+(the mailbox itself does not block carriers on admission).
+No automatic cleanup is promised for C-level process aborts or
+externally leaked native pointers.
