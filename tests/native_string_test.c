@@ -50,8 +50,10 @@ static void test_strict_json_unquote(void) {
     };
     for (size_t i=0;i<sizeof(failures)/sizeof(failures[0]);++i)
         check_json_rejected((const unsigned char*)failures[i],strlen(failures[i]));
-    OreslangNativeString oversized={NULL,UINT64_MAX}, output={0};
+    OreslangNativeString oversized={(unsigned char*)"x",UINT64_MAX}, output={0};
     CHECK(oreslang_string_json_unquote(&oversized,&output)==ORESLANG_STRING_TOO_LARGE);
+    OreslangNativeString null_with_length={NULL,UINT64_MAX};
+    CHECK(oreslang_string_json_unquote(&null_with_length,&output)==ORESLANG_STRING_INVALID);
     CHECK(!output.data && !output.byte_length);
     const unsigned char bad_utf8[]={0xc0,0xaf};
     OreslangNativeString invalid_utf8={(unsigned char*)bad_utf8,sizeof(bad_utf8)};
