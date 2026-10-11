@@ -333,6 +333,34 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 throw std::runtime_error("unsupported native conditional arm");
             }
         };
+        // Branch-local trivial i64 owners are initialized only along their
+        // reached predecessor and end their lifetime before the join. They
+        // never enter the enclosing lexical_slots or deferred cleanup list.
+        auto lower_arm = [&](const std::vector<Statement>& arm) {
+            std::vector<std::string> scoped_names;
+            for (const auto& action : arm) {
+                if (action.kind != Statement::Kind::ScopedLocal) {
+                    lower_effect(action);
+                    continue;
+                }
+                const LocalBinding& local = *action.branch_local;
+                llvm::Value* init = lower(*local.initializer, builder, i64,
+                    storage, field_storage, declarations, &region_moves);
+                llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
+                    local.name + ".arm.stack");
+                builder.CreateLifetimeStart(slot,
+                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+                builder.CreateStore(init, slot);
+                if (!storage.emplace(local.name, slot).second)
+                    throw std::runtime_error("branch-local shadows existing LLVM storage");
+                scoped_names.push_back(local.name);
+            }
+            for (auto it = scoped_names.rbegin(); it != scoped_names.rend(); ++it) {
+                builder.CreateLifetimeEnd(storage.at(*it),
+                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+                storage.erase(*it);
+            }
+        };
         for (const auto& stmt : fn.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
                 deferred_effects.push_back(&stmt);
@@ -352,12 +380,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     context, "if.merge", function);
                 builder.CreateCondBr(condition, thenBlock, elseBlock);
                 builder.SetInsertPoint(thenBlock);
-                for (const auto& effect : stmt.then_statements)
-                    lower_effect(effect);
+                lower_arm(stmt.then_statements);
                 builder.CreateBr(mergeBlock);
                 builder.SetInsertPoint(elseBlock);
-                for (const auto& effect : stmt.else_statements)
-                    lower_effect(effect);
+                lower_arm(stmt.else_statements);
                 builder.CreateBr(mergeBlock);
                 builder.SetInsertPoint(mergeBlock);
                 continue;

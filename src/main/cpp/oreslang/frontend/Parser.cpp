@@ -399,6 +399,21 @@ private:
                     fail("native conditional arm limit exceeded (16)");
                 Statement statement;
                 statement.offset = token_.offset;
+                if (token_.text == "let")
+                    fail("native branch-local class owner requires destructor/drop lowering");
+                if (accept("const") || accept("val")) {
+                    statement.kind = Statement::Kind::ScopedLocal;
+                    statement.branch_local = std::make_unique<LocalBinding>();
+                    statement.branch_local->offset = statement.offset;
+                    statement.branch_local->name = identifier();
+                    require(":");
+                    require("int");
+                    require("=");
+                    statement.branch_local->initializer = expression();
+                    require(";");
+                    actions.push_back(std::move(statement));
+                    continue;
+                }
                 auto target = primary();
                 if (target->kind == Expression::Kind::Field && accept("=")) {
                     if (!target->left || target->left->kind != Expression::Kind::Variable)
@@ -783,25 +798,37 @@ private:
                         + "' at byte " + std::to_string(binding.offset));
                 }
             }
-            std::function<void(const Statement&)> check_statement_names;
-            check_statement_names = [&](const Statement& stmt) {
+            using NameSet = std::unordered_set<std::string>;
+            std::function<void(const Statement&, NameSet&)> check_statement_names;
+            check_statement_names = [&](const Statement& stmt, NameSet& names) {
                 if (stmt.kind == Statement::Kind::Conditional) {
-                    validate_expression(*stmt.condition_lhs, params, functions);
-                    validate_expression(*stmt.condition_rhs, params, functions);
+                    validate_expression(*stmt.condition_lhs, names, functions);
+                    validate_expression(*stmt.condition_rhs, names, functions);
+                    NameSet then_names = names;
+                    NameSet else_names = names;
                     for (const auto& action : stmt.then_statements)
-                        check_statement_names(action);
+                        check_statement_names(action, then_names);
                     for (const auto& action : stmt.else_statements)
-                        check_statement_names(action);
+                        check_statement_names(action, else_names);
+                    // Neither arm's lexical locals escape into the parent scope.
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ScopedLocal) {
+                    const LocalBinding& local = *stmt.branch_local;
+                    validate_expression(*local.initializer, names, functions);
+                    if (!names.insert(local.name).second)
+                        throw std::runtime_error("duplicate branch-local name '" +
+                            local.name + "' at byte " + std::to_string(local.offset));
                     return;
                 }
                 if ((stmt.kind == Statement::Kind::FieldWrite ||
                         (stmt.kind == Statement::Kind::Defer && !stmt.receiver.empty())) &&
-                        !params.count(stmt.receiver))
+                        !names.count(stmt.receiver))
                     throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
-                validate_expression(*stmt.expression, params, functions);
+                validate_expression(*stmt.expression, names, functions);
             };
             for (const auto& stmt : fn.statements)
-                check_statement_names(stmt);
+                check_statement_names(stmt, params);
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
             for (const auto& action : fn.actor_actions) {

@@ -109,7 +109,7 @@ pub fnc main(): int {
   if (1 eq 1) { let mut Pair p = new Pair(); } else { } fi
   return 42;
 }
-""", "expected int expression"),
+""", "native branch-local class owner requires destructor/drop lowering"),
     "branch-local-defer": ("""
 fnc update(): void { return; }
 pub fnc main(): int {

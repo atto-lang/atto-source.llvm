@@ -145,6 +145,20 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_conditional_cfg
             native_source_conditional_cfg_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
+    # Synchronous branch-scoped i64 lifetimes cannot escape the owning arm.
+    if(ORE_CLANG)
+        add_test(NAME native_branch_local_scope_source_execution
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/branch_local_cfg_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        add_test(NAME native_branch_local_scope_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/branch_local_cfg_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_branch_local_scope_source_execution
+            native_branch_local_scope_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
