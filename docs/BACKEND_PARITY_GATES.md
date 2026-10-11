@@ -35,8 +35,8 @@ syntax are **not** evidence of behavioral parity.
 | Source actors (shared/isolated/untrusted) | JVM actor execution exists, physical heap guarantees vary | Source actors rejected; carrier primitives alone | BLOCKED |
 | Failed child CONTROL notice | Bounded, data-only direct-parent queue and non-cancellable notice Future | Data-only `Failure` policy primitive, no actor delivery | BLOCKED |
 | `on_throw/on_raise/on_panic` supervision | Actor method spellings rejected until checked handler dispatch exists | Actors rejected | BLOCKED |
-| Error precedence and suppressed diagnostics | `OresExceptionPolicy` | `ExceptionPolicy.hpp` | Policy primitives aligned, NOT source/runtime parity |
-| Supervisor diagnostic UTF-8 size | 1,024-byte Unicode-safe cap | 1,024-byte cap and invalid-UTF-8 normalization | Policy primitive gate only |
+| Error precedence and suppressed diagnostics | `OresExceptionPolicy`, including uncaught host `Error` classification | `ExceptionPolicy.hpp`, including strict invalid-tag rejection | Policy primitives aligned; exhaustive rank-pair regressions added, NOT source/runtime parity |
+| Supervisor diagnostic UTF-8 size | 1,024-byte cap, malformed UTF-16 surrogate replacement | 1,024-byte cap, malformed UTF-8 byte replacement | Control-metadata primitive gate only |
 
 ## Mandatory gates before declaring parity
 
