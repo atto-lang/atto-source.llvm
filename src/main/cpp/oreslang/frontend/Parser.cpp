@@ -49,7 +49,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int"
+        "gpu", "quantum", "over", "structural", "int", "pure"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -169,6 +169,9 @@ private:
         actor.name = identifier();
         require("as");
         const bool braced = accept("{");
+        if (token_.text == "state") {
+            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
+        }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
             if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
@@ -270,6 +273,9 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (token_.text == "pure") {
+            fail("native pure modifier awaits transitive observable-effect verification");
+        }
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
         if (token_.text == "gpu" || token_.text == "quantum") {
@@ -304,6 +310,26 @@ private:
         require(":");
         value.returns_void = accept("void");
         if (!value.returns_void) require("int");
+        if (accept("using")) {
+            value.has_declared_effects = true;
+            do {
+                std::string name = identifier();
+                if (accept(".")) name += "." + identifier();
+                FunctionEffect effect;
+                try { effect = FunctionEffects::parse(name); }
+                catch (const std::invalid_argument&) {
+                    fail("unknown function effect '" + name + "'");
+                }
+                const auto bit = static_cast<std::uint32_t>(effect);
+                if (value.declared_effects.bits & bit)
+                    fail("duplicate function effect '" + name + "'");
+                value.declared_effects.bits |= bit;
+            } while (accept(","));
+        }
+        if (accept("requires")) {
+            // Never accept an uncertified realtime property as a mere annotation.
+            fail("native requires clause awaits verified WCET/allocation/blocking analysis");
+        }
         require("{");
         while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
             LocalBinding binding;
