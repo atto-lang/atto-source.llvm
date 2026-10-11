@@ -2,6 +2,7 @@
 """CTest harness: verify safe rejection, verified IR, and optional native execution."""
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ def main():
     parser.add_argument("--ir")
     parser.add_argument("--diagnostic")
     parser.add_argument("--run", type=int)
+    parser.add_argument("--entry-symbol")
     parser.add_argument("--clang")
     parser.add_argument("--native-runtime")
     args = parser.parse_args()
@@ -36,6 +38,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
         clang_cmd = [args.clang, "-x", "ir", "-"]
+        if args.entry_symbol:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", args.entry_symbol):
+                raise AssertionError("unsafe native qualified entrypoint name")
+            # This test-only shim invokes a module-qualified LLVM symbol
+            # without claiming that LLVM has a public unqualified OS main ABI.
+            # The compiler emitted IR and the actual function body both run.
+            shim = pathlib.Path(directory) / "module-entry.c"
+            shim.write_text(
+                'extern long long oreslang_module_entry(void) __asm__("'
+                + args.entry_symbol + '");\\n'
+                + 'int main(void) { return (int)oreslang_module_entry(); }\\n',
+                encoding="utf-8",
+            )
+            clang_cmd.extend(["-x", "c", str(shim), "-std=c11"])
         if args.native_runtime:
             native_source = pathlib.Path(args.native_runtime)
             clang_cmd.extend(["-x", "c", str(native_source), "-std=c11",
