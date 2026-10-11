@@ -137,6 +137,15 @@ static void exercise(bool ambiguous) {
                 ? SupervisorChildRegistry::Phase::stopping
                 : SupervisorChildRegistry::Phase::stopped),
             "external STOP result did not produce correct terminal disposition");
+    const auto receipt = f.registry->stop_receipt(logical);
+    require(receipt.status == (ambiguous
+                ? SupervisorChildRegistry::StopReceiptStatus::uncertain
+                : SupervisorChildRegistry::StopReceiptStatus::acknowledged),
+            "host STOP receipt did not preserve applied versus ambiguous outcome");
+    require(receipt.turn_generation != 0
+                && receipt.failed_actor.actor_slot == f.child.actor_slot
+                && receipt.incarnation == 1,
+            "STOP receipt was not bound to the exact physical incarnation");
     require(f.process->resolved() == (ambiguous ? 0U : 1U)
                 && f.process->undelivered() == (ambiguous ? 1U : 0U),
             "CONTROL misaccounted acknowledged or ambiguous STOP");
