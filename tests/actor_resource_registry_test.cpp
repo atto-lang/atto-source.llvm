@@ -61,6 +61,28 @@ int main() {
     catch (const std::logic_error&) { rejected = true; }
     assert(rejected);
 
+    // Cross-incarnation and cross-role tickets must never release another
+    // actor's active memory loans, even when nonce values happen to match.
+    ActorResourceRegistry first(21, 1);
+    ActorResourceRegistry second(22, 1);
+    auto owned = first.acquire_loan();
+    auto foreign = second.acquire_loan();
+    rejected = false;
+    try { first.release_loan(foreign); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    rejected = false;
+    try { first.release_callback(owned); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    first.retire();
+    assert(first.try_reclaim().status == Reclaim::busy);
+    first.release_loan(owned);
+    assert(first.try_reclaim().status == Reclaim::complete);
+    second.release_loan(foreign);
+    second.retire();
+    assert(second.try_reclaim().status == Reclaim::complete);
+
     ActorResourceRegistry concurrent(16, 1, 2);
     std::atomic<int> finishes{0};
     concurrent.register_resource(Kind::native_allocation, [&] { ++finishes; });
