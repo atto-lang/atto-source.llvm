@@ -1,0 +1,6 @@
+pub fnc main(): int {
+  return do match 9 over
+    on 1 { return 7; }
+    on _ { return 42; }
+  end
+}
