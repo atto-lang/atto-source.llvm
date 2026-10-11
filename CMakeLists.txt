@@ -518,6 +518,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
 
+    # Stop one child without waiting for an unrelated actor's busy turn.
+    add_executable(oreslang-native-child-wait-test
+        tests/native_actor_group_wait_done_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-child-wait-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-child-wait-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-child-wait-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actorgroup_per_child_wait_done
+        COMMAND oreslang-native-child-wait-test)
+    set_tests_properties(native_actorgroup_per_child_wait_done PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-supervisor-control-test
         tests/native_supervisor_control_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c
