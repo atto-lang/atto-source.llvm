@@ -85,6 +85,12 @@ void* oreslang_source_actor_spawn_variants(
     size_t contract_count);
 int oreslang_source_actor_send_variant(
     void* actor, const uint8_t* wire, size_t size);
+/* Compiler-only fail-closed DATA send. Never silently drop source
+ * `ref.send(Enum.Case)` when the bounded mailbox rejects a message.
+ * Only trusted main may invoke this synchronous, no-retry admission form.
+ * Future<T> backpressure is a separate, not-yet-lowered path. */
+void oreslang_source_actor_send_variant_checked(
+    void* actor, const uint8_t* wire, size_t size);
 /* REQUIRED path for Java-compatible 'define enum' / 'define pattern':
  * a variant's SHA-256 commits to tuple SHAPE but not the 'Status' name
  * or numeric case tag inside its tuple. Pin these nominal identities at
