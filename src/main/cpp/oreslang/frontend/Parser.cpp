@@ -463,36 +463,75 @@ private:
         }
         if (token_.text == "await")
             fail("await requires native compiler continuation lowering");
-        // A first executable source matcher: closed bool inbox with
-        // exhaustive true/false arms. No free-form Message access or
-        // unverified implicit default branch.
-        if (value.is_receiver && accept("match")) {
+        // Source-only tagged arm admission shares the canonical syntax with
+        // Java, but never emits fake native i64 match branches. Only empty
+        // arm bodies are accepted here: work and effects inside an arm need
+        // their own explicit ownership-aware LLVM lowering.
+        if (value.is_receiver && (token_.text == "match" || token_.text == "do")) {
+            const bool procedural = accept("do");
+            require("match");
             value.match_subject = identifier();
-            require("{");
-            while (token_.text != "}") {
-                if (token_.kind == Kind::End) fail("unterminated receive match");
-                ReceiveBooleanArm arm;
-                arm.offset = token_.offset;
-                if (accept("true")) arm.match_value = true;
-                else if (accept("false")) arm.match_value = false;
-                else fail("expected true/false match arm");
-                require("=");
-                require(">");
+            if (accept("over")) {
                 require("{");
-                while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
-                    FieldAssignment assignment;
-                    assignment.offset = token_.offset;
-                    assignment.field = identifier();
-                    require("=");
-                    assignment.value = expression();
-                    require(";");
-                    arm.assignments.push_back(std::move(assignment));
+                while (token_.text != "}") {
+                    if (token_.kind == Kind::End)
+                        fail("unterminated tagged receive match");
+                    TaggedReceiveArm arm;
+                    arm.offset = token_.offset;
+                    require("on");
+                    const std::string owner = identifier();
+                    require(".");
+                    arm.qualified_case = owner + "." + identifier();
+                    if (accept("as")) {
+                        arm.binds_payload = true;
+                        if (accept("(")) {
+                            arm.tuple_destructure = true;
+                            if (!accept(")")) {
+                                do { arm.binders.push_back(identifier()); }
+                                while (accept(","));
+                                require(")");
+                            }
+                        } else {
+                            arm.binders.push_back(identifier());
+                        }
+                    }
+                    require("{");
+                    require("}");
+                    value.tagged_arms.push_back(std::move(arm));
+                    accept(";");
+                    accept(",");
                 }
                 require("}");
-                value.boolean_arms.push_back(std::move(arm));
-                accept(";");
+            } else {
+                if (procedural)
+                    fail("do match requires 'over' and typed alternatives");
+                // Existing executable bool-only matcher remains unchanged.
+                require("{");
+                while (token_.text != "}") {
+                    if (token_.kind == Kind::End) fail("unterminated receive match");
+                    ReceiveBooleanArm arm;
+                    arm.offset = token_.offset;
+                    if (accept("true")) arm.match_value = true;
+                    else if (accept("false")) arm.match_value = false;
+                    else fail("expected true/false match arm");
+                    require("=");
+                    require(">");
+                    require("{");
+                    while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+                        FieldAssignment assignment;
+                        assignment.offset = token_.offset;
+                        assignment.field = identifier();
+                        require("=");
+                        assignment.value = expression();
+                        require(";");
+                        arm.assignments.push_back(std::move(assignment));
+                    }
+                    require("}");
+                    value.boolean_arms.push_back(std::move(arm));
+                    accept(";");
+                }
+                require("}");
             }
-            require("}");
         }
         // Restricted synchronous actor methods can update declared `let` fields.
         while (actor_method && token_.kind == Kind::Identifier
