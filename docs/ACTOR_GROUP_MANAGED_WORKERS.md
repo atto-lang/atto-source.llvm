@@ -51,6 +51,19 @@ Validated exact source with GCC and Clang ASan/UBSan (including reentrant
 close and throwing callbacks):
 https://github.com/athlet-o/athleto-e2e/actions/runs/38093139710 .
 
+## Native heap integration proof
+
+`native_actor_group_heap_loan_quiescence` couples this supervisor's
+enqueue-only stop callback with the already-merged `ActorOwnedI64Heap` ABI.
+Group closure requests logical actor retirement and clears CONTROL-plane
+references, but `ores_actor_i64_heap_try_destroy` correctly **defers physical
+reclamation** while a suspended native loan exists. Releasing the final loan
+then permits deterministic heap destruction without any tracing GC.
+
+This validates an explicit supervisor-to-heap adapter, **not** automatic
+compiler lowering, scheduler-owned callbacks, cross-group ownership
+exclusivity, or a universal `memoryReclaimed()` guest future.
+
 ## Explicit limitations
 
 This is a host-side C++ runtime primitive, **not working source-level
