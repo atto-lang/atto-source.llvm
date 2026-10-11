@@ -637,6 +637,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
 
+    # Send and stop contend on one linearizable actor admission authority.
+    add_executable(oreslang-native-send-stop-race-test
+        tests/native_actor_send_stop_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-send-stop-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-send-stop-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-send-stop-race-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_send_stop_linearizable_race
+        COMMAND oreslang-native-send-stop-race-test)
+    set_tests_properties(native_actor_send_stop_linearizable_race PROPERTIES TIMEOUT 30)
+
     # Stop one child without waiting for an unrelated actor's busy turn.
     add_executable(oreslang-native-child-wait-test
         tests/native_actor_group_wait_done_test.c
