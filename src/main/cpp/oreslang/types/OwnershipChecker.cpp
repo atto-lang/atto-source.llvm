@@ -249,13 +249,26 @@ void validate_i64_ownership(const Program& program) {
             locals.emplace(param.name, std::move(entry));
         }
         for (const auto& binding : function.locals) {
-            if (!binding.new_class)
-                check_value(*binding.initializer, locals, functions);
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
             entry.class_name = binding.class_name;
-            if (binding.new_class)
+            if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
+            } else if (binding.move_class) {
+                const auto found = locals.find(binding.move_source);
+                if (found == locals.end() || found->second.class_name != binding.class_name)
+                    throw std::runtime_error("ownership violation: class move type mismatch at byte " +
+                        std::to_string(binding.offset));
+                auto& source = found->second;
+                if (source.mode != Mode::Value || source.moved ||
+                        source.exclusive_loan || source.shared_loans != 0)
+                    throw std::runtime_error("ownership violation: class move requires live unborrowed owner at byte " +
+                        std::to_string(binding.offset));
+                entry.class_fields = source.class_fields;
+                source.moved = true;
+            } else {
+                check_value(*binding.initializer, locals, functions);
+            }
             locals.emplace(binding.name, std::move(entry));
         }
         for (const auto& stmt : function.statements) {

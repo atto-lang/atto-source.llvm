@@ -97,6 +97,19 @@ if(BUILD_TESTING)
                 --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         set_tests_properties(native_owned_scalar_cfg_generated_stress PROPERTIES TIMEOUT 240)
     endif()
+    # Class moves are compiled and exercised through real native guests.
+    if(ORE_CLANG)
+        add_test(NAME native_class_move_source_execution
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        add_test(NAME native_class_move_source_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_class_move_source_execution
+            native_class_move_source_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
     oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_close")
