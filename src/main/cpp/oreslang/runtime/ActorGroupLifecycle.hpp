@@ -41,6 +41,8 @@ public:
     std::uint64_t runtime_id() const noexcept { return runtime_id_; }
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t generation() const noexcept { return generation_; }
+    /** Managed lifecycle supervisor, distinct from spawning actor. */
+    std::uint64_t supervisor_id() const noexcept { return ticket_->supervisor_id; }
 
     // HOST-ONLY futures: guest awaits must suspend the scheduler, never block
     // a carrier using shared_future::get(). Not cancellation capabilities.
@@ -109,6 +111,9 @@ private:
         std::shared_future<void> ready_future = ready_promise.get_future().share();
         std::shared_future<void> done_future = done_promise.get_future().share();
         bool done_settled = false;
+        // Stable for this exclusive managed ownership epoch. A ref retains
+        // the identity through group closure/physical finalization.
+        std::uint64_t supervisor_id = 0;
         std::atomic<bool> stop_issued{false};
         std::atomic<bool> physically_done{false};
         // True only after the group worker table was detached by close().
@@ -260,6 +265,9 @@ public:
     NativeActorGroup& operator=(const NativeActorGroup&) = delete;
 
     ~NativeActorGroup() { close(); }
+
+    /** Host-level identity; a group does not create a supervisor actor. */
+    std::uint64_t supervisor_id() const noexcept { return group_id_; }
 
     /** Root/host adoption: exactly one exclusive lifecycle manager. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
@@ -547,6 +555,7 @@ private:
         if (owners.live.find(key) != owners.live.end())
             throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
+        ticket->supervisor_id = group_id_;
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
         workers_.emplace(actor_id, Entry{ref, std::move(stop_request),
                                          Phase::starting, {}, spawned_by});
