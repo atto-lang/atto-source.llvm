@@ -223,6 +223,19 @@ if(BUILD_TESTING)
     add_test(NAME native_pinned_continuation_loan_cancel_quiescence
              COMMAND oreslang-pinned-continuation-gate-test)
     set_tests_properties(native_pinned_continuation_loan_cancel_quiescence PROPERTIES TIMEOUT 30)
+    # Real actor-owned fixed-field loans must survive logical suspension
+    # without permitting mutation, cancellation-time drop, or cross-actor alias.
+    if(UNIX)
+        add_executable(oreslang-pinned-actor-heap-suspend-test
+            tests/pinned_actor_heap_suspend_test.cpp
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+        target_include_directories(oreslang-pinned-actor-heap-suspend-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-pinned-actor-heap-suspend-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_link_libraries(oreslang-pinned-actor-heap-suspend-test PRIVATE Threads::Threads)
+        add_test(NAME native_pinned_actor_heap_suspend_cancel_quiescence
+                 COMMAND oreslang-pinned-actor-heap-suspend-test)
+        set_tests_properties(native_pinned_actor_heap_suspend_cancel_quiescence PROPERTIES TIMEOUT 30)
+    endif()
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
     oreslang_contract_test(reject_duplicates duplicate-function.ores --diagnostic "duplicate function")
     oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
