@@ -462,7 +462,20 @@ private:
                 require(".");
                 require("send");
                 require("(");
-                send.payload = expression();
+                // The restricted source-compiled nominal send form is
+                // ref.send(Enum.Variant), without an implicit scalar cast.
+                // Copy the lexical cursor to avoid consuming scalar
+                // expressions or interpreting a function call as a case.
+                Lexer probe = lexer_;
+                Token next = probe.next();
+                if (token_.kind == Kind::Identifier && !reserved(token_.text)
+                        && next.text == ".") {
+                    const std::string enum_name = identifier();
+                    require(".");
+                    send.tagged_variant = enum_name + "." + identifier();
+                } else {
+                    send.payload = expression();
+                }
                 require(")");
                 require(";");
                 value.actor_sends.push_back(std::move(send));
@@ -507,6 +520,15 @@ private:
                         }
                     }
                     require("{");
+                    while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+                        FieldAssignment assignment;
+                        assignment.offset = token_.offset;
+                        assignment.field = identifier();
+                        require("=");
+                        assignment.value = expression();
+                        require(";");
+                        arm.assignments.push_back(std::move(assignment));
+                    }
                     require("}");
                     value.tagged_arms.push_back(std::move(arm));
                     accept(";");
@@ -854,9 +876,24 @@ private:
                     [&](const Actor& a) { return a.name == ref->second; });
                 if (actor == program.actors.end()) throw std::runtime_error("unknown actor type");
                 if (!actor->messages_type.empty()) {
-                    if (typedDomains.count(actor->messages_type))
-                        throw std::runtime_error(
-                            "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+                    if (typedDomains.count(actor->messages_type)) {
+                        if (send.tagged_variant.empty())
+                            throw std::runtime_error("tagged actor send requires Enum.Case");
+                        std::unordered_set<std::string> allowed;
+                        for (const auto& pattern : program.tagged_patterns)
+                            if (pattern.name == actor->messages_type)
+                                allowed.insert(pattern.alternatives.begin(),
+                                               pattern.alternatives.end());
+                        if (const auto own = enumNames.find(actor->messages_type);
+                                own != enumNames.end())
+                            for (const auto& c : own->second->cases)
+                                allowed.insert(own->first + "." + c.name);
+                        if (!allowed.count(send.tagged_variant))
+                            throw std::runtime_error("actor send case outside closed tagged pattern");
+                        continue;
+                    }
+                    if (!send.tagged_variant.empty())
+                        throw std::runtime_error("nominal case send requires tagged actor");
                     auto found = messagePatterns.find(actor->messages_type);
                     if (found == messagePatterns.end())
                         throw std::runtime_error("unknown actor message match contract");
@@ -873,6 +910,8 @@ private:
                     if (!expectedBool && contains_boolean(*send.payload))
                         throw std::runtime_error("actor send expects int message");
                 } else {
+                    if (!send.tagged_variant.empty())
+                        throw std::runtime_error("nominal case send requires tagged actor");
                     const auto method = std::find_if(actor->methods.begin(), actor->methods.end(),
                         [](const Function& fn) { return fn.name == "on_message"; });
                     if (method == actor->methods.end() || !method->exported ||
@@ -1018,6 +1057,15 @@ private:
                                 [&](const EnumCase& c) { return c.name == variant; });
                             if (matched == enumeration->cases.end())
                                 throw std::runtime_error("unresolved tagged enum case");
+                            for (const auto& assignment : arm.assignments) {
+                                if (!mutableFields.count(assignment.field))
+                                    throw std::runtime_error(
+                                        "cannot assign immutable or unknown actor field in tagged match");
+                                if (reads_name(*assignment.value, parameter))
+                                    throw std::runtime_error(
+                                        "tagged match arm Message payload binding is not narrowed");
+                                validate_expression(*assignment.value, available, functions);
+                            }
                             if (arm.binds_payload) {
                                 if (!matched->has_payload)
                                     throw std::runtime_error(
@@ -1069,9 +1117,40 @@ private:
             // Static variant coverage alone cannot authorize execution:
             // per-case MessagePack DATA and typed continuation lowering
             // must be implemented before guest source reaches LLVM IR.
-            if (typedDomains.count(actor.messages_type))
-                throw std::runtime_error(
-                    "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+            if (typedDomains.count(actor.messages_type)) {
+                // The first executable LLVM slice accepts only valueless
+                // tagged cases, no payload destructuring, and an exhaustive
+                // set of side-effect-only scalar field assignments.
+                std::vector<std::string> allowed;
+                for (const auto& pattern : program.tagged_patterns)
+                    if (pattern.name == actor.messages_type)
+                        allowed = pattern.alternatives;
+                if (const auto found = enumNames.find(actor.messages_type);
+                        found != enumNames.end())
+                    for (const auto& c : found->second->cases)
+                        allowed.push_back(found->first + "." + c.name);
+                if (allowed.empty() || allowed.size() > 64)
+                    throw std::runtime_error("LLVM tagged actor supports 1..64 variants");
+                for (const auto& alternative : allowed) {
+                    const auto dot = alternative.find('.');
+                    const auto owner = enumNames.at(alternative.substr(0, dot));
+                    const auto it = std::find_if(owner->cases.begin(), owner->cases.end(),
+                        [&](const EnumCase& c) {
+                            return c.name == alternative.substr(dot + 1);
+                        });
+                    if (it == owner->cases.end() || it->has_payload)
+                        throw std::runtime_error(
+                            "LLVM tagged source subset requires payloadless cases");
+                }
+                const auto receiver = std::find_if(actor.methods.begin(),
+                    actor.methods.end(), [](const Function& f) { return f.is_receiver; });
+                if (receiver == actor.methods.end()
+                        || receiver->tagged_arms.size() != allowed.size()
+                        || !receiver->boolean_arms.empty()
+                        || !receiver->assignments.empty())
+                    throw std::runtime_error(
+                        "LLVM tagged actor requires exhaustive side-effect-only match");
+            }
         }
     }
 
