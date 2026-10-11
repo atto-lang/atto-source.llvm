@@ -17,6 +17,35 @@ static void check(bool yes, const char* error) {
 
 int main() {
     {
+        // Host-side contract: A -> B -> C remains one ActorGroup, and
+        // spawn ancestry does not create independent lifecycle managers.
+        NativeActorGroup group(1206, 3);
+        NativeActorGroup foreign_group(1206, 3);
+        int stops = 0;
+        auto a = group.adopt(1206, 101, 1, [&] { ++stops; });
+        check(group.mark_ready(a), "root not ready");
+        auto b = group.adopt_child(a, 1206, 102, 1, [&] { ++stops; });
+        check(group.mark_ready(b), "child not ready");
+        auto c = group.adopt_child(b, 1206, 103, 1, [&] { ++stops; });
+        check(group.mark_ready(c), "grandchild not ready");
+        check(group.worker_count() == 3, "nested spawn created an extra group");
+        check(!group.spawned_by(a).has_value(), "root has a fabricated parent");
+        check(group.spawned_by(b) == a.actor_id(), "incorrect child lineage");
+        check(group.spawned_by(c) == b.actor_id(), "incorrect grandchild lineage");
+        bool foreign = false;
+        try { (void) foreign_group.adopt_child(b, 1206, 104, 1, [] {}); }
+        catch (const std::logic_error&) { foreign = true; }
+        check(foreign, "foreign ActorGroup accepted a stale/foreign parent");
+        group.close();
+        check(stops == 3, "group close did not stop the full actor family");
+        check(group.worker_count() == 0, "closed group retained child refs");
+        check(group.finalized(a) && group.finalized(b) && group.finalized(c),
+              "physically finalized family was rejected");
+        a.get_done().get();
+        b.get_done().get();
+        c.get_done().get();
+    }
+    {
         NativeActorGroup group(100, 2);
         int stop_count = 0;
         NativeActorRef ref = group.adopt(100, 7, 1, [&] { ++stop_count; });
