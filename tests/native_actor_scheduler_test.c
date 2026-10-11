@@ -36,6 +36,7 @@ int main(void) {
     OresNativeActorScheduler* dormant =
         ores_native_actor_scheduler_open(2, 4, 8, run, &dormant_state);
     check(dormant != NULL);
+    /* Even a legacy request for eight workers must obey the five-worker cap. */
     check(ores_native_actor_scheduler_started_workers(dormant) == 0);
     check(ores_native_actor_scheduler_started_control_threads(dormant) == 0);
     OresNativeActorRef idle = ores_native_actor_scheduler_spawn(dormant, 0);
@@ -87,7 +88,7 @@ int main(void) {
         for (size_t a = 0; a < ACTORS; ++a)
             check(ores_native_actor_scheduler_send(scheduler, refs[a], (uint64_t)n));
     check(ores_native_actor_scheduler_started_workers(scheduler) >= 1);
-    check(ores_native_actor_scheduler_started_workers(scheduler) <= 8);
+    check(ores_native_actor_scheduler_started_workers(scheduler) <= 5);
     check(ores_native_actor_scheduler_drain(scheduler));
     check(atomic_load(&s.total) == ACTORS * EACH);
     check(atomic_load(&s.errors) == 0);
