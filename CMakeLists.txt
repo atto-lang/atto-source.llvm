@@ -53,6 +53,21 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_generation_handles
         COMMAND oreslang-native-region-handles-test)
     set_tests_properties(native_owned_region_generation_handles PROPERTIES TIMEOUT 30)
+    if(UNIX)
+        find_package(Threads REQUIRED)
+        add_executable(oreslang-native-region-concurrency-test
+            tests/native_owned_region_concurrency_test.c
+            src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+        target_include_directories(oreslang-native-region-concurrency-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_definitions(oreslang-native-region-concurrency-test PRIVATE NDEBUG)
+        target_compile_options(oreslang-native-region-concurrency-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        target_link_libraries(oreslang-native-region-concurrency-test PRIVATE Threads::Threads)
+        add_test(NAME native_owned_region_concurrent_slot_stress
+            COMMAND oreslang-native-region-concurrency-test)
+        set_tests_properties(native_owned_region_concurrent_slot_stress PROPERTIES TIMEOUT 60)
+    endif()
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)

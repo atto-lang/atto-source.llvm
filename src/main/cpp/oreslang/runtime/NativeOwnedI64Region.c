@@ -109,8 +109,6 @@ void oreslang_owned_i64_region_close(OresOwnedI64Region* region) {
     if (!region) fail_closed();
     lock_region(region);
     if (region->live_count != 0) fail_closed();
-    const size_t bytes = offsetof(OresOwnedI64Region, slots)
-                       + (size_t)region->capacity * sizeof(OwnedI64Slot);
     /* Never destroy/clear a locked atomic_flag; scrub payloads and metadata. */
     for (uint64_t i = 0; i < region->capacity; ++i)
         erase_bytes(&region->slots[i], sizeof(region->slots[i]));
@@ -118,7 +116,6 @@ void oreslang_owned_i64_region_close(OresOwnedI64Region* region) {
     region->live_count = 0;
     unlock_region(region);
     free(region);
-    (void)bytes;
 }
 #ifdef ORESLANG_NATIVE_TEST_REGION_GENERATION
 /* Test-only deterministic exhaustion injection; never compiled into runtime
