@@ -142,3 +142,40 @@ state loan authority or use an untrusted raw socket/FD.
   generation-fenced loans and no OS mutex held across suspension.
 - Run exactly the same source fixtures through Graal and LLVM on verified
   current HEADs; require full CI, native-image tests and concurrency fuzzing.
+
+
+## October 11 executable scalar-state milestone
+
+**Java/Graal source evaluator now has synchronous actor-state lowering.**
+`OresEvalRootNode.initializeActor` stores declared typed state in a
+`SealedActorState` separate from ordinary OresObject fields and initializes
+defaults before on_start / READY. Inline `self.handle_state(critical |s| ->...)`
+executes against a generation-checked ephemeral Access; nested synchronous
+callbacks fence the outer loan. Scalar callback returns cannot leak Access.
+ActorRuntime retires this storage after all actor turns quiesce.
+
+Both backends' scalar state substrates support int/bool/string values with
+finite schemas (1–256 keys), 64 KiB UTF-8 strings per key and 1 MiB aggregate
+string bytes. Java has a source evaluator implementation; LLVM's
+`ActorOwnedScalarState.hpp` is a real native runtime using
+`CriticalStateLoan` and strict effect admission, **not yet guest LLVM codegen**.
+
+Java TypeChecker now infers concrete results from expression-bodied callbacks
+and blocks with explicit final returns instead of silently propagating Unknown.
+More complex control-flow return joins, arbitrary structs/maps, transitive
+effect inference and compiled source continuation lowering remain unavailable.
+In particular, critical handle_state on a suspendable Java source task is
+explicitly rejected; no OS mutex is retained across await.
+
+The exact shared `tests/fixtures/critical-state-counter-runtime.ores`
+declares an actor processing three messages, expecting output 1, 2, 3.
+The Java parser/typechecker gate accepts it; the LLVM narrow parser
+intentionally rejects it at the precise unsupported actor-state lowering
+boundary. Native C++/Java deterministic actor-turn scalar tests are not a
+substitute for the full Java/Graal JUnit + native-image test or LLVM guest
+codegen test. Both are required before executable backend parity is claimed.
+
+Release gates: full Java/Graal guest execution CI; LLVM actor state source
+lowering; scheduler-owned await/loan retirement and continuation ID proof;
+live restart/cancel/panic/teardown races; FFM/native arena budget accounting;
+identical actor source/output/failure fixtures through both backends.
