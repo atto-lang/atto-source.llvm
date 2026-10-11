@@ -91,7 +91,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=.").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -228,6 +228,18 @@ private:
             }
         }
         if (!actor_method) {
+            while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+                ActorSend send;
+                send.offset = token_.offset;
+                send.reference = identifier();
+                require(".");
+                require("send");
+                require("(");
+                send.payload = expression();
+                require(")");
+                require(";");
+                value.actor_sends.push_back(std::move(send));
+            }
             while (accept("stop")) {
                 value.actor_stops.push_back(identifier());
                 require(";");
@@ -415,16 +427,20 @@ private:
                     throw std::runtime_error("source actor spawn requires zero-argument main");
             }
             std::unordered_set<std::string> liveActors;
+            std::unordered_map<std::string, std::string> actorTypes;
             for (const auto& spawn : fn.actor_spawns) {
                 if (!declaredActors.count(spawn.actor_type))
                     throw std::runtime_error("unknown actor type '" + spawn.actor_type + "'");
                 if (!liveActors.insert(spawn.name).second ||
                     !available.insert(spawn.name).second)
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
+                actorTypes.emplace(spawn.name, spawn.actor_type);
             }
             // Actor references cannot be cast to i64 or used as scalar values.
             for (const auto& actor : liveActors) available.erase(actor);
             for (const auto& local : fn.locals) {
+                if (liveActors.count(local.name))
+                    throw std::runtime_error("scalar local shadows actor reference '" + local.name + "'");
                 // The initializer is checked BEFORE publication: x=x+1 or
                 // forward references cannot read uninitialized stack memory.
                 validate_expression(*local.initializer, available, functions);
@@ -432,6 +448,20 @@ private:
                     throw std::runtime_error("duplicate owned local '" + local.name
                                              + "' at byte " + std::to_string(local.offset));
                 }
+            }
+            for (const auto& send : fn.actor_sends) {
+                auto ref = actorTypes.find(send.reference);
+                if (ref == actorTypes.end())
+                    throw std::runtime_error("unknown actor message receiver '" + send.reference + "'");
+                const auto actor = std::find_if(program.actors.begin(), program.actors.end(),
+                    [&](const Actor& a) { return a.name == ref->second; });
+                if (actor == program.actors.end()) throw std::runtime_error("unknown actor type");
+                const auto method = std::find_if(actor->methods.begin(), actor->methods.end(),
+                    [](const Function& fn) { return fn.name == "on_message"; });
+                if (method == actor->methods.end() || !method->exported ||
+                    method->parameters.size() != 1)
+                    throw std::runtime_error("actor send requires pub on_message(int)");
+                validate_expression(*send.payload, available, functions);
             }
             validate_expression(*fn.result, available, functions);
             for (const auto& name : fn.actor_stops) {
