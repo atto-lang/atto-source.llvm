@@ -76,7 +76,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite };
+    enum class Kind { Call, FieldWrite, Defer };
     Kind kind;
     std::unique_ptr<Expression> expression;
     std::string receiver;
