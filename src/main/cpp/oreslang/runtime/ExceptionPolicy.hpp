@@ -79,25 +79,36 @@ inline std::string bounded_control_diagnostic(std::string_view message) {
 
 // Copies no Throwable/exception_ptr or mutable cross-heap payload. Suppressed
 // cleanup failures are recursively preserved as native-owned diagnostic data.
-struct Failure {
-    FailureKind kind;
-    std::string diagnostic;
-    std::vector<Failure> suppressed;
-
+class Failure {
+public:
     static Failure make(FailureKind kind, std::string_view message) {
-        return {kind, bounded_control_diagnostic(message), {}};
+        return Failure(kind, bounded_control_diagnostic(message));
     }
+
+    FailureKind kind() const noexcept { return kind_; }
+    const std::string& diagnostic() const noexcept { return diagnostic_; }
+    const std::vector<Failure>& suppressed() const noexcept { return suppressed_; }
+
+private:
+    Failure(FailureKind kind, std::string diagnostic)
+        : kind_(kind), diagnostic_(std::move(diagnostic)) {}
+
+    FailureKind kind_;
+    std::string diagnostic_;
+    std::vector<Failure> suppressed_;
+
+    friend Failure combine_failure(Failure pending, Failure cleanup);
 };
 
 // Attempt each cleanup independently, then combine the resulting Failure.
 // Higher priority replaces lower priority; equal priority retains the first
 // failure, matching the JVM exception policy and Java suppressed ordering.
 inline Failure combine_failure(Failure pending, Failure cleanup) {
-    if (failure_priority(cleanup.kind) > failure_priority(pending.kind)) {
-        cleanup.suppressed.push_back(std::move(pending));
+    if (failure_priority(cleanup.kind()) > failure_priority(pending.kind())) {
+        cleanup.suppressed_.push_back(std::move(pending));
         return cleanup;
     }
-    pending.suppressed.push_back(std::move(cleanup));
+    pending.suppressed_.push_back(std::move(cleanup));
     return pending;
 }
 
