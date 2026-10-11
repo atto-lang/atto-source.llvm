@@ -536,6 +536,19 @@ if(BUILD_TESTING)
     add_test(NAME native_source_actor_closed_variant_mailbox
         COMMAND oreslang-source-variants-v2-test)
 
+    add_executable(oreslang-source-nominal-guard-v2-test
+        tests/native_source_actor_nominal_guard_v2_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-source-nominal-guard-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-nominal-guard-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_pinned_nominal_enum_identity
+        COMMAND oreslang-source-nominal-guard-v2-test)
+
     add_executable(oreslang-source-scalar-compat-test
         tests/native_source_actor_scalar_compat_test.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
