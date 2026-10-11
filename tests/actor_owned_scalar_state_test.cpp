@@ -91,6 +91,19 @@ int main() {
         });
     } catch (const std::runtime_error&) { }
     check(state.ready_to_suspend(actor));
+    rejects([&] {
+        (void) state.critical(actor, 207, checked, allowed,
+                [](State::Access& access) -> State::Value {
+            access.write("label", std::string(64 * 1024 + 1, 'x'));
+            return std::int64_t{0};
+        });
+    });
+    rejects([&] {
+        State oversize(actor, {
+            {"label", {State::Type::String, std::string(64 * 1024 + 1, 'x')}}
+        });
+        (void) oversize;
+    });
     rejects([&] { state.retire(99); });
     state.retire(actor);
     rejects([&] {
