@@ -104,7 +104,12 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
     /* Registration may race with initialization. Both paths serialize via
      * group.mutex and settle exactly once through NativeActorFuture. */
     ReadyAwaitFrame* frame = group.pending_ready;
-    if (frame && frame->actor == instance) {
+    if (frame && frame->actor == instance
+        && ores_native_actor_future_status(frame->ready_future)
+            == ORES_NATIVE_FUTURE_PENDING) {
+        /* Registration can observe initialized=1 before the initializer
+         * acquires group.mutex. Only the still-pending Future gets settled;
+         * an already-published READY wake must never be completed twice. */
         ensure(ores_native_actor_future_complete(
             frame->ready_future, ORES_NATIVE_FUTURE_READY));
     }
