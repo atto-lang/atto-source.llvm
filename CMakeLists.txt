@@ -94,6 +94,12 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_identifier owned-ordinary-identifier.ores --run 42 --clang "${ORE_CLANG}" --no-native-heap-abi)
         oreslang_contract_test(native_exec_owned_callable_identifier owned-function-identifier.ores --run 42 --clang "${ORE_CLANG}" --no-native-heap-abi)
+        add_test(NAME native_owned_syntax_cfg_stress
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/owned_syntax_stress.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        set_tests_properties(native_owned_syntax_cfg_stress PROPERTIES TIMEOUT 240)
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
         oreslang_contract_test(native_exec_owned_early_taken owned-native-early-true.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c" --experimental-owned-int)
