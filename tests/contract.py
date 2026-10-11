@@ -38,7 +38,16 @@ def main():
     assert args.clang, "--run requires a clang executable"
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
-        clang_args = [args.clang, "-x", "ir", "-"]
+        # Clang's C driver omits the UBSan C++ vptr runtime; use the
+        # matching clang++ driver for a sanitizer-instrumented C++ host.
+        # Keep the C runtime source explicitly in -x c mode below.
+        link_driver = args.clang
+        if args.native_harness_cxx and args.native_sanitizers:
+            clang_path = pathlib.Path(args.clang)
+            cxx = clang_path.with_name(clang_path.name.replace("clang", "clang++", 1))
+            assert cxx.is_file(), f"missing matching C++ sanitizer driver: {cxx}"
+            link_driver = str(cxx)
+        clang_args = [link_driver, "-x", "ir", "-"]
         if args.native_sanitizers:
             clang_args.extend(["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g"])
         for runtime_path in args.native_runtime or []:
