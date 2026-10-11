@@ -148,6 +148,12 @@ class ComparatorParityProof(unittest.TestCase):
         record["observed_exit"] = 0
         self.assertEqual(self.compare()[0], 1)
 
+    def test_required_native_cannot_smuggle_diagnostic(self):
+        record = next(item for item in self.reports["llvm"]["results"]
+                      if "observed_exit" in item)
+        record["diagnostic_class"] = "unknown_name"
+        self.assertEqual(self.compare()[0], 1)
+
     def test_strict_gate_can_verify_fully_required_subset_only(self):
         # A tiny suite passing its fixtures still does NOT prove language parity.
         suite = {"cases": [case for case in self.suite["cases"]
