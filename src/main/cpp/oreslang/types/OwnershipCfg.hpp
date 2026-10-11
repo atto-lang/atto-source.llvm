@@ -189,6 +189,14 @@ inline Analysis verify(const Graph& graph) {
             violation(name, "invalid CFG entry ownership mask");
         if (place.exclusive_loan && place.shared_loans)
             violation(name, "conflicting initial borrow states");
+        // A live loan must refer to a definitely owned place, not a
+        // possibly moved/dropped/uninitialized predecessor. Otherwise a
+        // matching Release can erase the impossible loan and admit a path.
+        if ((place.exclusive_loan || place.shared_loans) &&
+                place.possible != kOwned)
+            violation(name, "live loan on non-owned CFG entry place");
+        if (place.shared_loans > 65535)
+            violation(name, "shared loan count exceeds bound");
     }
     Analysis result;
     result.incoming.resize(graph.blocks.size());
