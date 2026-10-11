@@ -210,3 +210,21 @@ escalation and retry. Its unit tests prove priority over ordinary mail, but
 the native LLVM source compiler still rejects actor/exception language
 features that cannot be lowered, and has no integrated production actor
 scheduler. These substrate tests do not prove complete backend parity.
+
+
+## October 10 next-gate hardening (funded exact-source proof)
+
+- **LLVM lost readiness race closed.** The native `SupervisorControlTurn::urgent()` no longer reads a mutable cached atomic readiness bit. Previously a consumer could store `false` after a concurrent producer stored `true`, leaving queued CONTROL without visible readiness. Readiness now derives from the synchronized queue's pending count. Exact native subset CI passed:
+  https://github.com/zed-pkg-test/java-app/actions/runs/38099624188
+- **JVM/Graal compile-time admission tightened.** For direct nested source `spawn`, the TypeChecker rejects actor code without an inherited or locally declared complete `on_throw/on_raise/on_panic` handler set, or an explicit `supervision_policy()`. Runtime admission checks remain authoritative for dynamic invocations.
+- **Transactional restart cleanup.** If `onRestarted()` rejects a freshly spawned actor, the parent revokes/stops that replacement and escalates the original failure instead of leaking an unclaimed child.
+- **Broader compatibility proof:** SHA-exact funded GraalVM 25 mirror with 115 tests, 115 passed, zero failures/errors/skips. Covers actor runtime, source actors, ActorGroup Mailmen, continuation/cooperative Mailmen, terminal event queue, restart and parser contracts:
+  https://github.com/zed-pkg-test/java-app/actions/runs/38099928020
+
+### Remaining high-priority integration sequence
+
+1. Implement proper **supervisor-of-supervisor** escalation. Current JVM routing delivers to an immediate parent, then escalates to the runtime-root reserved lane; it does **not** offer that descendant fault to each intervening grandparent. Design quota-reserved per-ancestor escalation envelopes before admitting descendants, without unbounded fan-out.
+2. Integrate LLVM native `SupervisorControlTurn` with emitted actor spawn/turn/finalization and generated typed effect handlers. The existing LLVM compiler does not yet lower these guest actor forms into the substrate.
+3. Finish source lowering of `throw`, `raise`, `panic`, `recover` and effect propagation across await on both backends. The reservation/error diagnostics are intentionally fail-closed today.
+4. Make the source guest failure payload a first-class immutable typed value rather than only the bounded `String summary`, including parent identity, effect kind, source trace and dedup/generation.
+5. Test scheduler wakeup under concurrent stop, cancel, retransmission and suspend; then run full current-head Java Maven, LLVM CMake/CTest, Graal native AOT/hybrid, fault injection, physical isolation, and independent review. Targeted funded CI is **not** release certification.
