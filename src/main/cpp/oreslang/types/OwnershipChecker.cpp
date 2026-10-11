@@ -73,7 +73,9 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (source.mode == Mode::Borrow && exclusive)
         reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
     if (source.moved)
-        reject(expr, "borrow of explicitly moved value '" + expr.left->name + "'");
+        reject(expr, (source.class_name.empty()
+            ? "borrow of explicitly moved int '" : "ownership violation: borrow of moved class '")
+            + expr.left->name + "'");
     if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
         reject(expr, "conflicting active native borrow of '" + expr.left->name + "'");
     if (exclusive) source.exclusive_loan = true;
