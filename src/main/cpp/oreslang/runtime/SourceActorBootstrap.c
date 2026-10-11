@@ -739,6 +739,13 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
                                 memory_order_acquire) == 2);
     ensure(atomic_load_explicit(&group.pipeline_sink->processed,
                                 memory_order_acquire) == 1);
+    /* All DATA reservations (preparing, queued, executing) are returned.
+     * This is the single-flow owned-frame quiescence barrier before stop. */
+    ensure(atomic_load_explicit(&actor->wire_reserved, memory_order_acquire) == 0);
+    ensure(atomic_load_explicit(&group.pipeline_middle->wire_reserved,
+                                memory_order_acquire) == 0);
+    ensure(atomic_load_explicit(&group.pipeline_sink->wire_reserved,
+                                memory_order_acquire) == 0);
     group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr, "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=%llu backward=%llu result=%lld\n",
