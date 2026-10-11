@@ -118,10 +118,9 @@
       "kind": "diagnostic",
       "diagnostic_class": "ownership_violation",
       "backends": {
-        "llvm": "pending",
+        "llvm": "required",
         "graal": "required"
-      },
-      "pending_reason": "LLVM borrow checker and classes are not yet implemented."
+      }
     }
   ]
 }
