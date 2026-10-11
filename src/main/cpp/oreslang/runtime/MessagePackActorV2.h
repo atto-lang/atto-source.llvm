@@ -10,8 +10,9 @@ extern "C" {
  * MessagePackCollectionCodec: [2, schema-id, bin8(sha256(shape)), payload].
  * DO NOT use the experimental OMSG/1 frame as the actor's default wire ABI.
  *
- * Contract data is trusted COMPILER output and must remain alive until the
- * scheduler has drained. Numeric/string identity is not authentication.
+ * Contract data is trusted COMPILER output, stable for the duration
+ * of registration. The group COPIES schema, shape and digest and owns them
+ * until destruction. A hash is type compatibility, NOT authentication.
  * Shape grammar: B I F S T[...] FA[...] FL[...] A[shape] L[shape].
  */
 typedef struct {
@@ -48,14 +49,18 @@ typedef void (*OresMp2OnMessage)(void* context, size_t actor_slot,
 OresMp2ActorGroup* ores_mp2_group_open(size_t actors, size_t queue_capacity,
                                       size_t carriers, OresMp2OnMessage on_message,
                                       void* context);
-/* Set once per slot, before spawn. Contract memory must outlive the group. */
+/* Configure once per slot BEFORE spawn. All contract bytes are deep-copied
+ * and verified after copying; the caller retains them and may release them
+ * immediately after this function returns. Construction/registration must
+ * not race with spawn, send, stop or destroy of the same group. */
 int ores_mp2_group_contract(OresMp2ActorGroup* group, size_t slot,
                             OresMp2Contract contract);
 OresMp2ActorRef ores_mp2_group_spawn(OresMp2ActorGroup* group, size_t slot);
-/* Encodes/copies BEFORE scheduler admission; destination contract is
- * validated. Caller always retains input memory. Reject frees the copy.
- * Successful admission moves the owned snapshot into exactly one lane turn.
- */
+/* Reserves a bounded per-actor DATA slot BEFORE allocating or decoding.
+ * Copies then validates the caller's frame against its pinned destination
+ * schema; the caller retains input memory. Rejection releases both the
+ * snapshot and reservation; acceptance transfers them to one actor lane.
+ * Submitters MUST be fenced externally before group destruction. */
 int ores_mp2_group_send(OresMp2ActorGroup* group, OresMp2ActorRef target,
                         const uint8_t* wire, size_t size);
 int ores_mp2_group_stop(OresMp2ActorGroup* group, OresMp2ActorRef target);
