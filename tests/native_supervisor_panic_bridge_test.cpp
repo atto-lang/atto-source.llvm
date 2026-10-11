@@ -40,6 +40,7 @@ struct State {
     std::atomic<unsigned> control_events{0};
     std::atomic<unsigned> policy_calls{0};
     std::atomic<unsigned> decisions{0};
+    std::atomic<std::uint64_t> committed_generation{0};
     std::thread::id child_carrier;
     std::thread::id policy_carrier;
 };
@@ -123,8 +124,10 @@ int main() {
             return std::nullopt;
         },
         [&](const SupervisorProcess::Resolution& result) {
-            if (result.requested != SupervisorProcess::Directive::stop)
+            if (result.requested != SupervisorProcess::Directive::stop
+                    || result.turn_generation == 0)
                 ++s.unexpected;
+            s.committed_generation.store(result.turn_generation);
             if (!ores_native_actor_scheduler_stop(s.scheduler, s.sibling))
                 ++s.unexpected;
             // A real lifecycle STOP can close its own supervisor from inside
@@ -210,6 +213,8 @@ int main() {
     while (s.process->resolved() != 1 && std::chrono::steady_clock::now() < deadline)
         std::this_thread::yield();
 
+    check(s.committed_generation.load() == epoch,
+          "native STOP committed with a stale or missing turn generation");
     check(s.unexpected.load() == 0, "native panic bridge invariant violated");
     check(s.control_events.load() == 1 && s.policy_calls.load() == 1
           && s.decisions.load() == 1,
