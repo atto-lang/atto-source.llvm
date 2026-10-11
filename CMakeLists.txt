@@ -196,6 +196,25 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        # First source-compiled nominal enum actor end-to-end test:
+        # SHA-pinned Java-compatible schemas, closed pattern ordinal dispatch,
+        # checked DATA sends and actor-local state effects.
+        oreslang_contract_test(source_tagged_nominal_actor_ir source-tagged-payloadless-dispatch.ores
+            --ir "oreslang_source_actor_spawn_tagged_variants")
+        oreslang_contract_test(source_tagged_nominal_actor_java_schema source-tagged-payloadless-dispatch.ores
+            --ir "oreslang.enum.e5a943e4263cf4ff7a59b28b63ffbac5a6a3279952ec16ca95f26193831c33bf")
+        oreslang_contract_test(native_tagged_nominal_actor source-tagged-payloadless-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=14")
+        oreslang_contract_test(native_asan_tagged_nominal_actor source-tagged-payloadless-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=14")
         oreslang_contract_test(native_actor_bool_match_dispatch message-receive-bool-match.ores
             --run 43 --clang "${ORE_CLANG}" --runs 30
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
