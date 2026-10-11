@@ -180,44 +180,68 @@ static size_t source_bounded_length(const char* string, size_t max_length) {
         if (string[i] == '\0') return i;
     return max_length + 1;
 }
+static void release_source_variants(SourceVariantContract* variants,
+                                    size_t count) {
+    if (!variants) return;
+    for (size_t i = 0; i < count; ++i) {
+        free(variants[i].owned_schema);
+        free(variants[i].owned_shape);
+        memset(variants[i].sha, 0, sizeof(variants[i].sha));
+    }
+    free(variants);
+}
+
+/* Compiler-generated domains are immutable and complete. Copy-before-check
+ * prevents a mutable host descriptor from being validated under one shape
+ * and registered under another. Duplicate schema IDs are ambiguous and
+ * always rejected rather than matched by payload or declaration order. */
+static SourceVariantContract* source_copy_variants(
+    const OresMp2Contract* contracts, size_t count) {
+    if (!contracts || count == 0 || count > SOURCE_MAX_VARIANTS) return NULL;
+    SourceVariantContract* owned = calloc(count, sizeof(*owned));
+    if (!owned) return NULL;
+    for (size_t i = 0; i < count; ++i) {
+        const OresMp2Contract* src = &contracts[i];
+        if (!src->schema_id || !src->shape || !src->shape_sha256) goto fail;
+        size_t slen = source_bounded_length(src->schema_id, 256);
+        size_t tlen = source_bounded_length(src->shape, 4096);
+        if (!slen || slen > 256 || !tlen || tlen > 4096) goto fail;
+        owned[i].owned_schema = malloc(slen + 1);
+        owned[i].owned_shape = malloc(tlen + 1);
+        if (!owned[i].owned_schema || !owned[i].owned_shape) goto fail;
+        memcpy(owned[i].owned_schema, src->schema_id, slen + 1);
+        memcpy(owned[i].owned_shape, src->shape, tlen + 1);
+        memcpy(owned[i].sha, src->shape_sha256, sizeof(owned[i].sha));
+        owned[i].value = (OresMp2Contract){
+            owned[i].owned_schema, owned[i].owned_shape, owned[i].sha
+        };
+        if (!ores_mp2_contract_valid(&owned[i].value)) goto fail;
+        for (size_t earlier = 0; earlier < i; ++earlier) {
+            if (strcmp(owned[earlier].value.schema_id,
+                       owned[i].value.schema_id) == 0) goto fail;
+        }
+    }
+    return owned;
+fail:
+    release_source_variants(owned, count);
+    return NULL;
+}
 /* Returns zero only for invalid trusted registration. Configuration and
  * teardown are single-owner operations; concurrent host senders must be
  * fenced before stop to avoid use-after-free of the opaque actor handle.
  */
 static void* source_spawn(
     OresSourceActorInit constructor, OresSourceActorMessage on_message,
-    OresSourceActorWireMessage on_wire, uint64_t fields,
-    const OresMp2Contract* contract) {
+    OresSourceActorWireMessage on_wire,
+    OresSourceActorVariantMessage on_variant, uint64_t fields,
+    const OresMp2Contract* contracts, size_t variant_count) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
-    ensure((on_message != NULL) != (on_wire != NULL));
-    char* registered_schema = NULL;
-    char* registered_shape = NULL;
-    uint8_t registered_digest[32];
-    if (on_wire) {
-        if (!contract || !contract->schema_id || !contract->shape
-                || !contract->shape_sha256) return NULL;
-        size_t slen = source_bounded_length(contract->schema_id, 256);
-        size_t tlen = source_bounded_length(contract->shape, 4096);
-        if (!slen || slen > 256 || !tlen || tlen > 4096) return NULL;
-        registered_schema = malloc(slen + 1);
-        registered_shape = malloc(tlen + 1);
-        if (!registered_schema || !registered_shape) {
-            free(registered_schema);
-            free(registered_shape);
-            return NULL;
-        }
-        memcpy(registered_schema, contract->schema_id, slen + 1);
-        memcpy(registered_shape, contract->shape, tlen + 1);
-        memcpy(registered_digest, contract->shape_sha256, sizeof(registered_digest));
-        OresMp2Contract snapshot = {
-            registered_schema, registered_shape, registered_digest
-        };
-        if (!ores_mp2_contract_valid(&snapshot)) {
-            free(registered_schema);
-            free(registered_shape);
-            memset(registered_digest, 0, sizeof(registered_digest));
-            return NULL;
-        }
+    ensure((on_message != NULL) + (on_wire != NULL)
+        + (on_variant != NULL) == 1);
+    SourceVariantContract* registered = NULL;
+    if (on_wire || on_variant) {
+        registered = source_copy_variants(contracts, variant_count);
+        if (!registered) return NULL;
     }
     group_lock();
     if (!group.scheduler) {
@@ -241,16 +265,10 @@ static void* source_spawn(
     instance->constructor = constructor;
     instance->on_message = on_message;
     instance->on_wire = on_wire;
+    instance->on_variant = on_variant;
+    instance->variants = registered;
+    instance->variant_count = registered ? variant_count : 0;
     atomic_init(&instance->wire_reserved, 0);
-    if (on_wire) {
-        instance->owned_schema = registered_schema;
-        instance->owned_shape = registered_shape;
-        memcpy(instance->wire_sha, registered_digest, sizeof(instance->wire_sha));
-        memset(registered_digest, 0, sizeof(registered_digest));
-        instance->wire_contract = (OresMp2Contract){
-            instance->owned_schema, instance->owned_shape, instance->wire_sha
-        };
-    }
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref = ores_native_actor_scheduler_spawn(group.scheduler, slot);
@@ -267,13 +285,21 @@ static void* source_spawn(
 void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields) {
-    return source_spawn(constructor, on_message, NULL, fields, NULL);
+    return source_spawn(constructor, on_message, NULL, NULL, fields, NULL, 0);
 }
 void* oreslang_source_actor_spawn_wire(
     OresSourceActorInit constructor, OresSourceActorWireMessage on_wire,
     uint64_t fields, const OresMp2Contract* contract) {
     if (!on_wire || !contract) return NULL;
-    return source_spawn(constructor, NULL, on_wire, fields, contract);
+    return source_spawn(constructor, NULL, on_wire, NULL, fields, contract, 1);
+}
+void* oreslang_source_actor_spawn_variants(
+    OresSourceActorInit constructor,
+    OresSourceActorVariantMessage on_variant, uint64_t fields,
+    const OresMp2Contract* contracts, size_t contract_count) {
+    if (!on_variant) return NULL;
+    return source_spawn(constructor, NULL, NULL, on_variant,
+                        fields, contracts, contract_count);
 }
 int64_t oreslang_source_actor_await_ready(
     void* opaque, OresSourceActorContinuation continuation) {
@@ -383,8 +409,7 @@ void oreslang_source_actor_stop(void* opaque) {
     group.actors[slot] = NULL;
     ensure(atomic_load_explicit(&instance->wire_reserved,
                                  memory_order_acquire) == 0);
-    free(instance->owned_schema);
-    free(instance->owned_shape);
+    release_source_variants(instance->variants, instance->variant_count);
     instance->magic = 0;
     free(instance);
     ensure(group.live > 0);
