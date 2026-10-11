@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
+#include "oreslang/runtime/NativeSupervisorCodeSlot.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,33 @@ public:
         const auto id = next_supervisor_id_++;
         supervisors_.emplace(id, parent.id());
         return SupervisorRef(id, domain_);
+    }
+
+    /**
+     * Host CONTROL boundary. Binds the slot to the exact registry domain
+     * and supervisor identity; a code revision changes policy, never group
+     * parentage or group IDs. No guest may call this API directly.
+     */
+    void install_policy(const SupervisorRef& supervisor,
+            std::shared_ptr<NativeSupervisorCodeSlot<std::string>> code) {
+        if (!code) throw std::invalid_argument("null native supervisor policy code");
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_registered(supervisor);
+        if (policies_.count(supervisor.id()))
+            throw std::logic_error("native supervisor policy already installed");
+        (void)code->current();
+        code->bind_owner(domain_.get(), supervisor.id());
+        policies_.emplace(supervisor.id(), std::move(code));
+    }
+
+    NativeSupervisorCodeSlot<std::string>::Descriptor policy_revision(
+            const SupervisorRef& supervisor) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_registered(supervisor);
+        auto it = policies_.find(supervisor.id());
+        if (it == policies_.end())
+            throw std::logic_error("supervisor has no installed policy code");
+        return it->second->current();
     }
 
     std::uint64_t parent_id(const SupervisorRef& supervisor) const {
@@ -161,6 +189,8 @@ private:
     mutable std::mutex mutex_;
     std::uint64_t next_supervisor_id_ = NativeActorGroup::root_supervisor_id + 1;
     std::unordered_map<std::uint64_t, std::uint64_t> supervisors_;
+    std::unordered_map<std::uint64_t,
+        std::shared_ptr<NativeSupervisorCodeSlot<std::string>>> policies_;
     std::unordered_map<std::uint64_t, Association> groups_;
 };
 
