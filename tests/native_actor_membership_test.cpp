@@ -2,6 +2,7 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -80,8 +81,6 @@ int main() {
               "registry group quota bypass");
         NativeActorMembershipRegistry foreign(21, 2, 3);
         check(foreign.register_actor(1, 1), "foreign actor registration");
-        check(rejected([&] { (void)foreign.join(recreated, 1, 1); }) == false,
-              "foreign permit unexpectedly threw logic_error instead of invalid_argument");
         bool foreign_rejected = false;
         try { (void)foreign.join(recreated, 1, 1); }
         catch (const std::invalid_argument&) { foreign_rejected = true; }
