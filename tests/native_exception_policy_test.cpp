@@ -89,7 +89,7 @@ int main() {
     assert(bounded == many_rockets.substr(0, 256 * 4));
 
     const std::string malformed = std::string("valid:") + "\xed\xa0\x80" + "!";
-    assert(bounded_control_diagnostic(malformed) == "valid:???!");
+    assert(bounded_control_diagnostic(malformed) == std::string("valid:") + std::string(3, char(63)) + "!");
     assert(bounded_control_diagnostic(std::string(2048, 'x')).size() ==
            max_control_diagnostic_bytes);
     return 0;
