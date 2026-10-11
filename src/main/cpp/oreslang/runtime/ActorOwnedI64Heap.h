@@ -35,6 +35,10 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
+/* HOST ONLY: monitor suspended FFI/await pins before scheduling CONTROL
+ * cleanup; no pointer or turn authority is delegated to a loan holder. */
+uint32_t ores_actor_i64_heap_loan_count(OresActorI64Heap* heap);
+
 /* Compiler-facing field layout for a single actor instance.
  * Field indexes are compile-time layout indexes, not arbitrary pointers.
  * The caller must enter the owning actor turn first. */
@@ -43,6 +47,10 @@ OresActorI64Fields* ores_actor_i64_fields_create(
     OresActorI64Heap* heap, OresActorTurn turn,
     const int64_t* initial_values, uint32_t field_count);
 int64_t ores_actor_i64_fields_get(
+    OresActorI64Heap* heap, OresActorTurn turn,
+    const OresActorI64Fields* fields, uint32_t field);
+/* A field loan survives suspension but prevents field drop until release. */
+OresActorLoan ores_actor_i64_fields_borrow(
     OresActorI64Heap* heap, OresActorTurn turn,
     const OresActorI64Fields* fields, uint32_t field);
 void ores_actor_i64_fields_set(
