@@ -86,7 +86,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::Module module("oreslang-source", context);
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
-    llvm::Type* native_ptr = llvm::Type::getInt8PtrTy(context);
+    llvm::Type* native_ptr = llvm::Type::getInt8Ty(context)->getPointerTo();
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
@@ -231,7 +231,7 @@ std::string emit_verified_client_contract_llvm_ir(const ClientContractHeader& so
     // Signature lowering is deliberately declaration-only. Ownership, validity,
     // allocator, call frames and RPC dispatch must be implemented and tested
     // before any generated SDK can be admitted.
-    llvm::Type* data = llvm::Type::getInt8PtrTy(context);
+    llvm::Type* data = llvm::Type::getInt8Ty(context)->getPointerTo();
     llvm::Type* length = llvm::Type::getInt64Ty(context);
     llvm::StructType* string_type = llvm::StructType::create(
         context, {data, length}, "oreslang.string");
