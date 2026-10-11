@@ -129,8 +129,7 @@ private:
         return {actor.actor_slot, actor.generation};
     }
     void validate_actor(OresNativeActorRef actor) const {
-        if (actor.scheduler_domain != runtime_id_ || !actor.generation
-            || !actor.actor_slot)
+        if (actor.scheduler_domain != runtime_id_ || !actor.generation)
             throw std::invalid_argument("foreign or invalid actor incarnation");
     }
     Snapshot require_current(ChildRef child) const {
