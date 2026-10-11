@@ -1,4 +1,5 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/AcceleratorSourceLowering.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 
 #include <algorithm>
@@ -418,6 +419,19 @@ private:
 };
 
 } // namespace
+
+dop::OpenClArtifact compile_gpu_source(
+        std::string_view source, dop::Plan layout, dop::GpuTarget target) {
+    // Deliberately separate from normal parse_program(), whose strict i64
+    // guest grammar rejects gpu/quantum declarations. No device dispatch.
+    return accel_source::compile_gpu(source, layout).emit_opencl(target);
+}
+
+std::string compile_quantum_source_openqasm3(std::string_view source) {
+    // Source undergoes bounded circuit and terminal-measurement admission;
+    // the result is a codegen artifact, not a QPU or simulator invocation.
+    return accel_source::compile_quantum(source).emit_openqasm3();
+}
 
 Program parse_program(std::string_view source) {
     Program program = Parser(source).parse();
