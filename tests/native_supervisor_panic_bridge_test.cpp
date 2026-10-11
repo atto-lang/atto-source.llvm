@@ -137,9 +137,20 @@ int main() {
                     || result.turn_generation == 0)
                 ++s.unexpected;
             s.committed_generation.store(result.turn_generation);
+            try {
+                auto claim = s.bridge->reserve_finalized_stop(result);
+                if (claim.phase !=
+                        oreslang::runtime::SupervisorChildRegistry::Phase::stopping
+                    || claim.child.logical_child_id != result.notice.logical_child_id)
+                    ++s.unexpected;
+            } catch (...) {
+                ++s.unexpected;
+            }
+            // The sibling shutdown is a separate host lifecycle effect,
+            // not proof that the already finalized failed child was stopped.
             if (!ores_native_actor_scheduler_stop(s.scheduler, s.sibling))
                 ++s.unexpected;
-            // A real lifecycle STOP can close its own supervisor from inside
+            // A host lifecycle STOP can close its own supervisor from inside
             // the admitted CONTROL decision. The effect must still commit.
             s.process->close();
             try {
