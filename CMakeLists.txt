@@ -84,6 +84,14 @@ if(BUILD_TESTING)
         --diagnostic "await requires native compiler continuation lowering")
     oreslang_contract_test(reject_source_actor_escape source-actor-spawn-escape.ores
         --diagnostic "unknown parameter")
+    oreslang_contract_test(source_actor_send_ir source-actor-send.ores
+        --ir "oreslang_source_actor_send")
+    oreslang_contract_test(reject_source_actor_send_no_handler source-actor-send-missing-handler.ores
+        --diagnostic "actor send requires pub on_message(int)")
+    oreslang_contract_test(reject_source_actor_send_bad_receiver source-actor-send-unknown-ref.ores
+        --diagnostic "unknown actor message receiver")
+    oreslang_contract_test(reject_source_actor_ref_as_payload source-actor-send-ref-as-payload.ores
+        --diagnostic "unknown parameter")
 
     # Ownership remains Java-only. Reject all source ownership forms before
     # LLVM IR emission until a lifetime/provenance-aware typechecker exists.
@@ -128,6 +136,18 @@ if(BUILD_TESTING)
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "SOURCE_ACTOR_SPAWN_STOP_VERIFIED")
+        oreslang_contract_test(native_exec_source_actor_send source-actor-send.ores
+            --run 43 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=3")
+        oreslang_contract_test(native_asan_source_actor_send source-actor-send.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=3")
         oreslang_contract_test(native_exec_actor_fields actor-owned-fields.ores --run 0 --clang "${ORE_CLANG}"
             --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
