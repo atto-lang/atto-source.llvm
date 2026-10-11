@@ -128,6 +128,16 @@ if(BUILD_TESTING)
             --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
         set_tests_properties(native_exec_source_await_handler_panic PROPERTIES
             ENVIRONMENT "ORES_ACTOR_TEST_HANDLER_PANIC=1")
+        # Executed generated tagged union receiver: two actor heaps,
+        # repeated Delta/Reset messages, forged schema/tag rejection.
+        oreslang_contract_test(native_exec_typed_union_actor_mail actor-message-union.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_typed_union_scheduled_host.cpp")
+        oreslang_contract_test(native_exec_typed_union_actor_mail_sanitized actor-message-union.ores
+            --run 0 --clang "${ORE_CLANG}" --native-sanitizers
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_typed_union_scheduled_host.cpp")
         # Real compiler-generated Counter code reused by three independent
         # ActorGroup-owned heaps with callback-resumed parent CONTROL.
         oreslang_contract_test(native_exec_multi_actor_scheduled_group actor-fields-counter.ores
