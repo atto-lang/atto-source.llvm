@@ -11,7 +11,7 @@ Companion to [Java ActorGroup](https://github.com/ores-truffle-oreslang/oreslang
 | `await ref.get_ready()` | `void` | Readiness (or startup failure), via `Future<void>` |
 | `await ref.get_done()` | `void` | Physical finalization (or terminal failure), via `Future<void>` |
 
-**Current native gap:** `NativeActorRef::when_ready(...)` is a host-only callback ticket, not the source-level `get_ready()` future method. `get_done()` and a physical-finalization observer are not implemented by `ActorGroupLifecycle.hpp`; group close only requests shutdown. Do not expose host callbacks or termination-independent group detachment as Oreslang `Future<void>` lifecycle completion. Native lowering must supply separate readiness and done futures with generation fencing and scheduler-only continuation resumption.
+**Current native gap:** The unified `NativeActorRef` now exposes host-only `std::shared_future<void>` observers for readiness and actual terminal acknowledgment, alongside `when_ready(...)`. These are not compiled guest `Future<void>` objects. Native Oreslang lowering must add scheduler-owned, nonblocking guest continuations; host `.get()` must never block an actor carrier. Group close requests stop and **cannot settle `get_done()`**.
 
 Awaiting a spawn **never** means waiting until the actor exits. A
 group must retain worker references until termination; group membership
@@ -25,7 +25,7 @@ references. `NativeActorGroup::adopt(...)` returns the reference
 immediately; `mark_ready(ref)` settles its one-shot readiness ticket.
 `ref.when_ready(callback)` registers before or after settling, and
 receives failure if the actor retires before startup completes.
-Old references retain their **readiness ticket only** after retirement
+Old references retain their **readiness and completion tickets only** after retirement
 without keeping the actor's heap alive. Generation checks reject
 stale ref operations after actor ID reuse.
 
@@ -49,9 +49,8 @@ continuations must never execute directly on an actor completion thread.
 failure, late awaits, generation/identity, group closure, capacity, and
 ready-versus-close races.
 
-Validated exact source with GCC and Clang ASan/UBSan (including reentrant
-close and throwing callbacks):
-https://github.com/athlet-o/athleto-e2e/actions/runs/38093139710 .
+Validated latest unified exact native source with 110 matching compiler/test Git blobs, 92/92 CTests, 30 repetitions of each lifecycle/heap test target, and GCC ASan/UBSan:
+https://github.com/zed-pkg-test/java-app/actions/runs/38102851432 .
 
 ## Native heap integration proof
 
@@ -63,8 +62,9 @@ reclamation** while a suspended native loan exists. Releasing the final loan
 then permits deterministic heap destruction without any tracing GC.
 
 This validates an explicit supervisor-to-heap adapter, **not** automatic
-compiler lowering, scheduler-owned callbacks, cross-group ownership
-exclusivity, or a universal `memoryReclaimed()` guest future.
+compiler lowering, scheduler-owned callbacks, cross-isolate authorization,
+or a universal `memoryReclaimed()` guest future. Host cross-group exclusivity
+is now separately tested in `native_actor_group_managed_worker_readiness`.
 
 ## Unified lifecycle authority (native host ABI)
 
@@ -76,7 +76,9 @@ is **not** settled by `stop_workers()` or `close()`. It requires a trusted
 `NativeActorGroup::finalized(ref[, terminal_error])` acknowledgment after
 all turns, continuations, wakers, native loans, heap destruction and carrier
 cleanup. The group can accept that terminal acknowledgment after `close()`
-has released its worker table, without retaining an actor heap.
+has released its worker table, without retaining an actor heap. The owning
+`NativeActorGroup` object must still remain alive to receive the final
+acknowledgment; its destructor does not join actor carriers.
 
 Across groups, a process-local registry keyed by runtime and actor identity
 fences exclusive management until the physical terminal acknowledgment, even
@@ -99,9 +101,10 @@ ActorGroup header itself.
 
 This is a host-side C++ runtime primitive, **not working source-level
 LLVM `spawn` or `await spawn`**. A central native supervisor must still
-enforce **exclusive ActorGroup ownership across distinct native groups**;
-the current per-group table does not provide a global ownership registry. The native compiler currently fails
-closed on both expressions; CTest fixtures enforce rejection without
+map guest actor identities securely to the process-local exclusive owner
+registry and reject untrusted or forged runtime identities. The native
+compiler currently fails closed on actor source expressions; CTest fixtures
+enforce rejection without
 emitted LLVM IR. Pending features include actor constructor/source
 lowering, continuation frames, typed ActorRef ABI, scheduler-integrated
 readiness callbacks, supervised stop/failure propagation, cross-isolate
