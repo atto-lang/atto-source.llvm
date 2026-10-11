@@ -232,9 +232,12 @@ public:
             std::uint64_t incarnation, std::uint64_t turn_generation) {
         std::lock_guard<std::mutex> guard(mutex_);
         auto& receipt = require_stop_receipt(child, actor, incarnation, turn_generation);
-        if (receipt.status != StopReceiptStatus::pending
-                && receipt.status != StopReceiptStatus::uncertain)
-            throw std::logic_error("STOP receipt cannot be applied twice");
+        // The first host callback may acknowledge a PENDING request.
+        // An UNCERTAIN receipt may only advance after independent proof in
+        // reconcile_uncertain_stop(), never through this direct shortcut.
+        if (receipt.status != StopReceiptStatus::pending)
+            throw std::logic_error(
+                "STOP receipt is not pending; uncertain effects require reconciliation");
         receipt.status = StopReceiptStatus::applied;
         return receipt;
     }
@@ -272,8 +275,18 @@ public:
             throw std::logic_error("foreign or non-uncertain STOP reconciliation");
         if (!verify_applied(receipt))
             return false;  // UNKNOWN remains quarantined; no state change.
-        record_stop_applied(child, actor, incarnation, turn_generation);
-        commit_stop(child, actor, incarnation, turn_generation);
+        // Recheck the SAME turn under one lock and commit atomically after
+        // external verification. Never reopen the direct APPLIED shortcut
+        // for an UNKNOWN effect, even if two reconcilers race.
+        std::lock_guard<std::mutex> guard(mutex_);
+        auto& verified = require_stop_receipt(
+            child, actor, incarnation, turn_generation);
+        if (verified.status != StopReceiptStatus::uncertain)
+            throw std::logic_error("STOP changed while being reconciled");
+        auto& state = children_.at(child.logical_child_id);
+        state.phase = Phase::stopped;
+        verified.status = StopReceiptStatus::acknowledged;
+        pending_stops_.erase(child.logical_child_id);
         return true;
     }
 
