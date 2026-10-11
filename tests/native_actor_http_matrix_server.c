@@ -109,9 +109,10 @@ static void child_worker(int fd, int idx) {
     close_socket(fd);
     _exit(0);
 }
-static Answer process_request(int idx) {
+static int process_request(int idx, Answer* outcome) {
     Worker* w = &workers[idx];
-    require(ores_native_actor_mailbox_enter(w->gate) == 1, "bounded actor admission");
+    /* Scheduler admission errors are HTTP 503, not process termination. */
+    if (!ores_native_actor_mailbox_enter(w->gate)) return 0;
     Answer ans;
     if (!process_mode) ans = step(w, idx);
     else {
@@ -120,7 +121,8 @@ static Answer process_request(int idx) {
         require(full_io(w->ipc, &ans, sizeof ans, 0), "read isolated actor response");
     }
     ores_native_actor_mailbox_leave(w->gate);
-    return ans;
+    *outcome = ans;
+    return 1;
 }
 static long rss_pid_kb(pid_t pid) {
     char path[80];
@@ -175,11 +177,15 @@ static void client_request(int fd) {
         char tail = 0;
         if (sscanf(input, "GET /work/%d%c", &index, &tail) == 2 &&
             tail == ' ' && index >= 0 && index < ACTORS) {
-            Answer ans = process_request(index);
-            char body[100];
-            snprintf(body, sizeof body, "%d,%" PRId64 ",%" PRId64,
-                     index, ans.count, ans.value);
-            reply(fd, 200, body);
+            Answer ans;
+            if (!process_request(index, &ans)) {
+                reply(fd, 503, "actor admission at capacity");
+            } else {
+                char body[100];
+                snprintf(body, sizeof body, "%d,%" PRId64 ",%" PRId64,
+                         index, ans.count, ans.value);
+                reply(fd, 200, body);
+            }
         } else reply(fd, 404, "missing");
     } else if (!strncmp(input, "GET ", 4)) reply(fd, 404, "missing");
     else if (strchr(input, ' ')) reply(fd, 405, "method");
