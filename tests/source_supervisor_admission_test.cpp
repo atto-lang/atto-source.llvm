@@ -191,6 +191,28 @@ int main() {
               && targeted_process->undelivered() == 0,
           "typed Failure STOP did not commit exactly once");
 
+
+    // A legacy untyped host notice may use the historical no-argument
+    // STOP compatibility form, but must not impersonate a typed Failure
+    // parameter in an opt-in source hook.
+    unsigned untyped_applied = 0;
+    auto untyped = oreslang::runtime::install_source_supervisor_stop(
+        with_failure, 98, 63, 2, enqueue,
+        [&](const oreslang::runtime::SupervisorProcess::Resolution&) {
+            ++untyped_applied;
+        });
+    untyped->accept(oreslang::runtime::SupervisorFailureNotice{
+        98, 63, 20, 8, std::nullopt, "untyped legacy terminal"});
+    while (!queued.empty()) {
+        check(++ticks < 80, "runaway untyped Failure CONTROL");
+        auto task = std::move(queued.front());
+        queued.pop_front();
+        task();
+    }
+    check(untyped_applied == 0 && untyped->resolved() == 0
+              && untyped->undelivered() == 1 && !untyped->healthy(),
+          "untyped native notice forged the explicit Failure binder");
+
     // Cancellation is *not* silently treated as a panic STOP decision.
     auto cancelled = oreslang::runtime::install_source_supervisor_stop(
         source, 88, 43, 2, enqueue,
