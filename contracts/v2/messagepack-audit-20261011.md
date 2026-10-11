@@ -92,3 +92,39 @@ The canonical tagged format is documented in
 The test org mirrors **exact Git blob hashes** because the source org may fail
 GitHub Actions before allocating a runner (`runner_id=0`, no steps).
 No private cross-org checkout token or secrets are required.
+
+
+## Same-day follow-up: enforce nominal enum case identity
+
+A typed `oreslang.enum.*` message is NOT validated merely by a legitimate
+schema ID and the tuple's SHA-256 shape digest. For example, the same
+`T[S,I,S]` frame remains structurally valid when the embedded enum owner
+`Status` changes or the declared numeric tag changes from `2` to `3`.
+Java's production TaggedMessageCodec already rejected those values, while
+LLVM's initial generic variant transport checked only shape/schema.
+
+Fixed in LLVM #180:
+- `oreslang_source_actor_spawn_tagged_variants` registers a compiler-pinned
+  enum owner and declared positive 32-bit numeric tag for every case.
+- The receiver validates the full detached owned MessagePack snapshot then
+  independently checks both owner and tag before invoking guest callbacks.
+- The structural-only `spawn_variants` entrypoint rejects
+  `oreslang.enum.*` registrations. Typed enum messages cannot downgrade to
+  structurally checked delivery.
+- Existing scalar, structural and registered one-schema host integrations
+  remain compatible with their existing contracts.
+
+Native [exact-Git-blob CI #38177885872](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38177885872)
+passed GCC ASan/UBSan, the forged-owner/tag regression, the
+structural-only API fail-closed test, the serial actor's eight-producer
+stress test, backward compatibility, the Java wire vector, and optimized Clang.
+
+Java #645 gained an independent byte-mutation regression proving that
+`TaggedMessageCodec` rejects both wrong owner and wrong numeric tag despite
+valid structural payloads. Java [exact-Git-blob CI #38177982870](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38177982870)
+passed **58 targeted JUnit tests, 0 failures, 0 errors, 0 skipped**.
+
+**Scope:** This corrects native API admission, not Oreslang source compiler
+parity. The LLVM frontend must actually *generate* the pinned nominal ABI and
+execute real guest-source send/receive/match programs before merging. Native
+producer leases also do not make opaque pointers safe after destruction.
