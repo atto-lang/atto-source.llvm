@@ -192,3 +192,21 @@ still has its own mutex-backed turn admission inside the mailbox
 (the mailbox itself does not block carriers on admission).
 No automatic cleanup is promised for C-level process aborts or
 externally leaked native pointers.
+
+
+### Final executed pilot validation
+
+[Funded exact-blob CI run 38113552934](https://github.com/zed-pkg-test/java-app/actions/runs/38113552934):
+62/62 Release CTests passed; 100 repetitions of the exclusive-lane
+scheduler fixture and 5 repetitions of compiled-source actor panic/cancel
+passed; native scheduler ASan/UBSan passed; exact Java/Graal layout smoke
+passed; and generated LLVM IR rejected tracing-GC calls. Exact Git
+**blobs** are verified; the whole source tree has not been independently
+mirrored/certified. This is a draft pilot, not release approval.
+
+A previous sanitizer failure exposed a race in the **test's lifecycle
+assumption**, which had finalized a parent scheduler immediately after
+a handler resolved an observer promise, before the carrier called its
+turn-completed acknowledgment. The regression now waits for real
+scheduler-lane release, and the sanitizer check passes. Future actor
+runtime implementations must preserve that same distinction.
