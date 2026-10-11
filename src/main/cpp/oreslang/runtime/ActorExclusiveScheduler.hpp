@@ -45,13 +45,13 @@ public:
     ActorExclusiveScheduler(const ActorExclusiveScheduler&) = delete;
     ActorExclusiveScheduler& operator=(const ActorExclusiveScheduler&) = delete;
 
-    bool post_data(Task handler) {
+    bool post_data(Task handler, Task on_cancel = {}) {
         if (!handler) throw std::invalid_argument("empty actor data handler");
         Task dispatch;
         {
             std::lock_guard<std::mutex> guard(mutex_);
             if (closing_ || data_.size() >= data_capacity_) return false;
-            data_.push_back(std::move(handler));
+            data_.push_back({std::move(handler), std::move(on_cancel)});
             dispatch = pop_if_idle_locked();
         }
         schedule(std::move(dispatch));
@@ -79,12 +79,22 @@ public:
     // Ordinary DATA pending on shutdown is abandoned; cleanup is invoked
     // through the reserved parent CONTROL channel separately.
     void close() {
+        std::deque<Data> cancelled;
         Task dispatch;
         {
             std::lock_guard<std::mutex> guard(mutex_);
             closing_ = true;
-            data_.clear();
+            cancelled.swap(data_);
             dispatch = pop_if_idle_locked();
+        }
+        // Tell each already-accepted queued call that it was cancelled:
+        // no future can remain unresolved just because close drained DATA.
+        // Never run a callback while holding the mailbox lock.
+        for (auto& item : cancelled) {
+            if (item.on_cancel) {
+                try { item.on_cancel(); }
+                catch (...) { /* cancellation hooks cannot block siblings */ }
+            }
         }
         schedule(std::move(dispatch));
     }
@@ -113,7 +123,7 @@ private:
             selected = std::move(control_);
             control_pending_ = false;
         } else if (!closing_ && !data_.empty()) {
-            selected = std::move(data_.front());
+            selected = std::move(data_.front().handler);
             data_.pop_front();
         }
         if (selected) in_flight_ = true;
@@ -155,8 +165,12 @@ private:
     bool closing_ = false;
     bool finalized_ = false;
     bool control_pending_ = false;
+    struct Data {
+        Task handler;
+        Task on_cancel;
+    };
     Task control_;
-    std::deque<Task> data_;
+    std::deque<Data> data_;
 };
 
 } // namespace oreslang::runtime
