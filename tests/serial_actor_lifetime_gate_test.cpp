@@ -9,16 +9,20 @@
 using oreslang::SerialActorLifetimeGate;
 using Kind = SerialActorLifetimeGate::Kind;
 using Status = SerialActorLifetimeGate::SubmitStatus;
+using Lifecycle = SerialActorLifetimeGate::Lifecycle;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error("failed: " #x); } while (false)
 
 int main() {
     SerialActorLifetimeGate gate(42, 9, 1000);
+    CHECK(gate.lifecycle() == Lifecycle::Idle);
     const auto first = gate.submit(Kind::Http, 1);
     CHECK(first.status == Status::Admitted && first.lease);
     const auto held = *first.lease;
+    CHECK(gate.lifecycle() == Lifecycle::Running);
     CHECK(gate.may_execute(held));
     CHECK(gate.suspend(held));
+    CHECK(gate.lifecycle() == Lifecycle::Suspended);
     CHECK(gate.admitted(held));
     CHECK(!gate.may_execute(held));
     CHECK(!gate.suspend(held));
@@ -28,6 +32,7 @@ int main() {
     CHECK(gate.busy() && gate.queued() == 2);
     CHECK(gate.admitted(held));
     CHECK(gate.resume(held));
+    CHECK(gate.lifecycle() == Lifecycle::Running);
     CHECK(gate.may_execute(held));
     CHECK(!gate.resume(held));
     CHECK(gate.submit(Kind::Message, 2).status == Status::Duplicate);
@@ -46,7 +51,9 @@ int main() {
     CHECK(!gate.suspend(held));
     CHECK(gate.finish(*finished.next).accepted);
     CHECK(!gate.busy());
+    CHECK(gate.lifecycle() == Lifecycle::Idle);
     const auto stopped = gate.stop();
+    CHECK(gate.lifecycle() == Lifecycle::Stopped);
     CHECK(!stopped.revoked);
     CHECK(stopped.rejected.empty());
     CHECK(!gate.admitted(*finished.next));
