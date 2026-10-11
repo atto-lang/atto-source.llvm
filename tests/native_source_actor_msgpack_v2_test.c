@@ -65,9 +65,9 @@ int main(void) {
     submitted[1] = 1;
     assert(!oreslang_source_actor_send_wire(actor, submitted, canonical_size));
     memcpy(submitted, canonical, canonical_size);
-    submitted[canonical_size - 1] ^= 1;
+    submitted[3 + strlen("demo.String.v1") + 2] ^= 1;
     assert(oreslang_source_actor_send_wire(actor, canonical, canonical_size));
-    /* Input remains caller-owned: no receiver callback may observe mutations */
+    /* A forged SHA-256 descriptor must fail, even when payload is valid. */
     assert(oreslang_source_actor_send_wire(actor, submitted, canonical_size) == 0);
     memcpy(submitted, canonical, canonical_size);
     assert(oreslang_source_actor_send_wire(actor, submitted, canonical_size));
