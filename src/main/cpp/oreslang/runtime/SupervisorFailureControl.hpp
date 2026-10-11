@@ -30,6 +30,10 @@ struct SupervisorFailureNotice {
     std::uint64_t native_terminal_kind = 0;
     std::uint64_t failure_code = 0;
     std::uint64_t correlation = 0;
+    // Trusted host logical-child identity, NOT a guest lifecycle token.
+    // These appear at the tail to preserve legacy aggregate initializers.
+    std::uint64_t logical_child_id = 0;
+    std::uint64_t logical_incarnation = 0;
 };
 
 /**
