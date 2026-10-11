@@ -52,12 +52,19 @@ struct ActorAssignment {
     std::unique_ptr<Expression> value;
     std::size_t offset = 0;
 };
+struct ActorVariantArm {
+    std::string field;
+    std::vector<ActorAssignment> assignments;
+    std::size_t offset = 0;
+};
 struct ActorMethod {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<ActorAssignment> assignments;
     std::unique_ptr<Expression> result;
     std::string accepted_message_field;
+    std::vector<std::string> accepted_message_variants;
+    std::vector<ActorVariantArm> variant_arms;
     bool ends_after_receive = false;
     std::size_t offset = 0;
 };
