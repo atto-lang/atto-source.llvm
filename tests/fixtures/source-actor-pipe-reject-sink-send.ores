@@ -1,0 +1,17 @@
+define actor Producer as {
+  let count: int = 0;
+  pub fnc on_message(int n): int { return n + count; }
+}
+define actor Consumer as {
+  let count: int = 0;
+  pub fnc on_message(int n): int { return n + count; }
+}
+pub fnc main(): int {
+  const p = spawn Producer();
+  const c = spawn Consumer();
+  p pipe c;
+  c.send(42);
+  stop p;
+  stop c;
+  return 43;
+}
