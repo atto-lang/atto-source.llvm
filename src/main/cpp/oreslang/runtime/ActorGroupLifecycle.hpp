@@ -113,7 +113,7 @@ public:
     using StopRequest = std::function<void()>;
 
     enum class ControlTurn { idle, executed, busy, retired };
-    enum class DataTurn { executed, busy, retired };
+    enum class DataTurn { idle, executed, busy, retired };
 
     /** Enqueue-only reserved CONTROL slot. A GPU callback posts here but
      * cannot execute actor/user handlers on its carrier thread. */
@@ -199,6 +199,29 @@ public:
         }
         if (failure) std::rethrow_exception(failure);
         return DataTurn::executed;
+    }
+
+    /**
+     * Scheduler-only typed DATA port admission. This checks the exclusive
+     * actor lane and reserved CONTROL priority BEFORE removing a queued
+     * frame. An empty port returns idle, and rejected/busy turns leave the
+     * source frame and ownership credit untouched.
+     *
+     * The callback receives a move-only Delivery that it must either
+     * acknowledge after quiescence or transfer into a fenced async owner.
+     * Dropped unacknowledged deliveries intentionally retain quota.
+     */
+    template <typename Port, typename Handler>
+    DataTurn run_port_turn(const NativeActorRef& ref, Port& port, Handler&& handler) {
+        bool admitted_frame = false;
+        const auto result = run_data_turn(ref, [&] {
+            auto delivery = port.try_receive();
+            if (!delivery) return;
+            admitted_frame = true;
+            handler(*delivery);
+        });
+        return result == DataTurn::executed && !admitted_frame
+               ? DataTurn::idle : result;
     }
 
     explicit NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
