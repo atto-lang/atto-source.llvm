@@ -148,16 +148,36 @@ class ComparatorParityProof(unittest.TestCase):
                                      require_suite_parity=strict, expected_revisions=revisions)
         return status, out.getvalue()
 
+    def synthetic_pending(self, backend="llvm"):
+        # Regression-only coverage: a fully required real conformance suite
+        # must not erase testing of the comparator's pending safety boundary.
+        case = self.suite["cases"][0]
+        case["backends"][backend] = "pending"
+        case["pending_reason"] = "synthetic comparator regression only"
+        record = self.reports[backend]["results"][0]
+        record.clear()
+        record.update({"id": case["id"], "status": "pending",
+                       "detail": case["pending_reason"]})
+        return record
+
     def test_incremental_mode_is_explicitly_incomplete(self):
+        self.synthetic_pending()
         status, summary = self.compare()
         self.assertEqual(status, 0)
         self.assertIn("SUITE_COMPLETE=no", summary)
         self.assertIn("BACKEND_PENDING=", summary)
 
     def test_strict_gate_rejects_pending_cases(self):
+        self.synthetic_pending()
         status, summary = self.compare(strict=True, revisions=self.sha)
         self.assertEqual(status, 1)
         self.assertIn("SUITE_COMPLETE=no", summary)
+
+    def test_strict_gate_accepts_complete_fixture_suite_with_pinned_heads(self):
+        status, summary = self.compare(strict=True, revisions=self.sha)
+        self.assertEqual(status, 0)
+        self.assertIn("SUITE_COMPLETE=yes", summary)
+        self.assertIn("BACKEND_PENDING=0", summary)
 
     def test_strict_gate_demands_pinned_heads(self):
         with self.assertRaisesRegex(ValueError, "requires pinned"):
@@ -169,15 +189,7 @@ class ComparatorParityProof(unittest.TestCase):
             self.compare(revisions=revisions)
 
     def test_pending_cannot_smuggle_runtime_or_diagnostic_evidence(self):
-        # A synthetic pending case keeps the test useful as support expands.
-        # No production backend is required to remain permanently pending.
-        case = self.suite["cases"][0]
-        case["backends"]["graal"] = "pending"
-        case["pending_reason"] = "synthetic comparator regression only"
-        record = self.reports["graal"]["results"][0]
-        record.clear()
-        record.update({"id": case["id"], "status": "pending",
-                       "detail": case["pending_reason"]})
+        record = self.synthetic_pending("graal")
         self.assertEqual(self.compare()[0], 0)
         for evidence in ({"observed_exit": 0}, {"diagnostic_class": "unknown_name"}):
             record.update(evidence)
