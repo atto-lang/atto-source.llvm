@@ -39,6 +39,16 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Pure C++17 CFG dataflow proof: branches, backedges, per-field states,
+    # mismatched loan provenance and conditional drop-state joins.
+    add_executable(oreslang-ownership-cfg-dataflow-test
+        tests/ownership_cfg_dataflow_test.cpp)
+    target_include_directories(oreslang-ownership-cfg-dataflow-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-ownership-cfg-dataflow-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_cfg_dataflow_fixed_point
+        COMMAND oreslang-ownership-cfg-dataflow-test)
     add_executable(oreslang-dop-kernel-test tests/dop_kernel_lowering_test.cpp)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
