@@ -113,5 +113,53 @@ int main() {
               "duplicated resume corrupted supervisor lifecycle accounting");
     }
 
-    std::cout << "NATIVE_SUPERVISOR_REPLAY_PASS drain=34 begin=2 resume=2\n";
+    // Unlike a Java enum, native Directive can be forged via FFI/cast.
+    // Neither a synchronous policy nor a foreign completion may deliver an
+    // undefined directive into the trusted lifecycle decision sink.
+    {
+        auto scheduler = std::make_shared<ReplayingEnqueue>();
+        int effects = 0;
+        auto invalid = static_cast<SupervisorProcess::Directive>(0xFF);
+        auto supervisor = std::make_shared<SupervisorProcess>(
+            301, 400, 2,
+            [scheduler](std::function<void()> work) {
+                return scheduler->enqueue(std::move(work));
+            },
+            [invalid](const SupervisorFailureNotice&)
+                -> std::optional<SupervisorProcess::Directive> { return invalid; },
+            [&](const SupervisorProcess::Resolution&) { ++effects; });
+        supervisor->accept(SupervisorFailureNotice{
+            301, 400, 7, 1, std::nullopt, "invalid-policy"});
+        scheduler->drive();
+        check(effects == 0 && supervisor->resolved() == 0
+              && supervisor->undelivered() == 1 && supervisor->pending() == 0
+              && !supervisor->callback_active() && !supervisor->healthy(),
+              "unknown policy directive reached the lifecycle owner");
+    }
+    {
+        auto scheduler = std::make_shared<ReplayingEnqueue>();
+        int effects = 0;
+        auto supervisor = std::make_shared<SupervisorProcess>(
+            501, 600, 2,
+            [scheduler](std::function<void()> work) {
+                return scheduler->enqueue(std::move(work));
+            },
+            [](const SupervisorFailureNotice&)
+                -> std::optional<SupervisorProcess::Directive> { return std::nullopt; },
+            [&](const SupervisorProcess::Resolution&) { ++effects; });
+        supervisor->accept(SupervisorFailureNotice{
+            501, 600, 8, 1, std::nullopt, "invalid-resume"});
+        scheduler->drive();
+        const auto generation = supervisor->current_epoch();
+        check(generation != 0 && !supervisor->resume(
+                  generation, static_cast<SupervisorProcess::Directive>(0xFF)),
+              "unknown resumed directive was accepted");
+        scheduler->drive();
+        check(effects == 0 && supervisor->resolved() == 0
+              && supervisor->undelivered() == 1 && supervisor->pending() == 0
+              && !supervisor->callback_active() && !supervisor->healthy(),
+              "unknown resumed directive was delivered or not accounted");
+    }
+
+    std::cout << "NATIVE_SUPERVISOR_REPLAY_PASS drain=34 begin=2 resume=2 invalid=2\n";
 }
