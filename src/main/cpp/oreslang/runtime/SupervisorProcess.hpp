@@ -83,7 +83,9 @@ public:
         try {
             auto self = shared_from_this();
             if (!SupervisorEnqueueGuard::submit(
-                    enqueue_, [self, decision] { self->finish(decision); })) {
+                    enqueue_, [self, expected_epoch, decision] {
+                        self->finish(expected_epoch, decision);
+                    })) {
                 fail_locked();
                 return false;
             }
@@ -135,6 +137,7 @@ public:
         if (!failed_) undelivered_ += mailbox_.size();
         mailbox_.clear();
         active_ = false;
+        policy_started_ = false;
         suspended_ = false;
         resume_enqueued_ = false;
     }
@@ -146,22 +149,27 @@ private:
             fail_locked();
             return;
         }
-        ++epoch_;
+        const std::uint64_t generation = ++epoch_;
         active_ = true;
+        policy_started_ = false;
         try {
             auto self = shared_from_this();
             if (!SupervisorEnqueueGuard::submit(
-                    enqueue_, [self] { self->begin(); })) fail_locked();
+                    enqueue_, [self, generation] { self->begin(generation); })) fail_locked();
         } catch (...) {
             fail_locked();
         }
     }
 
-    void begin() noexcept {
+    void begin(std::uint64_t generation) noexcept {
         SupervisorFailureNotice next;
         try {
             std::lock_guard<std::mutex> guard(mutex_);
-            if (failed_ || closed_ || mailbox_.empty()) return;
+            // A duplicated or delayed scheduler callback cannot invoke policy
+            // twice, overlap the current policy, or enter a newer turn.
+            if (failed_ || closed_ || !active_ || policy_started_
+                || generation != epoch_ || mailbox_.empty()) return;
+            policy_started_ = true;
             next = mailbox_.front();
         } catch (...) {
             std::lock_guard<std::mutex> guard(mutex_);
@@ -180,15 +188,18 @@ private:
             if (!failed_ && !closed_) suspended_ = true;
             return;
         }
-        finish(*result);
+        finish(generation, *result);
     }
 
-    void finish(Directive decision) noexcept {
+    void finish(std::uint64_t generation, Directive decision) noexcept {
         std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         Resolution resolution;
         try {
             std::lock_guard<std::mutex> guard(mutex_);
-            if (failed_ || closed_ || !active_ || mailbox_.empty()) return;
+            // Validate again on the CONTROL carrier: checking the epoch at
+            // resume() admission alone does not fence a stale queued callback.
+            if (failed_ || closed_ || !active_ || generation != epoch_
+                || !policy_started_ || mailbox_.empty()) return;
             resolution = Resolution{mailbox_.front(), decision};
             suspended_ = false;
         } catch (...) {
@@ -215,6 +226,7 @@ private:
                 closed_ = true;
                 mailbox_.clear();
                 active_ = false;
+                policy_started_ = false;
                 suspended_ = false;
                 resume_enqueued_ = false;
                 close_after_commit_ = false;
@@ -228,6 +240,7 @@ private:
             mailbox_.pop_front();
             ++resolved_;
             active_ = false;
+            policy_started_ = false;
             resume_enqueued_ = false;
             if (close_after_commit_) {
                 closed_ = true;
@@ -245,6 +258,7 @@ private:
         undelivered_ += mailbox_.size();
         mailbox_.clear(); // Failed CONTROL never retains owned notice data.
         active_ = false;
+        policy_started_ = false;
         suspended_ = false;
         resume_enqueued_ = false;
     }
@@ -260,6 +274,7 @@ private:
     mutable std::mutex mutex_;
     std::deque<SupervisorFailureNotice> mailbox_;
     bool active_ = false;
+    bool policy_started_ = false;
     bool suspended_ = false;
     bool resume_enqueued_ = false;
     bool committing_decision_ = false;
