@@ -284,6 +284,52 @@ int main() {
             uncertain_child.child, uncertain_actor, 1, 72, accepted_proof);
     });
 
+    // A process can close after reserving STOP but before its host
+    // callback records UNCERTAIN. PENDING must remain quarantined; only an
+    // independent verifier can close that same original CONTROL turn.
+    const OresNativeActorRef pending_actor{42, 94, 1};
+    const auto pending_child = registry.register_child(pending_actor);
+    registry.finalized(pending_child.child, pending_actor, 1);
+    registry.begin_stop(pending_child.child, pending_actor, 1, 80);
+    must_reject([&] {
+        registry.reconcile_uncertain_stop(
+            pending_child.child, pending_actor, 1, 80,
+            [](const SupervisorChildRegistry::StopReceipt&) { return true; });
+    });
+    must_reject([&] {
+        registry.reconcile_unresolved_stop(
+            pending_child.child, pending_actor, 1, 81,
+            [](const SupervisorChildRegistry::StopReceipt&) { return true; });
+    });
+    check(!registry.reconcile_unresolved_stop(
+                pending_child.child, pending_actor, 1, 80,
+                [](const SupervisorChildRegistry::StopReceipt&) { return false; }),
+          "unverified PENDING host effect was committed");
+    check(registry.snapshot(pending_child.child).phase
+                  == SupervisorChildRegistry::Phase::stopping,
+          "unverified PENDING receipt escaped STOP quarantine");
+    check(registry.reconcile_unresolved_stop(
+                pending_child.child, pending_actor, 1, 80,
+                [&](const SupervisorChildRegistry::StopReceipt& candidate) {
+                    check(registry.stop_receipt(candidate.child).status
+                                == SupervisorChildRegistry::StopReceiptStatus::pending,
+                          "PENDING verifier blocked registry inspection");
+                    return candidate.child == pending_child.child
+                        && candidate.turn_generation == 80
+                        && candidate.incarnation == 1;
+                }),
+          "independent proof could not reconcile PENDING shutdown STOP");
+    check(registry.snapshot(pending_child.child).phase
+                  == SupervisorChildRegistry::Phase::stopped
+              && registry.stop_receipt(pending_child.child).status
+                  == SupervisorChildRegistry::StopReceiptStatus::acknowledged,
+          "PENDING proof did not commit the same terminal STOP turn");
+    must_reject([&] {
+        registry.reconcile_unresolved_stop(
+            pending_child.child, pending_actor, 1, 80,
+            [](const SupervisorChildRegistry::StopReceipt&) { return true; });
+    });
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
