@@ -141,8 +141,13 @@ int main() {
     s.bridge = std::make_unique<NativeSupervisorPanicBridge>(
         s.scheduler, s.parent, s.process);
     s.bridge->register_child(s.child);
-    check(s.bridge->registered_children() == 1,
-          "live child was not tracked for terminal notification");
+    s.bridge->register_child(s.sibling); // This child exits normally via STOP.
+    check(s.bridge->registered_children() == 2,
+          "child generations were not tracked for terminal notification");
+    check(!s.bridge->retire_normally_finalized_child(s.sibling),
+          "active child registration retired before physical finalization");
+    check(s.bridge->registered_children() == 2,
+          "premature normal-exit retirement mutated registrations");
     OresNativeActorTerminalFailure premature{
         ORES_NATIVE_CONTROL_PANIC, s.child, 37, 20261011
     };
@@ -209,8 +214,8 @@ int main() {
     check(s.control_events.load() == 1 && s.policy_calls.load() == 1
           && s.decisions.load() == 1,
           "terminal failure delivered or resolved more than once");
-    check(s.bridge->registered_children() == 0,
-          "terminal child generation remains pinned in bridge memory");
+    check(s.bridge->registered_children() == 1,
+          "terminal child replay registration was not consumed");
     check(s.bridge->accepted() == 1 && s.bridge->rejected() == 3,
           "native supervisor bridge replay/forgery accounting drift");
     check(s.process->resolved() == 1 && !s.process->healthy()
@@ -219,6 +224,18 @@ int main() {
     check(ores_native_actor_scheduler_poll_done(s.scheduler, s.child)
           && ores_native_actor_scheduler_poll_done(s.scheduler, s.sibling),
           "finalized child or stopped sibling is still executing");
+    check(!s.bridge->retire_normally_finalized_child(s.child),
+          "failed child's terminal registration was reused");
+    auto wrong_generation = s.sibling;
+    ++wrong_generation.generation;
+    check(!s.bridge->retire_normally_finalized_child(wrong_generation),
+          "stale or future generation retired a different child's registration");
+    check(s.bridge->retire_normally_finalized_child(s.sibling),
+          "normally finalized sibling did not retire its registration");
+    check(!s.bridge->retire_normally_finalized_child(s.sibling),
+          "normal child registration was retired twice");
+    check(s.bridge->registered_children() == 0,
+          "normally finalized child left an orphan registration");
 
     check(ores_native_actor_scheduler_stop(s.scheduler, s.parent),
           "parent supervisor lane could not stop");
