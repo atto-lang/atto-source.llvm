@@ -584,7 +584,7 @@ private:
             if (dot.text == "." &&
                     (operation.text == "forward" || operation.text == "backward"
                      || operation.text == "respond" || operation.text == "done")) {
-                fail("self." + operation.text
+                fail(std::string("self.") + std::string(operation.text)
                     + " requires native pipeline routing lowering");
             }
         }
