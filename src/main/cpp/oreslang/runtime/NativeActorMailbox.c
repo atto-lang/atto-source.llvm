@@ -87,3 +87,11 @@ uint64_t ores_native_actor_mailbox_rejected(OresNativeActorMailbox* m) {
     pthread_mutex_unlock(&m->lock);
     return count;
 }
+
+size_t ores_native_actor_mailbox_pending(OresNativeActorMailbox* m) {
+    if (!m) abort();
+    if (pthread_mutex_lock(&m->lock) != 0) abort();
+    const size_t pending = m->pending;
+    pthread_mutex_unlock(&m->lock);
+    return pending;
+}
