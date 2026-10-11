@@ -697,7 +697,9 @@ private:
                 || functions.count(actor.name) != 0) {
                 throw std::runtime_error("duplicate actor symbol '" + actor.name + "'");
             }
-            const std::string prefix = "oreslang_actor_" + actor.name + "_";
+            const std::string prefix = "oreslang_actor_"
+                + (program.module.empty() ? "" : program.module + "_")
+                + actor.name + "_";
             reserveGenerated(prefix + "init");
             std::unordered_set<std::string> fields;
             std::unordered_set<std::string> mutableFields;
