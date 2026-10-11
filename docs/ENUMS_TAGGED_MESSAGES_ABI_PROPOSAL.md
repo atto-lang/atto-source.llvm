@@ -62,6 +62,37 @@ worker.send(WorkerMessage.Start("job-123"));
 - Payload serialization must not rely on layout pointer bytes or padding; define an independent canonical codec, version, tagged structured payload, field names, numeric types and evolution policy before cross-process messages are enabled.
 - Decoding a payload case for a stopped/restarted actor must honor generation fencing, mailbox cancellation and reclamation. No stale pointers into previous actor heaps.
 
+## Mandatory serializable actor-message type and wire ABI
+
+`ActorRef<T>.send(value)` must reject any value that cannot be serialized through a compiler-known `Serializable` descriptor, **even when sender and recipient share a process or scheduler**. This is a stricter type property than sendability/read-only freezing. The actor message-domain check and the recursive `Serializable` proof are two independent required checks: `value: Domain` and `value: Serializable`.
+
+- Compiler: recursively prove codecs for accepted primitive/scalar types, tuples, finite/homogeneous arrays and lists, closed readonly/inferred records, `Option<T>`/`Result<T,E>`, tagged enums with recursively serializable payloads, and named pattern domains whose **all** alternatives are serializable. Reject opaque/erased generics, borrowed views, closures, raw pointers, FFI handles, native class identity, mutexes, channels, futures and raw actor refs. Compile-time `Serializable` capability must not be forgeable by a cast or host descriptor.
+- Derivation: the future `@Serializable` annotation for user-defined structs/classes/enums must emit schema descriptors, checked encoders and decoders plus version metadata. Merely recording the annotation or implementing a marker interface is **not** sufficient. No source-level derivation is claimed in this PR.
+- ABI: use a portable, versioned schema identity and stable case tags, not LLVM layout/struct padding, host endianness or enum ordinal. Byte-for-byte cross-backend vectors must specify numeric semantics, string encoding, map key normalization, size/depth/node quotas and schema evolution. Restrict decode by recipient policy and actor generation.
+- Runtime: validate and snapshot/encode before committing mailbox admission. An optimized same-process transport may elide byte materialization *only when* it proves an identical immutable decoded value and an actual portable codec exists. PRIVATE/UNTRUSTED isolation and source actor-owned heaps cannot inherit writable aliases. Cancellation, quotas, nonblocking scheduler admission and actor teardown reclaim all staged payload resources exactly once.
+- Security: dynamic `Any`, JSON decoding and FFI cannot bypass static checks; unknown variant IDs/versions, cyclic object graphs, executable closures, process-local `Symbol` atoms, invalid capability tokens and oversized encoded messages fail closed.
+- Capability compatibility: current JVM host actor transport has explicitly scoped exceptions for controlled actor-reference and shared handles. Do not treat those as `Serializable` user messages. Forwarding a capability through the future public `send` requires a distinct audit-approved serialized capability descriptor or migration to a separate CONTROL mechanism; no raw pointer or process-local handle travels in data mail.
+
+Example intended source shape (not yet LLVM-admitted):
+
+```ores
+const a = await spawn WorkerActor();
+a.send("foo"); // only if the declared message domain includes string
+
+// All cases recursively serializable -> a serializable enum.
+define enum Status as
+  Queued = "queued"
+  Done = "done"
+end
+
+// All alternatives must be Serializable, not merely Sendable.
+define pattern Messages as
+  string | Status | Tuple[bool, string]
+end
+```
+
+**Scope note:** The Java/Graal draft adds a first compiler-level builtin/structural `Serializable` admission check and rejects unimplemented `@Serializable` derivation; neither repository yet implements a canonical portable codec or full source-level enum/actor parity. LLVM's existing fail-closed reservations remain correct while source-level lowering is absent.
+
 ## Implementation and parity gates
 
 1. Align a single cross-backend grammar: distinct `define pattern` (type only) and `define enum` (type plus variants), nullary and typed payload variants, `type T = A | B`, `match<R>` and `do match`, and `Actor<messages=T>` metadata. Add static tests for pattern includes enum, direct/indirect enum -> pattern rejection, and type-only names being nonconstructible. Ensure rejected syntax emits no IR. Do not conflate parser acceptance with feature support.
