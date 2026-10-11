@@ -146,6 +146,21 @@ int main() {
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Compute as (text, n) {}"),
             arm.size(), "on E.Compute as (x, x) {}"),
             "duplicate variable in tagged payload destructuring");
+    // '_' is not a bound variable. Repeated ignored slots preserve tuple
+    // shape without introducing duplicate bindings or shadowing.
+    rejects(std::string(taggedActor).replace(taggedActor.find(arm), arm.size(),
+            "on E.Compute as (_, _) {}"),
+            "LLVM tagged enum/pattern source actor requires canonical MessagePack guest lowering");
+    rejects(std::string(taggedActor).replace(taggedActor.find("on E.Ping as label {}"),
+            std::string("on E.Ping as label {}").size(), "on E.Ping as m {}"),
+            "tagged payload binder shadows field, local or Message parameter");
+    rejects(std::string(taggedActor).replace(taggedActor.find("receive(Message m)"),
+            std::string("receive(Message m)").size(),
+            "let count: int = 0; receive(Message m)").replace(
+            taggedActor.find("on E.Ping as label {}")
+                + std::string("let count: int = 0; ").size(),
+            std::string("on E.Ping as label {}").size(), "on E.Ping as count {}"),
+            "tagged payload binder shadows field, local or Message parameter");
     rejects(std::string(taggedActor).replace(taggedActor.find("match m over"),
             std::string("match m over").size(), "match unknown over"),
             "tagged receive match must inspect Message parameter");
