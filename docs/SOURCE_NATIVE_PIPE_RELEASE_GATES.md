@@ -47,13 +47,19 @@ stop c;
   scheduler-owned continuation frames, GPU driver events, dynamic
   StreamOperator ports, supervisor restarts, or network IO are released.
 
+## Targeted exact-source CI evidence
+
+[Green native source-compiled pipeline and ASan/UBSan regression suite](https://github.com/zed-pkg-test/java-app/actions/runs/38113166217): the funded runner verified upstream Git blobs, built the actual LLVM parser/ownership checker/code generator, emitted LLVM IR, compiled/linked the C11 native actor runtime through Clang, and ran both the existing source actor set and new two-actor pipe under Release and sanitizers. Producer final result `6`; consumer final result `8`. The CI uses an explicit private exact-blob mirror, no cross-org checkout token.
+
+This targeted green run is **not** full CMake/CTest, Java/GraalVM parity, or a proof of guest await scheduling.
+
 ## Required gates
 
-- [ ] Exact-source funded GitHub CI builds real LLVM parser/checker/codegen,
+- [x] Exact-source funded GitHub CI builds real LLVM parser/checker/codegen,
   emits native LLVM IR, links Clang/C11 actor runtime, and executes the
   positive producer/consumer fixture with expected producer final result
   `6` and consumer final result `8`.
-- [ ] Existing source actor lifecycle fixtures and negative no-IR
+- [x] Existing source actor lifecycle fixtures and negative no-IR
   ownership/admission cases pass.
 - [ ] Current-head full native CMake/CTest and ASan/UBSan suites.
 - [ ] Direct native backpressure and cancellation stress, actor panics,
