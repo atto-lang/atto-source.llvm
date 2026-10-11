@@ -65,6 +65,21 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-accelerator-compiler-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-accelerator-compiler-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME accelerator_normal_native_compiler_boundary COMMAND oreslang-accelerator-compiler-test)
+    # Compile real Parser and OwnershipChecker translation units, not only
+    # standalone helper token tests. No device driver is required for
+    # source admission; the separate OpenCL graph test has explicit ICD gate.
+    add_executable(oreslang-pipeline-source-test
+        tests/pipeline_source_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-pipeline-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-pipeline-source-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_source_pipeline_type_and_effect_admission
+        COMMAND oreslang-pipeline-source-test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/cpu-gpu-collect-pipeline.ores")
+
     add_executable(oreslang-gpu-dispatch-test tests/gpu_dispatch_coordinator_test.cpp)
     target_include_directories(oreslang-gpu-dispatch-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-gpu-dispatch-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
