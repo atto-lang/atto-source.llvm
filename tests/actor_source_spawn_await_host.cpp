@@ -212,6 +212,12 @@ extern "C" int ores_actor_host_stop(void* value) {
     return 1;
 }
 
+extern "C" int ores_actor_host_cancel(void* value) {
+    auto& ctx = *static_cast<HostContext*>(value);
+    if (ctx.worker) ctx.worker->request_cancel();
+    return 1;
+}
+
 extern "C" int ores_actor_host_poll_done(void* value) {
     auto& ctx = *static_cast<HostContext*>(value);
     if (!ctx.worker) return -1;
