@@ -53,6 +53,29 @@ void* oreslang_source_actor_spawn_wire(
  */
 int oreslang_source_actor_send_wire(
     void* actor, const uint8_t* wire, size_t size);
+
+/* Closed typed mailbox: compiler registers a fixed ordered schema table.
+ * variant_index is the compiler-local ordinal (0..contract_count-1), NOT
+ * an enum's declared numeric wire tag. Schema identity is verified from
+ * the MessagePack envelope and the complete typed payload is validated.
+ * All variants share ONE native DATA queue, capacity budget and serial
+ * actor execution lane. No runtime shape inference and no second pool.
+ *
+ * Registration copies all contracts before validating them. The supplied
+ * contracts must remain stable for the duration of the registration call.
+ * Duplicate schema IDs, invalid digests, empty/oversized domains and
+ * unsupported descriptors fail closed without spawning an actor.
+ */
+typedef int64_t (*OresSourceActorVariantMessage)(
+    OresActorI64Heap*, uint64_t domain, uint64_t epoch,
+    size_t variant_index, const uint8_t* wire, size_t wire_size);
+void* oreslang_source_actor_spawn_variants(
+    OresSourceActorInit initializer,
+    OresSourceActorVariantMessage on_variant,
+    uint64_t fields, const OresMp2Contract* contracts,
+    size_t contract_count);
+int oreslang_source_actor_send_variant(
+    void* actor, const uint8_t* wire, size_t size);
 void oreslang_source_actor_stop(void* actor);
 /* A source-compiled continuation runs on the root ActorGroup CONTROL lane.
  * Only the outer trusted-main ABI waits to return the program's i64 result;
