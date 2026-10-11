@@ -202,14 +202,17 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
     /* Completion is published only AFTER the DATA finalizer, actor-state
      * release, and processed-result publication have all completed. */
-    if (is_pipeline_backward) {
+    if (instance->upstream || instance->downstream || is_pipeline_backward) {
         group_lock();
-        if (group.pipeline_source == instance) {
+        if (is_pipeline_backward && group.pipeline_source == instance) {
             ensure(!group.pipeline_done);
             group.pipeline_result = result;
             group.pipeline_done = 1;
-            ensure(pthread_cond_signal(&group.pipeline_completed) == 0);
         }
+        /* Backward delivery can overtake the emitting actor's finalizer on
+         * another scheduler worker. Every completed pipeline DATA turn must
+         * wake the join predicate, not only the root's final reply. */
+        ensure(pthread_cond_broadcast(&group.pipeline_completed) == 0);
         group_unlock();
     }
 }
@@ -713,7 +716,12 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
     struct timespec deadline;
     ensure(clock_gettime(CLOCK_REALTIME, &deadline) == 0);
     deadline.tv_sec += 20;
-    while (!group.pipeline_done) {
+    while (!group.pipeline_done
+           || atomic_load_explicit(&actor->processed, memory_order_acquire) != 2
+           || atomic_load_explicit(&group.pipeline_middle->processed,
+                                   memory_order_acquire) != 2
+           || atomic_load_explicit(&group.pipeline_sink->processed,
+                                   memory_order_acquire) != 1) {
         int status = pthread_cond_timedwait(
             &group.pipeline_completed, &group.mutex, &deadline);
         ensure(status == 0);
