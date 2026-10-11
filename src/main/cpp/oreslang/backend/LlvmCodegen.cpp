@@ -300,6 +300,18 @@ std::string emit_verified_llvm_ir(const Program& source) {
         "oreslang_source_actor_send_variant_checked",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                 {ptr, ptr, i64}, false));
+    const auto pipelineConnect = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_connect",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {ptr, ptr, ptr}, false));
+    const auto pipelineEmit = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_emit_i64",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {i64, i64, i64}, false));
+    const auto pipelineExpect = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_expect",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {ptr, i64}, false));
     const auto sourceStop = module.getOrInsertFunction(
         "oreslang_source_actor_stop",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
@@ -359,6 +371,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
             }
             actorRefs.emplace(spawn.name, ref);
             actorRefTypes.emplace(spawn.name, spawn.actor_type);
+        }
+        if (!fn.pipeline_actors.empty()) {
+            builder.CreateCall(pipelineConnect,
+                {actorRefs.at(fn.pipeline_actors.at(0)),
+                 actorRefs.at(fn.pipeline_actors.at(1)),
+                 actorRefs.at(fn.pipeline_actors.at(2))});
         }
         // Scalar locals are either stack owned ('int') or explicitly backed
         // by a bounded native lexical heap region ('owned int'). The latter
@@ -456,6 +474,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
             for (const auto& send : fn.actor_sends)
                 emitSend(builder, send, actorRefs, parameters, locals);
 
+        }
+        if (!fn.pipeline_expect_actor.empty()) {
+            builder.CreateCall(pipelineExpect, {
+                actorRefs.at(fn.pipeline_expect_actor),
+                llvm::ConstantInt::getSigned(i64, fn.pipeline_expect_value)});
         }
         for (const auto& name : fn.actor_stops) {
             builder.CreateCall(sourceStop, {actorRefs.at(name)});
@@ -625,6 +648,22 @@ std::string emit_verified_llvm_ir(const Program& source) {
                                  std::distance(actor.fields.begin(), field)), updated});
                         builder.CreateStore(updated, locals.at(assignment.field));
                     }
+                    if (!arm.route_direction.empty()) {
+                        const auto output = std::find_if(cases.begin(), cases.end(),
+                            [&](const GuestNominalCase& c) {
+                                return c.qualified == arm.route_variant;
+                            });
+                        if (output == cases.end() || !output->i64_payload)
+                            throw std::runtime_error("LLVM pipeline route type contract mismatch");
+                        llvm::Value* routed = lower(*arm.route_payload, builder, i64,
+                                                    armParameters, locals, declarations);
+                        builder.CreateCall(pipelineEmit, {
+                            llvm::ConstantInt::get(i64,
+                                arm.route_direction == "forward" ? 1 : 2),
+                            llvm::ConstantInt::get(i64,
+                                std::distance(cases.begin(), output)),
+                            routed});
+                    }
                     builder.CreateBr(joined);
                 }
                 builder.SetInsertPoint(invalid);
@@ -722,6 +761,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_read"
                             && name != "ores_actor_i64_heap_field_init_mutable"
                             && name != "ores_actor_i64_heap_field_write"
+                            && name != "oreslang_source_actor_pipeline_connect"
+                            && name != "oreslang_source_actor_pipeline_emit_i64"
+                            && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_spawn_tagged_variants"
                             && name != "oreslang_source_actor_send_variant_checked"
                             && name != "oreslang_source_actor_tagged_i64"
