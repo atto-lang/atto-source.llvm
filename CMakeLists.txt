@@ -27,6 +27,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Standalone LLVM frontend admission proof. The parser is linked directly
+    # so nominal declarations, monotonic tags and fail-closed actor usage can
+    # be tested without generating IR for unsupported tagged operations.
+    add_executable(oreslang-nominal-message-parser-test
+        tests/native_nominal_message_parser_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp)
+    target_include_directories(oreslang-nominal-message-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME source_nominal_enum_pattern_parser_gate
+        COMMAND oreslang-nominal-message-parser-test)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
