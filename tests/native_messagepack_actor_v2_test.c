@@ -115,10 +115,12 @@ int main(void) {
     assert(!invalid_float.bytes && !invalid_float.size);
     /* Noncanonical positive one as uint8 is forbidden; Java rejects it. */
     uint8_t inflated_integer[1024];
-    memcpy(inflated_integer, wire[1], sizes[1]);
+    memcpy(inflated_integer, wire[1], sizes[1] - 3);
     inflated_integer[sizes[1]-3] = 0xcc;
-    inflated_integer[sizes[1]-2] = 1;
-    assert(!ores_mp2_validate_copy(&schemas[1], inflated_integer, sizes[1], &invalid_float));
+    inflated_integer[sizes[1]-2] = 1; /* nonminimal uint8(1) */
+    inflated_integer[sizes[1]-1] = 2;
+    inflated_integer[sizes[1]] = 3;
+    assert(!ores_mp2_validate_copy(&schemas[1], inflated_integer, sizes[1] + 1, &invalid_float));
     State state = {0};
     state.expected_size[0] = sizes[0]; state.expected_size[1] = sizes[5];
     memcpy(state.expected[0], wire[0], sizes[0]);
