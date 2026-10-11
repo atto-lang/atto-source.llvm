@@ -21,6 +21,12 @@ struct Token {
     std::size_t offset;
 };
 
+bool exceptional_control(std::string_view word) {
+    return word == "throw" || word == "raise" || word == "panic" ||
+           word == "recover" || word == "defer" || word == "try" ||
+           word == "catch" || word == "finally" || word == "trap";
+}
+
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
 bool identifier_start(char ch) {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
@@ -199,6 +205,9 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        // Modifiers cannot masquerade as ordinary functions.
+        if (exceptional_control(token_.text))
+            fail("native exception/control effect unsupported");
         if (token_.text == "gpu" || token_.text == "quantum") {
             fail("native accelerator lowering unsupported");
         }
@@ -264,6 +273,10 @@ private:
         }
         while (token_.text != "return" && token_.text != "if") {
             if (token_.kind == Kind::End || token_.text == "}") fail("missing final return");
+            // Distinguish unsupported effects from ordinary bad expressions.
+            // The reserved words also remain forbidden in parameters/calls.
+            if (exceptional_control(token_.text))
+                fail("native exception/control effect unsupported");
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
@@ -532,18 +545,6 @@ private:
                     "validated effects, ownership, device lowering and explicit "
                     "backend admission required; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
-        }
-        // Exception effects must not be parsed as ordinary calls or values:
-        // the native backend lacks guest unwind, typed catch and recover frames.
-        if (token_.text == "throw" || token_.text == "raise" ||
-            token_.text == "panic" || token_.text == "recover" ||
-            token_.text == "trap" || token_.text == "try" ||
-            token_.text == "catch" || token_.text == "finally" ||
-            token_.text == "defer") {
-            throw std::runtime_error(
-                "native exception/control effect unsupported: "
-                "typed unwinding, cleanup and supervision lowering required"
-                " at byte " + std::to_string(token_.offset));
         }
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
