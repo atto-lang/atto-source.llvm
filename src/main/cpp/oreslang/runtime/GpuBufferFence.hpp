@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -72,6 +73,59 @@ public:
         if (state_->status != Status::Idle)
             throw std::logic_error("cannot move device buffer with pending fence");
         return BufferFence(std::move(state_));
+    }
+
+
+    struct PairTickets {
+        Identity input;
+        Ticket input_ticket;
+        Identity output;
+        Ticket output_ticket;
+    };
+
+    // All-or-nothing paired claim for a trusted GPU provider.
+    // Owner and allocation locks are acquired in stable address order, so
+    // take(), begin_command(), cancel and retirement cannot interleave.
+    static PairTickets claim_pair(BufferFence& input, BufferFence& output,
+                                  std::uint64_t expected_bytes) {
+        if (&input == &output || expected_bytes == 0)
+            throw std::invalid_argument("two nonempty distinct GPU buffers required");
+        auto* first = std::less<BufferFence*>{}(&input, &output) ? &input : &output;
+        auto* second = first == &input ? &output : &input;
+        std::lock_guard<std::mutex> owner_one(first->owner_lock_);
+        std::lock_guard<std::mutex> owner_two(second->owner_lock_);
+        if (!input.state_ || !output.state_ || input.state_ == output.state_)
+            throw std::logic_error("moved or aliased device owner");
+        auto* a = input.state_.get();
+        auto* b = output.state_.get();
+        auto* low = std::less<State*>{}(a, b) ? a : b;
+        auto* high = low == a ? b : a;
+        std::lock_guard<std::mutex> state_one(low->lock);
+        std::lock_guard<std::mutex> state_two(high->lock);
+        if (a->status != Status::Idle || b->status != Status::Idle
+                || !a->backend_quiescent || !b->backend_quiescent)
+            throw std::logic_error("device allocation not idle or not quiescent");
+        if (a->bytes != expected_bytes || b->bytes != expected_bytes)
+            throw std::invalid_argument("DOP padded bytes disagree with allocations");
+        if (a->identity.allocation_generation == 0
+                || b->identity.allocation_generation == 0
+                || a->identity.allocation_generation == b->identity.allocation_generation
+                || a->identity.tenant != b->identity.tenant
+                || a->identity.device != b->identity.device)
+            throw std::invalid_argument("foreign or duplicate GPU allocation identities");
+        if (a->sequence == std::numeric_limits<std::uint64_t>::max()
+                || b->sequence == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("device ticket sequence exhausted");
+        // Allocate/copy returned identities BEFORE mutating either fence.
+        PairTickets tickets{a->identity, {a->identity.allocation_generation, a->sequence + 1},
+                            b->identity, {b->identity.allocation_generation, b->sequence + 1}};
+        ++a->sequence;
+        ++b->sequence;
+        a->backend_quiescent = false;
+        b->backend_quiescent = false;
+        a->status = Status::InFlight;
+        b->status = Status::InFlight;
+        return tickets;
     }
 
     Ticket begin_command(const Identity& caller) {
