@@ -2,8 +2,10 @@
 
 > **LLVM status:** This is a source/API contract, not an executable native
 > standard library. The example below currently runs on Java/GraalVM only.
-> Canonical import declarations now parse into a sealed native AST, but LLVM
-> code generation deliberately rejects unresolved imports and assertion/trap lowering.
+> Canonical imports and qualified Assert member calls now parse into a
+> sealed native AST with explicit alias binding and arity checks. Source-level
+> bool return metadata is staged, but LLVM code generation still rejects the
+> unlinked standard-library ABI and assertion/trap lowering.
 
 Import the source-owned module with `import module Assert from "std/assert";`.
 
@@ -53,3 +55,18 @@ literals retain their existing meaning. Call these functions through `Assert`.
 The LLVM repository carries the same `stdlib/assert.ores` source, but its current
 compiler cannot execute it: stdlib imports, Any/bool APIs and ordinary failure/trap
 lowering still require implementation. This is not native execution parity.
+
+## Native implementation milestones
+
+The LLVM frontend now distinguishes `Assert.equal(1, 2)` from class-field reads
+and ordinary function calls. It rejects duplicate or noncanonical imports,
+unknown members, wrong arities, alias shadowing, and unscoped borrows.
+These checks do **not** prove `Any` or `bool` native execution: compiler codegen
+continues to reject all imported `std/assert` programs before LLVM IR emission.
+
+The native `EffectUnwind` helper has been hardened with 36 pairwise effect
+precedence scenarios. An already-pending terminal effect remains primary;
+ordinary cleanup throws retain the most recent ordinary failure and preserve
+previous failures as secondary diagnostics. Only ordinary `Throw` is marked
+eligible for future `trap` capture. This helper is not yet emitted by the
+Oreslang compiler. Actual guest-to-guest parity remains a release gate.
