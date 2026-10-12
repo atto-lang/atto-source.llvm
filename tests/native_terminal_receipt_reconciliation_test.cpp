@@ -161,6 +161,54 @@ int main() {
         control->close();
         shutdown(scheduler);
     }
+    // Concurrent reconcilers may all inspect the same pre-delivery receipt,
+    // but exactly one can transition it to CLAIMED under the scheduler lock.
+    // No mutable receipt token is shared by the racing host threads.
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        auto* scheduler = ores_native_actor_scheduler_open_identity_control(
+            2, 2, 2, data, nullptr, panic, nullptr);
+        require(scheduler != nullptr, "concurrent claim scheduler unavailable");
+        auto parent = ores_native_actor_scheduler_spawn(scheduler, 0);
+        auto child = ores_native_actor_scheduler_spawn(scheduler, 1);
+        expect_done(scheduler, child);
+        expect_done(scheduler, parent);
+        const auto failure = OresNativeActorTerminalFailure{
+            ORES_NATIVE_CONTROL_PANIC, child, 932, 211
+        };
+        require(!ores_native_actor_scheduler_publish_failure(
+                    scheduler, parent, failure),
+                "STOPped parent admitted concurrent PANIC");
+        std::atomic<bool> start{false};
+        std::atomic<int> claimed{0};
+        std::vector<std::thread> threads;
+        std::vector<OresNativeTerminalReceipt> claims(8);
+        for (int i = 0; i < 8; ++i) {
+            threads.emplace_back([&, i] {
+                while (!start.load()) std::this_thread::yield();
+                if (ores_native_actor_scheduler_claim_terminal_receipt(
+                        scheduler, parent, child, &claims[i]))
+                    claimed.fetch_add(1);
+            });
+        }
+        start.store(true);
+        for (auto& thread : threads) thread.join();
+        require(claimed.load() == 1,
+                "two concurrent reconcilers claimed one terminal host effect");
+        OresNativeTerminalReceipt receipt{};
+        require(ores_native_actor_scheduler_terminal_receipt(
+                    scheduler, parent, child, &receipt)
+                    && receipt.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+                    && receipt.nonce,
+                "one-use receipt claim was not retained after race");
+        for (const auto& attempt : claims)
+            if (attempt.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED)
+                require(attempt.nonce == receipt.nonce,
+                        "claim returned a foreign or inconsistent nonce");
+        require(!ores_native_actor_scheduler_seal_normal_exit(scheduler, child),
+                "claimed PANIC was reclassified as normal exit");
+        shutdown(scheduler);
+    }
     std::puts("NATIVE_TERMINAL_RECEIPT_RECONCILE_PASS"
-              " lost_parent=1 recovered=1 exact_once=1 uncertain=1 stale=1");
+              " lost_parent=1 recovered=1 exact_once=1 uncertain=1 stale=1"
+              " claimant_races=20");
 }
