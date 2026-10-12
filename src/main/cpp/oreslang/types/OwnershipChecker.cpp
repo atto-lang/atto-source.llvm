@@ -389,6 +389,8 @@ void validate_i64_ownership(const Program& program) {
             }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
+                if (recv.class_array_fields.count(stmt.field))
+                    throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
                 if (recv.mode == Mode::Borrow)
                     throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
                 if (recv.mode == Mode::Value && !recv.mutable_owner)
@@ -476,6 +478,8 @@ void validate_i64_ownership(const Program& program) {
                 }
                 auto& recv = checked_field(cleanup.receiver, cleanup.field,
                                            cleanup.offset, path);
+                if (recv.class_array_fields.count(cleanup.field))
+                    throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
                 if (recv.mode == Mode::Borrow)
                     throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
                 if (recv.mode == Mode::Value && !recv.mutable_owner)
