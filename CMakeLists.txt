@@ -227,6 +227,11 @@ if(BUILD_TESTING)
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
     oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "native async/channel/select boundary unsupported")
+    # LLVM source ActorGroups remain unsupported until typed handle/permit lowering.
+    # No native IR may be emitted on these negative compiler fixtures.
+    oreslang_contract_test(reject_guest_actor_group_create source-actor-group-create-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
+    oreslang_contract_test(reject_guest_actor_group_join source-actor-group-join-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
+    oreslang_contract_test(reject_guest_actor_group_shadow source-actor-group-declaration-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
