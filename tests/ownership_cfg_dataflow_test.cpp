@@ -55,6 +55,45 @@ int main() {
     fields.blocks[3].operations = {op(Kind::Read, "p.b")};
     verify(fields); // Disjoint still-owned field remains readable.
 
+    // A flat place map has no ancestor/descendant alias proof. Reject a
+    // whole owner and one of its projections being independently tracked:
+    // otherwise an exclusive loan on one could be bypassed through the other.
+    Graph alias_layout;
+    alias_layout.entry = {{"p", cell(kOwned)}, {"p.a", cell(kOwned)}};
+    alias_layout.blocks = {{{op(Kind::BorrowExclusive, "p"),
+                            op(Kind::Read, "p.a"),
+                            op(Kind::ReleaseExclusive, "p")}, {}}};
+    assert(rejected([&] { verify(alias_layout); }));
+    alias_layout.blocks = {{{}, {}}}; // Fail closed even without a read.
+    assert(rejected([&] { verify(alias_layout); }));
+    alias_layout.blocks = {{{op(Kind::BorrowExclusive, "p.a"),
+                            op(Kind::Read, "p")}, {}}};
+    assert(rejected([&] { verify(alias_layout); }));
+
+    // Nested parent/subfield projections are just as overlapping as direct
+    // parent/field pairs. Prefix similarity without a '.' is NOT overlap.
+    alias_layout.entry = {{"p.a", cell(kOwned)}, {"p.a.deep", cell(kOwned)}};
+    alias_layout.blocks = {{{}, {}}};
+    assert(rejected([&] { verify(alias_layout); }));
+    alias_layout.entry = {{"p", cell(kOwned)}, {"p.ab", cell(kOwned)}};
+    alias_layout.blocks = {{{op(Kind::Read, "p"), op(Kind::Read, "p.ab")}, {}}};
+    verify(alias_layout);
+    alias_layout.entry = {{"p.a", cell(kOwned)}, {"p.b", cell(kOwned)}};
+    alias_layout.blocks = {{{op(Kind::BorrowExclusive, "p.a"),
+                            op(Kind::Read, "p.b"),
+                            op(Kind::ReleaseExclusive, "p.a"),
+                            op(Kind::ReadObject, "p")}, {}}};
+    verify(alias_layout);
+
+    // Direct apply() must reject ambiguous storage too, even without verify().
+    State direct_alias = {{"p", cell(kOwned)}, {"p.a", cell(kOwned)}};
+    assert(rejected([&] { apply(op(Kind::Read, "p.a"), direct_alias); }));
+    assert(rejected([&] { apply(op(Kind::MoveObject, "p"), direct_alias); }));
+    Graph invalid_name;
+    invalid_name.entry = {{"p..a", cell(kOwned)}};
+    invalid_name.blocks = {{{}, {}}};
+    assert(rejected([&] { verify(invalid_name); }));
+
     // A definite whole-object transfer marks every field moved.
     Graph whole;
     whole.entry = fields.entry;
