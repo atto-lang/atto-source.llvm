@@ -4,8 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   target-abi:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
