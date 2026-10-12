@@ -20,6 +20,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -137,6 +138,12 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         const auto it = states_.find(key);
         if (it == states_.end()) throw std::logic_error("unknown terminal identity");
+        return it->second;
+    }
+    std::optional<State> find(const Key& key) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto it = states_.find(key);
+        if (it == states_.end()) return std::nullopt;
         return it->second;
     }
 
