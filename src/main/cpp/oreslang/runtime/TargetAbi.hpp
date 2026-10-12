@@ -10,12 +10,13 @@ namespace oreslang {
 
 // Descriptive target ABI registry, not a promise of executable native cross-targets.
 // Keep profiles identical to contracts/architecture/v1/targets.tsv.
-struct TargetAbi {
-    std::string_view triple;
-    unsigned pointer_bits;
-    std::string_view endian;
-    std::string_view abi;
-    std::string_view emission;
+class TargetAbi {
+public:
+    std::string_view triple() const noexcept { return triple_; }
+    unsigned pointer_bits() const noexcept { return pointer_bits_; }
+    std::string_view endian() const noexcept { return endian_; }
+    std::string_view abi() const noexcept { return abi_; }
+    std::string_view emission() const noexcept { return emission_; }
 
     static TargetAbi parse(std::string_view triple) {
         if (triple == "x86_64-unknown-linux-gnu")
@@ -32,11 +33,11 @@ struct TargetAbi {
     }
 
     bool experimental_wasm32_ir() const noexcept {
-        return emission == "experimental-wasm32-ir";
+        return emission_ == "experimental-wasm32-ir";
     }
 
     std::uint64_t max_contiguous_bytes() const noexcept {
-        return pointer_bits == 32
+        return pointer_bits_ == 32
             ? static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())
             : static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     }
@@ -55,6 +56,18 @@ struct TargetAbi {
             throw std::overflow_error("host contiguous allocation exceeds addressable range");
         return static_cast<std::size_t>(bytes);
     }
+
+private:
+    TargetAbi(std::string_view triple, unsigned pointer_bits, std::string_view endian,
+              std::string_view abi, std::string_view emission) noexcept
+        : triple_(triple), pointer_bits_(pointer_bits), endian_(endian),
+          abi_(abi), emission_(emission) {}
+
+    const std::string_view triple_;
+    const unsigned pointer_bits_;
+    const std::string_view endian_;
+    const std::string_view abi_;
+    const std::string_view emission_;
 };
 
 } // namespace oreslang
