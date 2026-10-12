@@ -673,6 +673,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-restart-admission-lease-test)
     set_tests_properties(native_restart_admission_lease PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-native-restart-control-fence-test
+        tests/native_supervisor_restart_control_fence_test.cpp)
+    target_include_directories(oreslang-native-restart-control-fence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-restart-control-fence-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-restart-control-fence-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-restart-control-fence-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_restart_control_close_fence
+        COMMAND oreslang-native-restart-control-fence-test)
+    set_tests_properties(native_supervisor_restart_control_close_fence
+        PROPERTIES TIMEOUT 30)
+
     # Real scheduler typed PANIC -> native bridge -> registry-verified
     # compiler-owned self.stop(f.child) -> acknowledged / ambiguous STOP.
     # This is the opt-in source STOP slice, not arbitrary guest on_panic.
