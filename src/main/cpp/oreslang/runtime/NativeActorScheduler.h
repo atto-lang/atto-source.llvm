@@ -216,6 +216,16 @@ int ores_native_actor_scheduler_claim_terminal_receipt(
 int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
     OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
     OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
+/* Recovery-only atomic receipt claim. Bind original terminal parent evidence
+ * to an ALREADY published, exact NEW parent generation in the same slot.
+ * Validation and the one-use claim share the scheduler mutex with STOP;
+ * a STOP that wins first leaves the original receipt RECORDED. A claim
+ * that wins first authorizes one host enqueue, never duplicate effects.
+ * Only a trusted supervisor bridge may call this; not guest authority. */
+int ores_native_actor_scheduler_claim_recovered_parent_terminal_receipt(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
+    OresNativeActorRef recovered_parent, OresNativeActorRef failed_child,
+    OresNativeTerminalReceipt* out);
 /* Acknowledge only for the exact nonce returned by a previous claim,
  * AFTER independently confirmed host CONTROL enqueue. No guest authority. */
 int ores_native_actor_scheduler_ack_terminal_receipt(
