@@ -872,11 +872,45 @@ std::string emit_verified_llvm_ir(const Program& source) {
             branches->addCase(llvm::ConstantInt::get(i64, 2), backwardBlock);
             std::vector<llvm::Value*> arguments;
             for (auto& arg : callback->args()) arguments.push_back(&arg);
-            dispatch.SetInsertPoint(forwardBlock);
-            dispatch.CreateRet(dispatch.CreateCall(forward, arguments));
-            dispatch.SetInsertPoint(backwardBlock);
-            dispatch.CreateRet(dispatch.CreateCall(backward, arguments));
+            // Reject an intact but directionally incorrect nominal frame
+            // *before* entering user code. All actors share the union wire
+            // schema; the two handlers do not share ingress permissions.
+            const auto& unionCases = taggedCases.at(actor.name);
+            auto permitCases = [&](llvm::BasicBlock* block,
+                                   const std::string& domain,
+                                   llvm::Function* handler,
+                                   const char* label) {
+                std::vector<std::string> allowed;
+                for (const auto& p : source.tagged_patterns)
+                    if (p.name == domain) allowed = p.alternatives;
+                for (const auto& e : source.enums)
+                    if (e.name == domain)
+                        for (const auto& c : e.cases)
+                            allowed.push_back(e.name + "." + c.name);
+                dispatch.SetInsertPoint(block);
+                auto* invoke = llvm::BasicBlock::Create(context, label, callback);
+                auto* guard = dispatch.CreateSwitch(arguments.at(3), invalid,
+                                                   static_cast<unsigned>(allowed.size()));
+                for (const auto& name : allowed) {
+                    const auto found = std::find_if(unionCases.begin(), unionCases.end(),
+                        [&](const GuestNominalCase& c) { return c.qualified == name; });
+                    if (found == unionCases.end())
+                        throw std::runtime_error("transform ingress escaped nominal union");
+                    guard->addCase(llvm::ConstantInt::get(i64,
+                        std::distance(unionCases.begin(), found)), invoke);
+                }
+                dispatch.SetInsertPoint(invoke);
+                dispatch.CreateRet(dispatch.CreateCall(handler, arguments));
+            };
+            permitCases(forwardBlock, actor.forward_messages_type, forward,
+                        "dispatch.allowed.forward");
+            permitCases(backwardBlock, actor.backward_messages_type, backward,
+                        "dispatch.allowed.backward");
             dispatch.SetInsertPoint(invalid);
+            auto reject = module.getOrInsertFunction(
+                "oreslang_source_actor_pipeline_reject_delivery",
+                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {}, false));
+            dispatch.CreateCall(reject);
             dispatch.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
         }
     }
@@ -920,6 +954,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
                             && name != "oreslang_source_actor_pipeline_ingress"
+                            && name != "oreslang_source_actor_pipeline_reject_delivery"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_pipeline_expect_status"
                             && name != "oreslang_source_actor_pipeline_cancel"
