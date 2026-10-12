@@ -43,6 +43,53 @@ int main() {
     assert(p.enums.at(0).cases.at(0).payload.elements.size() == 2);
     assert(p.tagged_patterns.at(0).alternatives.at(1) == "Events.Ping");
 
+    // Same structural payload does not collapse two nominal alternatives.
+    // Default tags 1,2,3 are equivalent to explicitly writing = 1,= 2,= 3.
+    auto sameShape = parse_program(R"(
+        define enum Status as
+            Message1: Tuple[bool, string]
+            Message2: string
+            Message3: string
+        end
+        define pattern Messages as
+            Status.Message1
+            Status.Message2
+            Status.Message3
+        end
+    )");
+    auto explicitShape = parse_program(R"(
+        define enum Status as
+            Message1: Tuple[bool, string] = 1
+            Message2: string = 2
+            Message3: string = 3
+        end
+        define pattern Messages as
+            Status.Message1
+            Status.Message2
+            Status.Message3
+        end
+    )");
+    assert(sameShape.enums.at(0).cases.size() == 3);
+    assert(explicitShape.enums.at(0).cases.size() == 3);
+    for (std::size_t i = 0; i < 3; ++i) {
+        const auto& automatic = sameShape.enums.at(0).cases.at(i);
+        const auto& explicitCase = explicitShape.enums.at(0).cases.at(i);
+        assert(automatic.name == explicitCase.name);
+        assert(automatic.tag == explicitCase.tag);
+        assert(automatic.has_payload == explicitCase.has_payload);
+        assert(automatic.tag == i + 1);
+    }
+    assert(sameShape.enums.at(0).cases.at(1).name !=
+           sameShape.enums.at(0).cases.at(2).name);
+    assert(sameShape.enums.at(0).cases.at(1).payload.kind ==
+           sameShape.enums.at(0).cases.at(2).payload.kind);
+    assert(sameShape.tagged_patterns.at(0).alternatives.size() == 3);
+
+    // String-valued '= code' is not a wire tag or payload constructor.
+    // Keep it fail-closed until both backends agree on associated codes.
+    rejects(R"(define enum Status as Message1: string = "one" end)",
+            "unsupported Oreslang token");
+
     auto collection = parse_program(R"(
         define enum Other as
             Many: List[int]
@@ -60,6 +107,60 @@ int main() {
     assert(collection.enums.at(0).cases.at(1).payload.kind == MessageShape::Kind::FixedArray);
     assert(collection.enums.at(0).cases.at(3).payload.kind == MessageShape::Kind::FixedList);
     assert(collection.tagged_patterns.at(0).alternatives.size() == 4);
+
+    auto spread = parse_program(R"(
+        define match pattern Messages as
+            ...Status
+        end
+        define enum Status as
+            Message1: Tuple[bool, string]
+            Message2: string
+            Message3: string
+        end
+    )");
+    assert(spread.tagged_patterns.size() == 1);
+    assert(spread.tagged_patterns.at(0).alternatives ==
+           std::vector<std::string>({"Status.Message1", "Status.Message2",
+                                     "Status.Message3"}));
+    assert(spread.tagged_patterns.at(0).alternatives ==
+           sameShape.tagged_patterns.at(0).alternatives);
+
+    auto augmented = parse_program(R"(
+        define enum First as A B end
+        define enum Second as C end
+        define match pattern Messages as
+            ...First
+            Second.C
+        end
+    )");
+    assert(augmented.tagged_patterns.at(0).alternatives ==
+           std::vector<std::string>({"First.A", "First.B", "Second.C"}));
+
+    auto grown = parse_program(R"(
+        define match pattern Messages as ...Status end
+        define enum Status as Message1 Message2 Message3 Message4 end
+    )");
+    assert(grown.tagged_patterns.at(0).alternatives.size() == 4);
+    assert(grown.tagged_patterns.at(0).alternatives.back() == "Status.Message4");
+    rejects(R"(
+        define enum Status as Message1 Message2 end
+        define match pattern Bad as ...Status Status.Message1 end
+    )", "duplicate pattern alternative");
+    rejects(R"(
+        define enum Status as Message1 Message2 end
+        define match pattern Bad as ...Status ...Status end
+    )", "duplicate pattern alternative");
+    rejects("define match pattern Bad as ...Missing end",
+            "unknown enum in match pattern spread");
+    rejects(R"(
+        define enum Status as Message1 end
+        define match pattern All as ...Status end
+        define match pattern Bad as ...All end
+    )", "unknown enum in match pattern spread");
+    rejects(R"(
+        define enum Status as Message1 end
+        define match Bad as ...Status end
+    )", "expected 'pattern'");
 
     rejects("define enum Bad as A: string = 2 B: string = 1 end",
             "enum wire tags must increase monotonically");

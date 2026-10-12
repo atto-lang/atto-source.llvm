@@ -98,6 +98,10 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        if (source_.substr(at_, 3) == "...") {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         if (std::string_view("()[]{},:;+-*=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
@@ -135,10 +139,13 @@ public:
                 program.actors.push_back(actor());
             } else if (accept("enum")) {
                 program.enums.push_back(tagged_enum());
+            } else if (accept("match")) {
+                require("pattern");
+                program.tagged_patterns.push_back(tagged_pattern());
             } else if (accept("pattern")) {
                 program.tagged_patterns.push_back(tagged_pattern());
             } else {
-                fail("expected 'module', 'actor', 'enum' or 'pattern'");
+                fail("expected 'module', 'actor', 'enum' or 'match pattern'");
             }
         }
         while (token_.kind != Kind::End
@@ -148,8 +155,12 @@ public:
             } else if (accept("define")) {
                 if (accept("actor")) program.actors.push_back(actor());
                 else if (accept("enum")) program.enums.push_back(tagged_enum());
+                else if (accept("match")) {
+                    require("pattern");
+                    program.tagged_patterns.push_back(tagged_pattern());
+                }
                 else if (accept("pattern")) program.tagged_patterns.push_back(tagged_pattern());
-                else fail("expected 'actor', 'enum' or 'pattern'");
+                else fail("expected 'actor', 'enum' or 'match pattern'");
             } else {
                 program.functions.push_back(function());
             }
@@ -160,6 +171,10 @@ public:
             && program.message_patterns.empty() && program.enums.empty()
             && program.tagged_patterns.empty())
             fail("expected a function or actor");
+        // Resolve spreads after parsing all declarations, including forward
+        // enum references. Backend schema and actor admission always see
+        // explicit closed alternatives, never unresolved spread sentinels.
+        expand_tagged_pattern_spreads(program);
         validate(program);
         return program;
     }
@@ -230,15 +245,20 @@ private:
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.kind != Kind::End && token_.text != "end") {
-            const std::string owner = identifier();
-            require(".");
-            const std::string variant = identifier();
-            const std::string qualified = owner + "." + variant;
-            if (!seen.insert(qualified).second)
+            std::string source;
+            if (accept("...")) {
+                source = "..." + identifier();
+            } else {
+                const std::string owner = identifier();
+                require(".");
+                const std::string variant = identifier();
+                source = owner + "." + variant;
+            }
+            if (!seen.insert(source).second)
                 fail("duplicate pattern alternative");
             if (result.alternatives.size() >= 4096)
                 fail("tagged pattern exceeds 4096 alternatives");
-            result.alternatives.push_back(qualified);
+            result.alternatives.push_back(std::move(source));
             accept(",");
             accept(";");
         }
@@ -867,6 +887,38 @@ private:
         for (const auto& arg : e.arguments)
             if (reads_name(*arg, name)) return true;
         return false;
+    }
+
+    static void expand_tagged_pattern_spreads(Program& program) {
+        std::unordered_map<std::string, const EnumDeclaration*> enums;
+        for (const auto& enumeration : program.enums) {
+            if (!enums.emplace(enumeration.name, &enumeration).second)
+                throw std::runtime_error("duplicate enum declaration");
+        }
+        for (auto& pattern : program.tagged_patterns) {
+            std::vector<std::string> resolved;
+            std::unordered_set<std::string> seen;
+            auto add = [&](const std::string& qualified) {
+                if (!seen.insert(qualified).second)
+                    throw std::runtime_error("duplicate pattern alternative: " + qualified);
+                if (resolved.size() >= 4096)
+                    throw std::runtime_error("expanded match pattern exceeds 4096 alternatives");
+                resolved.push_back(qualified);
+            };
+            for (const auto& source : pattern.alternatives) {
+                if (source.rfind("...", 0) != 0) {
+                    add(source);
+                    continue;
+                }
+                const auto owner = source.substr(3);
+                const auto found = enums.find(owner);
+                if (found == enums.end())
+                    throw std::runtime_error("unknown enum in match pattern spread: " + owner);
+                for (const auto& variant : found->second->cases)
+                    add(owner + "." + variant.name);
+            }
+            pattern.alternatives = std::move(resolved);
+        }
     }
 
     static void validate(const Program& program) {
