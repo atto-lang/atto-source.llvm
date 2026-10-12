@@ -60,6 +60,27 @@ static void* send_many(void* raw) {
     }
     return NULL;
 }
+/* Keep submitting while trusted main stops and frees an actor. After stop,
+ * every lookup of the same opaque token must fail without dereferencing
+ * reclaimed memory, including when another actor uses the old slot. */
+typedef struct {
+    void* handle;
+    _Atomic int attempts;
+    _Atomic int exit_requested;
+} StopRace;
+static void* send_while_stopping(void* raw) {
+    StopRace* race = raw;
+    while (!atomic_load_explicit(&race->exit_requested, memory_order_acquire)) {
+        (void)oreslang_source_actor_send_variant(
+            race->handle, expected[0], lengths[0]);
+        atomic_fetch_add_explicit(&race->attempts, 1, memory_order_relaxed);
+        sched_yield();
+    }
+    for (int i = 0; i < 1024; ++i)
+        assert(!oreslang_source_actor_send_variant(
+            race->handle, expected[0], lengths[0]));
+    return NULL;
+}
 int main(void) {
     lengths[0] = from_hex(
         "9402ae64656d6f2e537472696e672e7631c420"
@@ -167,6 +188,49 @@ int main(void) {
         assert(atomic_load(&calls[i]) == (i == 2 ? 49 : 73));
     assert(atomic_load(&calls[3]) == 0);
     assert(atomic_load(&active) == 0);
-    puts("SOURCE_ACTOR_CLOSED_VARIANTS_PASS same_lane=1 nominal_tags=1 single_budget=1 nominal_requires_pinned_tag=1 producers=8 messages=195");
+    /* A dead token is never made valid again when the 0th slot is recycled. */
+    for (int i = 0; i < 1024; ++i)
+        assert(!oreslang_source_actor_send_variant(actor, expected[0], lengths[0]));
+    uint8_t fresh_digest[32];
+    const size_t sha_offset = 3 + strlen("demo.String.v1") + 2;
+    assert(expected[0][sha_offset-2] == 0xc4
+        && expected[0][sha_offset-1] == 32);
+    memcpy(fresh_digest, expected[0] + sha_offset, 32);
+    OresMp2Contract fresh_contract = {"demo.String.v1", "S", fresh_digest};
+    assert(ores_mp2_contract_valid(&fresh_contract));
+    void* replacement = oreslang_source_actor_spawn_variants(
+        actor_init, receive_variant, 1, &fresh_contract, 1);
+    assert(replacement && replacement != actor);
+    assert(!oreslang_source_actor_send_variant(actor, expected[0], lengths[0]));
+    assert(oreslang_source_actor_send_variant(replacement, expected[0], lengths[0]));
+    StopRace race = {.handle = replacement};
+    atomic_init(&race.attempts, 0);
+    atomic_init(&race.exit_requested, 0);
+    pthread_t racers[4];
+    for (size_t i = 0; i < 4; ++i)
+        assert(pthread_create(&racers[i], NULL, send_while_stopping, &race) == 0);
+    while (atomic_load_explicit(&race.attempts, memory_order_acquire) < 200)
+        sched_yield();
+    /* No producer join before stop: this deliberately exercises the race. */
+    oreslang_source_actor_stop(replacement);
+    atomic_store_explicit(&race.exit_requested, 1, memory_order_release);
+    for (size_t i = 0; i < 4; ++i)
+        assert(pthread_join(racers[i], NULL) == 0);
+    assert(!oreslang_source_actor_send_variant(
+        replacement, expected[0], lengths[0]));
+    assert(!oreslang_source_actor_send_variant(
+        actor, expected[0], lengths[0]));
+    /* A third incarnation on the same slot does not resurrect either token. */
+    void* third = oreslang_source_actor_spawn_variants(
+        actor_init, receive_variant, 1, &fresh_contract, 1);
+    assert(third && third != replacement && third != actor);
+    assert(!oreslang_source_actor_send_variant(
+        replacement, expected[0], lengths[0]));
+    assert(!oreslang_source_actor_send_variant(
+        actor, expected[0], lengths[0]));
+    assert(oreslang_source_actor_send_variant(third, expected[0], lengths[0]));
+    oreslang_source_actor_stop(third);
+    assert(atomic_load(&active) == 0);
+    puts("SOURCE_ACTOR_CLOSED_VARIANTS_PASS same_lane=1 nominal_tags=1 single_budget=1 nominal_requires_pinned_tag=1 producers=8 messages=195 stale_generation_fenced=1 stop_race=1");
     return 0;
 }
