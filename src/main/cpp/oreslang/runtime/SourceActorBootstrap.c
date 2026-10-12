@@ -50,6 +50,14 @@ typedef struct {
     OresMp2Owned packet;
     size_t variant_index;
     uint8_t direction;
+    /* Scheduler/host-owned, never decoded from guest MessagePack data.
+     * The current source lowering permits ONE flow; a future multi-flow
+     * adapter must replace the global phase, not bypass it. */
+    uint64_t flow_id;
+    uint64_t message_id;
+    uint64_t parent_message_id;
+    uint64_t destination_domain;
+    uint64_t destination_generation;
 } SourceWireDelivery;
 
 typedef struct SourceActor {
@@ -95,6 +103,7 @@ typedef struct {
     atomic_int pipeline_phase; /* 0..(2*(count-1)+1) */
     atomic_int pipeline_failure;
     atomic_int pipeline_root_sent;
+    uint64_t pipeline_flow_id; /* identity committed on first root DATA admit */
     SourceActor* pipeline_stages[SOURCE_PIPELINE_MAX_STAGES];
     size_t pipeline_count;
     atomic_uint_fast64_t pipeline_forward_count;
@@ -117,6 +126,21 @@ static SourceActorGroup group = {
  * is executing. A source program cannot forge it through message bytes. */
 static _Thread_local SourceActor* active_pipeline_actor;
 static _Thread_local uint8_t active_pipeline_ingress;
+static _Thread_local uint64_t active_pipeline_flow_id;
+static _Thread_local uint64_t active_pipeline_message_id;
+static _Atomic uint64_t next_pipeline_flow_id = 1;
+static _Atomic uint64_t next_pipeline_message_id = 1;
+/* Identity allocation is monotonic for the process lifetime, including
+ * stop/restart and slot reuse. Return zero on exhaustion; never wrap. */
+static uint64_t pipeline_issue_id(_Atomic uint64_t* counter) {
+    uint64_t current = atomic_load_explicit(counter, memory_order_relaxed);
+    while (current != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(counter, &current,
+                current + 1, memory_order_relaxed, memory_order_relaxed))
+            return current;
+    }
+    return 0;
+}
 /* Optional test-only scheduler fault point. Production builds neither
  * export nor invoke a testing callback. Never call under group.mutex. */
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -242,13 +266,33 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         if (instance->on_variant) {
             SourceActor* prior = active_pipeline_actor;
             uint8_t prior_ingress = active_pipeline_ingress;
+            uint64_t prior_flow_id = active_pipeline_flow_id;
+            uint64_t prior_message_id = active_pipeline_message_id;
+            if (instance->upstream || instance->downstream) {
+                group_lock();
+                /* DATA was enqueued with pinned scheduler identity, but a
+                 * stopped/restarted actor must not receive stale context. */
+                ensure(accepted->flow_id != 0
+                    && accepted->flow_id == group.pipeline_flow_id
+                    && accepted->message_id != 0
+                    && accepted->destination_domain == instance->ref.scheduler_domain
+                    && accepted->destination_generation == instance->ref.generation
+                    && (accepted->direction == 0
+                        ? accepted->parent_message_id == 0
+                        : accepted->parent_message_id != 0));
+                group_unlock();
+            }
             active_pipeline_actor = instance;
             active_pipeline_ingress = accepted->direction;
+            active_pipeline_flow_id = accepted->flow_id;
+            active_pipeline_message_id = accepted->message_id;
             result = instance->on_variant(instance->heap, turn.domain, turn.epoch,
                     accepted->variant_index, accepted->packet.bytes,
                     accepted->packet.size);
             active_pipeline_ingress = prior_ingress;
             active_pipeline_actor = prior;
+            active_pipeline_flow_id = prior_flow_id;
+            active_pipeline_message_id = prior_message_id;
         } else {
             ensure(accepted->variant_index == 0 && instance->variant_count == 1);
             result = instance->on_wire(instance->heap, turn.domain, turn.epoch,
@@ -715,7 +759,27 @@ static int source_send_binary_unlocked(SourceActor* actor,
         || (group.pipeline_source == actor
             && atomic_load_explicit(&group.pipeline_root_sent,
                                     memory_order_acquire) == 0);
-    int admitted = root_allowed
+    int context_valid = 1;
+    if (pipeline_route && root_allowed) {
+        /* Capture immutable route context at the same group-mutex
+         * linearization point as physical DATA publication. The flow ID is
+         * committed only after a successful scheduler admission. */
+        accepted->flow_id = direction == 0
+            ? pipeline_issue_id(&next_pipeline_flow_id)
+            : active_pipeline_flow_id;
+        accepted->message_id = pipeline_issue_id(&next_pipeline_message_id);
+        accepted->parent_message_id = direction == 0 ? 0
+            : active_pipeline_message_id;
+        accepted->destination_domain = actor->ref.scheduler_domain;
+        accepted->destination_generation = actor->ref.generation;
+        context_valid = accepted->flow_id != 0 && accepted->message_id != 0
+            && (direction == 0
+                ? accepted->parent_message_id == 0
+                : accepted->parent_message_id != 0
+                    && accepted->flow_id == group.pipeline_flow_id
+                    && active_pipeline_actor != NULL);
+    }
+    const int admitted = root_allowed && context_valid
         && (!pipeline_route
             || atomic_load_explicit(&group.pipeline_failure,
                                     memory_order_acquire) == SOURCE_PIPELINE_OK)
@@ -725,6 +789,8 @@ static int source_send_binary_unlocked(SourceActor* actor,
      * Commit both root admission and directional counts BEFORE releasing
      * the shared publication lock, otherwise final receive can overtake. */
     if (admitted && pipeline_route) {
+        if (direction == 0)
+            group.pipeline_flow_id = accepted->flow_id;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         if (has_admitted_trace) {
             fprintf(stderr,
@@ -732,6 +798,14 @@ static int source_send_binary_unlocked(SourceActor* actor,
                 actor->pipeline_index, (unsigned)direction,
                 index, (long long)admitted_trace_value);
         }
+        fprintf(stderr,
+            "SOURCE_PIPELINE_CONTEXT_ADMIT flow=%llu message=%llu parent=%llu target=%zu direction=%u domain=%llu generation=%llu\\n",
+            (unsigned long long)accepted->flow_id,
+            (unsigned long long)accepted->message_id,
+            (unsigned long long)accepted->parent_message_id,
+            actor->pipeline_index, (unsigned)direction,
+            (unsigned long long)accepted->destination_domain,
+            (unsigned long long)accepted->destination_generation);
 #endif
         if (direction == 0)
             atomic_store_explicit(&group.pipeline_root_sent, 1,
@@ -837,6 +911,7 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
         group.pipeline_stages[i] = stages[i];
     }
     group.pipeline_count = count;
+    group.pipeline_flow_id = 0;
     group.pipeline_source = first;
     atomic_store_explicit(&group.pipeline_forward_count, 0, memory_order_release);
     atomic_store_explicit(&group.pipeline_backward_count, 0, memory_order_release);
