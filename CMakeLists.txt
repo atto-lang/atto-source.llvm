@@ -703,6 +703,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-active-generation-test)
     set_tests_properties(native_active_actor_generation PROPERTIES TIMEOUT 40)
 
+    # Exact scheduler-minted terminal envelope survives parent STOP and
+    # remains single-claim across ambiguous host CONTROL admission.
+    add_executable(oreslang-native-terminal-receipt-test
+        tests/native_terminal_receipt_reconciliation_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-terminal-receipt-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-terminal-receipt-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-terminal-receipt-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-terminal-receipt-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_terminal_receipt_reconciliation
+        COMMAND oreslang-native-terminal-receipt-test)
+    set_tests_properties(native_terminal_receipt_reconciliation PROPERTIES TIMEOUT 40)
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # GNU link-wrapper fault injection: no uninitialized mutex destroy
         # and no publication-gate leak on partial pthread startup.
