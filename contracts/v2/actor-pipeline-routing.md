@@ -162,11 +162,32 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
   0 errors, 0 skips) passed on GraalVM 25 in the exact-source funded run
   [#38191532323](https://github.com/zed-pkg-test/java-app/actions/runs/38191532323).
   The funded mirror checked 74 exact production Git source blobs.
-- This **does not** establish Native Image AOT/hybrid execution; the Java
-  route binder is a fixed single-flow, synchronous admission-only subset
-  without general `Future<T>` pipeline suspension or graph fan-out/fan-in.
-  There is no machine-checked refinement proof yet between the two runtime
-  lifecycle implementations.
+- The funded [Native Image AOT and hybrid run #38191776758](https://github.com/zed-pkg-test/java-app/actions/runs/38191776758)
+  built **both actual native executables** with GraalVM 25.3.4.1, inspected
+  their capabilities, and successfully executed the same three-actor guest
+  Oreslang program to produce `JAVA_PIPELINE_RESULT_19`. A mismatched
+  GraalVM 25.0.4 run failed during Truffle class initialization; the
+  dependency-aligned 25.3.4.1 run passed. Native guest execution is therefore
+  verified for this **specific bounded slice**, not for arbitrary pipelines.
+- The runtime binder remains a fixed single-flow, synchronous admission-only
+  subset without general `Future<T>` pipeline suspension or graph fan-out/fan-in.
+  There is no machine-checked implementation refinement proof yet between
+  the two runtime lifecycle implementations.
+
+## Bounded TLC safety evidence (2026-10-11)
+
+- `contracts/v2/formal/LinearPipelineSingleFlow.tla` describes the six
+  causal phases, the single pending admission reservation, terminal rejection,
+  and source completion after five committed admissions. Safe and intentionally
+  unsafe replay configurations are checked independently.
+- Exact-model funded [TLC run #38192119587](https://github.com/zed-pkg-test/java-app/actions/runs/38192119587)
+  passed all invariants after **17 distinct reachable states**. The deliberate
+  duplicate-completion mutant produced the required `NoDoubleAdmission`
+  counterexample. The checker artifact's SHA-256 was pinned and verified.
+- This result is limited to the finite single-flow state machine. It is **not
+  yet a Java/LLVM refinement proof** and does not model all scheduler
+  interleavings, actor-generation ABA, multiple simultaneous flows,
+  cancellation while awaiting backpressure, or branch correlation.
 
 ## Current admission status
 
@@ -175,6 +196,7 @@ for nominal enum values, routed only inside actual actor mailbox DATA turns
 of a runtime-bound three-actor pipeline. `self.respond` and `self.done`
 remain unavailable. LLVM admits the corresponding fixed linear three-actor
 `int` pipeline described above. Neither backend exposes unrestricted graph
-routing or general pipeline Futures. Native Image and comprehensive
-cross-backend lifecycle refinement remain unverified, so no release readiness
-or general actor-pipeline semantic parity is claimed.
+routing or general pipeline Futures. Native Image guest execution is
+verified for the fixed three-actor Java slice, but comprehensive cross-backend
+lifecycle refinement remains unverified. No release readiness or general
+actor-pipeline semantic parity is claimed.
