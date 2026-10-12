@@ -42,6 +42,20 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     add_test(NAME source_nominal_enum_pattern_parser_gate
         COMMAND oreslang-nominal-message-parser-test)
+    # Standalone scheduler-trusted correlation/admission module, not yet
+    # enabled for compiled guest pipelines. Nonblocking publication, replay,
+    # per-flow terminalization and generation checks are independently tested.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-correlated-flows-test
+        tests/native_pipeline_correlated_flows_test.c
+        src/main/cpp/oreslang/runtime/SourcePipelineFlows.c)
+    target_include_directories(oreslang-correlated-flows-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-correlated-flows-test PRIVATE Threads::Threads)
+    add_test(NAME native_pipeline_correlated_flow_isolation
+        COMMAND oreslang-correlated-flows-test)
+    set_tests_properties(native_pipeline_correlated_flow_isolation
+        PROPERTIES TIMEOUT 30)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
