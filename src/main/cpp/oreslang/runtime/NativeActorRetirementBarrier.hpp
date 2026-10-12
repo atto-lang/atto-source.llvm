@@ -26,33 +26,49 @@ namespace oreslang::runtime {
 class NativeActorResourceQuarantine final {
 public:
     explicit NativeActorResourceQuarantine(std::size_t capacity)
-        : capacity_(capacity) {
+        : capacity_(capacity), state_(std::make_unique<State>()) {
         if (capacity == 0 || capacity > 4096)
             throw std::invalid_argument("invalid native actor quarantine capacity");
-        entries_.reserve(capacity);
+        state_->entries.reserve(capacity);
+    }
+
+    NativeActorResourceQuarantine(const NativeActorResourceQuarantine&) = delete;
+    NativeActorResourceQuarantine& operator=(const NativeActorResourceQuarantine&) = delete;
+
+    ~NativeActorResourceQuarantine() {
+        // A failed FFI revocation can still refer to arena memory. Destroying
+        // the callbacks here might invoke their RAII destructors and free the
+        // arenas prematurely. Preserve the entire bounded state allocation
+        // until process termination when there are unresolved failures.
+        // The process supervisor must log/alert and restart the isolate.
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        if (!state_->entries.empty()) (void) state_.release();
     }
 
     bool hold(std::shared_ptr<ActorResourceRegistry> registry) {
         if (!registry || registry->phase() != ActorResourceRegistry::Phase::failed)
             throw std::invalid_argument("only failed actor resource registries can be quarantined");
-        std::lock_guard<std::mutex> guard(mutex_);
-        for (const auto& item : entries_) {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        for (const auto& item : state_->entries) {
             if (item == registry) return true;
         }
-        if (entries_.size() >= capacity_) return false;
-        entries_.push_back(std::move(registry));
+        if (state_->entries.size() >= capacity_) return false;
+        state_->entries.push_back(std::move(registry));
         return true;
     }
 
     std::size_t size() const {
-        std::lock_guard<std::mutex> guard(mutex_);
-        return entries_.size();
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->entries.size();
     }
 
 private:
+    struct State {
+        mutable std::mutex mutex;
+        std::vector<std::shared_ptr<ActorResourceRegistry>> entries;
+    };
     const std::size_t capacity_;
-    mutable std::mutex mutex_;
-    std::vector<std::shared_ptr<ActorResourceRegistry>> entries_;
+    std::unique_ptr<State> state_;
 };
 
 /**
