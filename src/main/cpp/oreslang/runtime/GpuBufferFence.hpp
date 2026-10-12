@@ -44,6 +44,7 @@ class BufferFence {
         std::uint64_t sequence = 0;
         Status status = Status::Idle;
         bool backend_quiescent = true;
+        bool paired = false; // prohibit per-allocation terminal transitions
         std::shared_ptr<const std::uint8_t> active_seal;
         mutable std::mutex lock;
         State(Identity i, std::uint64_t n)
@@ -140,6 +141,7 @@ public:
         ++b->sequence;
         a->backend_quiescent = false;
         b->backend_quiescent = false;
+        a->paired = b->paired = true;
         a->status = Status::InFlight;
         b->status = Status::InFlight;
         return tickets;
@@ -167,7 +169,8 @@ public:
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller)) throw std::logic_error("foreign device identity");
-        if (state_->status != Status::Idle) throw std::logic_error("buffer not idle");
+        if (state_->status != Status::Idle || state_->paired)
+            throw std::logic_error("buffer not idle or belongs to GPU pair");
         if (state_->sequence == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("device ticket sequence exhausted");
         auto seal = std::make_shared<const std::uint8_t>(0);
@@ -200,7 +203,7 @@ public:
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller) || state_->status != Status::Poisoned
-            || state_->backend_quiescent
+            || state_->backend_quiescent || state_->paired
             || ticket.generation != state_->identity.allocation_generation
             || ticket.sequence != state_->sequence
             || !state_->active_seal || ticket.seal_ != state_->active_seal)
@@ -261,6 +264,7 @@ private:
         std::lock_guard<std::mutex> state_two(high->lock);
         // Compare exact submission seals as well as diagnostic integer fields.
         if (!(a->identity == pair.input) || !(b->identity == pair.output)
+                || !a->paired || !b->paired
                 || !a->active_seal || !b->active_seal
                 || a->active_seal != pair.input_ticket.seal_
                 || b->active_seal != pair.output_ticket.seal_
@@ -274,6 +278,7 @@ private:
                     || a->backend_quiescent || b->backend_quiescent)
                 throw std::logic_error("device pair has not been cancelled or is partly acknowledged");
             a->backend_quiescent = b->backend_quiescent = true;
+            a->paired = b->paired = false;
             a->active_seal.reset();
             b->active_seal.reset();
             return;
@@ -288,6 +293,7 @@ private:
         a->status = b->status =
                 action == PairAction::CompleteOk ? Status::Idle : Status::Poisoned;
         a->backend_quiescent = b->backend_quiescent = true;
+        a->paired = b->paired = false;
         a->active_seal.reset();
         b->active_seal.reset();
     }
@@ -300,7 +306,7 @@ private:
         if (state_->status == Status::Closed) throw std::logic_error("device buffer closed");
     }
     void validate_inflight(Ticket ticket) const {
-        if (state_->status != Status::InFlight ||
+        if (state_->status != Status::InFlight || state_->paired ||
             ticket.generation != state_->identity.allocation_generation ||
             ticket.sequence != state_->sequence ||
             !state_->active_seal || ticket.seal_ != state_->active_seal)
