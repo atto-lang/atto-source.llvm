@@ -18,8 +18,8 @@ namespace oreslang::runtime {
 class ActorResourceRegistry final {
 public:
     enum class Kind { socket, file, timer, ffi_callback, native_allocation };
-    enum class Phase { live, retiring, closing, reclaimed };
-    enum class Reclaim { not_retired, busy, closing, complete };
+    enum class Phase { live, retiring, closing, reclaimed, failed };
+    enum class Reclaim { not_retired, busy, closing, complete, failed };
     enum class Activity { turn, loan, callback };
 
     struct Ticket {
@@ -31,10 +31,12 @@ public:
 
     struct Result {
         Reclaim status;
+        // Number of closers that returned successfully. Not the number attempted.
         std::size_t closed;
         std::vector<std::string> errors;
         // Includes failures whose diagnostic text could not be allocated.
         std::size_t failures = 0;
+        std::size_t attempted = 0;
     };
 
     explicit ActorResourceRegistry(std::uint64_t actor_id,
@@ -90,7 +92,7 @@ public:
             std::lock_guard<std::mutex> guard(mutex_);
             if (phase_ == Phase::live) return {Reclaim::not_retired, 0, {}};
             if (phase_ == Phase::closing) return {Reclaim::closing, 0, {}};
-            if (phase_ == Phase::reclaimed) return last_result_;
+            if (phase_ == Phase::reclaimed || phase_ == Phase::failed) return last_result_;
             if (!turns_.empty() || !loans_.empty() || !callbacks_.empty())
                 return {Reclaim::busy, 0, {}};
             phase_ = Phase::closing;
@@ -98,8 +100,10 @@ public:
         }
         Result result{Reclaim::complete, 0, {}};
         for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+            ++result.attempted;
             try {
                 it->close();
+                ++result.closed;
             } catch (const std::exception& e) {
                 ++result.failures;
                 append_error(result, e.what());
@@ -107,15 +111,20 @@ public:
                 ++result.failures;
                 append_error(result, "unknown closer failure");
             }
-            ++result.closed;
         }
+        // A throwing revoker might leave a live socket, native loan or FFI
+        // callback. Do not report COMPLETE or authorize arena destruction.
+        // Failure is terminal; retrying a partially run closer violates
+        // exactly-once semantics. Supervisor must quarantine/reconcile.
+        if (result.failures != 0) result.status = Reclaim::failed;
         {
             std::lock_guard<std::mutex> guard(mutex_);
-            // Vector move cannot allocate. Set RECLAIMED after commit so an
-            // allocation failure while building optional diagnostic text
-            // never leaves the registry permanently in CLOSING.
+            // Vector move cannot allocate. Terminal failure is intentionally
+            // distinct from safe quiescent reclamation. Both states prevent
+            // a second close attempt and leave failure visible to supervisor.
+            const bool safely_reclaimed = result.failures == 0;
             last_result_ = std::move(result);
-            phase_ = Phase::reclaimed;
+            phase_ = safely_reclaimed ? Phase::reclaimed : Phase::failed;
             return last_result_;
         }
     }
