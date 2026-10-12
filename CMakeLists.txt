@@ -323,6 +323,43 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_state_loan_escape
         actor-state-loan-escape-reject.ores
         --diagnostic "actor state reference cannot escape handle_state callback")
+    # using state.read is an immutable scoped loan, using
+    # state.write(critical ...) is an exclusive scoped state transaction.
+    foreach(mode read write)
+        oreslang_contract_test(native_ir_actor_using_${mode}
+            actor-using-${mode}-positive.ores
+            --ir "oreslang_actor_Probe_receive")
+        if(ORE_CLANG)
+            oreslang_contract_test(native_exec_actor_using_${mode}_pipeline
+                source-actor-pipeline-fifteen-using-${mode}.ores
+                --run 43 --clang "${ORE_CLANG}"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+        endif()
+    endforeach()
+    oreslang_contract_test(reject_actor_using_read_mut
+        actor-using-read-mut-reject.ores
+        --diagnostic "using state.read cannot mutate state")
+    oreslang_contract_test(reject_actor_using_write_no_critical
+        actor-using-write-no-critical-reject.ores
+        --diagnostic "expected 'critical'")
+    oreslang_contract_test(reject_actor_using_read_critical
+        actor-using-read-critical-reject.ores
+        --diagnostic "using state.read cannot request a critical write loan")
+    oreslang_contract_test(reject_actor_using_unknown_capability
+        actor-using-unknown-capability-reject.ores
+        --diagnostic "using state capability must be read or write")
+    foreach(bad_scope read-await write-select nested)
+        oreslang_contract_test(reject_actor_using_${bad_scope}
+            actor-using-${bad_scope}-reject.ores
+            --diagnostic "state read/write loan cannot suspend or nest")
+    endforeach()
+    foreach(mode read write)
+        oreslang_contract_test(reject_actor_using_${mode}_escape
+            actor-using-${mode}-escape-reject.ores
+            --diagnostic "actor state reference cannot escape handle_state callback")
+    endforeach()
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
