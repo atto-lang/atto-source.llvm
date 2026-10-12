@@ -317,6 +317,11 @@ static void reject_restarted_duplicate_stage(OresFlowTable* table) {
     OresFlowActor missing_domain[3] = {{100, 10, 77}, {101, 10, 0}, {102, 10, 77}};
     assert(ores_flow_open(table, 17, 3, missing_domain, 3, &flow)
            == ORES_FLOW_BAD_ARGUMENT);
+    OresFlowActor unsupported_cross_scheduler[3] = {
+        {100, 10, 77}, {101, 10, 99}, {102, 10, 77}
+    };
+    assert(ores_flow_open(table, 17, 3, unsupported_cross_scheduler, 3, &flow)
+           == ORES_FLOW_BAD_ARGUMENT);
 }
 
 int main(void) {
