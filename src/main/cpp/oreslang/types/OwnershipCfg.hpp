@@ -255,6 +255,11 @@ inline Analysis verify(const Graph& graph) {
     std::map<std::uint64_t, std::pair<std::size_t, std::size_t>> borrow_sites;
     for (std::size_t block_id = 0; block_id < graph.blocks.size(); ++block_id) {
         const auto& block = graph.blocks[block_id];
+        // Malformed successors are invalid even in presently unreachable
+        // blocks: optimizer or lowering changes must not expose bad edges.
+        for (const auto next : block.successors)
+            if (next >= graph.blocks.size())
+                violation(std::to_string(block_id), "CFG edge outside graph");
         for (std::size_t op_id = 0; op_id < block.operations.size(); ++op_id) {
             const auto& op = block.operations[op_id];
             if (op.kind != Operation::Kind::BorrowShared &&
@@ -305,6 +310,9 @@ inline Analysis verify(const Graph& graph) {
     // also cannot claim the same nonzero origin. Zero is reserved only for
     // the backward-compatible anonymous single-loan entry state.
     std::map<std::uint64_t, std::string> entry_loan_owners;
+    // Zero is an anonymous *single entry loan*, not a globally reusable
+    // identity. Multiple parameter loans need distinct explicit tokens.
+    bool anonymous_entry_claimed = false;
     for (const auto& entry_item : entry) {
         // C++17: capture ordinary references, not structured bindings, in
         // the nested provenance validator lambda.
@@ -312,6 +320,12 @@ inline Analysis verify(const Graph& graph) {
         const auto& value = entry_item.second;
         if (value.shared_loans > 1 && value.shared_loan_ids.count(0))
             violation(name, "anonymous entry loan mixed with named loans");
+        if (value.shared_loan_ids.count(0) ||
+                (value.exclusive_loan_id && *value.exclusive_loan_id == 0)) {
+            if (anonymous_entry_claimed)
+                violation(name, "duplicate anonymous entry loan identity");
+            anonymous_entry_claimed = true;
+        }
         auto record_entry_token = [&](std::uint64_t token) {
             if (!token) return;
             if (borrow_sites.count(token) ||
