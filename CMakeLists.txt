@@ -119,6 +119,8 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_exit_void_fallthrough exit-void-main.ores
             --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_module_main module-main.ores
+            --run 7 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exit_max_valid exit-max-main.ores
             --run 255 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exit_overflow_fails_closed exit-invalid-positive-main.ores
