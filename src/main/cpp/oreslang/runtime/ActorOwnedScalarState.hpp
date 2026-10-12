@@ -108,14 +108,14 @@ public:
 
     template <class Callback>
     Value critical(std::uint64_t actor_id, std::uint64_t continuation_id,
-                   CriticalStateCallback metadata, FunctionEffects using_effects,
+                   CriticalStateCallback metadata, FunctionEffects with_effects,
                    Callback&& callback) {
         if (retired_ || actor_id != actor_id_) {
             throw std::runtime_error("stale or foreign actor state owner");
         }
         CriticalStateLoan loan;
         if (loan.begin(scope_, actor_id, continuation_id, metadata,
-                using_effects, verified_serial_actor_)
+                with_effects, verified_serial_actor_)
                 != CriticalStateAdmission::Accept) {
             throw std::runtime_error("critical actor state/effect admission denied");
         }
