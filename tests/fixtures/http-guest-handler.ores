@@ -1,0 +1,8 @@
+// Identical guest request handler for LLVM and GraalVM native actor HTTP tests.
+// Only the handler is source-parity; listener, sockets and lifecycle are hosts.
+pub fnc handle_request(int count): int {
+  return count * 43;
+}
+pub fnc main(): int {
+  return handle_request(1);
+}
