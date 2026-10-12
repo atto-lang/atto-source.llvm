@@ -115,6 +115,12 @@ int main() {
     }
     CHECK(bounded.pending_notifications().size() ==
           Bridge::max_outstanding_continuations - 1);
+    CHECK(bounded.pending_notifications(0).empty());
+    const auto small_batch = bounded.pending_notifications(3);
+    CHECK(small_batch.size() == 3);
+    CHECK(small_batch[0].continuation_id == 2);
+    CHECK(small_batch[1].continuation_id == 3);
+    CHECK(small_batch[2].continuation_id == 4);
     bool saturated = false;
     try {
         (void)bounded.request(bounded.incarnation(), Bridge::max_outstanding_continuations + 1,
