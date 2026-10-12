@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include "oreslang/runtime/NativeTerminalReceiptJournal.hpp"
 #include "oreslang/runtime/SupervisorChildRegistry.hpp"
 #include "oreslang/runtime/SupervisorProcess.hpp"
 
@@ -34,13 +35,15 @@ public:
             OresNativeActorScheduler* scheduler,
             OresNativeActorRef parent,
             std::shared_ptr<SupervisorProcess> process,
-            std::shared_ptr<SupervisorChildRegistry> children = nullptr)
+            std::shared_ptr<SupervisorChildRegistry> children = nullptr,
+            std::shared_ptr<NativeTerminalReceiptJournal> durable_journal = nullptr)
         : scheduler_(scheduler), parent_(parent), process_(std::move(process)),
           child_registry_(children
               ? std::move(children)
               : std::make_shared<SupervisorChildRegistry>(
                     process_ ? process_->supervisor_id() : 0,
-                    parent.scheduler_domain)) {
+                    parent.scheduler_domain)),
+          durable_journal_(std::move(durable_journal)) {
         if (!scheduler_ || !process_ || !valid(parent_)
             || process_->runtime_id() != parent_.scheduler_domain
             || !child_registry_
@@ -49,6 +52,10 @@ public:
             throw std::invalid_argument("supervisor bridge domain mismatch");
         if (!ores_native_actor_scheduler_poll_ready(scheduler_, parent_))
             throw std::invalid_argument("supervisor parent must be live");
+        if (durable_journal_
+            && !ores_native_actor_scheduler_uses_identity_callbacks(scheduler_))
+            throw std::invalid_argument(
+                "durable receipts require generation-aware callback mode");
     }
 
     // Teardown invalidates the restart publication fence even when a
@@ -666,6 +673,7 @@ private:
     const OresNativeActorRef parent_;
     const std::shared_ptr<SupervisorProcess> process_;
     std::shared_ptr<SupervisorChildRegistry> child_registry_;
+    const std::shared_ptr<NativeTerminalReceiptJournal> durable_journal_;
     mutable std::mutex mutex_;
     std::unordered_map<Key, SupervisorChildRegistry::Snapshot, KeyHash> registered_;
     std::size_t accepted_ = 0;
