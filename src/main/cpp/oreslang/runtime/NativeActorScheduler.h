@@ -221,6 +221,13 @@ int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
  * claim a host delivery. A queued receipt, copied ActorRef, or unrelated
  * carrier does not confer callback execution authority.
  * The check and one-use receipt claim share the STOP mutex. */
+/* Read-only authoritative preflight for durable journal preparation. Only
+ * an executing exact typed parent PANIC callback may inspect its still
+ * RECORDED, published terminal envelope. Does not claim or grant host effect
+ * authority; STOP and callback completion must be rechecked at final claim. */
+int ores_native_actor_scheduler_probe_delivered_terminal_receipt(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
+    OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
 int ores_native_actor_scheduler_claim_delivered_terminal_receipt(
     OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
     OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
