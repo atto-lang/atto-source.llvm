@@ -448,6 +448,13 @@ private:
         bool return_guards_started = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            // A void program entrypoint may fall through with success status 0.
+            // Other functions retain their existing explicit-return requirement.
+            if (token_.text == "}" && value.returns_void &&
+                    value.name == "main" && value.parameters.empty()) {
+                require("}");
+                return value;
+            }
             if (token_.kind == Kind::End || token_.text == "}") {
                 if (return_guards_started) fail("expected 'return'");
                 fail("missing final return");
