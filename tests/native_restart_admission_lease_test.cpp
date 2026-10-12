@@ -31,6 +31,12 @@ int main() {
         auto candidate = ores_native_actor_scheduler_spawn_unpublished(scheduler, 1);
         check(parent.scheduler_domain && candidate.scheduler_domain,
               "scheduler actor spawn failed");
+        // Parent is already physically DONE; wait_done() succeeds before
+        // acquiring a lease and must still reject if the calling thread
+        // later owns the publication gate (uniform nonblocking contract).
+        check(ores_native_actor_scheduler_stop(scheduler, parent)
+                  && ores_native_actor_scheduler_wait_done(scheduler, parent),
+              "control test parent did not reach physical DONE");
         check(ores_native_actor_scheduler_poll_ready(scheduler, candidate),
               "physically spawned candidate should be ready");
         check(!ores_native_actor_scheduler_send(scheduler, candidate, 1)
@@ -48,6 +54,10 @@ int main() {
               "same-thread physical STOP during a lease must reject");
         check(!ores_native_actor_scheduler_try_destroy(scheduler),
               "same-thread destroy during a lease must reject");
+        check(!ores_native_actor_scheduler_wait_done(scheduler, parent),
+              "lease owner entered physical DONE wait under publication gate");
+        check(!ores_native_actor_scheduler_drain(scheduler),
+              "lease owner entered global drain wait under publication gate");
         OresNativeRestartLease forged = lease;
         ++forged.nonce;
         check(!ores_native_actor_scheduler_publish_restart_lease(scheduler, forged)
