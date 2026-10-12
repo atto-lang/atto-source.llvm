@@ -21,6 +21,10 @@ def main():
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
+        # Verify real compiled guest execution, not just IR text admission,
+        # for all three source spellings of native instance on_message.
+        ("source-actor-method-keyword.ores", 1, 0, None),
+        ("source-actor-bare-method.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
@@ -50,6 +54,10 @@ def main():
         "source-actor-send-class-value-reject.ores": "ownership violation: class is non-Copy",
         "source-actor-send-moved-class-field-reject.ores": "ownership violation: use-after-move class field",
         "source-actor-send-field-take-reject.ores": "ownership violation: use-after-move class field",
+        # Explicitly refuse source contracts that need typed actor field
+        # ownership or suspension-aware continuation lowering.
+        "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
+        "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
     for name, diagnostic in negatives.items():
         result = run([args.compiler, str(fixtures / name)])
@@ -63,7 +71,11 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
-            if name != "source-actor-spawn-stop.ores":
+            if name not in {
+                "source-actor-spawn-stop.ores",
+                "source-actor-method-keyword.ores",
+                "source-actor-bare-method.ores",
+            }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
