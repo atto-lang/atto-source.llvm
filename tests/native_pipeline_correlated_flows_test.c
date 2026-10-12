@@ -289,6 +289,73 @@ static void slow_publisher_isolation(OresFlowTable* table) {
     assert(pthread_cond_destroy(&test.cond) == 0);
     assert(pthread_mutex_destroy(&test.mutex) == 0);
 }
+/* A callback holding A's flow mutex must not be able to enter B and then
+ * nest B's callback back into A. Even if table B is otherwise idle, such
+ * reentry would form a cross-table lock cycle. */
+typedef struct {
+    OresFlowTable* other;
+    OresFlowTicket other_ticket;
+    uint64_t other_flow;
+    unsigned callbacks;
+} CrossTableProbe;
+static int cross_table_reentry_probe(void* opaque,
+                                     const OresFlowTicket* source_ticket) {
+    CrossTableProbe* probe = (CrossTableProbe*)opaque;
+    uint64_t bogus_id = 0;
+    OresFlowSnapshot snapshot;
+    OresFlowTicket bogus_ticket;
+    assert(source_ticket && source_ticket->message_id > 0);
+    ++probe->callbacks;
+    assert(ores_flow_open(probe->other, 17, 3, stages, 3, &bogus_id)
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_snapshot(probe->other, probe->other_flow, &snapshot)
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_reserve(probe->other, probe->other_flow,
+                (OresFlowActor){0,0,0}, ORES_FLOW_ROOT, 0, &bogus_ticket)
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_publish(probe->other, &probe->other_ticket, accept, NULL)
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_cancel(probe->other, probe->other_flow, stages[0])
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_finish(probe->other, probe->other_flow,
+                stages[0], probe->other_ticket.message_id)
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_retire(probe->other, probe->other_flow)
+           == ORES_FLOW_REENTRANT);
+    assert(bogus_id == 0);
+    return 1;
+}
+static void cross_table_callback_cycle_fenced(OresFlowTable* table) {
+    OresFlowTable* other = ores_flow_table_create();
+    assert(other);
+    uint64_t source;
+    OresFlowTicket source_ticket;
+    assert(ores_flow_open(table, 17, 3, stages, 3, &source) == ORES_FLOW_OK);
+    assert(ores_flow_reserve(table, source, (OresFlowActor){0,0,0},
+               ORES_FLOW_ROOT, 0, &source_ticket) == ORES_FLOW_OK);
+    CrossTableProbe probe = {0};
+    probe.other = other;
+    assert(ores_flow_open(other, 17, 3, stages, 3, &probe.other_flow)
+           == ORES_FLOW_OK);
+    assert(ores_flow_reserve(other, probe.other_flow, (OresFlowActor){0,0,0},
+               ORES_FLOW_ROOT, 0, &probe.other_ticket) == ORES_FLOW_OK);
+    assert(ores_flow_publish(table, &source_ticket, cross_table_reentry_probe,
+               &probe) == ORES_FLOW_OK);
+    assert(probe.callbacks == 1);
+    /* Failed reentry must not consume the other table's reservation. */
+    OresFlowSnapshot snapshot;
+    assert(ores_flow_snapshot(other, probe.other_flow, &snapshot)
+           == ORES_FLOW_OK);
+    assert(snapshot.state == ORES_FLOW_ACTIVE && snapshot.reserved
+           && snapshot.committed_hops == 0);
+    assert(ores_flow_publish(other, &probe.other_ticket, accept, NULL)
+           == ORES_FLOW_OK);
+    assert(ores_flow_cancel(other, probe.other_flow, stages[0]) == ORES_FLOW_OK);
+    assert(ores_flow_retire(other, probe.other_flow) == ORES_FLOW_OK);
+    assert(ores_flow_cancel(table, source, stages[0]) == ORES_FLOW_OK);
+    assert(ores_flow_retire(table, source) == ORES_FLOW_OK);
+    ores_flow_table_destroy(other);
+}
 static void reentrant_and_recreated_table(OresFlowTable* table) {
     uint64_t old_id, new_id;
     OresFlowTicket ticket;
@@ -331,6 +398,7 @@ int main(void) {
     reject_restarted_duplicate_stage(table);
     slow_publisher_isolation(table);
     reentrant_and_recreated_table(table);
+    cross_table_callback_cycle_fenced(table);
     rejection_and_incomplete(table);
     capacity(table);
     sixteen_stages(table);
@@ -352,6 +420,6 @@ int main(void) {
     }
     assert(atomic_load(&delivered) == 5 + 8 * 10 * 5 + race_admitted);
     ores_flow_table_destroy(table);
-    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1 slow_publish=1 reentry=1");
+    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1 slow_publish=1 reentry=1 cross_table_cycle=1");
     return 0;
 }
