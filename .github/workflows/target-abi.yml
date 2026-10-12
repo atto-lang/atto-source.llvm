@@ -21,3 +21,13 @@ jobs:
         env:
           CXX_BIN: ${{ matrix.compiler }}
         run: bash scripts/verify-target-abi-dop.sh "$CXX_BIN"
+      - name: ThreadSanitizer read-loan quiescence regression
+        if: matrix.runner == 'ubuntu-24.04' && matrix.compiler == 'g++'
+        run: |
+          set -euo pipefail
+          tempdir="$(mktemp -d)"
+          trap 'rm -rf -- "$tempdir"' EXIT
+          g++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=thread -fno-omit-frame-pointer -pthread -I src/main/cpp \
+            tests/dop_hostbuffer_concurrency_test.cpp -o "$tempdir/dop-tsan"
+          "$tempdir/dop-tsan"
