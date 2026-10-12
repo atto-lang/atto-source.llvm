@@ -4,6 +4,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -23,11 +24,17 @@ struct PlaceState {
     ValueMask possible = kUninitialized;
     unsigned shared_loans = 0;
     bool exclusive_loan = false;
+    // Identity, not merely the number of borrows, must survive a CFG join.
+    // Token zero is reserved for a legacy loan already live at graph entry.
+    std::set<std::uint64_t> shared_loan_ids;
+    std::optional<std::uint64_t> exclusive_loan_id;
 
     bool operator==(const PlaceState& rhs) const {
         return possible == rhs.possible &&
             shared_loans == rhs.shared_loans &&
-            exclusive_loan == rhs.exclusive_loan;
+            exclusive_loan == rhs.exclusive_loan &&
+            shared_loan_ids == rhs.shared_loan_ids &&
+            exclusive_loan_id == rhs.exclusive_loan_id;
     }
 };
 using State = std::map<std::string, PlaceState>;
@@ -40,6 +47,9 @@ struct Operation {
     };
     Kind kind;
     std::string place;
+    // Optional explicit lexical loan identity; absent borrow IDs derive from
+    // the original CFG operation site, not the active traversal order.
+    std::optional<std::uint64_t> loan_id;
 };
 
 struct BasicBlock {
@@ -73,7 +83,7 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
         violation(key, "not definitely initialized on every CFG predecessor");
 }
 
-inline void apply(Operation op, State& state) {
+inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -132,6 +142,8 @@ inline void apply(Operation op, State& state) {
             require_owned(op.place, value);
             if (value.exclusive_loan) violation(op.place, "shared borrow overlaps mutable loan");
             if (value.shared_loans == 65535) violation(op.place, "shared loan count exceeds bound");
+            if (!value.shared_loan_ids.insert(op.loan_id.value_or(site_id)).second)
+                violation(op.place, "shared loan identity already live");
             ++value.shared_loans;
             return;
         case Operation::Kind::BorrowExclusive:
@@ -139,14 +151,23 @@ inline void apply(Operation op, State& state) {
             if (value.exclusive_loan || value.shared_loans)
                 violation(op.place, "overlapping exclusive loans");
             value.exclusive_loan = true;
+            value.exclusive_loan_id = op.loan_id.value_or(site_id);
             return;
         case Operation::Kind::ReleaseShared:
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
+            if (!op.loan_id && value.shared_loan_ids.size() != 1)
+                violation(op.place, "shared loan release requires unambiguous provenance");
+            const auto to_release = op.loan_id.value_or(*value.shared_loan_ids.begin());
+            if (!value.shared_loan_ids.erase(to_release))
+                violation(op.place, "shared loan release has foreign provenance");
             --value.shared_loans;
             return;
         case Operation::Kind::ReleaseExclusive:
             if (!value.exclusive_loan) violation(op.place, "unmatched exclusive loan release");
+            if (op.loan_id && op.loan_id != value.exclusive_loan_id)
+                violation(op.place, "exclusive loan release has foreign provenance");
             value.exclusive_loan = false;
+            value.exclusive_loan_id.reset();
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
@@ -166,8 +187,10 @@ inline bool join_into(State& target, const State& incoming) {
         // Do not invent a released loan by joining distinct loan histories.
         // A future provenance-aware pass may make this more precise.
         if (pair.second.shared_loans != other->second.shared_loans ||
-                pair.second.exclusive_loan != other->second.exclusive_loan)
-            violation(pair.first, "different live loan states at CFG join");
+                pair.second.exclusive_loan != other->second.exclusive_loan ||
+                pair.second.shared_loan_ids != other->second.shared_loan_ids ||
+                pair.second.exclusive_loan_id != other->second.exclusive_loan_id)
+            violation(pair.first, "different live loan provenance at CFG join");
         ValueMask merged = static_cast<ValueMask>(pair.second.possible | other->second.possible);
         if (merged != pair.second.possible) {
             pair.second.possible = merged;
@@ -183,7 +206,8 @@ inline Analysis verify(const Graph& graph) {
     // Reject malformed initial abstract states before any CFG edge is
     // processed. Unknown bits and contradictory live-loan provenance
     // must not silently enter the fixed-point lattice.
-    for (const auto& [name, place] : graph.entry) {
+    State entry = graph.entry;
+    for (auto& [name, place] : entry) {
         if (!place.possible || (place.possible &
                 static_cast<ValueMask>(~(kOwned | kMoved | kUninitialized | kDropped))))
             violation(name, "invalid CFG entry ownership mask");
@@ -197,11 +221,21 @@ inline Analysis verify(const Graph& graph) {
             violation(name, "live loan on non-owned CFG entry place");
         if (place.shared_loans > 65535)
             violation(name, "shared loan count exceeds bound");
+        // Backwards-compatible entry loan identity: an entry with one live
+        // loan can be named unambiguously; multiple anonymous entry loans
+        // would make release ownership impossible to prove.
+        if (place.shared_loans == 1 && place.shared_loan_ids.empty())
+            place.shared_loan_ids.insert(0);
+        if (place.exclusive_loan && !place.exclusive_loan_id)
+            place.exclusive_loan_id = 0;
+        if (place.shared_loans != place.shared_loan_ids.size() ||
+                place.exclusive_loan != place.exclusive_loan_id.has_value())
+            violation(name, "unproven initial loan identity");
     }
     Analysis result;
     result.incoming.resize(graph.blocks.size());
     result.outgoing.resize(graph.blocks.size());
-    result.incoming[0] = graph.entry;
+    result.incoming[0] = entry;
     std::deque<std::size_t> queue{0};
     std::vector<bool> queued(graph.blocks.size(), false);
     queued[0] = true;
@@ -211,8 +245,15 @@ inline Analysis verify(const Graph& graph) {
         queued[index] = false;
         State current = *result.incoming[index];
         const BasicBlock& block = graph.blocks[index];
-        for (const Operation& operation : block.operations)
-            apply(operation, current);
+        for (std::size_t site = 0; site < block.operations.size(); ++site) {
+            // Reserve zero for an explicitly known loan at entry. Source
+            // position gives stable IDs across fixed-point reprocessing.
+            if (index >= UINT32_MAX || site >= UINT32_MAX)
+                throw std::runtime_error("ownership violation: CFG too large for loan identity");
+            const auto site_id = ((static_cast<std::uint64_t>(index) + 1) << 32)
+                    | (static_cast<std::uint64_t>(site) + 1);
+            apply(block.operations[site], current, site_id);
+        }
         if (block.successors.empty())
             for (const auto& item : current)
                 if (item.second.shared_loans || item.second.exclusive_loan)
