@@ -422,6 +422,32 @@ int main() {
                "ACTIVE>FINALIZED>RESTARTING>SPAWNED>CLEANED>FINALIZED\n";
     }
 
+    // The physical scheduler slot is exclusive while a RESTART candidate is
+    // merely staged; the active-only index is insufficient at that point.
+    {
+        SupervisorChildRegistry exclusive{4417, 42};
+        const OresNativeActorRef dying_a{42, 150, 1};
+        const OresNativeActorRef dying_b{42, 151, 1};
+        const auto a = exclusive.register_child(dying_a);
+        const auto b = exclusive.register_child(dying_b);
+        exclusive.finalized(a.child, dying_a, 1);
+        exclusive.finalized(b.child, dying_b, 1);
+        const auto claim_a = exclusive.begin_restart(a.child, dying_a, 1);
+        const auto claim_b = exclusive.begin_restart(b.child, dying_b, 1);
+        const OresNativeActorRef candidate{42, 152, 1};
+        exclusive.stage_replacement(claim_a, candidate);
+        must_reject([&] { exclusive.stage_replacement(claim_b, candidate); });
+        must_reject([&] {
+            exclusive.stage_replacement(claim_b, OresNativeActorRef{42, 152, 2});
+        });
+        must_reject([&] { exclusive.register_child(candidate); });
+        exclusive.acknowledge_replacement_admission(
+            claim_a, candidate, [] { return true; });
+        exclusive.replace(claim_a, candidate);
+        must_reject([&] { exclusive.stage_replacement(claim_b, candidate); });
+        exclusive.abort_restart(claim_b);
+    }
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
