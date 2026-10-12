@@ -640,23 +640,33 @@ int ores_native_actor_scheduler_terminal_receipt(
     unlock(s);
     return ok;
 }
-int ores_native_actor_scheduler_claim_terminal_receipt(
+/* Shared generation-bound, one-use claim. The ordinary parent CONTROL
+ * path needs a live published parent and a scheduler-published terminal
+ * envelope. Recovery is deliberately separate: its original parent may
+ * already be STOPPED and its initial publication may have failed. */
+static int claim_terminal_receipt_internal(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
-    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
-    /* Nonblocking claim is permitted on the parent CONTROL carrier. It
-     * acquires only the scheduler mutex, never waits on a publication gate
-     * or executes external policy. The caller owns host-side enqueue. */
+    OresNativeActorRef child, OresNativeTerminalReceipt* out,
+    int require_live_parent) {
     if (!s || !out) return 0;
     lock(s);
     int ok = terminal_receipt_locked(s, parent, child, NULL);
+    if (ok && require_live_parent) {
+        ok = !s->retired && matching(s, parent)
+            && s->actors[parent.actor_slot].published
+            && !s->actors[parent.actor_slot].retired
+            && s->actors[child.actor_slot].terminal_was_published;
+    }
     if (ok) {
         ActorLane* lane = &s->actors[child.actor_slot];
         ok = lane->terminal_receipt_state == ORES_NATIVE_TERMINAL_RECEIPT_RECORDED
             && lane->retired && !lane->active && !lane->queued
             && !lane->has_control && s->next_terminal_claim_nonce != UINT64_MAX;
         if (ok) {
-            /* First successful claimant alone may cross into host CONTROL.
-             * A crash or ambiguous host failure leaves CLAIMED: never replay. */
+            /* The exact claim and parent STOP share the scheduler mutex.
+             * A later STOP cannot invalidate an already-claimed in-flight
+             * host effect, but a STOP that wins first denies ordinary
+             * callback admission without consuming its RECORDED evidence. */
             uint64_t nonce = ++s->next_terminal_claim_nonce;
             lane->terminal_claim_nonce = nonce;
             lane->terminal_receipt_state = ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED;
@@ -665,6 +675,18 @@ int ores_native_actor_scheduler_claim_terminal_receipt(
     }
     unlock(s);
     return ok;
+}
+int ores_native_actor_scheduler_claim_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    /* Trusted recovered-parent claim, including a parent that stopped
+     * before its CONTROL callback could be accepted. */
+    return claim_terminal_receipt_internal(s, parent, child, out, 0);
+}
+int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    return claim_terminal_receipt_internal(s, parent, child, out, 1);
 }
 int ores_native_actor_scheduler_ack_terminal_receipt(
     OresNativeActorScheduler* s, OresNativeTerminalReceipt receipt) {
