@@ -721,8 +721,12 @@ int main() {
                        supervisor.scheduler_domain, supervisor.actor_slot,
                        supervisor.generation + 1}, panic_notice),
                   "forged supervisor callback incarnation reached CONTROL");
-            check(bridge->on_panic(supervisor, panic_notice),
-                  "exact generation-aware parent PANIC did not route");
+            // This fixture uses the legacy slot-index callback ABI.
+            // The legacy overload is permitted only for legacy schedulers.
+            check(bridge->on_panic(
+                      static_cast<std::size_t>(supervisor.actor_slot),
+                      panic_notice),
+                  "legacy callback did not route on a legacy scheduler");
             bridge->fence_restart_publication();
         } else if (mode == 1) {
             children->stage_replacement(ticket, replacement);
@@ -968,6 +972,70 @@ int main() {
         check(ores_native_actor_scheduler_drain(runtime)
                   && ores_native_actor_scheduler_try_destroy(runtime),
               "native restart proof scheduler teardown failed");
+    }
+
+    // Identity-mode supervisors must NOT accept the old slot-index callback
+    // entrypoint, even if the slot and typed child identity happen to match.
+    // This prevents a retained callback from eliding the parent generation.
+    {
+        auto* identity_scheduler =
+            ores_native_actor_scheduler_open_identity_control(
+                2, 2, 2,
+                [](void*, OresNativeActorRef, std::uint64_t) {},
+                nullptr,
+                [](void*, OresNativeActorRef,
+                   OresNativeActorTerminalFailure) {},
+                nullptr);
+        check(identity_scheduler != nullptr,
+              "identity-mode bridge scheduler startup failed");
+        const auto parent = ores_native_actor_scheduler_spawn(
+            identity_scheduler, 0);
+        const auto child = ores_native_actor_scheduler_spawn(
+            identity_scheduler, 1);
+        check(parent.scheduler_domain && child.scheduler_domain,
+              "identity-mode bridge actors unavailable");
+        auto control = std::make_shared<SupervisorControlScheduler>(2, 16);
+        auto children = std::make_shared<
+            oreslang::runtime::SupervisorChildRegistry>(
+                9917, parent.scheduler_domain);
+        auto process = std::make_shared<SupervisorProcess>(
+            9917, parent.scheduler_domain, 4, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return std::nullopt;
+            },
+            [](const SupervisorProcess::Resolution&) {});
+        auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
+            identity_scheduler, parent, process, children);
+        bridge->register_child(child);
+        check(ores_native_actor_scheduler_stop(identity_scheduler, child)
+                  && ores_native_actor_scheduler_wait_done(
+                         identity_scheduler, child),
+              "identity child never physically finalized");
+        const OresNativeActorTerminalFailure failure{
+            ORES_NATIVE_CONTROL_PANIC, child, 811, 912
+        };
+        check(!bridge->on_panic(
+                  static_cast<std::size_t>(parent.actor_slot), failure),
+              "slot-only callback bypassed identity-mode PANIC boundary");
+        check(!bridge->on_panic(OresNativeActorRef{
+                  parent.scheduler_domain, parent.actor_slot,
+                  parent.generation + 1}, failure),
+              "forged parent generation bypassed PANIC boundary");
+        check(bridge->on_panic(parent, failure),
+              "identity-mode exact parent PANIC failed to route");
+        check(!bridge->on_panic(parent, failure),
+              "duplicate identity-mode PANIC replay was accepted");
+        bridge->fence_restart_publication();
+        bridge.reset();
+        process->close();
+        control->close();
+        ores_native_actor_scheduler_retire(identity_scheduler);
+        check(ores_native_actor_scheduler_drain(identity_scheduler)
+                  && ores_native_actor_scheduler_try_destroy(identity_scheduler),
+              "identity-mode bridge scheduler teardown failed");
+        std::puts("NATIVE_SUPERVISOR_IDENTITY_PANIC_FENCE_PASS"
+                  " slot_only=0 forged=0 exact=1 replay=0");
     }
 
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
