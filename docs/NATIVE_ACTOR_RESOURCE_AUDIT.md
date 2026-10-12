@@ -74,6 +74,20 @@ captured RAII retention, duplicate/foreign ticket rejection, and concurrent
 exactly-once completion. These targeted tests do **not** establish full LLVM
 compiler integration.
 
+## Additional type-safety audit
+
+Activity tickets now have a private constructor and can only be minted
+through `acquire_turn`, `acquire_loan` or `acquire_callback` on the
+owning trusted registry. Their actor incarnation and activity role are checked
+again at release. Compile-time tests reject default construction, aggregate
+construction, and public four-field construction. This is host-side type
+safety, **not** a cryptographic defense against arbitrary memory corruption.
+
+After these changes, exact Git-source tests passed GCC 14 C++17 Release
+(`-Wall -Wextra -Wpedantic -Werror`), GCC ASan/UBSan/LeakSanitizer, and
+Clang 17 Release `-Werror`. The full LLVM repository CMake/CTest and native
+actor runtime integration have **not** executed.
+
 ## Required before integration or merge
 
 1. The supervisor or owning actor runtime must keep the registry alive,
