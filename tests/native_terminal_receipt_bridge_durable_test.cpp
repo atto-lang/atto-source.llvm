@@ -205,6 +205,95 @@ int main() {
         }
         check(::unlink(path.c_str()) == 0, "journal unlink failed");
     }
+    // Simulate a trusted host losing its scheduler ACK after a one-use
+    // claim, but retaining both the scheduler and fsynced journal receipts.
+    // The proof-bound reconciliation must finish *both* ACKs, without
+    // dispatching SupervisorProcess or executing an effect a second time.
+    {
+        const std::string path = std::string(dir) + "/lost-scheduler-ack";
+        auto* s = ores_native_actor_scheduler_open_identity_control(
+            2, 2, 2, task, nullptr, panic, nullptr);
+        check(s != nullptr, "lost-ACK identity scheduler unavailable");
+        const auto parent = ores_native_actor_scheduler_spawn(s, 0);
+        const auto child = ores_native_actor_scheduler_spawn(s, 1);
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::atomic<unsigned> effects{0};
+        auto process = std::make_shared<SupervisorProcess>(
+            7903, parent.scheduler_domain, 4, control->adapter(),
+            [](const auto&) -> std::optional<SupervisorProcess::Directive> {
+                return SupervisorProcess::Directive::acknowledge;
+            },
+            [&](const auto&) { ++effects; });
+        auto registry = std::make_shared<SupervisorChildRegistry>(
+            process->supervisor_id(), parent.scheduler_domain);
+        auto journal = std::make_shared<NativeTerminalReceiptJournal>(path);
+        auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
+            s, parent, process, registry, journal);
+        bridge->register_child(child);
+        const auto logical =
+            registry->committed_transitions().front().state->child.logical_child_id;
+        stop_and_wait(s, child);
+        stop_and_wait(s, parent);
+        const OresNativeActorTerminalFailure failure{
+            ORES_NATIVE_CONTROL_PANIC, child, 553, 886
+        };
+        check(!ores_native_actor_scheduler_publish_failure(s, parent, failure),
+              "stopped parent admitted lost-ACK fixture");
+        OresNativeTerminalReceipt scheduler_claim{};
+        check(ores_native_actor_scheduler_claim_terminal_receipt(
+                  s, parent, child, &scheduler_claim),
+              "trusted host did not claim terminal scheduler receipt");
+        const auto key = DurableTerminalKey::from(
+            process->supervisor_id(), process->runtime_id(),
+            parent.scheduler_domain, parent.actor_slot, parent.generation,
+            child.scheduler_domain, child.actor_slot, child.generation,
+            failure.kind, failure.failure_code, failure.correlation,
+            logical, 1);
+        journal->record(key);
+        check(journal->record_physical_done(key, [&] {
+                  return ores_native_actor_scheduler_poll_done(s, child) != 0;
+              }), "lost-ACK physical DONE not proven");
+        const auto nonce = journal->claim(key);
+        ExternalEffectProof proof{key, nonce, {}};
+        for (unsigned i = 0; i < proof.evidence_sha256.size(); ++i)
+            proof.evidence_sha256[i] = static_cast<std::uint8_t>(i + 1);
+        bool verified = false;
+        check(!bridge->reconcile_durable_terminal_effect(
+                  proof, [&](const auto&) { return verified; }),
+              "unproven lost-ACK receipt incorrectly advanced");
+        OresNativeTerminalReceipt pending{};
+        check(ores_native_actor_scheduler_terminal_receipt(
+                  s, parent, child, &pending)
+                  && pending.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED,
+              "unproven scheduler ACK left quarantine");
+        verified = true; // trusted external commit ledger fixture, no new effect
+        check(bridge->reconcile_durable_terminal_effect(
+                  proof, [&](const auto& candidate) {
+                      return verified && candidate.key == key
+                          && candidate.nonce == nonce;
+                  }), "proof-bound reconciliation failed to persist both ACKs");
+        check(ores_native_actor_scheduler_terminal_receipt(
+                  s, parent, child, &pending)
+                  && pending.status == ORES_NATIVE_TERMINAL_RECEIPT_ACKNOWLEDGED
+                  && journal->inspect(key).phase
+                         == DurableTerminalPhase::acknowledged,
+              "proof-bound reconciliation did not coordinate scheduler and disk");
+        check(!bridge->reconcile_durable_terminal_effect(
+                  proof, [](const auto&) { return true; })
+                  && effects.load() == 0,
+              "completed ACK reran supervisor policy or effect");
+        bridge.reset();
+        process->close();
+        control->close();
+        shutdown(s);
+        journal.reset();
+        {
+            NativeTerminalReceiptJournal reopened(path);
+            check(reopened.inspect(key).phase == DurableTerminalPhase::acknowledged,
+                  "lost-ACK durable reconciliation did not survive reopen");
+        }
+        check(::unlink(path.c_str()) == 0, "lost-ACK journal unlink failed");
+    }
     check(::rmdir(dir) == 0, "journal test directory cleanup failed");
     std::puts("NATIVE_DURABLE_SUPERVISOR_BRIDGE_PASS"
               " original=1 recovered=1 off_carrier=0 claim_once=1"
