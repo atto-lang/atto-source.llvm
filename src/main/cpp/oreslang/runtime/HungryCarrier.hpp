@@ -4,6 +4,7 @@
 #include "oreslang/runtime/BoundedSpscQueue.hpp"
 #include "oreslang/runtime/ActorHeap.hpp"
 #include "oreslang/runtime/ParkingSignal.hpp"
+#include "oreslang/runtime/SupervisorControlTurn.hpp"
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -77,6 +78,9 @@ public:
     public:
         ProducerHandle() = default;
         bool try_send(ActorMessage message) const noexcept;
+        // Only wake after successful publication to a reserved slot.
+        // Uses the same shutdown gate as ordinary producers.
+        bool try_wake_control() const noexcept;
         explicit operator bool() const noexcept { return static_cast<bool>(gate_); }
     private:
         friend class HungryCarrier;
@@ -116,6 +120,9 @@ public:
         bool require_strict_no_gc = false;    // fail closed until compiler/allocator proof exists
         bool require_hard_realtime = false;   // fail closed until watchdog/OS proof exists
         std::optional<ActorHeapIdentity> heap_owner; // minted at supervisor admission
+        // Optional externally owned supervisor components; must outlive join.
+        oreslang::SupervisorControlTurn* supervisor_control = nullptr;
+        oreslang::SupervisorControlTurn::Hooks* supervisor_hooks = nullptr;
     };
     HungryCarrier(void* actor_state, ActorHandler handler, void* broker_state,
                   BrokerOperation operation, Options opts);
@@ -159,6 +166,7 @@ private:
     bool pop_next_input(ActorMessage& message) noexcept;
     bool try_send_spsc(std::size_t lane, ActorMessage message) noexcept;
     bool enqueue_mpsc(ActorMessage message) noexcept;
+    bool wake_control() noexcept;
     bool pin_cpu() noexcept;
 
     void* actor_state_;
