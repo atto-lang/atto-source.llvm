@@ -661,7 +661,7 @@ int main() {
 
     // True scheduler-backed RESTART admission and shutdown fencing. The
     // replacement must be physically READY, not just a fresh actor number.
-    for (int mode = 0; mode < 5; ++mode) {
+    for (int mode = 0; mode < 6; ++mode) {
         auto* runtime = ores_native_actor_scheduler_open_typed_control(
             3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
         check(runtime != nullptr, "restart proof scheduler startup failed");
@@ -819,7 +819,7 @@ int main() {
             check(closed == 1 && cleanup == 1 && aborts == 1 && commits == 0,
                   "shutdown RESTART journal violated cleanup-before-abort");
             std::puts("NATIVE_SUPERVISOR_RESTART_SHUTDOWN_E2E_PASS admitted=1 closed=1 cleaned=1 aborted=1 committed=0");
-        } else {
+        } else if (mode == 4) {
             // Reclaim a failed, never-published candidate only AFTER exact
             // physical DONE and registry cleanup. A subsequent RESTART may
             // reuse the *same slot* with a fresh generation, without ever
@@ -861,6 +861,58 @@ int main() {
                   "new incarnation failed physical teardown");
             bridge->fence_restart_publication();
             std::puts("NATIVE_SUPERVISOR_RECYCLED_RESTART_PASS old_gen=1 new_gen=2 cleanup=1 admitted=1");
+        } else {
+            // Race a logical CONTROL close against final physical recycling.
+            // Either operation may win, but a closed supervisor must never
+            // revive the old incarnation, and a successful new hidden
+            // candidate must remain owned by the caller for physical cleanup.
+            children->stage_replacement(ticket, replacement);
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "close/recycle candidate did not reach physical DONE");
+            std::atomic<bool> go{false};
+            std::atomic<bool> was_recycled{false};
+            std::atomic<bool> rejected_recycle{false};
+            std::atomic<std::uint64_t> new_generation{0};
+            std::thread recycler([&] {
+                while (!go.load()) std::this_thread::yield();
+                try {
+                    auto next = bridge->abort_cleaned_and_recycle_unpublished(
+                        ticket, replacement);
+                    was_recycled.store(next.scheduler_domain != 0);
+                    new_generation.store(next.generation);
+                } catch (const std::logic_error&) {
+                    rejected_recycle.store(true);
+                }
+            });
+            std::thread closer([&] {
+                while (!go.load()) std::this_thread::yield();
+                bridge->fence_restart_publication();
+            });
+            go.store(true);
+            recycler.join();
+            closer.join();
+            check(children->snapshot(child.child).phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "raced cleanup lost old logical finalized identity");
+            check(!ores_native_actor_scheduler_poll_ready(runtime, replacement)
+                      && !ores_native_actor_scheduler_send(runtime, replacement, 95),
+                  "raced recycle revived old-generation ActorRef");
+            if (was_recycled.load()) {
+                auto next = OresNativeActorRef{
+                    replacement.scheduler_domain, replacement.actor_slot,
+                    new_generation.load()};
+                check(next.generation == replacement.generation + 1
+                          && !ores_native_actor_scheduler_poll_published(runtime, next)
+                          && ores_native_actor_scheduler_stop(runtime, next)
+                          && ores_native_actor_scheduler_wait_done(runtime, next),
+                      "raced-close returned live candidate without host cleanup");
+            } else {
+                check(rejected_recycle.load()
+                          && ores_native_actor_scheduler_poll_done(runtime, replacement),
+                      "fenced close either lost abort or accepted hidden reincarnation");
+            }
+            std::puts("NATIVE_SUPERVISOR_RECYCLE_CLOSE_RACE_PASS finalized=1 stale=1");
         }
         bridge.reset();
         process->close();
