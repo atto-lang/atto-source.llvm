@@ -338,6 +338,7 @@ int ores_native_actor_scheduler_publish_control(
     if (!s) return 0;
     lock(s);
     int ok = !s->retired && s->control_callback && matching(s, parent)
+        && s->actors[parent.actor_slot].published
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
         && s->accepted != UINT64_MAX;
@@ -373,6 +374,7 @@ int ores_native_actor_scheduler_publish_failure(
     if (attempted)
         s->actors[failure.child.actor_slot].failure_attempted = 1;
     int ok = attempted && !s->retired
+        && s->actors[parent.actor_slot].published
         && !s->actors[failure.child.actor_slot].failure_published
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
