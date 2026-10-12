@@ -1,5 +1,22 @@
 # Bounded formal single-flow pipeline model
 
+## Two-flow correlated admission model (new experimental API)
+
+`ConcurrentPipelineFlows.tla` models two independently keyed flows across five
+directional admission hops, including reservation, publication,
+per-flow cancellation and completion. The safe config intentionally permits
+terminal quiescence (`CHECK_DEADLOCK FALSE`). It checks no late admission,
+no duplicate accounting, no pending reservation on terminal states and
+no premature completion. Both late-publish and double-commit mutant configs
+must produce counterexamples.
+
+This is a bounded **host-state abstraction** only: it does not yet prove
+`SourcePipelineFlows.c` refines TLA+, much less the production
+`SourceActorBootstrap` callback/worker/credit integration. Physical
+delivered-versus-admitted state, graph routing, fairness, futures and
+incarnation restarts remain separate models/tests. CI must test exact source
+blobs and use positive + deliberate-negative model checks.
+
 \`LinearPipelineSingleFlow.tla\` is a TLC-executable safety model of the
 fixed root → source → transform → sink → transform → source admission
 protocol currently used by the initial Java/GraalVM and LLVM pipeline slices.
@@ -45,21 +62,3 @@ into actor references. General untrusted cross-context capabilities need
 runtime-minted authority and context binding, not merely guess-resistant IDs.
 This model does not prove C11 memory-order refinement, general `Future<T>`
 continuations or multi-flow routing.
-
-
-## Two-flow correlated admission model (new experimental API)
-
-`ConcurrentPipelineFlows.tla` models two independently keyed flows across five
-directional admission hops, including reservation, publication,
-per-flow cancellation and completion. The safe config intentionally permits
-terminal quiescence (`CHECK_DEADLOCK FALSE`). It checks no late admission,
-no duplicate accounting, no pending reservation on terminal states and
-no premature completion. Both late-publish and double-commit mutant configs
-must produce counterexamples.
-
-This is a bounded **host-state abstraction** only: it does not yet prove
-`SourcePipelineFlows.c` refines TLA+, much less the production
-`SourceActorBootstrap` callback/worker/credit integration. Physical
-delivered-versus-admitted state, graph routing, fairness, futures and
-incarnation restarts remain separate models/tests. CI must test exact source
-blobs and use positive + deliberate-negative model checks.
