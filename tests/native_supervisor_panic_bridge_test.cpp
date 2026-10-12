@@ -782,10 +782,22 @@ int main() {
             check(ores_native_actor_scheduler_stop(runtime, replacement)
                       && ores_native_actor_scheduler_wait_done(runtime, replacement),
                   "shutdown replacement could not physically clean up");
-            const auto restored = bridge->abort_cleaned_replacement(ticket, replacement);
-            check(restored.phase ==
-                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
-                  "shutdown cleanup did not release the old generation");
+            // Aborting a failed candidate must still work after CONTROL
+            // shutdown, but the bridge must NOT revive a hidden physical
+            // generation after its parent supervisor is already closed.
+            bool post_close_recycle_rejected = false;
+            try {
+                (void) bridge->abort_cleaned_and_recycle_unpublished(
+                    ticket, replacement);
+            } catch (const std::logic_error&) {
+                post_close_recycle_rejected = true;
+            }
+            const auto restored = children->snapshot(child.child);
+            check(post_close_recycle_rejected
+                      && restored.phase ==
+                          oreslang::runtime::SupervisorChildRegistry::Phase::finalized
+                      && ores_native_actor_scheduler_poll_done(runtime, replacement),
+                  "closed CONTROL either revived a candidate or lost safe abort");
             check(!ores_native_actor_scheduler_poll_published(runtime, replacement)
                       && !ores_native_actor_scheduler_send(runtime, replacement, 42),
                   "shutdown leaked an externally routable replacement");
