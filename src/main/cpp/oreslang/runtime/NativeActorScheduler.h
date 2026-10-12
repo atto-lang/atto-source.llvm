@@ -46,6 +46,12 @@ OresNativeActorRef ores_native_actor_scheduler_spawn_unpublished(
 int ores_native_actor_scheduler_acquire_restart_lease(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     OresNativeRestartLease* out);
+/* Pins an ALREADY published initial actor across logical supervisor
+ * registration, using the same STOP/retirement exclusion. This lease cannot
+ * publish RESTART and must be released on its acquiring host thread. */
+int ores_native_actor_scheduler_acquire_registration_lease(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeRestartLease* out);
 /* Called only AFTER logical identity/routing publication while the lease is
  * held; makes the physical lane externally routable. */
 int ores_native_actor_scheduler_publish_restart_lease(
