@@ -631,6 +631,20 @@ if(BUILD_TESTING)
     # implement the actor scheduler or certify lock-free mailbox delivery.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         find_package(Threads REQUIRED)
+        # Real joined carrier is the sole issuer of retirement proofs.
+        add_executable(oreslang-actor-graph-heap-test
+            tests/actor_owned_graph_heap_test.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-actor-graph-heap-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-actor-graph-heap-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-actor-graph-heap-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_actor_owned_cyclic_graph_heap
+            COMMAND oreslang-actor-graph-heap-test)
+        set_tests_properties(native_actor_owned_cyclic_graph_heap PROPERTIES TIMEOUT 15)
+
         add_executable(oreslang-parking-signal-test
             tests/parking_signal_test.cpp
             src/main/cpp/oreslang/runtime/ParkingSignal.cpp)

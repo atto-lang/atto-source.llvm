@@ -35,6 +35,21 @@ jobs:
           UBSAN_OPTIONS=halt_on_error=1 \
             ./build/hungry-carrier-sanitized
 
+      - name: Sanitized actor-owned generational graph heap
+        run: |
+          clang++ -std=c++17 -O1 -g \
+            -Wall -Wextra -Wpedantic -Werror -fno-omit-frame-pointer \
+            -fsanitize=address,undefined \
+            -I src/main/cpp \
+            tests/actor_owned_graph_heap_test.cpp \
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp \
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp \
+            -pthread \
+            -o build/actor-owned-graph-heap-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/actor-owned-graph-heap-sanitized
+
       - name: ThreadSanitizer actor data-race stress
         run: |
           g++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \
