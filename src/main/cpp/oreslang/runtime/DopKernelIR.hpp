@@ -2,7 +2,9 @@
 
 #include "oreslang/runtime/DopLayout.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include <climits>
 #include <cmath>
+#include <limits>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
@@ -14,6 +16,10 @@
 #include <vector>
 
 namespace oreslang::dop {
+
+static_assert(CHAR_BIT == 8, "DOP byte offsets require 8-bit bytes");
+static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559,
+              "native F32 DOP requires IEEE-754 binary32 storage");
 
 // The executable CPU lowering and emitted OpenCL source share one typed IR.
 // Device execution is a separate, explicit capability; no CPU fallback.
