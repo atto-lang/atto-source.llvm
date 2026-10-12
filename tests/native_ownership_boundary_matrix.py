@@ -34,6 +34,10 @@ cases = {
     "borrow of temporary": (
         "fnc view(borrow int x): int { return x; } pub fnc main(): int { return view(rt borrow (40 + 2)); }",
         "native borrow requires an addressable named int parameter"),
+    "const local cannot gain exclusive loan": (
+        "fnc mutate(borrow mut int x): int { return x; } "
+        "pub fnc main(): int { const fixed: int = 42; return mutate(rt borrow mut fixed); }",
+        "cannot mutably borrow immutable owner"),
     "immutable/exclusive conflict": (
         "fnc join(borrow int a, borrow mut int b): int { return a + b; } "
         "fnc invoke(int x): int { return join(rt borrow x, rt borrow mut x); }",

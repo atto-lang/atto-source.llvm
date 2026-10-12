@@ -333,6 +333,9 @@ private:
                     binding.move_class = true;
                 }
             } else {
+                // A val owns mutable scalar storage; const permits only shared
+                // loans. Preserve the distinction for native ownership checks.
+                binding.owner_mutable = token_.text == "val";
                 advance();
                 binding.name = identifier();
                 // Distinguish actor capabilities from scalar data before IR.
