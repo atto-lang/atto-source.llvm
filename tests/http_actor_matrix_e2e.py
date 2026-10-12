@@ -85,7 +85,7 @@ def main():
     assert "gc.statepoint" not in ir and "gc.relocate" not in ir
     kernel_ir = subprocess.run([args.compiler, args.kernel_fixture],
                                check=True, capture_output=True, text=True, timeout=25).stdout
-    assert "@counter_value(" in kernel_ir
+    assert "@counter_response(" in kernel_ir
     # Two independent source programs both expose a main() entry. Avoid a
     # collision while retaining the public counter_value guest ABI.
     assert "@main(" in kernel_ir
