@@ -65,9 +65,11 @@ int main() {
         require(seen == ((1u << known.size()) - 1u),
                 "effect flags must form the reviewed contiguous bit range");
 
-        for (std::string_view spelling : {
-                std::string_view{}, "unknown", "state", "state.READ",
-                "state.read ", "PANIC", "panic\\0extra"}) {
+        const std::array<std::string_view, 7> invalid{{
+            std::string_view{}, "unknown", "state", "state.READ",
+            "state.read ", "PANIC", std::string_view{"panic\\0extra", 11}
+        }};
+        for (std::string_view spelling : invalid) {
             bool rejected = false;
             try {
                 (void) FunctionEffects::parse(spelling);
