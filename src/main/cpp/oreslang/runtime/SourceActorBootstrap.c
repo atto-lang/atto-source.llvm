@@ -1001,8 +1001,9 @@ int32_t oreslang_source_actor_pipeline_expect_status(void* source,
     return status;
 }
 void oreslang_source_actor_pipeline_cancel(void* source) {
-    /* Publish cancellation while the registry identity is still held.
-     * An old source capability cannot cancel a newly bound pipeline. */
+    /* Cancellation and DATA publication use the same group mutex: neither
+     * can overtake the other once admitted. Verify live token identity under
+     * that barrier so an old source cannot cancel a new pipeline. */
     group_lock();
     SourceActor* actor = source_resolve_locked(source);
     if (actor && actor == group.pipeline_source) {

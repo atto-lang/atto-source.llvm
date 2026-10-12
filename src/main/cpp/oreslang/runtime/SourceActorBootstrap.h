@@ -139,6 +139,7 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
  * 7 explicit cancellation. Unlike expect(), this never aborts. */
 int32_t oreslang_source_actor_pipeline_expect_status(void* source,
                                                     int64_t expected);
+/* Trusted-main cancellation shares the final DATA-publication mutex. */
 void oreslang_source_actor_pipeline_cancel(void* source);
 /* Legacy fatal assertion ABI. Guest code uses expect_status and returns
  * a nonzero process result only AFTER stopping every pipeline actor. */
