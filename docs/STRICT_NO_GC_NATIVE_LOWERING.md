@@ -59,3 +59,12 @@ runs native executable and negative parser/ownership CTest fixtures, then
 inspects emitted IR for lifetime intrinsics and absence of GC statepoints,
 `malloc` and `free` calls for the scalar example. Preserve these gates
 when extending the compiler to arrays, structs, classes and actors.
+
+## Current ownership admission
+
+`owned` is not a shared-language keyword. Region-backed `owned int` is test-only
+and requires `--experimental-owned-int`; ordinary `int` is Copy. Region slots
+use `OresOwnedI64Handle` with monotonically unique tokens, not raw slot indices.
+Slot reuse cannot revive a dropped token. Borrowed class fields and terminal
+try/finally use the current ownership CFG checks; unsupported effects still
+reject before IR. See NATIVE_OWNED_SCALAR_HEAP.md for the exact experimental boundary.

@@ -1,20 +1,10 @@
-// Immutable source actor fields persisted in a native ActorId heap.
+// Scalar actor storage survives separate admitted turns, with one ingress.
 define actor Counter as {
   const base: int = 40;
   val delta: int = 2;
   let total: int = 0;
-  pub fnc read(): int {
-    return base + delta;
-  }
-  pub fnc add(int n): int {
+  pub fnc on_message(int n): int {
     total = total + base + delta + n;
     return total;
-  }
-  pub fnc total_value(): int {
-    return total;
-  }
-  pub fnc plus(int n): int {
-    const local: owned int = base + delta;
-    return local + n;
   }
 }

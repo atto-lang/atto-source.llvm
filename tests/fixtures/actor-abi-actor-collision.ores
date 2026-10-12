@@ -1,8 +1,8 @@
-define actor A_B as {
+define actor Counter as {
   const value: int = 40;
-  pub fnc c(): int { return value; }
+  pub fnc on_message(int message): int { return value; }
 }
-define actor A as {
+define actor Counter as {
   const value: int = 2;
-  pub fnc B_c(): int { return value; }
+  pub fnc on_message(int message): int { return value; }
 }

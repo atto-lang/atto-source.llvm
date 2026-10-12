@@ -16,9 +16,12 @@ and remains alive across admitted actor turns and physical carrier migration.
 - `new/read/write/drop`: actor-turn-only access to i64 slots through
   generational non-pointer handles. Erase zeros the slot and invalidates the
   old generation. Outstanding loans prevent drop.
-- `borrow`: creates a bounded unique loan token that survives
+- `borrow`: creates a bounded **shared, read-only** loan token that survives
   `leave` and may represent a suspended continuation or FFI lease.
-  A loan alone cannot dereference data; it must resume an admitted turn.
+  Until all loans against a slot release, `write` and `drop` both fail closed,
+  including during a later resumed turn on a different carrier. Independent
+  slots remain writable. A loan alone cannot dereference data; it must resume
+  an admitted turn. Mutable/exclusive borrow is **not yet supported**.
 - `retire`: fences new turns/guest access immediately. In-flight turns
   can still `leave`, and outstanding loans may still release.
 - `try_destroy`: returns pending while an admitted turn or lease exists.

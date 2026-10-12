@@ -149,6 +149,9 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* target = checked_slot(heap, slot);
+    /* A suspended shared read loan still freezes the referent: a new actor
+     * turn is not permission to mutate it. Mutable loans need a separate
+     * exclusive API and source-level alias proof. */
     if (target->fixed_field || target->loans != 0) rejected();
     target->value = value;
     unlock_heap(heap);

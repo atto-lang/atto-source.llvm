@@ -1,6 +1,6 @@
 define actor Counter as {
   let value: int = 40;
-  pub fnc bad(): int {
+  pub fnc on_message(int message): int {
     ghost = 41;
     return value;
   }
