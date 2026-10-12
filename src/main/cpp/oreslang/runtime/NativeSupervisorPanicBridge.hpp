@@ -287,6 +287,23 @@ public:
             resolution.turn_generation);
     }
 
+    /**
+     * Host-only, one-use callback-entry claim for externally implemented STOP
+     * effects. The caller must invoke this immediately before the actual host
+     * effect, not during reservation and not after the acknowledgment.
+     * This never treats the invocation as proof of effect success.
+     */
+    void claim_finalized_stop_host_invocation(
+            const SupervisorProcess::Resolution& resolution) {
+        const auto key = validated_stop_child(resolution);
+        const OresNativeActorRef actor{resolution.notice.runtime_id,
+                                      resolution.notice.actor_id,
+                                      resolution.notice.generation};
+        child_registry_->claim_host_stop_invocation(
+            key, actor, resolution.notice.logical_incarnation,
+            resolution.turn_generation);
+    }
+
     /** Commit STOP disposition only for an already reserved exact turn. */
     SupervisorChildRegistry::Snapshot acknowledge_finalized_stop(
             const SupervisorProcess::Resolution& resolution) {
