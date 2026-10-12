@@ -182,6 +182,46 @@ int main() {
     )", "requires a portable nested enum wire codec");
     rejects("define enum Foo as Message1: Missing end",
             "unknown enum payload type: Missing");
+    // Bounded model check: all 2^9 directed 3-enum dependency graphs.
+    // Compare compiler cycle rejection against independent transitive closure.
+    for (unsigned mask = 0; mask < (1u << 9); ++mask) {
+        bool edges[3][3] = {};
+        std::string generated;
+        for (unsigned i = 0; i < 3; ++i) {
+            generated += "define enum E" + std::to_string(i) + " as Empty";
+            for (unsigned j = 0; j < 3; ++j) {
+                if (mask & (1u << (i * 3 + j))) {
+                    edges[i][j] = true;
+                    generated += " To" + std::to_string(j) + ": E" + std::to_string(j);
+                }
+            }
+            generated += " end\\n";
+        }
+        for (unsigned k = 0; k < 3; ++k)
+            for (unsigned i = 0; i < 3; ++i)
+                for (unsigned j = 0; j < 3; ++j)
+                    edges[i][j] = edges[i][j] || (edges[i][k] && edges[k][j]);
+        bool cycle = edges[0][0] || edges[1][1] || edges[2][2];
+        bool rejectedCycle = false;
+        try {
+            (void)parse_program(generated);
+        } catch (const std::runtime_error& err) {
+            const std::string diagnostic = err.what();
+            rejectedCycle = diagnostic.find("unboxed recursive enum payload") != std::string::npos;
+            if (!rejectedCycle
+                    && diagnostic.find("requires a portable nested enum wire codec")
+                        == std::string::npos) {
+                std::cerr << "unexpected dependency diagnostic for mask "
+                          << mask << ": " << diagnostic << "\\n";
+                std::abort();
+            }
+        }
+        if (cycle != rejectedCycle) {
+            std::cerr << "enum dependency closure mismatch mask " << mask << "\\n";
+            std::abort();
+        }
+    }
+
     rejects(R"(
         define enum Foo as Message1 = 1 end
         define enum Foo as Message1: Foo end
