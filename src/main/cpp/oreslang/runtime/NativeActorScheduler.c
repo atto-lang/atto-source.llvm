@@ -43,6 +43,10 @@ struct OresNativeActorScheduler {
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
+/* Only the acquiring host thread may release a restart lease. In particular,
+ * it must not synchronously STOP/retire the same scheduler: pthread normal
+ * mutexes are not recursive and would deadlock on that reentry. */
+static _Thread_local OresNativeActorScheduler* owned_restart_lease;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
 static void lock(OresNativeActorScheduler* s) {
@@ -173,7 +177,6 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         goto allocation_failed;
     }
     if (pthread_mutex_init(&s->restart_publication_gate, NULL) != 0) {
-        pthread_mutex_destroy(&s->restart_publication_gate);
         pthread_cond_destroy(&s->drained);
         pthread_cond_destroy(&s->ready);
         pthread_mutex_destroy(&s->lock);
@@ -185,6 +188,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     if (started != workers) {
         ores_native_actor_scheduler_retire(s);
         for (size_t i = 0; i < started; ++i) pthread_join(s->threads[i], NULL);
+        pthread_mutex_destroy(&s->restart_publication_gate);
         pthread_cond_destroy(&s->drained);
         pthread_cond_destroy(&s->ready);
         pthread_mutex_destroy(&s->lock);
@@ -266,7 +270,7 @@ OresNativeActorRef ores_native_actor_scheduler_spawn_unpublished(
 int ores_native_actor_scheduler_acquire_restart_lease(
     OresNativeActorScheduler* s, OresNativeActorRef actor,
     OresNativeRestartLease* out) {
-    if (!s || !out) return 0;
+    if (!s || !out || owned_restart_lease) return 0;
     /* The gate stays held only by the acquiring trusted host thread.
      * STOP and whole-scheduler retirement take this same gate first. */
     if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
@@ -280,6 +284,7 @@ int ores_native_actor_scheduler_acquire_restart_lease(
         ActorLane* a = &s->actors[actor.actor_slot];
         a->restart_lease_nonce = ++s->next_restart_lease_nonce;
         a->restart_lease_owner = pthread_self();
+        owned_restart_lease = s;
         out->actor = actor;
         out->nonce = a->restart_lease_nonce;
     }
@@ -296,7 +301,7 @@ static int matches_restart_lease(OresNativeActorScheduler* s,
 }
 int ores_native_actor_scheduler_publish_restart_lease(
     OresNativeActorScheduler* s, OresNativeRestartLease lease) {
-    if (!s) return 0;
+    if (!s || owned_restart_lease != s) return 0;
     lock(s);
     int ok = matches_restart_lease(s, lease) && !s->retired
         && !s->actors[lease.actor.actor_slot].retired
@@ -307,12 +312,15 @@ int ores_native_actor_scheduler_publish_restart_lease(
 }
 int ores_native_actor_scheduler_release_restart_lease(
     OresNativeActorScheduler* s, OresNativeRestartLease lease) {
-    if (!s) return 0;
+    if (!s || owned_restart_lease != s) return 0;
     lock(s);
     int ok = matches_restart_lease(s, lease);
     if (ok) s->actors[lease.actor.actor_slot].restart_lease_nonce = 0;
     unlock(s);
-    if (ok && pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+    if (ok) {
+        owned_restart_lease = NULL;
+        if (pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+    }
     return ok;
 }
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
@@ -402,7 +410,7 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
 }
 int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor) {
-    if (!s) return 0;
+    if (!s || owned_restart_lease == s) return 0;
     if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
     lock(s);
     int ok = matching(s, actor) && !s->actors[actor.actor_slot].retired;
@@ -469,7 +477,9 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
     return 1;
 }
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
-    if (!s) abort();
+    /* This API has no error return. Fail closed instead of deadlocking a
+     * trusted host thread that already holds the scheduler publication gate. */
+    if (!s || owned_restart_lease == s) abort();
     if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
     lock(s);
     s->retired = 1;
@@ -487,7 +497,7 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     return 1;
 }
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
-    if (!s || executing == s) return 0;
+    if (!s || executing == s || owned_restart_lease == s) return 0;
     if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
     lock(s);
     int ready = s->retired && !s->outstanding;
