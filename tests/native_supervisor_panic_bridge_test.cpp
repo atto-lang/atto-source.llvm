@@ -980,7 +980,7 @@ int main() {
     {
         auto* identity_scheduler =
             ores_native_actor_scheduler_open_identity_control(
-                2, 2, 2,
+                3, 2, 2,
                 [](void*, OresNativeActorRef, std::uint64_t) {},
                 nullptr,
                 [](void*, OresNativeActorRef,
@@ -992,7 +992,10 @@ int main() {
             identity_scheduler, 0);
         const auto child = ores_native_actor_scheduler_spawn(
             identity_scheduler, 1);
-        check(parent.scheduler_domain && child.scheduler_domain,
+        const auto second_child = ores_native_actor_scheduler_spawn(
+            identity_scheduler, 2);
+        check(parent.scheduler_domain && child.scheduler_domain
+                  && second_child.scheduler_domain,
               "identity-mode bridge actors unavailable");
         auto control = std::make_shared<SupervisorControlScheduler>(2, 16);
         auto children = std::make_shared<
@@ -1008,6 +1011,7 @@ int main() {
         auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
             identity_scheduler, parent, process, children);
         bridge->register_child(child);
+        bridge->register_child(second_child);
         check(ores_native_actor_scheduler_stop(identity_scheduler, child)
                   && ores_native_actor_scheduler_wait_done(
                          identity_scheduler, child),
@@ -1026,6 +1030,21 @@ int main() {
               "identity-mode exact parent PANIC failed to route");
         check(!bridge->on_panic(parent, failure),
               "duplicate identity-mode PANIC replay was accepted");
+        // A retained callback with the CORRECT old parent generation must
+        // still fail if the physical parent has already STOPPED. Verify
+        // rejection BEFORE child routing is consumed for a second actor.
+        check(ores_native_actor_scheduler_stop(identity_scheduler, second_child)
+                  && ores_native_actor_scheduler_wait_done(
+                         identity_scheduler, second_child)
+                  && ores_native_actor_scheduler_stop(identity_scheduler, parent)
+                  && ores_native_actor_scheduler_wait_done(identity_scheduler, parent),
+              "retired-parent probe failed physical DONE prerequisites");
+        const auto before_reject = bridge->registered_children();
+        check(before_reject == 1
+                  && !bridge->on_panic(parent, OresNativeActorTerminalFailure{
+                      ORES_NATIVE_CONTROL_PANIC, second_child, 813, 914})
+                  && bridge->registered_children() == before_reject,
+              "stale retired parent callback consumed an active child identity");
         bridge->fence_restart_publication();
         bridge.reset();
         process->close();
