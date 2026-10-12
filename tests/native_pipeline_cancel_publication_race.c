@@ -8,7 +8,9 @@
  * main after it validates and copies the root's MessagePack envelope, but
  * before the actual bounded scheduler DATA enqueue. A second OS thread
  * publishes terminal cancellation while main is paused. The resumed root
- * must observe terminal status 7 and MUST NOT submit even one DATA turn.
+ * must observe terminal status 7 and MUST NOT submit late DATA. The
+ * ORESLANG_CANCEL_RACE_FORWARD_HOP build variant pauses the first actor's
+ * downstream emit instead of trusted-main initial ingress.
  */
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include <pthread.h>
@@ -54,7 +56,12 @@ void __wrap_oreslang_source_actor_pipeline_connect_many(
 
 void oreslang_source_actor_test_before_pipeline_publish(
     void* actor, unsigned direction) {
-    if (actor != source || direction != 0) return;
+#ifdef ORESLANG_CANCEL_RACE_FORWARD_HOP
+    const unsigned target_direction = 1;
+#else
+    const unsigned target_direction = 0;
+#endif
+    if (actor != source || direction != target_direction) return;
     if (pthread_mutex_lock(&gate) != 0) abort();
     if (publication_waiting) abort();
     publication_waiting = 1;
