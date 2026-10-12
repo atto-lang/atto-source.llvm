@@ -1,10 +1,10 @@
-> **PRE-1.0 BREAKING UPDATE (2026-10-12):** The normative actor-state callback
-> forms are now `critical read |s| -> ...` and `critical write |s| -> ...`.
-> Bare `critical |s| -> ...` and implicit serial-mode admission are removed.
-> `using` remains an effect *upper bound* and never grants read/write authority.
-> For current requirements, see [CRITICAL_RW_USING_CONTRACT.md](CRITICAL_RW_USING_CONTRACT.md).
-> Historical examples below document earlier milestones and are **superseded**
-> wherever they conflict with the new contract.
+> **SUPERSEDED HISTORICAL CONTRACT — pre-1.0 (2026-10-12):**
+> This document preserves older designs for audit history, NOT for implementation.
+> Current normative rules are in [WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md).
+> `with` declares function effect bounds, `using` acquires scoped capabilities,
+> plain `self.handle_state(|s| -> ...)` reads, and `critical |s| -> ...`
+> acquires exclusive write access. Both `using` and `handle_state` are
+> first-class supported forms. All contradictory examples below are obsolete.
 
 # Critical handle_state and using — shared Java/Graal and LLVM language contract
 
