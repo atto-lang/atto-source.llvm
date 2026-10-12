@@ -212,6 +212,18 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
+    # Optional instance method marker: fnc, method, and no marker all lower
+    # to the same native supported on_message(int) handler.
+    oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores
+        --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(native_contextual_method_identifier contextual-method-identifier.ores
+        --ir "ret i64")
+    oreslang_contract_test(native_actor_bare_method source-actor-bare-method.ores
+        --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
+        --diagnostic "native suspends actor method requires continuation lowering")
+    oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
+        --diagnostic "native final actor fields require typed field initialization and ownership lowering")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
     oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "native async/channel/select boundary unsupported")

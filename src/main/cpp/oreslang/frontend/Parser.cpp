@@ -186,12 +186,21 @@ private:
             require(";");
             actor.fields.push_back(std::move(field));
         }
+        if (token_.text == "final") {
+            fail("native final actor fields require typed field initialization and ownership lowering");
+        }
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
         if (!method.exported) fail("native actor requires pub on_message(int)");
-        require("fnc");
+        // Match the Java frontend's declaration spelling contract. The native
+        // actor subset still lowers only on_message(int) and cannot admit
+        // arbitrary methods, static fnc members or suspension frames.
+        if (token_.text == "suspend" || token_.text == "suspends") {
+            fail("native suspends actor method requires continuation lowering");
+        }
+        if (!accept("fnc")) accept("method"); // optional method marker
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
