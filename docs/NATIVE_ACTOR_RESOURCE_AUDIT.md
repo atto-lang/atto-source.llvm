@@ -131,6 +131,37 @@ can defeat quiescence. The actor compiler and all concrete native resource
 paths are not yet wired to this host bridge. Full CMake/CTest and native
 sanitizers on the combined PR tree remain required before any merge.
 
+## October 12 destructor and quarantine-overflow audit
+
+The actor-retirement barrier now treats lost registry ownership as
+**non-evidence** of quiescence. Destroying a LIVE, RETIRING or FAILED registry
+while it still has registered native resource closures or quarantined captures
+must not trigger RAII teardown of memory reachable by an unrevoked callback.
+Its fail-closed destructor intentionally retains those captures for process
+lifetime rather than introducing a use-after-free. If allocation of the
+emergency retention object fails, the process terminates instead of freeing
+unsafe ownership. This is an emergency safety fallback, not an ordinary
+reclamation strategy: applications must bound quarantine pressure and restart
+or retire unhealthy isolates. An emergency-retained registry may consume
+memory until process termination.
+
+Verified isolation shutdown uses
+`NativeActorResourceQuarantine::release_after_verified_isolate_shutdown()`
+to discharge the bounded quarantine without retrying resource closers. The
+quarantine is thereafter sealed against new holders. Previously overflowed
+registry ownership can be discharged using the trusted
+`release_overflow_after_verified_isolate_shutdown()` operation, also without
+retrying a closer. Once that proof is available, the barrier may settle the
+overflowed actor's `get_done()` **exceptionally** instead of leaving it
+pending forever. A failed resource revocation must never produce successful
+DONE, including after isolate shutdown.
+
+Regression `native_actor_retirement_barrier_test.cpp` covers premature
+overflow discharge rejection, sealed quarantine, verified-discharge terminal
+failure and no retry of already attempted FFI closes. These exact new changes
+still require executable full CMake/CTest and native sanitizer CI on an
+authorized runner.
+
 ## Required before integration or merge
 
 1. The supervisor or owning actor runtime must keep the registry alive,
