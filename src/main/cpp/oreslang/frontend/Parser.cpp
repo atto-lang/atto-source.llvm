@@ -139,10 +139,11 @@ public:
                 program.actors.push_back(actor());
             } else if (accept("enum")) {
                 program.enums.push_back(tagged_enum());
-            } else if (accept("pattern")) {
+            } else if (accept("match")) {
+                require("pattern");
                 program.tagged_patterns.push_back(tagged_pattern());
             } else {
-                fail("expected 'module', 'actor', 'enum' or 'pattern'");
+                fail("expected 'module', 'actor', 'enum' or 'match pattern'");
             }
         }
         while (token_.kind != Kind::End
@@ -152,8 +153,11 @@ public:
             } else if (accept("define")) {
                 if (accept("actor")) program.actors.push_back(actor());
                 else if (accept("enum")) program.enums.push_back(tagged_enum());
-                else if (accept("pattern")) program.tagged_patterns.push_back(tagged_pattern());
-                else fail("expected 'actor', 'enum' or 'pattern'");
+                else if (accept("match")) {
+                    require("pattern");
+                    program.tagged_patterns.push_back(tagged_pattern());
+                }
+                else fail("expected 'actor', 'enum' or 'match pattern'");
             } else {
                 program.functions.push_back(function());
             }

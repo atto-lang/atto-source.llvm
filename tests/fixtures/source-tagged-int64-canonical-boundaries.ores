@@ -7,7 +7,7 @@ define enum Numbers as
     Sub: int = 2
 end
 
-define pattern NumberMail as
+define match pattern NumberMail as
     Numbers.Sub
     Numbers.Add
 end

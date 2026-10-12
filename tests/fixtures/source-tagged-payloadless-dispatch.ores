@@ -7,7 +7,7 @@ end
 
 // Reordered domains MUST have the same domain fingerprint but keep
 // callback ordinals tied to this source order.
-define pattern WorkerMessages as
+define match pattern WorkerMessages as
     Signals.Pong
     Signals.Ping
     Signals.Stop

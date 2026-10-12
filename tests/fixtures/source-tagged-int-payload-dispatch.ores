@@ -8,7 +8,7 @@ define enum Signals as
     Sub: int = 3
 end
 
-define pattern WorkerMessages as
+define match pattern WorkerMessages as
     Signals.Sub
     Signals.Ping
     Signals.Add

@@ -30,3 +30,8 @@ The fifteen-stage tests execute all three spellings through compiled Oreslang
 handlers, with fourteen forward and fourteen backward hops and terminal result
 30. The inline-spawn tests execute three stages and verify terminal result 19.
 No handwritten guest handler is substituted.
+
+Message domains use `define match pattern Messages as ... end`. The old
+`define pattern` spelling is rejected in this LLVM frontend. See
+[Actor response contracts](ACTOR_RESPONSE_CONTRACTS.md) for the proposed
+separation of unary returns, streaming callbacks and transport adapters.

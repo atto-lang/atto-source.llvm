@@ -260,6 +260,11 @@ if(BUILD_TESTING)
         set_tests_properties(native_pipeline_cancel_worker_forward_linearization
             PROPERTIES TIMEOUT 45)
     endif()
+    oreslang_contract_test(canonical_match_pattern_first_declaration
+        source-actor-match-pattern-first.ores)
+    oreslang_contract_test(reject_legacy_define_pattern
+        source-actor-match-pattern-legacy-reject.ores
+        --diagnostic "expected 'actor', 'enum' or 'match pattern'")
     oreslang_contract_test(reject_actor_utils_shadow_dot
         source-actor-utils-shadow-dot-reject.ores
         --diagnostic "ambiguous ActorUtils.pipe")
