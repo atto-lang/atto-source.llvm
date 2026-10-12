@@ -17,10 +17,15 @@ define actor Worker as
 end
 ```
 
-The only supported state mutation syntax in the restricted LLVM tagged
-message subset is a synchronous critical scoped callback:
+The canonical API is `self.handle_state`: no modifier means a
+read-only state loan; `critical` grants exclusive mutable access. The
+restricted LLVM tagged-message compiler supports both synchronous forms:
 
 ```ores
+const current = self.handle_state(|state| -> {
+    return state.value;
+});
+
 const next = self.handle_state(critical |state| -> {
     state.value = n + 1;
     return state.value;
@@ -38,9 +43,9 @@ general reader-writer lock or async state loans.
 
 ## Evidence
 
-LLVM: [26/26 exact-source native CTests, with Clang ASan/UBSan](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38312289067).
+LLVM: [57/57 focused native CTests, with Clang ASan/UBSan](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314809579).
 
-Java: [23 exact-source JDK25 parser/compiler checks](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38311417501).
+Java: [27 exact-source JDK25 parser/compiler checks](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314867754).
 The Java `Ast.ActorStateSpec` records fixed-key state independently from
 `ClassDecl.fields`; annotation expansion and tree shaking preserve it.
 The Java checker **rejects** state execution until the scoped state-loan
