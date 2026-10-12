@@ -10,9 +10,11 @@ EXTENDS Naturals
  * establish machine-checked implementation refinement or disk guarantees.
  *)
 VARIABLES phase, physical, effect, claims, executions, crashed,
-          closed, verified, illegalAck, illegalDone, illegalCloseEffect
+          closed, verified, illegalAck, illegalDone, illegalCloseEffect,
+          reconciliationAck
 vars == <<phase, physical, effect, claims, executions, crashed,
-          closed, verified, illegalAck, illegalDone, illegalCloseEffect>>
+          closed, verified, illegalAck, illegalDone, illegalCloseEffect,
+          reconciliationAck>>
 
 Init ==
   /\ phase = "Absent"
@@ -26,31 +28,32 @@ Init ==
   /\ illegalAck = FALSE
   /\ illegalDone = FALSE
   /\ illegalCloseEffect = FALSE
+  /\ reconciliationAck = FALSE
 
 Record ==
   /\ phase = "Absent" /\ ~crashed /\ ~closed
   /\ phase' = "Recorded"
   /\ UNCHANGED <<physical, effect, claims, executions, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 StopAndDone ==
   /\ phase = "Recorded" /\ ~crashed
   /\ physical' = "Done"
   /\ UNCHANGED <<phase, effect, claims, executions, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 PersistDone ==
   /\ phase = "Recorded" /\ physical = "Done" /\ ~crashed
   /\ phase' = "PhysicalDone"
   /\ UNCHANGED <<physical, effect, claims, executions, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 Claim ==
   /\ phase = "PhysicalDone" /\ ~crashed /\ ~closed
   /\ phase' = "Claimed"
   /\ claims' = claims + 1
   /\ UNCHANGED <<physical, effect, executions, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 ExecuteExternalEffect ==
   /\ phase = "Claimed" /\ ~crashed /\ ~closed
@@ -58,42 +61,51 @@ ExecuteExternalEffect ==
   /\ effect' = "Committed"
   /\ executions' = 1
   /\ UNCHANGED <<phase, physical, claims, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 Crash ==
   /\ ~crashed
   /\ crashed' = TRUE
   /\ UNCHANGED <<phase, physical, effect, claims, executions, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 Reopen ==
   /\ crashed
   /\ crashed' = FALSE
   /\ UNCHANGED <<phase, physical, effect, claims, executions, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 IndependentExternalProof ==
   /\ phase = "Claimed" /\ effect = "Committed" /\ ~crashed
   /\ phase' = "EffectProven"
   /\ verified' = TRUE
   /\ UNCHANGED <<physical, effect, claims, executions, crashed, closed,
-                 illegalAck, illegalDone, illegalCloseEffect>>
+                 illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 Acknowledge ==
   /\ phase = "EffectProven" /\ verified /\ ~crashed
   /\ phase' = "Acknowledged"
   /\ UNCHANGED <<physical, effect, claims, executions, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
+
+(* A recovery ACK is distinct from the scheduler's ordinary CONTROL
+ * enqueue ACK. It requires fsynced external-effect proof and journal ACK. *)
+ReconcileAck ==
+  /\ phase = "Acknowledged" /\ verified /\ ~crashed
+  /\ ~reconciliationAck
+  /\ reconciliationAck' = TRUE
+  /\ UNCHANGED <<physical, effect, claims, executions, crashed, closed,
+                 phase, verified, illegalAck, illegalDone, illegalCloseEffect>>
 
 CloseSupervisor ==
   /\ ~closed
   /\ closed' = TRUE
   /\ UNCHANGED <<phase, physical, effect, claims, executions, crashed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 Next == Record \/ StopAndDone \/ PersistDone \/ Claim
   \/ ExecuteExternalEffect \/ Crash \/ Reopen
-  \/ IndependentExternalProof \/ Acknowledge \/ CloseSupervisor
+  \/ IndependentExternalProof \/ Acknowledge \/ ReconcileAck \/ CloseSupervisor
 Spec == Init /\ [][Next]_vars
 
 TypeOK ==
@@ -105,10 +117,13 @@ TypeOK ==
   /\ crashed \in BOOLEAN /\ closed \in BOOLEAN /\ verified \in BOOLEAN
   /\ illegalAck \in BOOLEAN /\ illegalDone \in BOOLEAN
   /\ illegalCloseEffect \in BOOLEAN
+  /\ reconciliationAck \in BOOLEAN
 
 AtMostOneClaim == claims <= 1
 AtMostOneExternalEffect == executions <= 1
 NoFabricatedAck == ~illegalAck
+RecoveryAckRequiresDurableProof ==
+  ~reconciliationAck \/ (phase = "Acknowledged" /\ verified /\ effect = "Committed")
 AckRequiresIndependentProof ==
   phase = "Acknowledged" => (verified /\ effect = "Committed")
 DoneRequiresPhysicalProof == ~illegalDone
@@ -123,7 +138,7 @@ UnsafeCrashRetry ==
   /\ executions = 1
   /\ executions' = 2
   /\ UNCHANGED <<phase, physical, effect, claims, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 (* Unsafe: mark ACK with only physical DONE and no effect proof. *)
 UnsafeFalseAck ==
@@ -131,14 +146,14 @@ UnsafeFalseAck ==
   /\ phase' = "Acknowledged"
   /\ illegalAck' = TRUE
   /\ UNCHANGED <<physical, effect, claims, executions, crashed, closed,
-                 verified, illegalDone, illegalCloseEffect>>
+                 verified, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 (* Unsafe: a duplicated claim minted on resume from a crash. *)
 UnsafeDoubleClaim ==
   /\ crashed /\ phase = "Claimed" /\ claims = 1
   /\ claims' = 2
   /\ UNCHANGED <<phase, physical, effect, executions, crashed, closed,
-                 verified, illegalAck, illegalDone, illegalCloseEffect>>
+                 verified, illegalAck, illegalDone, illegalCloseEffect, reconciliationAck>>
 
 (* Unsafe: physical DONE is assumed based on an earlier READY observation. *)
 UnsafeFakePhysicalDone ==
@@ -146,7 +161,7 @@ UnsafeFakePhysicalDone ==
   /\ phase' = "PhysicalDone"
   /\ illegalDone' = TRUE
   /\ UNCHANGED <<physical, effect, claims, executions, crashed, closed,
-                 verified, illegalAck, illegalCloseEffect>>
+                 verified, illegalAck, illegalCloseEffect, reconciliationAck>>
 
 (* Unsafe: start a new external effect after supervisor close. *)
 UnsafeClosedEffect ==
@@ -154,11 +169,23 @@ UnsafeClosedEffect ==
   /\ executions' = 1
   /\ illegalCloseEffect' = TRUE
   /\ UNCHANGED <<phase, physical, effect, claims, crashed, closed,
-                 verified, illegalAck, illegalDone>>
+                 verified, illegalAck, illegalDone, reconciliationAck>>
 
 RetryMutant == Init /\ [][Next \/ UnsafeCrashRetry]_vars
 AckMutant == Init /\ [][Next \/ UnsafeFalseAck]_vars
 DoubleClaimMutant == Init /\ [][Next \/ UnsafeDoubleClaim]_vars
 DoneMutant == Init /\ [][Next \/ UnsafeFakePhysicalDone]_vars
 ClosedMutant == Init /\ [][Next \/ UnsafeClosedEffect]_vars
+
+(* Unsafe: a scheduler-only recovery helper releases CLAIMED even when
+ * the fsynced journal has no independently committed external effect. *)
+UnsafeLegacyRecoveryAck ==
+  /\ phase = "Claimed" /\ ~crashed /\ ~reconciliationAck
+  /\ reconciliationAck' = TRUE
+  /\ UNCHANGED <<phase, physical, effect, claims, executions, crashed,
+                 closed, verified, illegalAck, illegalDone, illegalCloseEffect>>
+
+LegacyRecoveryAckMutant ==
+  Init /\ [][Next \/ UnsafeLegacyRecoveryAck]_vars
+
 =============================================================================
