@@ -42,6 +42,18 @@ if(BUILD_TESTING)
     add_test(NAME native_int_array_region_security
         COMMAND oreslang-native-int-array-region-test)
 
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    if(NOT ORE_NATIVE_ARRAY_CLANG)
+        message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
+        set(ORE_NATIVE_ARRAY_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang")
+    endif()
+    add_test(NAME native_int_array_llvm_abi
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_llvm_abi.py"
+          --clang "${ORE_NATIVE_ARRAY_CLANG}"
+          --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_int_array_llvm_abi PROPERTIES TIMEOUT 120)
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
