@@ -638,6 +638,16 @@ private:
                                                value.actor_stops.size() - 1});
                 continue;
             }
+            // `rt cooperate` is a statement, not an int expression.
+            // The native scalar backend cannot suspend and resume its stack,
+            // so reject before attempting expression lowering or emitting IR.
+            if (token_.text == "rt") {
+                advance();
+                if (token_.text == "cooperate") {
+                    fail("native rt cooperate requires verified heap-owned continuation lowering");
+                }
+                fail("native rt expression statement unsupported until ownership/suspension lowering");
+            }
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
