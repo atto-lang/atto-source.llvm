@@ -122,6 +122,9 @@ void* oreslang_source_actor_spawn_tagged_variants(
 void oreslang_source_actor_pipeline_connect(void* source, void* transform, void* sink);
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                                uint64_t variant, int64_t value);
+/* Compiler-owned one-level nested nominal MessagePack frame. */
+void oreslang_source_actor_pipeline_emit_variant(uint64_t direction,
+    uint64_t variant, const uint8_t* bytes, uint64_t size);
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected);
 
 void oreslang_source_actor_stop(void* actor);

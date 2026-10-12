@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* Compiled only with ORESLANG_SOURCE_ACTOR_TESTING. Not a production ABI. */
+int oreslang_source_actor_send_expected_variant_test(
+    void* actor, const uint8_t* frame, size_t size, size_t expected_variant);
 static _Atomic int deliveries = 0;
 static uint8_t canonical[512];
 static size_t nbytes;
@@ -91,6 +94,11 @@ int main(void) {
     ores_mp2_owned_release(&snapshot);
     assert(!oreslang_source_actor_send_variant(actor, frame, nbytes));
     memcpy(frame, canonical, nbytes);
+    // Canonical bytes select ordinal zero. A forged call claiming ordinal
+    // one must not reserve/deliver that case, even though the frame passes
+    // its own closed schema and nominal identity validation.
+    assert(!oreslang_source_actor_send_expected_variant_test(
+        actor, frame, nbytes, 1));
     assert(oreslang_source_actor_send_variant(actor, frame, nbytes));
     memset(frame, 0, nbytes);
     oreslang_source_actor_stop(actor);
