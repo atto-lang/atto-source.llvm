@@ -169,3 +169,29 @@ envelope metadata with the already-tested per-flow registry while explicitly
 maintaining group-mutex/flow-mutex lock order, actor turn finalization,
 producer leases, and bounded credits. Then introduce an opt-in compiled
 two-flow fixture and expand toward 1,000 interleaved requests.
+
+
+### Parent-reconciled final verification
+
+The complete parent-stack replay after #180's optimized-Python evidence fixes
+passed on funded Actions:
+
+- [Full CMake/CTest #38276259243](https://github.com/zed-pkg-test/java-app/actions/runs/38276259243):
+  **165 exact compiler/runtime/test Git blobs, 164/164 original CTests**, including
+  20 actual compiled three-actor guest runs with the strict causal-admission
+  verifier; the ordinary and Python `-O` mutation suites both passed.
+  The single-root-credit TLC safety proof and deliberately unsafe mutant also
+  passed.
+- [Capability/lifetime native and compiled-guest #38276258949](https://github.com/zed-pkg-test/java-app/actions/runs/38276258949):
+  exact source fingerprints, 30 strict GCC race runs, 15 Clang ASan/UBSan
+  race runs, bounded TLC stale-generation counterexample, and actual
+  source-compiled signed-i64/pipeline/await-ready guest programs all passed.
+- Verification-only [funded mirror PR #203](https://github.com/zed-pkg-test/java-app/pull/203)
+  remains draft. All three PRs (#180 → #239 → #240) remain draft/unmerged;
+  reconciliation used two-parent Git commits preserving each downstream head.
+
+These checks establish the real scheduler-owned **single-flow** causal
+provenance integration and no observed regressions in the bounded compiler
+slice. They do **not** establish concurrent flows, route binding to the
+standalone `SourcePipelineFlows` admission registry, implementation-level
+TLA+ trace refinement, or Java/GraalVM Native Image parity.
