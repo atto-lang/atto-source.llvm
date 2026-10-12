@@ -1,11 +1,13 @@
 #pragma once
 
 #include "oreslang/runtime/SupervisorFailureControl.hpp"
+#include "oreslang/runtime/SupervisorEnqueueGuard.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -45,6 +47,9 @@ public:
             throw std::invalid_argument("invalid supervisor process admission");
     }
 
+    std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
+
     /** Trusted CONTROL receiver; does not run a user callback inline. */
     void accept(const SupervisorFailureNotice& notice) {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -63,15 +68,22 @@ public:
     /**
      * Completes one suspended policy. Can be called from any completion
      * thread, but resolution and decision sink execute only in the scheduled
-     * continuation. A second resume is rejected until the first is admitted.
+     * continuation. A second/stale-epoch resume is rejected until the first
+     * is admitted. A caller must wait for suspension before calling resume.
      */
-    bool resume(Directive decision) noexcept {
+    bool resume(std::uint64_t expected_epoch, Directive decision) noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (!suspended_ || resume_enqueued_ || failed_ || closed_) return false;
+        // Every new failure callback owns a fresh continuation generation.
+        // Without this fence a late completion from a previous callback
+        // could resume the next child's failure with a stale decision.
+        if (!expected_epoch || expected_epoch != epoch_
+            || !suspended_ || resume_enqueued_ || failed_ || closed_)
+            return false;
         resume_enqueued_ = true;
         try {
             auto self = shared_from_this();
-            if (!enqueue_([self, decision] { self->finish(decision); })) {
+            if (!SupervisorEnqueueGuard::submit(
+                    enqueue_, [self, decision] { self->finish(decision); })) {
                 fail_locked();
                 return false;
             }
@@ -80,6 +92,12 @@ public:
             return false;
         }
         return true;
+    }
+
+    /** Capture during the current callback; pass unchanged to resume(). */
+    std::uint64_t current_epoch() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return active_ && !failed_ && !closed_ ? epoch_ : 0;
     }
 
     std::size_t pending() const {
@@ -103,6 +121,10 @@ public:
         return !failed_ && !closed_ && undelivered_ == 0;
     }
     void close() {
+        // Linearize shutdown with actual lifecycle decision side effects.
+        // A recursive fence supports a trusted decision that stops its own
+        // supervisor without deadlocking the CONTROL carrier.
+        std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return;
         closed_ = true;
@@ -113,10 +135,16 @@ public:
 private:
     void schedule_locked() {
         if (active_ || failed_ || closed_ || mailbox_.empty()) return;
+        if (epoch_ == std::numeric_limits<std::uint64_t>::max()) {
+            fail_locked();
+            return;
+        }
+        ++epoch_;
         active_ = true;
         try {
             auto self = shared_from_this();
-            if (!enqueue_([self] { self->begin(); })) fail_locked();
+            if (!SupervisorEnqueueGuard::submit(
+                    enqueue_, [self] { self->begin(); })) fail_locked();
         } catch (...) {
             fail_locked();
         }
@@ -149,6 +177,7 @@ private:
     }
 
     void finish(Directive decision) noexcept {
+        std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         Resolution resolution;
         try {
             std::lock_guard<std::mutex> guard(mutex_);
@@ -192,6 +221,8 @@ private:
     Enqueue enqueue_;
     Policy policy_;
     DecisionSink sink_;
+    // Always acquire decision_fence_ before mutex_ for close/finish.
+    mutable std::recursive_mutex decision_fence_;
     mutable std::mutex mutex_;
     std::deque<SupervisorFailureNotice> mailbox_;
     bool active_ = false;
@@ -199,6 +230,7 @@ private:
     bool resume_enqueued_ = false;
     bool failed_ = false;
     bool closed_ = false;
+    std::uint64_t epoch_ = 0;
     std::size_t resolved_ = 0;
     std::size_t undelivered_ = 0;
 };
