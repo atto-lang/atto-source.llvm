@@ -982,14 +982,18 @@ private:
         for (const auto& item : program.enums) {
             for (const auto& member : item.cases) {
                 if (!member.has_payload) continue;
-                std::function<bool(const MessageShape&)> containsEnum;
-                containsEnum = [&](const MessageShape& shape) {
-                    if (shape.kind == MessageShape::Kind::EnumRef) return true;
+                std::function<bool(const MessageShape&)> needsNewCodec;
+                needsNewCodec = [&](const MessageShape& shape) {
+                    // Box<int> is just as unsupported over the wire as
+                    // Box<Foo>. Do not grant transport because a box lacks
+                    // a nested nominal enum reference.
+                    if (shape.kind == MessageShape::Kind::EnumRef
+                            || shape.kind == MessageShape::Kind::Box) return true;
                     for (const auto& child : shape.elements)
-                        if (containsEnum(child)) return true;
+                        if (needsNewCodec(child)) return true;
                     return false;
                 };
-                if (containsEnum(member.payload))
+                if (needsNewCodec(member.payload))
                     unencodedCases.insert(item.name + "." + member.name);
             }
         }
