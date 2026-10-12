@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ores-truffle-oreslang.github.io/contracts/assert/v1/cases.schema.json",
+  "title": "Oreslang assertion conformance suite v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "stdlib_module",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "stdlib_module": {
+      "const": "std/assert"
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AssertCase"
+      }
+    }
+  },
+  "$defs": {
+    "Operand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "int",
+            "bool",
+            "string"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "Expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "returned",
+            "throw",
+            "none"
+          ]
+        },
+        "boolean": {
+          "type": "boolean"
+        },
+        "message_contains": {
+          "type": "string"
+        }
+      }
+    },
+    "AssertCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "operation",
+        "operands",
+        "trapped",
+        "expected"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "equal",
+            "not_equal",
+            "same",
+            "true",
+            "false",
+            "equal_throws",
+            "not_equal_throws",
+            "same_throws",
+            "true_throws",
+            "false_throws",
+            "fail"
+          ]
+        },
+        "operands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Operand"
+          }
+        },
+        "trapped": {
+          "type": "boolean"
+        },
+        "expected": {
+          "$ref": "#/$defs/Expected"
+        }
+      }
+    }
+  }
+}
