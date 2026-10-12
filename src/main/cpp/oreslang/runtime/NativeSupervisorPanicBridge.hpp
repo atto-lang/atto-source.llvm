@@ -385,6 +385,12 @@ public:
             OresNativeActorRef failed_child,
             const std::function<bool(const OresNativeTerminalReceipt&)>&
                 verify_committed_effect) {
+        // An in-memory scheduler ACK is only a CONTROL enqueue receipt.
+        // In durable mode it must never bypass the separately fsync'd
+        // external-effect proof and journal acknowledgment protocol.
+        if (durable_journal_)
+            throw std::logic_error(
+                "durable terminal ACK requires journal-bound external proof");
         if (!verify_committed_effect
                 || original_parent.scheduler_domain != parent_.scheduler_domain
                 || original_parent.actor_slot != parent_.actor_slot
