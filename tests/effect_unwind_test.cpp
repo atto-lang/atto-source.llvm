@@ -103,8 +103,10 @@ int main() {
             const EffectKind expected = deferred == EffectKind::Return
                 || oreslang::effect_is_terminal(pending) ? pending : deferred;
             CHECK(actual.primary.kind == expected);
-            CHECK(actual.primary.code == (expected == deferred
-                 && deferred != EffectKind::Return ? 200u : 100u));
+            const bool cleanup_becomes_primary =
+                deferred != EffectKind::Return
+                && !oreslang::effect_is_terminal(pending);
+            CHECK(actual.primary.code == (cleanup_becomes_primary ? 200u : 100u));
             CHECK(actual.secondary_count ==
                 ((pending != EffectKind::Return && deferred != EffectKind::Return) ? 1u : 0u));
             if (actual.secondary_count != 0) {
