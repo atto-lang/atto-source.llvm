@@ -306,11 +306,15 @@ private:
             require("[");
             close = "]";
         } else if (accept("Box")) {
-            // Box is indirection for size analysis only. It does not silently
-            // authorize pointer or object-graph serialization.
+            // Canonical generic spelling is Box<Foo>, like the Java parser.
+            // Square brackets remain accepted as an internal transitional
+            // source spelling. Neither form grants a runtime heap allocator.
             shape.kind = MessageShape::Kind::Box;
-            require("[");
-            close = "]";
+            if (accept("<")) close = ">";
+            else {
+                require("[");
+                close = "]";
+            }
         } else if (token_.kind == Kind::Identifier && !reserved(token_.text)) {
             // Recognize Foo in 'Case: Foo' as a nominal type dependency;
             // do not degrade it to an untyped string or numeric wire tag.
