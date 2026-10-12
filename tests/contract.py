@@ -103,6 +103,8 @@ def main():
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--fixture", required=True)
     parser.add_argument("--ir")
+    parser.add_argument("--ir-not", action="append",
+                        help="Forbidden LLVM IR regex (checked even with python -O)")
     parser.add_argument("--diagnostic")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
@@ -136,6 +138,9 @@ def main():
     require(not compile_result.stderr, compile_result.stderr)
     if args.ir:
         require(args.ir in compile_result.stdout, compile_result.stdout)
+    for forbidden in args.ir_not or ():
+        require(re.search(forbidden, compile_result.stdout) is None,
+                "forbidden LLVM IR evidence: " + forbidden)
     if args.run is None:
         return
     require(args.clang, "--run requires a clang executable")
