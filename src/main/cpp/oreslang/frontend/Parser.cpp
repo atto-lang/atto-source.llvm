@@ -1335,7 +1335,10 @@ private:
                 if (!methods.insert(method.name).second)
                     throw std::runtime_error("duplicate actor method '" + method.name + "'");
                 reserveGenerated(prefix + method.name);
-                std::unordered_set<std::string> available = fields;
+                // Actor class fields are never ordinary lexical values.
+                // The only legal field reads/writes happen under a state
+                // loan with explicit compiler-owned @state.key bindings.
+                std::unordered_set<std::string> available;
                 for (const auto& param : method.parameters) {
                     if (!available.insert(param).second)
                         throw std::runtime_error("actor parameter shadows field '" + param + "'");
@@ -1420,7 +1423,31 @@ private:
                                 throw std::runtime_error("unresolved tagged enum case");
                             auto armAvailable = available;
                             for (const auto& binder : arm.binders) {
-                                if (binder != "_") armAvailable.insert(binder);
+                                if (binder != "_") {
+                                    if (!armAvailable.insert(binder).second)
+                                        throw std::runtime_error("tagged binder shadows parameter or local");
+                                }
+                            }
+                            if (arm.state_loan) {
+                                if (!actor.state_declared)
+                                    throw std::runtime_error("handle_state requires an actor state map");
+                                if (arm.state_loan->assignments.empty())
+                                    throw std::runtime_error("critical state loan requires an explicit mutation");
+                                std::unordered_set<std::string> loanAvailable = armAvailable;
+                                for (const auto& field : actor.fields)
+                                    loanAvailable.insert("@state." + field.name);
+                                for (const auto& assignment : arm.state_loan->assignments) {
+                                    if (!mutableFields.count(assignment.field))
+                                        throw std::runtime_error(
+                                            "state callback writes unknown or immutable key");
+                                    validate_expression(*assignment.value, loanAvailable, functions);
+                                }
+                                validate_expression(*arm.state_loan->result,
+                                                    loanAvailable, functions);
+                                if (fields.count(arm.state_loan->result_binding)
+                                        || !armAvailable.insert(arm.state_loan->result_binding).second)
+                                    throw std::runtime_error(
+                                        "state callback result shadows actor state or arm local");
                             }
                             for (const auto& assignment : arm.assignments) {
                                 if (!mutableFields.count(assignment.field))
