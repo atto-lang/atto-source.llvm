@@ -50,7 +50,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int"
+        "gpu", "cpu", "quantum", "over", "structural", "int"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -282,8 +282,8 @@ private:
         value.exported = accept("pub");
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            fail("native accelerator lowering unsupported");
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
@@ -880,10 +880,11 @@ private:
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            throw std::runtime_error("native gpu/quantum boundary unsupported: "
-                    "validated effects, ownership, device lowering and explicit "
-                    "backend admission required; no implicit CPU fallback at byte "
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            throw std::runtime_error("native gpu/cpu/quantum boundary unsupported: "
+                    "validated effects, ownership, host/device lowering and explicit "
+                    "backend admission required; nested cpu/gpu blocks cannot "
+                    "silently execute on the host; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
         }
         // Syntactic admission is a safety boundary: rejecting actor/channel
