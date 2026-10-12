@@ -26,6 +26,8 @@ class ActorStateReadWriteContinuations final {
 public:
     using Gate = ActorStateReadWriteGate;
     using Mode = Gate::Mode;
+    static constexpr std::size_t max_outstanding_continuations =
+            Gate::max_waiters + Gate::max_active_readers;
     enum class Status : std::uint8_t { Queued, Ready, Cancelled };
     struct Request {
         Status status;
@@ -45,6 +47,11 @@ public:
         if (retired_) throw std::logic_error("actor state continuations retired");
         if (continuation_id == 0 || continuation_id <= issued_continuation_) {
             throw std::invalid_argument("continuation identity must increase monotonically");
+        }
+        // Includes cancelled-but-unacknowledged continuations, which no
+        // longer consume gate tickets but still consume durable CONTROL space.
+        if (entries_.size() >= max_outstanding_continuations) {
+            throw std::overflow_error("actor state continuation registry exhausted");
         }
         // Prepare registry storage before obtaining an admission ticket.
         auto [it, inserted] = entries_.try_emplace(continuation_id);
