@@ -175,7 +175,7 @@ int main() {
     )", "unboxed recursive enum payload: Foo -> Foo");
     // Box permits finite-size layout, but no implicit cycles or wire codec.
     auto boxed = parse_program(R"(
-        define enum Foo as Empty More: Box[Foo] end
+        define enum Foo as Empty More: Box<Foo> end
     )");
     assert(boxed.enums.at(0).cases.at(1).payload.kind == MessageShape::Kind::Box);
     assert(boxed.enums.at(0).cases.at(1).payload.elements.at(0).kind
