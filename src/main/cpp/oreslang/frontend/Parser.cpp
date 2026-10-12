@@ -900,7 +900,10 @@ private:
             fail("expected int expression");
         }
         if (state_loan_depth_ && token_.text == "state") {
-            require("state"); require(".");
+            require("state");
+            if (token_.text != ".")
+                fail("actor state reference cannot escape handle_state callback");
+            require(".");
             auto value = make_expression(Expression::Kind::Variable, offset);
             value->name = "@state." + identifier();
             return value;
