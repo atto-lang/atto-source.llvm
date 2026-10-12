@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <exception>
+#include <optional>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -56,5 +58,48 @@ int main() {
         successor.close();
         must_reject_loan([&] { (void)successor.read(0, 0); });
     }
+    // Borrow admission and owner transfer contend on the *same wrapper*.
+    // Exactly one wins. This used to race on HostBuffer::state_ itself
+    // despite the shared backing State having an internal mutex.
+    Plan scalar(Layout::AoS, 1, 1, 4, 4, 1);
+    for (int trial = 0; trial < 128; ++trial) {
+        HostBuffer contended(scalar);
+        std::optional<HostBuffer::ReadLoan> borrowed;
+        std::optional<HostBuffer> moved;
+        std::exception_ptr borrow_error, move_error;
+        std::atomic<bool> start{false};
+        std::thread reader([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { borrowed.emplace(contended.borrow_read()); }
+            catch (const std::logic_error&) { }
+            catch (...) { borrow_error = std::current_exception(); }
+        });
+        std::thread transfer([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { moved.emplace(contended.take()); }
+            catch (const std::logic_error&) { }
+            catch (...) { move_error = std::current_exception(); }
+        });
+        start.store(true, std::memory_order_release);
+        reader.join();
+        transfer.join();
+        if (borrow_error) std::rethrow_exception(borrow_error);
+        if (move_error) std::rethrow_exception(move_error);
+        if (borrowed.has_value() == moved.has_value())
+            throw std::runtime_error("borrow versus move must admit exactly one owner");
+        if (borrowed) {
+            must_reject_loan([&] { contended.close(); });
+            borrowed.reset();
+            contended.close();
+        } else {
+            moved->close();
+            must_reject_loan([&] { (void)contended.layout(); });
+        }
+    }
+    HostBuffer target(scalar), source(scalar);
+    must_reject_loan([&] { target = std::move(source); });
+    target.close();
+    target = std::move(source);
+    target.close();
     std::cout << "PASS: threaded read loans, exclusive ownership and quiescent transfer\n";
 }
