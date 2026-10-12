@@ -36,10 +36,12 @@ CPU execution uses those same checked offsets rather than assuming contiguous
 packed arrays. Java uses a single-owner direct ByteBuffer and scoped read
 loans. Native uses byte storage and `memcpy` (avoids strict aliasing and
 unaligned type-punning). Both reject write-while-borrowed and moving while a
-read loan exists. The native HostBuffer now also locks the wrapper-owned
+read loan exists. The native HostBuffer also locks the wrapper-owned
 handle separately from its State, so concurrent borrow/take/close and move
-assignment cannot race on the state_ shared_ptr. Moves cannot overwrite live
-buffers or abandon outstanding loans. The exact-source 128-round
+assignment cannot race on the state_ shared_ptr. Public C++ move constructors
+and move assignments enforce borrow/closed-state exclusion directly, not only
+through `take()`. Moves cannot overwrite live buffers, abandon outstanding
+loans, or transfer a still-borrowed source. The exact-source 128-round
 borrow-versus-transfer regression passes GCC/Clang ASan+UBSan and GCC TSAN.
 Physical Java direct-buffer release remains GC-mediated;
 logical close is not yet explicit native memory deallocation.
@@ -94,9 +96,12 @@ Taking a buffer owner is permitted only while IDLE, and invalidates the
 predecessor handle. Native BufferFence now locks the wrapper's owner handle
 before entering shared State operations, with fixed lock order
 `owner_lock_ -> State::lock`. This serializes owner transfer against command
-admission/completion and closes a shared_ptr move/use race. Native move
-assignment refuses to overwrite an unretired handle; GCC/Clang sanitizer
-and ThreadSanitizer regressions exercise competing submit/take operations. Stale generations, foreign device/tenant identities and
+admission/completion and closes a shared_ptr move/use race. Native move assignment refuses to overwrite an unretired handle;
+direct `std::move` construction and assignment are also subject to the same
+IDLE-only constraint as `take()`, so in-flight tickets cannot be transferred
+through implicit C++ moves. The regression tests reject both bypasses while
+preserving the original live owner. GCC/Clang sanitizer and ThreadSanitizer
+regressions exercise competing submit/take operations. Stale generations, foreign device/tenant identities and
 duplicated command tickets are rejected. A cancelled operation cannot
 release/reuse storage until the backend confirms device event completion.
 There is no implicit recovery from POISONED, no actor-message serialization of
@@ -114,7 +119,9 @@ First quantum IR supports X, H, CX and terminal measurement, with 1..16
 qubits, 1..16 classical bits, and <=1024 gates. Invalid control-target
 overlap, repeated measurement, duplicate classical result indices,
 out-of-range registers, post-measurement gates and unmeasured circuits are
-rejected before emitting QASM or running the simulator. The simulator
+rejected before emitting QASM or running the simulator. Native C++ also rejects
+unknown enum discriminants supplied by casts/FFI, matching Java's closed enum
+contract instead of silently discarding invalid operations. The simulator
 executes an ideal real-valued statevector, returns exact marginal
 probabilities, and offers deterministic seeded shot sampling (up to 1M
 shots). Circuit builder admission rejects the 1,025th gate before
