@@ -93,7 +93,8 @@ public:
     using State = DurableTerminalState;
     static constexpr std::size_t kFrameSize = 176;
 
-    explicit NativeTerminalReceiptJournal(const std::string& absolute_path) {
+    explicit NativeTerminalReceiptJournal(const std::string& absolute_path)
+        : path_(absolute_path) {
         if (absolute_path.size() < 2 || absolute_path.front() != '/')
             throw std::invalid_argument("journal path must be absolute");
         struct stat st{};
@@ -107,9 +108,7 @@ public:
         try {
             if (::flock(fd_, LOCK_EX | LOCK_NB) != 0)
                 throw std::runtime_error("journal has another writer");
-            if (::fstat(fd_, &st) != 0 || !S_ISREG(st.st_mode)
-                || st.st_nlink != 1
-                || (st.st_mode & 0077) != 0)
+            if (!validate_path_inode(st))
                 throw std::runtime_error("journal must be private regular file");
             if (!existed) {
                 const auto slash = absolute_path.find_last_of('/');
@@ -211,6 +210,10 @@ public:
     }
 
 private:
+    // Keep the configured name bound to the opened inode, not only an fd.
+    // A rename that moves this inode to another name (and replaces our path)
+    // leaves st_nlink == 1 and bypasses a link-count-only defense.
+    const std::string path_;
     int fd_ = -1;
     mutable std::mutex mutex_;
     std::map<Key, State> states_;
@@ -218,6 +221,16 @@ private:
     std::uint64_t highest_nonce_ = 0;
     bool poisoned_ = false;
     using Frame = std::array<std::uint8_t, kFrameSize>;
+
+    bool validate_path_inode(struct stat& fd_stat) const noexcept {
+        struct stat path_stat{};
+        return ::fstat(fd_, &fd_stat) == 0 && S_ISREG(fd_stat.st_mode)
+            && fd_stat.st_nlink == 1 && (fd_stat.st_mode & 0077) == 0
+            && ::lstat(path_.c_str(), &path_stat) == 0
+            && S_ISREG(path_stat.st_mode)
+            && path_stat.st_dev == fd_stat.st_dev
+            && path_stat.st_ino == fd_stat.st_ino;
+    }
 
     static bool all_zero(const std::array<std::uint8_t, 32>& digest) {
         return std::all_of(digest.begin(), digest.end(),
@@ -313,8 +326,7 @@ private:
         // Quarantine rather than write more durable state through an inode
         // whose identity now has an unexpected alternate filesystem path.
         struct stat live{};
-        if (::fstat(fd_, &live) != 0 || !S_ISREG(live.st_mode)
-            || live.st_nlink != 1 || (live.st_mode & 0077) != 0) {
+        if (!validate_path_inode(live)) {
             poisoned_ = true;
             throw std::runtime_error("journal inode no longer private");
         }
@@ -339,6 +351,13 @@ private:
         if (::fsync(fd_) != 0) {
             poisoned_ = true;
             throw std::runtime_error("journal fsync failed: outcome ambiguous");
+        }
+        // If the trusted directory was unexpectedly rebound during I/O,
+        // quarantine the writer instead of treating a now-unreachable append
+        // as committed under the configured journal path.
+        if (!validate_path_inode(live)) {
+            poisoned_ = true;
+            throw std::runtime_error("journal pathname changed during append");
         }
         states_.swap(next);
         highest_nonce_ = next_highest;
