@@ -162,6 +162,91 @@ int main() {
         define match Bad as ...Status end
     )", "expected 'pattern'");
 
+    // Nominal nested payload dependencies must never become structural
+    // string messages or silently allocate implicit self-references.
+    rejects("define enum Foo as Message1: Foo end",
+            "unboxed recursive enum payload: Foo -> Foo");
+    rejects(R"(
+        define enum Foo as ToBar: Bar end
+        define enum Bar as ToFoo: Foo end
+    )", "unboxed recursive enum payload: Foo -> Bar -> Foo");
+    rejects(R"(
+        define enum Foo as Message1: Tuple[int, Foo] end
+    )", "unboxed recursive enum payload: Foo -> Foo");
+    // Box permits finite-size layout, but no implicit cycles or wire codec.
+    auto boxed = parse_program(R"(
+        define enum Foo as Empty More: Box<Foo> end
+    )");
+    assert(boxed.enums.at(0).cases.at(1).payload.kind == MessageShape::Kind::Box);
+    assert(boxed.enums.at(0).cases.at(1).payload.elements.at(0).kind
+           == MessageShape::Kind::EnumRef);
+    auto nested = parse_program(R"(
+        define enum Bar as Message1 = 1 end
+        define enum Foo as Message1: Bar end
+    )");
+    assert(nested.enums.at(1).cases.at(0).payload.kind == MessageShape::Kind::EnumRef);
+    assert(nested.enums.at(1).cases.at(0).payload.nominal_name == "Bar");
+    assert(nested.enums.at(1).cases.at(0).tag == 1);
+    rejects(R"(
+        define enum Bar as Message1 = 1 end
+        define enum Foo as Message1: Bar end
+        define actor Worker<messages=Foo> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over {
+                    on Foo.Message1 as inner { count = count + 1; }
+                }
+                return count;
+            }
+        end
+    )", "requires a portable nested enum wire codec");
+    rejects("define enum Foo as Message1: Missing end",
+            "unknown enum payload type: Missing");
+    // Bounded model check: all 2^9 directed 3-enum dependency graphs.
+    // Compare compiler cycle rejection against independent transitive closure.
+    for (unsigned mask = 0; mask < (1u << 9); ++mask) {
+        bool edges[3][3] = {};
+        std::string generated;
+        for (unsigned i = 0; i < 3; ++i) {
+            generated += "define enum E" + std::to_string(i) + " as Empty";
+            for (unsigned j = 0; j < 3; ++j) {
+                if (mask & (1u << (i * 3 + j))) {
+                    edges[i][j] = true;
+                    generated += " To" + std::to_string(j) + ": E" + std::to_string(j);
+                }
+            }
+            generated += " end\n";
+        }
+        for (unsigned k = 0; k < 3; ++k)
+            for (unsigned i = 0; i < 3; ++i)
+                for (unsigned j = 0; j < 3; ++j)
+                    edges[i][j] = edges[i][j] || (edges[i][k] && edges[k][j]);
+        bool cycle = edges[0][0] || edges[1][1] || edges[2][2];
+        bool rejectedCycle = false;
+        try {
+            (void)parse_program(generated);
+        } catch (const std::runtime_error& err) {
+            const std::string diagnostic = err.what();
+            rejectedCycle = diagnostic.find("unboxed recursive enum payload") != std::string::npos;
+            if (!rejectedCycle
+                    && diagnostic.find("requires a portable nested enum wire codec")
+                        == std::string::npos) {
+                std::cerr << "unexpected dependency diagnostic for mask "
+                          << mask << ": " << diagnostic << "\n";
+                std::abort();
+            }
+        }
+        if (cycle != rejectedCycle) {
+            std::cerr << "enum dependency closure mismatch mask " << mask << "\n";
+            std::abort();
+        }
+    }
+
+    rejects(R"(
+        define enum Foo as Message1 = 1 end
+        define enum Foo as Message1: Foo end
+    )", "duplicate enum declaration");
+
     rejects("define enum Bad as A: string = 2 B: string = 1 end",
             "enum wire tags must increase monotonically");
     rejects("define enum Bad as A: string = 0 end",

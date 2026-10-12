@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -276,9 +277,9 @@ private:
         if (depth > 64) fail("message shape exceeds maximum type nesting depth");
         if (++*shape_nodes > 100000)
             fail("message shape exceeds total descriptor node budget");
-        if (accept("bool")) return {MessageShape::Kind::Boolean, {}};
-        if (accept("int")) return {MessageShape::Kind::Integer, {}};
-        if (accept("string")) return {MessageShape::Kind::String, {}};
+        if (accept("bool")) return {MessageShape::Kind::Boolean, {}, {}};
+        if (accept("int")) return {MessageShape::Kind::Integer, {}, {}};
+        if (accept("string")) return {MessageShape::Kind::String, {}, {}};
         MessageShape shape;
         std::string_view close;
         if (accept("(")) {
@@ -304,8 +305,24 @@ private:
             shape.kind = MessageShape::Kind::List;
             require("[");
             close = "]";
+        } else if (accept("Box")) {
+            // Canonical generic spelling is Box<Foo>, like the Java parser.
+            // Square brackets remain accepted as an internal transitional
+            // source spelling. Neither form grants a runtime heap allocator.
+            shape.kind = MessageShape::Kind::Box;
+            if (accept("<")) close = ">";
+            else {
+                require("[");
+                close = "]";
+            }
+        } else if (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+            // Recognize Foo in 'Case: Foo' as a nominal type dependency;
+            // do not degrade it to an untyped string or numeric wire tag.
+            shape.kind = MessageShape::Kind::EnumRef;
+            shape.nominal_name = identifier();
+            return shape;
         } else {
-            fail("expected message shape (bool, int, string, Tuple, FixedArray, FixedList, Array or List)");
+            fail("expected message shape (bool, int, string, Tuple, Array, List, Box or enum name)");
         }
         if (accept(close))
             fail("empty structural message pattern is not supported");
@@ -316,7 +333,8 @@ private:
         } while (accept(","));
         require(close);
         if ((shape.kind == MessageShape::Kind::Array
-             || shape.kind == MessageShape::Kind::List)
+             || shape.kind == MessageShape::Kind::List
+             || shape.kind == MessageShape::Kind::Box)
             && shape.elements.size() != 1)
             fail("variable enum message collection must have exactly one element type");
         return shape;
@@ -824,12 +842,14 @@ private:
             case MessageShape::Kind::Boolean: return "bool";
             case MessageShape::Kind::Integer: return "int";
             case MessageShape::Kind::String: return "string";
+            case MessageShape::Kind::EnumRef: return "enum:" + shape.nominal_name;
             default: break;
         }
         const char* label = shape.kind == MessageShape::Kind::Tuple ? "Tuple"
             : shape.kind == MessageShape::Kind::FixedArray ? "FixedArray"
             : shape.kind == MessageShape::Kind::FixedList ? "FixedList"
-            : shape.kind == MessageShape::Kind::Array ? "Array" : "List";
+            : shape.kind == MessageShape::Kind::Array ? "Array"
+            : shape.kind == MessageShape::Kind::Box ? "Box" : "List";
         std::string text(label);
         text += "[";
         for (const auto& element : shape.elements) {
@@ -899,6 +919,81 @@ private:
                 throw std::runtime_error("duplicate enum/pattern declaration");
             enumNames.emplace(enumeration.name, &enumeration);
         }
+        // Analyze enum payload dependencies before touching any binary
+        // descriptor. Direct recursion creates an infinitely sized value;
+        // indirect cycles are representable but still lack a portable codec.
+        std::unordered_map<std::string, std::vector<std::string>> inlineEdges;
+        for (const auto& item : program.enums) inlineEdges[item.name] = {};
+        std::string nestedCase;
+        std::function<void(const MessageShape&, const std::string&,
+                           const std::string&, bool)> collect;
+        collect = [&](const MessageShape& shape, const std::string& owner,
+                      const std::string& member, bool inlineValue) {
+            if (shape.kind == MessageShape::Kind::EnumRef) {
+                if (!enumNames.count(shape.nominal_name))
+                    throw std::runtime_error("unknown enum payload type: " + shape.nominal_name);
+                if (inlineValue) inlineEdges.at(owner).push_back(shape.nominal_name);
+                if (nestedCase.empty()) nestedCase = owner + "." + member
+                    + " -> " + shape.nominal_name;
+                return;
+            }
+            const bool nextInline = inlineValue
+                && shape.kind != MessageShape::Kind::List
+                && shape.kind != MessageShape::Kind::Array
+                && shape.kind != MessageShape::Kind::Box;
+            for (const auto& child : shape.elements)
+                collect(child, owner, member, nextInline);
+        };
+        for (const auto& item : program.enums)
+            for (const auto& member : item.cases)
+                if (member.has_payload)
+                    collect(member.payload, item.name, member.name, true);
+
+        std::unordered_map<std::string, int> cycleState;
+        std::vector<std::string> stack;
+        std::function<void(const std::string&)> visit;
+        visit = [&](const std::string& name) {
+            const int state = cycleState[name];
+            if (state == 2) return;
+            if (state == 1) {
+                auto first = std::find(stack.begin(), stack.end(), name);
+                std::string chain;
+                for (; first != stack.end(); ++first) {
+                    if (!chain.empty()) chain += " -> ";
+                    chain += *first;
+                }
+                throw std::runtime_error("unboxed recursive enum payload: "
+                        + chain + " -> " + name);
+            }
+            if (stack.size() >= 256)
+                throw std::runtime_error(
+                    "enum inline dependency chain exceeds maximum depth of 256");
+            cycleState[name] = 1;
+            stack.push_back(name);
+            for (const auto& dependency : inlineEdges.at(name)) visit(dependency);
+            stack.pop_back();
+            cycleState[name] = 2;
+        };
+        for (const auto& item : program.enums) visit(item.name);
+        // A nominal enum can contain a value of another enum locally.
+        // Wire admission is a separate gate on the actor's CLOSED domain,
+        // not a blanket ban on the enum declaration itself.
+        std::unordered_set<std::string> unencodedCases;
+        for (const auto& item : program.enums) {
+            for (const auto& member : item.cases) {
+                if (!member.has_payload) continue;
+                std::function<bool(const MessageShape&)> containsEnum;
+                containsEnum = [&](const MessageShape& shape) {
+                    if (shape.kind == MessageShape::Kind::EnumRef) return true;
+                    for (const auto& child : shape.elements)
+                        if (containsEnum(child)) return true;
+                    return false;
+                };
+                if (containsEnum(member.payload))
+                    unencodedCases.insert(item.name + "." + member.name);
+            }
+        }
+
         std::unordered_set<std::string> typedDomains;
         for (const auto& pattern : program.tagged_patterns) {
             if (!declaredNames.insert(pattern.name).second)
@@ -930,6 +1025,27 @@ private:
             if (!declaredNames.insert(item.name).second)
                 throw std::runtime_error("duplicate structural/tagged message contract");
         }
+        // Fail closed at actor admission: locally valid enum nesting has no
+        // portable nested MessagePack codec on this LLVM backend yet. Check
+        // exactly the cases in the actor's expanded mailbox domain.
+        for (const auto& actor : program.actors) {
+            std::vector<std::string> cases;
+            if (const auto owner = enumNames.find(actor.messages_type);
+                    owner != enumNames.end()) {
+                for (const auto& member : owner->second->cases)
+                    cases.push_back(owner->first + "." + member.name);
+            }
+            for (const auto& domain : program.tagged_patterns)
+                if (domain.name == actor.messages_type)
+                    cases.insert(cases.end(), domain.alternatives.begin(),
+                                 domain.alternatives.end());
+            for (const auto& qualified : cases) {
+                if (unencodedCases.count(qualified))
+                    throw std::runtime_error("nested enum payload " + qualified
+                        + " requires a portable nested enum wire codec (not yet implemented)");
+            }
+        }
+
         std::unordered_set<std::string> declaredActors;
         for (const auto& actor : program.actors) declaredActors.insert(actor.name);
         // A route intrinsic is admitted only inside a source-defined actor
