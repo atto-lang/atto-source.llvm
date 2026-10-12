@@ -33,6 +33,12 @@ public:
         std::uint64_t token;
         std::uint64_t destination;
         Direction direction;
+    private:
+        const NativeActorStreamRoute* owner;
+        Claim(std::uint64_t ticket, std::uint64_t next, Direction way,
+              const NativeActorStreamRoute* issuer)
+            : token(ticket), destination(next), direction(way), owner(issuer) { }
+        friend class NativeActorStreamRoute;
     };
 
     NativeActorStreamRoute(std::vector<std::uint64_t> actor_ids,
@@ -134,7 +140,9 @@ public:
         ++done_count_;
         const auto required_phase = pos == 0 ? 2 * actors_.size()
                                              : 2 * actors_.size() - pos;
-        if (!successful || claimed_ || phase_ < required_phase) aborted_ = true;
+        // Another stage may be in the middle of a legal publication while
+        // this stage finishes. Only this stage's own committed phase matters.
+        if (!successful || phase_ < required_phase) aborted_ = true;
     }
 
     void fail() noexcept {
@@ -168,7 +176,7 @@ private:
         reserved_destination_ = destination;
         reserved_direction_ = direction;
         ++next_token_;
-        return Claim{next_token_, destination, direction};
+        return Claim{next_token_, destination, direction, this};
     }
 
     void require_ready(const std::string& domain) const {
@@ -179,7 +187,8 @@ private:
     }
 
     void require_active_claim(const Claim& candidate) const {
-        if (aborted_ || !claimed_ || candidate.token != next_token_ ||
+        if (aborted_ || !claimed_ || candidate.owner != this ||
+            candidate.token != next_token_ ||
             candidate.direction != reserved_direction_ ||
             candidate.destination != reserved_destination_)
             throw std::logic_error("ActorStream forged, stale or aborted publication claim");

@@ -25,7 +25,9 @@ static void roundtrip(std::size_t n) {
     Route route(a, "PipeMessages@sha256:abcdef");
     auto entry = route.claim_root(a[0], "PipeMessages@sha256:abcdef");
     rejected([&] { route.claim_root(a[0], "PipeMessages@sha256:abcdef"); });
-    rejected([&] { route.commit_published({entry.token + 1, entry.destination, entry.direction}); });
+    auto forged = entry;
+    ++forged.token;
+    rejected([&] { route.commit_published(forged); });
     route.commit_published(entry);
     check(route.phase() == 1, "root publication phase");
     for (std::size_t i = 0; i < n-1; ++i) {
@@ -92,6 +94,44 @@ int main() {
         route.commit_published(route.claim_root(a[0], "closed-domain"));
         route.fail();
         check(route.done() == Route::Done::Failed, "actor failure did not abort route");
+    }
+    // A sink may finish while the transform holds its valid backward
+    // publication reservation; that sibling's claim must not cause a false
+    // pipeline abort. The reservation commits before source execution.
+    {
+        auto a = ids(3);
+        Route route(a, "closed-domain");
+        route.commit_published(route.claim_root(a[0], "closed-domain"));
+        route.commit_published(route.claim_directional(a[0], 0,
+            Route::Direction::Forward, "closed-domain"));
+        route.commit_published(route.claim_directional(a[1], a[0],
+            Route::Direction::Forward, "closed-domain"));
+        route.commit_published(route.claim_directional(a[2], a[1],
+            Route::Direction::Backward, "closed-domain"));
+        auto transform_backward = route.claim_directional(a[1], a[2],
+            Route::Direction::Backward, "closed-domain");
+        route.physical_done(a[2], true);
+        check(route.done() == Route::Done::Pending,
+              "sibling pending publication falsely aborted completed sink");
+        check(!route.fenced(a[2]) && route.fenced(a[1]),
+              "sink DONE changed surviving transform fence");
+        route.commit_published(transform_backward);
+        route.complete_source(a[0], a[1]);
+        route.physical_done(a[1], true);
+        route.physical_done(a[0], true);
+        check(route.done() == Route::Done::Succeeded,
+              "legitimate overlapping physical DONE and sibling publication failed");
+    }
+    // Claims belong to one route object even if two routes happen to share
+    // stage ids and their first token value is the same.
+    {
+        Route first(ids(3), "domain");
+        Route second(ids(3), "domain");
+        auto a = first.claim_root(100, "domain");
+        auto b = second.claim_root(100, "domain");
+        rejected([&] { second.commit_published(a); });
+        first.commit_published(a);
+        second.commit_published(b);
     }
     // One publisher owns the claim; concurrent contenders cannot obtain
     // duplicate route authority while the first claim is pending.
