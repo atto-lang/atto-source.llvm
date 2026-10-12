@@ -109,14 +109,39 @@ OresFlowTable* ores_flow_table_create(void) {
     }
     return table;
 }
-void ores_flow_table_destroy(OresFlowTable* table) {
-    if (!table) return;
-    /* The trusted scheduler owner must fence/join all callers first.
-     * Never silently destroy a mutex while another producer owns it. */
+OresFlowError ores_flow_table_try_destroy(OresFlowTable* table) {
+    if (!table) return ORES_FLOW_BAD_ARGUMENT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
+    /* A nonblocking inspection of all flow locks under the directory lock
+     * makes a blocked publication observable as BUSY. The trusted scheduler
+     * must still fence/join new callers before invoking this function. */
+    pthread_mutex_lock(&table->mutex);
+    size_t acquired = 0;
+    for (; acquired < ORES_FLOW_MAX_ACTIVE; ++acquired) {
+        if (pthread_mutex_trylock(&table->flow_locks[acquired]) != 0) {
+            while (acquired > 0)
+                pthread_mutex_unlock(&table->flow_locks[--acquired]);
+            pthread_mutex_unlock(&table->mutex);
+            return ORES_FLOW_BUSY;
+        }
+    }
+    int incomplete = 0;
+    for (size_t i = 0; i < ORES_FLOW_MAX_ACTIVE; ++i)
+        if (table->flows[i].id != 0) incomplete = 1;
+    for (size_t i = ORES_FLOW_MAX_ACTIVE; i > 0; --i)
+        pthread_mutex_unlock(&table->flow_locks[i - 1]);
+    pthread_mutex_unlock(&table->mutex);
+    if (incomplete) return ORES_FLOW_INCOMPLETE;
     for (size_t i = 0; i < ORES_FLOW_MAX_ACTIVE; ++i)
         if (pthread_mutex_destroy(&table->flow_locks[i]) != 0) abort();
     if (pthread_mutex_destroy(&table->mutex) != 0) abort();
     free(table);
+    return ORES_FLOW_OK;
+}
+void ores_flow_table_destroy(OresFlowTable* table) {
+    if (!table) return;
+    /* Fail closed rather than silently drop an admitted or reserved flow. */
+    if (ores_flow_table_try_destroy(table) != ORES_FLOW_OK) abort();
 }
 OresFlowError ores_flow_open(OresFlowTable* table, uint64_t pipeline_id,
     uint64_t route_generation, const OresFlowActor* stages,
