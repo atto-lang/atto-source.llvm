@@ -1,0 +1,6 @@
+pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(42);
+  values.set(1, 7);
+  return values.get(0);
+}

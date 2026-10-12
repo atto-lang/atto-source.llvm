@@ -1,0 +1,10 @@
+pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> spare = new Array<int>();
+  values.reserve(8);
+  values.add(40);
+  values.add(400);
+  values.set(1, 2);
+  spare.add(123);
+  return values.get(0) + values.get(1) + values.length() - 2;
+}

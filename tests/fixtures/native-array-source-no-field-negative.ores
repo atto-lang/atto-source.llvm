@@ -1,0 +1,6 @@
+define class Foo as
+    pub let mut Array<int> items;
+end
+pub fnc main(): int {
+    return 1;
+}

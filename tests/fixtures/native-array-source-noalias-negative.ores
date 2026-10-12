@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> copy = rt take values;
+  return copy.length();
+}

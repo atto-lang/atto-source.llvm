@@ -12,11 +12,12 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, Copy, Take, Share, Borrow, BorrowMut, Field, ArrayOp };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
     std::string name;
+    std::string array_method; // intrinsic on a lexical owned Array<int> receiver
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
@@ -34,6 +35,7 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool native_int_array = false; // bounded, lexical, owned Array<int> (native-only)
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Restricted local stack-only explicit class move.
@@ -90,7 +92,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayOp };
     Kind kind;
     // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
     // Non-Copy branch-local classes are still rejected until drop glue exists.

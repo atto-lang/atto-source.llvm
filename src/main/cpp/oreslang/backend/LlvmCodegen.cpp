@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "llvm/Config/llvm-config.h"
@@ -41,13 +42,21 @@ struct RegionMoveLowering {
     const std::unordered_map<std::string, llvm::Value*>* live_flags = nullptr;
 };
 
+// Unique, nonescaping lexical Array<int> handles. No class fields, arguments,
+// aliases, returned owners, or exception edges enter this initial native slice.
+struct ArrayLowering {
+    llvm::Value* region = nullptr;
+    llvm::FunctionCallee add, get, set, length, reserve;
+};
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
                    const std::unordered_map<std::string, llvm::Value*>& storage,
                    const std::unordered_map<std::string, llvm::Value*>& field_storage,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
-                   const RegionMoveLowering* moves = nullptr) {
+                   const RegionMoveLowering* moves = nullptr,
+                   const ArrayLowering* arrays = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
@@ -63,6 +72,31 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Field:
             return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
                                       expr.left->name + "." + expr.name + ".read");
+        case Expression::Kind::ArrayOp: {
+            if (!arrays || arrays->region == nullptr)
+                throw std::runtime_error("Array<int> method missing owning native region");
+            llvm::Value* handle = builder.CreateLoad(i64, storage.at(expr.name),
+                expr.name + ".array.handle");
+            std::vector<llvm::Value*> args;
+            for (const auto& arg : expr.arguments)
+                args.push_back(lower(*arg, builder, i64, storage, field_storage,
+                    functions, moves, arrays));
+            if (expr.array_method == "get")
+                return builder.CreateCall(arrays->get, {arrays->region, handle, args.at(0)},
+                    expr.name + ".array.get");
+            if (expr.array_method == "length" || expr.array_method == "size")
+                return builder.CreateCall(arrays->length, {arrays->region, handle},
+                    expr.name + ".array.length");
+            if (expr.array_method == "add")
+                return builder.CreateCall(arrays->add, {arrays->region, handle, args.at(0)});
+            if (expr.array_method == "set")
+                return builder.CreateCall(arrays->set,
+                    {arrays->region, handle, args.at(0), args.at(1)});
+            if (expr.array_method == "reserve")
+                return builder.CreateCall(arrays->reserve,
+                    {arrays->region, handle, args.at(0)});
+            throw std::runtime_error("unlowered native Array<int> method");
+        }
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut: {
             // Heap owner storage is a HANDLE, never a borrowable i64 address.
@@ -85,10 +119,10 @@ llvm::Value* lower(const Expression& expr,
             return storage.at(expr.left->name);
         }
         case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
+            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves, arrays), "neg");
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
-            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves, arrays);
         case Expression::Kind::Take: {
             // Native owned-int transfer reads the scalar before destroying
             // the old heap allocation. It then disables the exit-time drop.
@@ -98,7 +132,7 @@ llvm::Value* lower(const Expression& expr,
                 const auto found = moves->live_flags->find(expr.left->name);
                 if (found != moves->live_flags->end()) {
                     llvm::Value* value = lower(*expr.left, builder, i64,
-                        storage, field_storage, functions, moves);
+                        storage, field_storage, functions, moves, arrays);
                     llvm::Value* handle = builder.CreateLoad(i64,
                         storage.at(expr.left->name), "take.owned.handle");
                     builder.CreateCall(moves->drop, {moves->region, handle});
@@ -108,27 +142,27 @@ llvm::Value* lower(const Expression& expr,
                     return value;
                 }
             }
-            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves, arrays);
         }
         case Expression::Kind::Add: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves, arrays);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves, arrays);
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves, arrays);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves, arrays);
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
-            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves, arrays);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves, arrays);
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
-                arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
+                arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves, arrays));
             llvm::Function* callee = functions.at(expr.name);
             return builder.CreateCall(callee, arguments,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
@@ -160,7 +194,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
             for (const auto& local : fn.locals)
-                if (local.heap_owned)
+                if (local.heap_owned || local.native_int_array)
                     throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
         }
     }
@@ -222,6 +256,35 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, i64}, false));
         regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
+    }
+
+    const bool has_array_bindings = std::any_of(source.functions.begin(), source.functions.end(),
+        [](const Function& fn) {
+            return std::any_of(fn.locals.begin(), fn.locals.end(),
+                [](const LocalBinding& binding) { return binding.native_int_array; });
+        });
+    llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
+        arrayLength, arrayReserve, arrayDrop, arrayClose;
+    if (has_array_bindings) {
+        auto* voidTy = llvm::Type::getVoidTy(context);
+        arrayOpen = module.getOrInsertFunction("oreslang_int_array_region_open",
+            llvm::FunctionType::get(native_ptr, {}, false));
+        arrayNew = module.getOrInsertFunction("oreslang_int_array_new",
+            llvm::FunctionType::get(i64, {native_ptr}, false));
+        arrayAdd = module.getOrInsertFunction("oreslang_int_array_add",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false));
+        arrayGet = module.getOrInsertFunction("oreslang_int_array_get",
+            llvm::FunctionType::get(i64, {native_ptr, i64, i64}, false));
+        arraySet = module.getOrInsertFunction("oreslang_int_array_set",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64}, false));
+        arrayLength = module.getOrInsertFunction("oreslang_int_array_length",
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
+        arrayReserve = module.getOrInsertFunction("oreslang_int_array_reserve",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false));
+        arrayDrop = module.getOrInsertFunction("oreslang_int_array_drop",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        arrayClose = module.getOrInsertFunction("oreslang_int_array_region_close",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
     }
 
     // Only generated source actors resolve this native scheduler/heap ABI.
@@ -342,7 +405,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags};
+        const auto array_count = std::count_if(fn.locals.begin(), fn.locals.end(),
+            [](const LocalBinding& b) { return b.native_int_array; });
+        llvm::Value* arrayRegion = array_count
+            ? builder.CreateCall(arrayOpen, {}, "native.array.region") : nullptr;
+        const ArrayLowering array_lowering{arrayRegion, arrayAdd, arrayGet, arraySet,
+            arrayLength, arrayReserve};
+        std::unordered_set<std::string> array_owners;
         for (const auto& binding : fn.locals) {
+            if (binding.native_int_array) {
+                auto* handle = builder.CreateCall(arrayNew, {arrayRegion},
+                    binding.name + ".array.new");
+                auto* slot = builder.CreateAlloca(i64, nullptr, binding.name + ".array.handle.slot");
+                builder.CreateStore(handle, slot);
+                storage.emplace(binding.name, slot);
+                array_owners.insert(binding.name);
+                lexical_slots.push_back({binding.name, slot, false, 8});
+                continue;
+            }
             if (binding.new_class || binding.move_class) {
                 llvm::StructType* shape = class_types.at(binding.class_name);
                 llvm::Value* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record");
@@ -368,7 +448,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 lexical_slots.push_back({binding.name, slot, false, bytes});
                 continue;
             }
-            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves, &array_lowering);
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
                 // Store only an opaque, generation-checked lifetime token.
@@ -393,11 +473,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         auto lower_effect = [&](const Statement& effect) {
             if (effect.kind == Statement::Kind::FieldWrite) {
                 llvm::Value* updated = lower(*effect.expression, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
+                    storage, field_storage, declarations, &region_moves, &array_lowering);
                 builder.CreateStore(updated, field_storage.at(
                     field_key(effect.receiver, effect.field)));
-            } else if (effect.kind == Statement::Kind::Call) {
-                lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
+            } else if (effect.kind == Statement::Kind::Call ||
+                    effect.kind == Statement::Kind::ArrayOp) {
+                lower(*effect.expression, builder, i64, storage, field_storage,
+                    declarations, &region_moves, &array_lowering);
             } else {
                 throw std::runtime_error("unsupported native conditional arm");
             }
@@ -414,7 +496,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 }
                 const LocalBinding& local = *action.branch_local;
                 llvm::Value* init = lower(*local.initializer, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
+                    storage, field_storage, declarations, &region_moves, &array_lowering);
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
                     local.name + ".arm.stack");
                 builder.CreateLifetimeStart(slot,
@@ -437,9 +519,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             }
             if (stmt.kind == Statement::Kind::Conditional) {
                 llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
+                    storage, field_storage, declarations, &region_moves, &array_lowering);
                 llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
+                    storage, field_storage, declarations, &region_moves, &array_lowering);
                 llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "if.else.eq");
                 llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
                     context, "if.then", function);
@@ -465,7 +547,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         for (const auto& action : fn.actor_actions) {
             if (action.kind == ActorAction::Kind::Send) {
                 const auto& send = fn.actor_sends.at(action.index);
-                llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations, &region_moves);
+                llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations, &region_moves, &array_lowering);
                 builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
             } else {
                 builder.CreateCall(sourceStop, {actorRefs.at(fn.actor_stops.at(action.index))});
@@ -494,19 +576,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     builder.CreateStore(builder.getFalse(), flag);
                     builder.CreateBr(after_drop);
                     builder.SetInsertPoint(after_drop);
+                } else if (array_owners.count(it->name)) {
+                    auto* handle = builder.CreateLoad(i64, it->address,
+                        it->name + ".array.drop.handle");
+                    builder.CreateCall(arrayDrop, {arrayRegion, handle});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), it->address);
                 } else {
                     // llvm.lifetime.end is not a source-level destructor.
                     builder.CreateLifetimeEnd(it->address,
                         llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
                 }
             }
+            if (arrayRegion != nullptr) builder.CreateCall(arrayClose, {arrayRegion});
             if (region != nullptr) builder.CreateCall(regionClose, {region});
         };
         if (fn.early_returns.empty() && deferred_effects.empty()) {
             // Maintain stable native IR (ret i64 42, for example) for
             // functions without a multi-exit cleanup obligation.
             llvm::Value* result = fn.result
-                ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves)
+                ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves, &array_lowering)
                 : nullptr;
             emit_lexical_cleanup();
             if (fn.returns_void) builder.CreateRetVoid();
@@ -522,22 +610,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             };
             for (const auto& guard : fn.early_returns) {
                 llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
+                    declarations, &region_moves, &array_lowering);
                 llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
+                    declarations, &region_moves, &array_lowering);
                 llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
                 llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
                 llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
                 builder.CreateCondBr(equal, taken, next);
                 builder.SetInsertPoint(taken);
                 llvm::Value* selected = lower(*guard.result, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
+                    storage, field_storage, declarations, &region_moves, &array_lowering);
                 branch_to_cleanup(selected);
                 builder.SetInsertPoint(next);
             }
             llvm::Value* result = fn.result
                 ? lower(*fn.result, builder, i64, storage, field_storage,
-                    declarations, &region_moves) : nullptr;
+                    declarations, &region_moves, &array_lowering) : nullptr;
             branch_to_cleanup(result);
             builder.SetInsertPoint(cleanup);
             // Capture the return before deferred calls can mutate class fields.
@@ -545,10 +633,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 const Statement& effect = **it;
                 if (effect.receiver.empty()) {
                     lower(*effect.expression, builder, i64, storage, field_storage,
-                        declarations, &region_moves);
+                        declarations, &region_moves, &array_lowering);
                 } else {
                     llvm::Value* updated = lower(*effect.expression, builder, i64,
-                        storage, field_storage, declarations, &region_moves);
+                        storage, field_storage, declarations, &region_moves, &array_lowering);
                     builder.CreateStore(updated, field_storage.at(
                         field_key(effect.receiver, effect.field)));
                 }

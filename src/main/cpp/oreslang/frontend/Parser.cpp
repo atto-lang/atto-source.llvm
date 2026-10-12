@@ -300,6 +300,8 @@ private:
     }
 
     Function function() {
+        // Never allow a previous function's lexical arrays to resolve here.
+        array_receivers_.clear();
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
@@ -371,21 +373,43 @@ private:
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
                 binding.class_name = identifier();
-                binding.name = identifier();
-                require("=");
-                if (accept("new")) {
-                    const std::string ctor = identifier();
-                    if (ctor != binding.class_name) fail("class constructor type mismatch");
+                if (binding.class_name == "Array") {
+                    // First native Array slice: a local, unique, mutable owner,
+                    // not an array parameter, class field, alias, or returned handle.
+                    require("<");
+                    require("int");
+                    require(">");
+                    if (!binding.owner_mutable)
+                        fail("native Array<int> construction requires let mut owner");
+                    binding.native_int_array = true;
+                    binding.class_name.clear();
+                    binding.name = identifier();
+                    require("=");
+                    require("new");
+                    require("Array");
+                    require("<");
+                    require("int");
+                    require(">");
                     require("(");
                     require(")");
-                    binding.new_class = true;
+                    array_receivers_.insert(binding.name);
                 } else {
-                    require("rt");
-                    require("take");
-                    const bool parenthesized = accept("(");
-                    binding.move_source = identifier();
-                    if (parenthesized) require(")");
-                    binding.move_class = true;
+                    binding.name = identifier();
+                    require("=");
+                    if (accept("new")) {
+                        const std::string ctor = identifier();
+                        if (ctor != binding.class_name) fail("class constructor type mismatch");
+                        require("(");
+                        require(")");
+                        binding.new_class = true;
+                    } else {
+                        require("rt");
+                        require("take");
+                        const bool parenthesized = accept("(");
+                        binding.move_source = identifier();
+                        if (parenthesized) require(")");
+                        binding.move_class = true;
+                    }
                 }
             } else {
                 // A val owns mutable scalar storage; const permits only shared
@@ -632,6 +656,9 @@ private:
             } else if (action->kind == Expression::Kind::Call) {
                 statement.kind = Statement::Kind::Call;
                 statement.expression = std::move(action);
+            } else if (action->kind == Expression::Kind::ArrayOp) {
+                statement.kind = Statement::Kind::ArrayOp;
+                statement.expression = std::move(action);
             } else {
                 fail("expected class field assignment or function call statement");
             }
@@ -792,10 +819,31 @@ private:
                 require(")");
             }
         } else if (accept(".")) {
-            auto field = make_expression(Expression::Kind::Field, offset);
-            field->left = std::move(expr);
-            field->name = identifier();
-            expr = std::move(field);
+            const std::string member = identifier();
+            if (array_receivers_.count(expr->name)) {
+                if (member != "add" && member != "get" && member != "set"
+                        && member != "reserve" && member != "length"
+                        && member != "size")
+                    fail("unsupported native Array<int> method '" + member + "'");
+                auto operation = make_expression(Expression::Kind::ArrayOp, offset);
+                operation->name = expr->name;
+                operation->array_method = member;
+                require("(");
+                if (!accept(")")) {
+                    do { operation->arguments.push_back(expression()); } while (accept(","));
+                    require(")");
+                }
+                const std::size_t required = member == "set" ? 2
+                    : (member == "length" || member == "size") ? 0 : 1;
+                if (operation->arguments.size() != required)
+                    fail("wrong arity for Array<int>." + member);
+                expr = std::move(operation);
+            } else {
+                auto field = make_expression(Expression::Kind::Field, offset);
+                field->left = std::move(expr);
+                field->name = member;
+                expr = std::move(field);
+            }
         }
         return expr;
     }
@@ -843,6 +891,15 @@ private:
                 return;
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions);
+                return;
+            case Expression::Kind::ArrayOp:
+                if (!parameters.count(expr.name))
+                    throw std::runtime_error("unknown native Array<int> owner '" + expr.name + "'");
+                if (expr.array_method != "get" && expr.array_method != "size"
+                        && expr.array_method != "length")
+                    throw std::runtime_error("native Array<int> mutation is a statement-only effect");
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions);
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
@@ -892,6 +949,8 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
+            if (local.native_int_array)
+                throw std::runtime_error("native Array<int> using effects require verified collection effect summaries");
             if (local.heap_owned && !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
@@ -980,7 +1039,11 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.new_class || binding.move_class) {
+                if (binding.native_int_array) {
+                    if (!binding.owner_mutable || binding.initializer || binding.new_class
+                            || binding.move_class)
+                        throw std::runtime_error("invalid native Array<int> ownership initialization");
+                } else if (binding.new_class || binding.move_class) {
                     if (classes.count(binding.class_name) == 0)
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
                     if (binding.move_class && !params.count(binding.move_source))
@@ -1016,6 +1079,17 @@ private:
                     if (!names.insert(local.name).second)
                         throw std::runtime_error("duplicate branch-local name '" +
                             local.name + "' at byte " + std::to_string(local.offset));
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ArrayOp) {
+                    const auto& op = *stmt.expression;
+                    if (!names.count(op.name))
+                        throw std::runtime_error("unknown native Array<int> owner '" + op.name + "'");
+                    if (op.array_method != "add" && op.array_method != "set"
+                            && op.array_method != "reserve")
+                        throw std::runtime_error("read-only Array<int> method cannot be a statement");
+                    for (const auto& arg : op.arguments)
+                        validate_expression(*arg, names, functions);
                     return;
                 }
                 if ((stmt.kind == Statement::Kind::FieldWrite ||
@@ -1086,6 +1160,7 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    std::unordered_set<std::string> array_receivers_;
 };
 
 } // namespace
