@@ -74,6 +74,7 @@ typedef struct {
     SourceActor* pipeline_source;
     int pipeline_done;
     int64_t pipeline_result;
+    atomic_int pipeline_phase; /* 0 -> 1 -> 2 -> 3 -> 4 -> 5 */
     SourceActor* pipeline_middle;
     SourceActor* pipeline_sink;
     atomic_uint_fast64_t pipeline_forward_count;
@@ -95,6 +96,7 @@ static SourceActorGroup group = {
 /* The active context is issued only while a scheduler-owned DATA callback
  * is executing. A source program cannot forge it through message bytes. */
 static _Thread_local SourceActor* active_pipeline_actor;
+static _Thread_local uint8_t active_pipeline_ingress;
 static _Atomic uint64_t next_actor_id = 4100;
 static void check_invariant(int condition, const char* predicate, int line) {
     if (!condition) {
@@ -175,10 +177,13 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         ensure(accepted->variant_index < instance->variant_count);
         if (instance->on_variant) {
             SourceActor* prior = active_pipeline_actor;
+            uint8_t prior_ingress = active_pipeline_ingress;
             active_pipeline_actor = instance;
+            active_pipeline_ingress = accepted->direction;
             result = instance->on_variant(instance->heap, turn.domain, turn.epoch,
                     accepted->variant_index, accepted->packet.bytes,
                     accepted->packet.size);
+            active_pipeline_ingress = prior_ingress;
             active_pipeline_actor = prior;
         } else {
             ensure(accepted->variant_index == 0 && instance->variant_count == 1);
@@ -206,6 +211,10 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         group_lock();
         if (is_pipeline_backward && group.pipeline_source == instance) {
             ensure(!group.pipeline_done);
+            int expected = 4;
+            ensure(atomic_compare_exchange_strong_explicit(
+                &group.pipeline_phase, &expected, 5,
+                memory_order_acq_rel, memory_order_acquire));
             group.pipeline_result = result;
             group.pipeline_done = 1;
         }
@@ -636,6 +645,7 @@ void oreslang_source_actor_pipeline_connect(void* first, void* middle, void* las
     atomic_store_explicit(&group.pipeline_backward_count, 0, memory_order_release);
     group.pipeline_done = 0;
     group.pipeline_result = 0;
+    atomic_store_explicit(&group.pipeline_phase, 0, memory_order_release);
     group_unlock();
 }
 static size_t pipeline_write_positive(uint8_t* dst, uint64_t n) {
@@ -676,6 +686,22 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
         && (direction == 1 || direction == 2) && variant < actor->variant_count);
     SourceActor* target = direction == 1 ? actor->downstream : actor->upstream;
     ensure(target && target->magic == SOURCE_ACTOR_MAGIC);
+    /* Only the actual scheduler-admitted ingress may authorize a directional
+     * hop. The one-use phase CAS prevents duplicate, reordered or reentrant
+     * sends, including when multiple actors occupy different workers. */
+    int expected_phase = -1;
+    if (direction == 1 && active_pipeline_ingress == 0
+            && actor == group.pipeline_source) expected_phase = 0;
+    else if (direction == 1 && active_pipeline_ingress == 1
+            && actor == group.pipeline_middle) expected_phase = 1;
+    else if (direction == 2 && active_pipeline_ingress == 1
+            && actor == group.pipeline_sink) expected_phase = 2;
+    else if (direction == 2 && active_pipeline_ingress == 2
+            && actor == group.pipeline_middle) expected_phase = 3;
+    ensure(expected_phase >= 0);
+    ensure(atomic_compare_exchange_strong_explicit(
+        &group.pipeline_phase, &expected_phase, expected_phase + 1,
+        memory_order_acq_rel, memory_order_acquire));
     const SourceVariantContract* contract = &actor->variants[variant];
     ensure(contract->owned_enum_name && contract->declared_tag
         && strcmp(contract->value.shape, "T[S,I,I]") == 0);
@@ -727,6 +753,7 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
         ensure(status == 0);
     }
     ensure(group.pipeline_result == expected);
+    ensure(atomic_load_explicit(&group.pipeline_phase, memory_order_acquire) == 5);
     ensure(atomic_load_explicit(&actor->processed, memory_order_acquire) == 2);
     ensure(atomic_load_explicit(&actor->last_result, memory_order_acquire) == expected);
     const uint64_t forwards = atomic_load_explicit(
