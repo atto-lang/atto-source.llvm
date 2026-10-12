@@ -27,6 +27,11 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Native CTest fixtures use assert() as executable correctness checks.
+    # CMake RelWithDebInfo/Release otherwise defines NDEBUG and silently
+    # removes test setup/side effects, producing false passes and hangs.
+    # Keep assertions live whenever BUILD_TESTING is enabled.
+    add_compile_options(-UNDEBUG)
     # Standalone LLVM frontend admission proof. The parser is linked directly
     # so nominal declarations, monotonic tags and fail-closed actor usage can
     # be tested without generating IR for unsupported tagged operations.
