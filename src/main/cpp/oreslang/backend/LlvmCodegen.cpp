@@ -29,6 +29,8 @@ llvm::Value* lower(const Expression& expr,
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
+        case Expression::Kind::Boolean:
+            return llvm::ConstantInt::get(i64, expr.integer ? 1 : 0);
         case Expression::Kind::Variable:
             if (auto local = locals.find(expr.name); local != locals.end()) {
                 return builder.CreateLoad(i64, local->second, expr.name + ".load");
@@ -100,21 +102,27 @@ std::string emit_verified_llvm_ir(const Program& source) {
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::Function*> actorInitializers;
     std::unordered_map<std::string, llvm::Function*> actorMessageHandlers;
+    const std::string actorSymbolPrefix = "oreslang_actor_"
+        + (source.module.empty() ? "" : source.module + "_");
     std::unordered_map<std::string, std::size_t> actorFieldCounts;
     for (const auto& actor : source.actors) {
         auto* ctorType = llvm::FunctionType::get(
             llvm::Type::getVoidTy(context), {ptr, i64, i64}, false);
         actorInitializers.emplace(actor.name, llvm::Function::Create(
             ctorType, llvm::Function::ExternalLinkage,
-            "oreslang_actor_" + actor.name + "_init", module));
-        actorFieldCounts.emplace(actor.name, actor.fields.size());
+            actorSymbolPrefix + actor.name + "_init", module));
+        // The native i64 heap requires capacity >=1, even for a stateless
+        // actor with an exclusively typed inbound message contract.
+        actorFieldCounts.emplace(actor.name, std::max<std::size_t>(1, actor.fields.size()));
         const auto method = std::find_if(actor.methods.begin(), actor.methods.end(),
-            [](const Function& f) { return f.name == "on_message"; });
+            [&](const Function& f) { return f.name ==
+                (actor.messages_type.empty() ? "on_message" : "receive"); });
         if (method != actor.methods.end() && method->parameters.size() == 1) {
             auto* msgType = llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false);
             actorMessageHandlers.emplace(actor.name, llvm::Function::Create(
                 msgType, llvm::Function::ExternalLinkage,
-                "oreslang_actor_" + actor.name + "_on_message", module));
+                actorSymbolPrefix + actor.name + "_"
+                + (actor.messages_type.empty() ? "on_message" : "receive"), module));
         }
     }
     const auto sourceSpawn = module.getOrInsertFunction(
@@ -248,11 +256,25 @@ std::string emit_verified_llvm_ir(const Program& source) {
         builder.CreateRet(result);
     }
 
+    // Native C entrypoint for a module-scoped main: retain the fully scoped
+    // Bar.main symbol while providing the executable's conventional main ABI.
+    if (!source.module.empty()) {
+        auto entry = declarations.find("main");
+        if (entry != declarations.end() && entry->second->arg_empty()) {
+            auto* entryType = llvm::FunctionType::get(i64, {}, false);
+            auto* nativeMain = llvm::Function::Create(
+                entryType, llvm::Function::ExternalLinkage, "main", module);
+            llvm::IRBuilder<> mainBuilder(
+                llvm::BasicBlock::Create(context, "entry", nativeMain));
+            mainBuilder.CreateRet(mainBuilder.CreateCall(entry->second, {}));
+        }
+    }
+
     // Actor field layout is fixed and private to an admitted native actor
     // heap. Runtime/FFI code is responsible for creating a heap with at least
     // actor.fields.size() slots and passing fresh scheduler turn tokens.
     for (const auto& actor : source.actors) {
-        const std::string symbol = "oreslang_actor_" + actor.name;
+        const std::string symbol = actorSymbolPrefix + actor.name;
         auto* initTy = llvm::FunctionType::get(
                 llvm::Type::getVoidTy(context), {ptr, i64, i64}, false);
         auto* initialize = actorInitializers.at(actor.name);
@@ -280,7 +302,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
             types.insert(types.end(), method.parameters.size(), i64);
             auto* signature = llvm::FunctionType::get(i64, types, false);
             auto existing = actorMessageHandlers.find(actor.name);
-            auto* fn = method.name == "on_message" && existing != actorMessageHandlers.end()
+            auto* fn = (method.name == "on_message" || method.name == "receive")
+                           && existing != actorMessageHandlers.end()
                     ? existing->second
                     : llvm::Function::Create(signature, llvm::Function::ExternalLinkage,
                                              symbol + "_" + method.name, module);

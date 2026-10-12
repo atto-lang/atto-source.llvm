@@ -41,7 +41,8 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "self", "true", "false", "null", "obj", "arr",
-        "int", "owned"
+        "int", "owned", "declare", "receive", "Message", "bool", "string",
+        "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -55,6 +56,11 @@ public:
             if (at_ == source_.size()) return {Kind::End, {}, at_};
             const unsigned char ch = static_cast<unsigned char>(source_[at_]);
             if (std::isspace(ch)) { ++at_; continue; }
+            if (source_[at_] == '#') {
+                const auto end = source_.find('\n', at_ + 1);
+                at_ = end == std::string_view::npos ? source_.size() : end;
+                continue;
+            }
             if (source_.substr(at_, 2) == "//") {
                 const auto end = source_.find('\n', at_ + 2);
                 at_ = end == std::string_view::npos ? source_.size() : end;
@@ -91,7 +97,7 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("()[]{},:;+-*=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -132,7 +138,9 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            if (accept("define")) {
+            if (accept("declare")) {
+                program.message_patterns.push_back(message_pattern());
+            } else if (accept("define")) {
                 require("actor");
                 program.actors.push_back(actor());
             } else {
@@ -141,17 +149,70 @@ public:
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty())
+        if (program.functions.empty() && program.actors.empty()
+            && program.message_patterns.empty())
             fail("expected a function or actor");
         validate(program);
         return program;
     }
 
 private:
+    MessageShape message_shape() {
+        if (accept("bool")) return {MessageShape::Kind::Boolean, {}};
+        if (accept("int")) return {MessageShape::Kind::Integer, {}};
+        if (accept("string")) return {MessageShape::Kind::String, {}};
+        MessageShape shape;
+        std::string_view close;
+        if (accept("(")) {
+            shape.kind = MessageShape::Kind::Tuple;
+            close = ")";
+        } else if (accept("Array")) {
+            shape.kind = MessageShape::Kind::Array;
+            require("[");
+            close = "]";
+        } else if (accept("List")) {
+            shape.kind = MessageShape::Kind::List;
+            require("[");
+            close = "]";
+        } else {
+            fail("expected message shape (bool, int, string, tuple, Array or List)");
+        }
+        if (accept(close))
+            fail("empty structural message pattern is not supported");
+        do {
+            shape.elements.push_back(message_shape());
+        } while (accept(","));
+        require(close);
+        return shape;
+    }
+
+    MessagePattern message_pattern() {
+        MessagePattern pattern;
+        pattern.offset = token_.offset;
+        require("type");
+        require("match");
+        pattern.name = identifier();
+        require("as");
+        while (token_.kind != Kind::End && token_.text != "end") {
+            pattern.alternatives.push_back(message_shape());
+            accept(";");
+        }
+        if (pattern.alternatives.empty())
+            fail("message match contract must declare at least one alternative");
+        require("end");
+        return pattern;
+    }
+
     Actor actor() {
         Actor value;
         value.offset = token_.offset;
         value.name = identifier();
+        if (accept("<")) {
+            require("messages");
+            require("=");
+            value.messages_type = identifier();
+            require(">");
+        }
         require("as");
         const bool braced = accept("{");
         // The first native actor subset deliberately admits only immutable
@@ -169,8 +230,10 @@ private:
             require(";");
             value.fields.push_back(std::move(field));
         }
-        if (value.fields.empty()) fail("actor requires at least one scalar field");
-        while (token_.text == "fnc" || token_.text == "routine" || token_.text == "pub") {
+        if (value.fields.empty() && value.messages_type.empty())
+            fail("actor requires at least one scalar field");
+        while (token_.text == "fnc" || token_.text == "routine"
+               || token_.text == "pub" || token_.text == "receive") {
             value.methods.push_back(function(true));
         }
         if (value.methods.empty()) fail("actor requires at least one read-only method");
@@ -183,18 +246,30 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
-        if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
-        value.name = identifier();
-        require("(");
-        if (!accept(")")) {
-            do {
-                require("int");
-                value.parameters.push_back(identifier());
-            } while (accept(","));
-            require(")");
+        value.is_receiver = actor_method && accept("receive");
+        if (value.is_receiver) {
+            value.name = "receive";
+            value.exported = true;
+        } else {
+            if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+            value.name = identifier();
         }
-        require(":");
-        require("int");
+        require("(");
+        if (value.is_receiver) {
+            require("Message");
+            value.parameters.push_back(identifier());
+            require(")");
+        } else {
+            if (!accept(")")) {
+                do {
+                    require("int");
+                    value.parameters.push_back(identifier());
+                } while (accept(","));
+                require(")");
+            }
+            require(":");
+            require("int");
+        }
         require("{");
         bool scalar_local_seen = false;
         while (token_.text == "const" || token_.text == "val") {
@@ -295,9 +370,14 @@ private:
             require(";");
             value.assignments.push_back(std::move(assignment));
         }
-        require("return");
-        value.result = expression();
-        require(";");
+        if (value.is_receiver && token_.text == "}") {
+            value.result = make_expression(Expression::Kind::Integer, token_.offset);
+            value.result->integer = 0;
+        } else {
+            require("return");
+            value.result = expression();
+            require(";");
+        }
         require("}");
         return value;
     }
@@ -349,6 +429,12 @@ private:
             auto inner = expression();
             require(")");
             return inner;
+        }
+        if (token_.text == "true" || token_.text == "false") {
+            auto expr = make_expression(Expression::Kind::Boolean, offset);
+            expr->integer = token_.text == "true" ? 1 : 0;
+            advance();
+            return expr;
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
@@ -407,7 +493,8 @@ private:
                                     const std::unordered_set<std::string>& parameters,
                                     const std::unordered_map<std::string, std::size_t>& functions) {
         switch (expr.kind) {
-            case Expression::Kind::Integer: return;
+            case Expression::Kind::Integer:
+            case Expression::Kind::Boolean: return;
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
@@ -439,7 +526,53 @@ private:
         throw std::runtime_error("internal invalid expression kind");
     }
 
+    static std::string shape_key(const MessageShape& shape) {
+        switch (shape.kind) {
+            case MessageShape::Kind::Boolean: return "bool";
+            case MessageShape::Kind::Integer: return "int";
+            case MessageShape::Kind::String: return "string";
+            default: break;
+        }
+        const char* label = shape.kind == MessageShape::Kind::Tuple ? "Tuple"
+            : shape.kind == MessageShape::Kind::Array ? "Array" : "List";
+        std::string text(label);
+        text += "[";
+        for (const auto& element : shape.elements) {
+            if (text.back() != '[') text += ",";
+            text += shape_key(element);
+        }
+        return text + "]";
+    }
+
+    static bool contains_boolean(const Expression& e) {
+        if (e.kind == Expression::Kind::Boolean) return true;
+        if (e.left && contains_boolean(*e.left)) return true;
+        if (e.right && contains_boolean(*e.right)) return true;
+        for (const auto& arg : e.arguments)
+            if (contains_boolean(*arg)) return true;
+        return false;
+    }
+
+    static bool reads_name(const Expression& e, const std::string& name) {
+        if (e.kind == Expression::Kind::Variable && e.name == name) return true;
+        if (e.left && reads_name(*e.left, name)) return true;
+        if (e.right && reads_name(*e.right, name)) return true;
+        for (const auto& arg : e.arguments)
+            if (reads_name(*arg, name)) return true;
+        return false;
+    }
+
     static void validate(const Program& program) {
+        std::unordered_map<std::string, const MessagePattern*> messagePatterns;
+        for (const auto& pattern : program.message_patterns) {
+            if (!messagePatterns.emplace(pattern.name, &pattern).second)
+                throw std::runtime_error("duplicate message match contract '" + pattern.name + "'");
+            std::unordered_set<std::string> variants;
+            for (const auto& alternative : pattern.alternatives) {
+                if (!variants.insert(shape_key(alternative)).second)
+                    throw std::runtime_error("duplicate message shape in match '" + pattern.name + "'");
+            }
+        }
         std::unordered_set<std::string> declaredActors;
         for (const auto& actor : program.actors) declaredActors.insert(actor.name);
         std::unordered_map<std::string, std::size_t> functions;
@@ -503,11 +636,29 @@ private:
                 const auto actor = std::find_if(program.actors.begin(), program.actors.end(),
                     [&](const Actor& a) { return a.name == ref->second; });
                 if (actor == program.actors.end()) throw std::runtime_error("unknown actor type");
-                const auto method = std::find_if(actor->methods.begin(), actor->methods.end(),
-                    [](const Function& fn) { return fn.name == "on_message"; });
-                if (method == actor->methods.end() || !method->exported ||
-                    method->parameters.size() != 1)
-                    throw std::runtime_error("actor send requires pub on_message(int)");
+                if (!actor->messages_type.empty()) {
+                    auto found = messagePatterns.find(actor->messages_type);
+                    if (found == messagePatterns.end())
+                        throw std::runtime_error("unknown actor message match contract");
+                    const MessagePattern& contract = *found->second;
+                    if (contract.alternatives.size() != 1 ||
+                        (contract.alternatives.front().kind != MessageShape::Kind::Boolean
+                         && contract.alternatives.front().kind != MessageShape::Kind::Integer))
+                        throw std::runtime_error(
+                            "typed structural/union message transport requires tagged envelope lowering");
+                    const bool expectedBool =
+                        contract.alternatives.front().kind == MessageShape::Kind::Boolean;
+                    if (expectedBool && send.payload->kind != Expression::Kind::Boolean)
+                        throw std::runtime_error("actor send expects bool message");
+                    if (!expectedBool && contains_boolean(*send.payload))
+                        throw std::runtime_error("actor send expects int message");
+                } else {
+                    const auto method = std::find_if(actor->methods.begin(), actor->methods.end(),
+                        [](const Function& fn) { return fn.name == "on_message"; });
+                    if (method == actor->methods.end() || !method->exported ||
+                        method->parameters.size() != 1)
+                        throw std::runtime_error("actor send requires pub on_message(int)");
+                }
                 validate_expression(*send.payload, available, functions);
             }
             validate_expression(*fn.result, available, functions);
@@ -526,11 +677,29 @@ private:
                 throw std::runtime_error("conflicting generated actor symbol '" + name + "'");
         };
         for (const auto& actor : program.actors) {
+            if (!actor.messages_type.empty()) {
+                if (!messagePatterns.count(actor.messages_type))
+                    throw std::runtime_error(
+                        "unknown actor message match contract '" + actor.messages_type + "'");
+                const auto count = std::count_if(actor.methods.begin(), actor.methods.end(),
+                    [](const Function& f) { return f.is_receiver; });
+                if (count != 1)
+                    throw std::runtime_error("typed actor requires exactly one receive(Message m)");
+                if (std::any_of(actor.methods.begin(), actor.methods.end(),
+                    [](const Function& f) { return f.name == "on_message"; }))
+                    throw std::runtime_error(
+                        "typed actor must use receive, not on_message");
+            } else if (std::any_of(actor.methods.begin(), actor.methods.end(),
+                    [](const Function& f) { return f.is_receiver; })) {
+                throw std::runtime_error("receive requires actor messages=Contract");
+            }
             if (!actorNames.insert(actor.name).second
                 || functions.count(actor.name) != 0) {
                 throw std::runtime_error("duplicate actor symbol '" + actor.name + "'");
             }
-            const std::string prefix = "oreslang_actor_" + actor.name + "_";
+            const std::string prefix = "oreslang_actor_"
+                + (program.module.empty() ? "" : program.module + "_")
+                + actor.name + "_";
             reserveGenerated(prefix + "init");
             std::unordered_set<std::string> fields;
             std::unordered_set<std::string> mutableFields;
@@ -558,6 +727,16 @@ private:
                     validate_expression(*local.initializer, available, functions);
                     if (!available.insert(local.name).second)
                         throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
+                }
+                if (method.is_receiver) {
+                    const std::string& parameter = method.parameters.at(0);
+                    if (reads_name(*method.result, parameter) ||
+                        std::any_of(method.assignments.begin(), method.assignments.end(),
+                            [&](const FieldAssignment& a) {
+                                return reads_name(*a.value, parameter);
+                            }))
+                        throw std::runtime_error(
+                            "receive Message payload inspection requires match lowering");
                 }
                 for (const auto& assignment : method.assignments) {
                     if (!mutableFields.count(assignment.field)) {
