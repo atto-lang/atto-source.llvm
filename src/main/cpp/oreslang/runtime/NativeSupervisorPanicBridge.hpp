@@ -214,6 +214,21 @@ private:
                     return false;
                 }
                 admitted = registered_.at(key);
+                // Only this exact scheduler callback may durably prepare
+                // terminal evidence; a copied ActorRef or queued envelope
+                // must never poison the journal before real delivery.
+                std::optional<DurableTerminalKey> durable_key;
+                if (durable_journal_) {
+                    OresNativeTerminalReceipt preflight{};
+                    if (!has_scheduler_receipt
+                        || !ores_native_actor_scheduler_probe_delivered_terminal_receipt(
+                            scheduler_, parent_, failure.child, &preflight)) {
+                        ++rejected_;
+                        return false;
+                    }
+                    durable_key = durable_identity(receipt.failure, admitted);
+                    prepare_durable_terminal(*durable_key, failure.child);
+                }
                 // Identity-mode callbacks also require the actual scheduler-minted
                 // typed CONTROL carrier. A recorded-but-queued receipt or
                 // copied parent ActorRef cannot authorize host delivery.
@@ -230,6 +245,10 @@ private:
                     ++rejected_;
                     return false;
                 }
+                if (durable_key)
+                    (void)durable_journal_->claim(*durable_key);
+                // Durable claim is fsync'd BEFORE supervisor CONTROL
+                // enqueue. An ambiguous host exception is never replayed.
                 // The scheduler guarantees physical DONE, and the exact
                 // receipt remains CLAIMED on all subsequent exceptions.
                 child_registry_->finalized(
@@ -646,6 +665,38 @@ public:
     }
 
 private:
+    DurableTerminalKey durable_identity(
+            const OresNativeActorTerminalFailure& failure,
+            const SupervisorChildRegistry::Snapshot& admitted) const {
+        return DurableTerminalKey::from(
+            process_->supervisor_id(), process_->runtime_id(),
+            parent_.scheduler_domain, parent_.actor_slot, parent_.generation,
+            failure.child.scheduler_domain, failure.child.actor_slot,
+            failure.child.generation, failure.kind,
+            failure.failure_code, failure.correlation,
+            admitted.child.logical_child_id, admitted.incarnation);
+    }
+    void prepare_durable_terminal(
+            const DurableTerminalKey& identity,
+            OresNativeActorRef physical_child) {
+        if (!durable_journal_) return;
+        auto state = durable_journal_->find(identity);
+        if (!state) {
+            durable_journal_->record(identity);
+            state = durable_journal_->find(identity);
+        }
+        if (state->phase == DurableTerminalPhase::recorded) {
+            if (!durable_journal_->record_physical_done(identity, [&] {
+                    return ores_native_actor_scheduler_poll_done(
+                        scheduler_, physical_child) != 0;
+                }))
+                throw std::logic_error(
+                    "physical DONE not verified before durable terminal claim");
+        } else if (state->phase != DurableTerminalPhase::physical_done) {
+            throw std::logic_error(
+                "durable terminal receipt already claimed or acknowledged");
+        }
+    }
     struct Key {
         std::uint64_t slot;
         std::uint64_t generation;
