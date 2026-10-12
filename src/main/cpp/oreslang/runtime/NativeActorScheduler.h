@@ -23,6 +23,18 @@ typedef struct {
  */
 typedef void (*OresNativeActorPanicFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
+/* Separate, bounded scheduler-owned actor-state continuation wake slot.
+ * Never aliases the supervisor priority CONTROL slot. The three identities
+ * are kept intact; no truncation into a single uint64_t is permitted.
+ */
+typedef struct {
+    uint64_t incarnation;
+    uint64_t continuation_id;
+    uint64_t status;
+} OresNativeActorStateWake;
+enum { ORES_NATIVE_RW_READY = 1, ORES_NATIVE_RW_CANCELLED = 2 };
+typedef void (*OresNativeActorStateWakeFn)(
+    void* ctx, size_t actor_index, OresNativeActorStateWake wake);
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
@@ -75,6 +87,16 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_future,
     OresNativeActorPanicFn on_panic, void* ctx);
+/* Host-only backend constructor. State wake callbacks run under the actor's
+ * existing single-flight execution claim, on a scheduler worker. They must
+ * verify incarnation/ticket authority before executing any guest operation.
+ * Old constructors remain ABI-compatible and disable this wake channel.
+ */
+OresNativeActorScheduler* ores_native_actor_scheduler_open_state_wakes(
+    size_t actor_count, size_t per_actor_capacity, size_t workers,
+    OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control,
+    OresNativeActorPanicFn on_panic,
+    OresNativeActorStateWakeFn on_state_wake, void* ctx);
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
@@ -84,6 +106,18 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
  */
 int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent, uint64_t payload);
+/* Typed, independent state-wakeup receipt. Returns 1 only when this actor's
+ * dedicated slot has accepted the notification under the generation fence.
+ * A full slot or retired actor returns 0 for caller-side durable retry.
+ * Admission never executes guest code inline and never consumes the panic
+ * supervisor priority mailbox. Callers must retain their registry receipt
+ * until this returns 1. Only a trusted backend may invoke this API.
+ */
+int ores_native_actor_scheduler_publish_state_wake(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorStateWake wake);
+uint64_t ores_native_actor_scheduler_state_wakes_completed(
+    OresNativeActorScheduler* scheduler);
 /* Child must be a valid actor in the same scheduler, distinct from parent.
  * Returns 0 on reserved CONTROL saturation, stale refs or parent retirement.
  * Never invokes on_panic directly on the publishing child's carrier.
