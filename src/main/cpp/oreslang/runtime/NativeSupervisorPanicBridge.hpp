@@ -281,6 +281,32 @@ public:
         return child_registry_->abort_restart(permit);
     }
 
+    /**
+     * Canonical trusted host operation for a failed, never-published
+     * candidate: first confirm exact physical DONE, then consume the
+     * original one-use reservation in the child registry, and ONLY THEN
+     * recycle the physical scheduler slot with a bumped generation.
+     *
+     * A recycling failure never reverses the completed logical abort:
+     * callers must use a different physical slot or report capacity
+     * exhaustion. This intentionally cannot recycle a published actor.
+     * The newly returned ActorRef remains unpublished and requires a NEW
+     * logical RESTART reservation and scheduler admission lease.
+     */
+    OresNativeActorRef abort_cleaned_and_recycle_unpublished(
+            SupervisorChildRegistry::RestartReservation permit,
+            OresNativeActorRef replacement) {
+        const auto restored = abort_cleaned_replacement(permit, replacement);
+        if (restored.phase != SupervisorChildRegistry::Phase::finalized)
+            throw std::logic_error("restart abort did not restore FINALIZED");
+        const auto next = ores_native_actor_scheduler_recycle_unpublished_done(
+            scheduler_, replacement);
+        if (!next.scheduler_domain)
+            throw std::logic_error(
+                "physically cleaned replacement could not recycle safely");
+        return next;
+    }
+
     /** Terminal supervisor teardown fences any in-flight RESTART commit. */
     void fence_restart_publication() {
         child_registry_->close_restart_admission();
