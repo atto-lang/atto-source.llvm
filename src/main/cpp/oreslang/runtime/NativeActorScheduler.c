@@ -533,7 +533,11 @@ int ores_native_actor_scheduler_seal_normal_exit(
 }
 int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
                                           OresNativeActorRef actor) {
-    if (!s || executing == s) return 0;
+    /* A same-thread admission lease pins the publication gate. A pending
+     * callback may need STOP/retirement before physical DONE; waiting under
+     * that lease can create a cross-thread cycle. Fail closed, even if the
+     * requested actor is already DONE, to keep this host API nonblocking. */
+    if (!s || executing == s || owned_restart_lease == s) return 0;
     lock(s);
     if (!matching(s, actor) || !s->actors[actor.actor_slot].retired) {
         unlock(s);
@@ -559,7 +563,9 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
 }
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
-    if (!s || executing == s) return 0;
+    /* Draining from the lease owner can depend on a STOP blocked by this
+     * thread's own publication gate. It must never enter cond_wait. */
+    if (!s || executing == s || owned_restart_lease == s) return 0;
     lock(s);
     while (s->outstanding)
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
