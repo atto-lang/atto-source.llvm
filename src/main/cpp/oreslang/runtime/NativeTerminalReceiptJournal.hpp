@@ -309,6 +309,15 @@ private:
                        const std::array<std::uint8_t, 32>& digest) {
         if (poisoned_ || fd_ < 0)
             throw std::runtime_error("journal is quarantined after I/O failure");
+        // A new hard link can appear after the constructor's inode check.
+        // Quarantine rather than write more durable state through an inode
+        // whose identity now has an unexpected alternate filesystem path.
+        struct stat live{};
+        if (::fstat(fd_, &live) != 0 || !S_ISREG(live.st_mode)
+            || live.st_nlink != 1 || (live.st_mode & 0077) != 0) {
+            poisoned_ = true;
+            throw std::runtime_error("journal inode no longer private");
+        }
         if (sequence_ == UINT64_MAX)
             throw std::overflow_error("journal sequence exhausted");
         // Validate and allocate ALL new state before writing durable bytes.
