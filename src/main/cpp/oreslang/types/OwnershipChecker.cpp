@@ -443,6 +443,17 @@ void validate_i64_ownership(const Program& program) {
         using Ops = std::vector<ownership::Operation>;
         std::function<void(const Expression&, Ops&)> add_effects;
         add_effects = [&](const Expression& expr, Ops& operations) {
+            if (expr.kind == Expression::Kind::ModuleCall) {
+                // The left child is a *sealed module namespace*, not a
+                // stack-owned scalar place. Analyze only actual arguments;
+                // emitting a read of "Assert" invents a nonexistent owner.
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable
+                        || expr.left->name != "Assert")
+                    reject(expr, "invalid native sealed module qualifier");
+                for (const auto& argument : expr.arguments)
+                    add_effects(*argument, operations);
+                return;
+            }
             if (expr.kind == Expression::Kind::Variable) {
                 const auto found = cfg_entry.find(expr.name);
                 const bool object = found != cfg_entry.end() && !found->second.class_name.empty();
