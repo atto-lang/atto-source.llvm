@@ -282,7 +282,11 @@ inline Analysis verify(const Graph& graph) {
     // also cannot claim the same nonzero origin. Zero is reserved only for
     // the backward-compatible anonymous single-loan entry state.
     std::map<std::uint64_t, std::string> entry_loan_owners;
-    for (const auto& [name, value] : entry) {
+    for (const auto& entry_item : entry) {
+        // C++17: capture ordinary references, not structured bindings, in
+        // the nested provenance validator lambda.
+        const auto& name = entry_item.first;
+        const auto& value = entry_item.second;
         if (value.shared_loans > 1 && value.shared_loan_ids.count(0))
             violation(name, "anonymous entry loan mixed with named loans");
         auto record_entry_token = [&](std::uint64_t token) {
