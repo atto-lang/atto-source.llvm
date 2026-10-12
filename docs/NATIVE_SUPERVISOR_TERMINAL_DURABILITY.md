@@ -41,8 +41,15 @@ recorded -> physical_done -> claimed -> effect_proven -> acknowledged.
 The host journal writes canonical 176-byte little-endian frames, uses exclusive
 nonblocking flock, O_NOFOLLOW, O_CLOEXEC and private 0600 file permissions,
 fsyncs the parent directory at creation and fsyncs each appended transition.
+The journal also compares the configured pathname's device/inode with
+its open descriptor at startup and on both sides of each durable append,
+and rejects multiply-linked files. Any detected rebinding quarantines that
+writer, including after the original pathname is restored. These checks are
+fail-closed detection, **not an atomic defense against a hostile directory
+owner who can rename and restore the path between checks**. The parent
+directory and filesystem must remain trusted and access-controlled.
 Its FNV-1a checksum is for accidental corruption detection, not adversarial
-tamper protection. The host must trust the directory and filesystem.
+tamper protection.
 
 ## Host-bound acknowledgment reconciliation
 
