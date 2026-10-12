@@ -153,7 +153,7 @@ semantic_check(valid_max)
 
 # This targeted source-level assertion checks the intended TypeSpec scalar
 # mapping, while a full TypeSpec compilation remains a separate CI concern.
-TYPESPEC = SCHEMA.with_suffix(".tsp").read_text()
+TYPESPEC = SCHEMA.with_name("terminal-receipt.tsp").read_text()
 assert "claim_nonce?: NonZeroUInt64Decimal;" in TYPESPEC, (
     "TypeSpec and JSON Schema disagree on nonzero receipt claim nonce"
 )
