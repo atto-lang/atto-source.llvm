@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeSupervisorPanicBridge.hpp"
+#include "oreslang/runtime/NativePhysicalStopEvidence.hpp"
 #include "oreslang/runtime/SourceSupervisorStop.hpp"
 #include "oreslang/runtime/SupervisorControlScheduler.hpp"
 
@@ -23,6 +24,7 @@ struct Fixture {
     OresNativeActorRef parent{}, child{};
     std::shared_ptr<SupervisorControlScheduler> control;
     std::shared_ptr<SupervisorChildRegistry> registry;
+    std::unique_ptr<NativePhysicalStopEvidence> host_receipts;
     std::shared_ptr<SupervisorProcess> process;
     std::unique_ptr<NativeSupervisorPanicBridge> bridge;
     std::atomic<unsigned> terminal_events{0};
@@ -64,7 +66,8 @@ static void typed_terminal(void* raw, size_t parent_slot,
         ++f.failed_checks;
 }
 
-static void exercise(bool ambiguous) {
+static void exercise(bool ambiguous, bool lost_ack = false) {
+    require(!lost_ack || ambiguous, "lost ACK must model an unknown callback result");
     Fixture f;
     f.scheduler = ores_native_actor_scheduler_open_typed_control(
         2, 2, 2, ordinary, nullptr, typed_terminal, &f);
@@ -78,6 +81,8 @@ static void exercise(bool ambiguous) {
     const auto domain = f.parent.scheduler_domain;
     f.control = std::make_shared<SupervisorControlScheduler>(2, 16);
     f.registry = std::make_shared<SupervisorChildRegistry>(supervisor, domain);
+    f.host_receipts = std::make_unique<NativePhysicalStopEvidence>(
+        f.scheduler, supervisor, domain);
     constexpr auto source = R"(
         define supervisor Root as
           on_panic(f: Failure): void {
@@ -117,8 +122,22 @@ static void exercise(bool ambiguous) {
                 ++f.failed_checks;
                 throw;
             }
+            // This receipt is written by the trusted physical lifecycle
+            // adapter, using the real scheduler DONE barrier. It is not a
+            // fabricated callback result and not evidence of other effects.
+            // The lost-ACK case records DONE before throwing to CONTROL.
+            if (!ambiguous || lost_ack) {
+                const auto evidence = f.host_receipts->observe_physical_done(
+                    f.registry->stop_receipt(
+                        SupervisorChildRegistry::ChildRef{
+                            supervisor, domain, n.logical_child_id}));
+                require(evidence.control_turn == resolution.turn_generation
+                        && evidence.incarnation == n.logical_incarnation
+                        && evidence.actor.generation == n.generation,
+                        "host DONE attestation bound to wrong STOP incarnation");
+            }
             if (ambiguous)
-                throw std::runtime_error("unknown external STOP commit");
+                throw std::runtime_error("unknown external STOP acknowledgment");
         });
     f.bridge = std::make_unique<NativeSupervisorPanicBridge>(
         f.scheduler, f.parent, f.process, f.registry);
@@ -209,6 +228,51 @@ static void exercise(bool ambiguous) {
                     ORES_NATIVE_CONTROL_PANIC, f.child, 17, 91}),
             "duplicate typed panic replayed a consumed child incarnation");
 
+    // Prove that an uncertain STOP with no host evidence remains quarantined,
+    // whereas a separately recorded physical DONE can reconcile after the
+    // original host acknowledgment is lost, without replaying the sink.
+    require(f.host_receipts->size() ==
+                (ambiguous && !lost_ack ? 0U : 1U),
+            "host-owned physical STOP evidence ledger has wrong cardinality");
+    if (ambiguous) {
+        const auto original = f.registry->stop_receipt(logical);
+        auto forged = original;
+        forged.turn_generation++;
+        require(!f.host_receipts->confirms_physical_done(forged),
+                "foreign CONTROL turn borrowed physical STOP proof");
+        forged = original;
+        forged.failed_actor.generation++;
+        require(!f.host_receipts->confirms_physical_done(forged),
+                "foreign physical generation borrowed physical STOP proof");
+        forged = original;
+        forged.child.logical_child_id++;
+        require(!f.host_receipts->confirms_physical_done(forged),
+                "foreign logical child borrowed physical STOP proof");
+        const bool reconciled = f.registry->reconcile_uncertain_stop(
+            logical, f.child, 1, original.turn_generation,
+            [&](const SupervisorChildRegistry::StopReceipt& pending) {
+                return f.host_receipts->confirms_physical_done(pending);
+            });
+        require(reconciled == lost_ack,
+                "unknown STOP disposition did not follow independent host evidence");
+        require(f.registry->snapshot(logical).phase ==
+                    (lost_ack ? SupervisorChildRegistry::Phase::stopped
+                              : SupervisorChildRegistry::Phase::stopping),
+                "host ledger reconciliation broke STOP quarantine");
+        require(f.applied.load() == 1,
+                "reconciliation must never invoke original host callback twice");
+        if (lost_ack) {
+            require(f.registry->stop_receipt(logical).status ==
+                        SupervisorChildRegistry::StopReceiptStatus::acknowledged,
+                    "lost ACK did not reconcile one physically finalized child");
+            std::puts("NATIVE_SUPERVISOR_LOST_ACK_RECONCILED_V1"
+                      " attested=1 invoked=1 reconciled=1 replay=0");
+        } else {
+            std::puts("NATIVE_SUPERVISOR_UNKNOWN_QUARANTINED_V1"
+                      " attested=0 invoked=1 reconciled=0 replay=0");
+        }
+    }
+
     require(ores_native_actor_scheduler_stop(f.scheduler, f.parent),
             "supervisor parent could not stop");
     ores_native_actor_scheduler_retire(f.scheduler);
@@ -225,5 +289,6 @@ static void exercise(bool ambiguous) {
 int main() {
     exercise(false);
     exercise(true);
+    exercise(true, true);
     std::puts("NATIVE_SOURCE_SUPERVISOR_BRIDGE_E2E_PASS typed=1 stop=1 unknown_quarantined=1");
 }
