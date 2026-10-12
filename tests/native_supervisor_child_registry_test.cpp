@@ -57,6 +57,15 @@ int main() {
     must_reject([&] { registry.stop(first.child, first_actor, 1); });
     must_reject([&] { registry.replace(reservation, first_actor); });
     const auto next_actor = OresNativeActorRef{42, 5, 1};
+    must_reject([&] { registry.replace(reservation, next_actor); });
+    registry.stage_replacement(reservation, next_actor);
+    must_reject([&] { registry.replace(reservation, next_actor); });
+    must_reject([&] {
+        registry.acknowledge_replacement_admission(
+            reservation, next_actor, [] { return false; });
+    });
+    registry.acknowledge_replacement_admission(
+        reservation, next_actor, [] { return true; });
     auto second = registry.replace(reservation, next_actor);
     must_reject([&] { registry.replace(reservation, OresNativeActorRef{42, 9, 1}); });
     check(second.child == first.child && second.incarnation == 2,
@@ -103,7 +112,11 @@ int main() {
         contenders.emplace_back([&, i] {
             try {
                 auto claim = registry.begin_restart(before.child, before_actor, 1);
-                registry.replace(claim, OresNativeActorRef{42, 8 + i, 1});
+                const auto candidate = OresNativeActorRef{42, 8 + i, 1};
+                registry.stage_replacement(claim, candidate);
+                registry.acknowledge_replacement_admission(
+                    claim, candidate, [] { return true; });
+                registry.replace(claim, candidate);
                 ++wins;
             } catch (const std::exception&) {
                 ++rejects;
