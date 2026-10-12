@@ -38,6 +38,32 @@ does not free either buffer until an authenticated device event confirms
 quiescence. This preflight neither schedules GPU work nor chooses a CPU
 fallback.
 
+## Paired fence claim (implemented in this branch)
+
+After typed kernel/layout preflight, `DopGpuAdmission.claim` (Java) or
+`dop::claim_gpu` (LLVM) invokes an atomic **two-buffer fence claim**.
+The allocation locks are acquired in stable order (Java monotonic allocation
+ranks; native ordered owner and state pointers). Single-buffer `take`,
+`begin_command`, completion, cancellation and retirement synchronize
+with the same allocation locks. Before touching either status the claim
+checks both exact padded byte lengths, distinct device allocations and
+generations, tenant/device equality, `IDLE` and backend quiescence, and
+nonwrapping ticket sequences. Only after both return tickets have been
+created do the statuses change to `IN_FLIGHT` together.
+
+Failed validation does not partly claim either buffer. A successful claim
+blocks reuse/ownership transfer until corresponding authenticated device
+events are acknowledged. Reversed-order concurrent pair claims are covered
+by regression tests. Java additionally preconstructs single-buffer tickets
+and successors before changing their state.
+
+**Boundary:** this claims host-side fence records only. It does not prove a
+provider allocated the advertised GPU memory, authorize a tenant, reserve
+an external device queue, or launch any kernel. The device adapter still
+needs authenticated allocation capabilities, separate per-tenant limits,
+provider-side admission, actual device completion, and physical quiescent
+release. A completed preflight alone is never launch authorization.
+
 ## Lowering a nested CPU/GPU expression
 
 Future compiler lowering must consume the same typed DOP kernel/layout IR:
