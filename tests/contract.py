@@ -15,7 +15,10 @@ def main():
     parser.add_argument("--diagnostic")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
-    parser.add_argument("--native-runtime")
+    parser.add_argument("--native-runtime", action="append")
+    parser.add_argument("--native-harness")
+    parser.add_argument("--native-harness-cxx")
+    parser.add_argument("--native-sanitizers", action="store_true")
     args = parser.parse_args()
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
@@ -35,13 +38,42 @@ def main():
     assert args.clang, "--run requires a clang executable"
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
-        clang_args = [args.clang, "-x", "ir", "-"]
-        if args.native_runtime:
-            native_source = pathlib.Path(args.native_runtime)
+        # Clang's C driver omits the UBSan C++ vptr runtime; use the
+        # matching clang++ driver for a sanitizer-instrumented C++ host.
+        # Keep the C runtime source explicitly in -x c mode below.
+        link_driver = args.clang
+        if args.native_harness_cxx and args.native_sanitizers:
+            clang_path = pathlib.Path(args.clang)
+            cxx = clang_path.with_name(clang_path.name.replace("clang", "clang++", 1))
+            assert cxx.is_file(), f"missing matching C++ sanitizer driver: {cxx}"
+            link_driver = str(cxx)
+        clang_args = [link_driver, "-x", "ir", "-"]
+        if args.native_sanitizers:
+            clang_args.extend(["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g"])
+        for runtime_path in args.native_runtime or []:
+            native_source = pathlib.Path(runtime_path)
             clang_args.extend([
                 "-x", "c", str(native_source),
                 "-std=c11", "-I", str(native_source.parents[2]),
             ])
+        if args.native_harness:
+            clang_args.extend(["-x", "c", args.native_harness, "-pthread"])
+        if args.native_harness_cxx:
+            assert args.native_runtime, "C++ harness needs native runtime includes"
+            native_source = pathlib.Path(args.native_runtime[0])
+            cxx_object = str(pathlib.Path(directory) / "actor-group-host.o")
+            host_sanitizers = (
+                ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g"]
+                if args.native_sanitizers else []
+            )
+            host_build = subprocess.run(
+                [args.clang, "-x", "c++", "-std=c++17", "-c",
+                 args.native_harness_cxx, "-I", str(native_source.parents[2]),
+                 "-pthread", "-o", cxx_object] + host_sanitizers,
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            assert host_build.returncode == 0, host_build.stderr
+            clang_args.extend(["-x", "none", cxx_object, "-pthread", "-lstdc++"])
         clang_args.extend(["-o", executable])
         native = subprocess.run(
             clang_args, input=compile_result.stdout,

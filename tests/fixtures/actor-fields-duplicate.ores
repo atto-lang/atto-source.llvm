@@ -1,0 +1,7 @@
+define actor Counter as
+  let count: int = 5;
+  let count: int = 9;
+  fnc read(): int {
+    return self.count;
+  }
+end

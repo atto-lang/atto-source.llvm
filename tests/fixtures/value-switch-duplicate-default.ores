@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  return switch 1
+    default { return 99; }
+    case 1 { return 42; }
+    default { return 0; }
+  end
+}

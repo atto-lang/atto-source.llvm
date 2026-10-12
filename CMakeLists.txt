@@ -54,7 +54,89 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
-    oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "expected 'module'")
+    # Compiler admission budgets: bound dispatch comparisons and recursive descent.
+    oreslang_contract_test(source_grouped_case_limit dispatch-grouped-case-max.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_grouped_case_overflow dispatch-grouped-case-overflow.ores
+        --diagnostic "dispatch case count exceeds 256")
+    oreslang_contract_test(reject_total_case_overflow dispatch-total-case-overflow.ores
+        --diagnostic "dispatch case count exceeds 256")
+    oreslang_contract_test(reject_dispatch_nesting_overflow dispatch-nesting-overflow.ores
+        --diagnostic "dispatch nesting depth exceeds 64")
+    oreslang_contract_test(source_value_match_wildcard_last_ir value-match-wildcard-last.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_wildcard_miss_ir value-match-wildcard-miss.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_ir value-match-return.ores --ir "dispatch.collected.value")
+    # Nested arm-local returns must merge into their lexical value dispatch,
+    # while an enclosing do arm still returns from the containing function.
+    oreslang_contract_test(source_nested_match_switch_ir value-match-nested-switch-return.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_do_switch_nested_value_ir do-switch-nested-value-return.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_return_do_match_nested_value_ir return-do-match-nested-value.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_nested_value_nonexhaustive reject-nested-value-nonexhaustive.ores
+        --diagnostic "non-exhaustive value match/switch")
+    oreslang_contract_test(source_value_switch_ir value-switch-return.ores --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_switch_default_before_cases_ir value-switch-default-first.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_value_match_nonexhaustive value-match-nonexhaustive.ores
+        --diagnostic "non-exhaustive value match/switch")
+    oreslang_contract_test(reject_return_do_switch_nonexhaustive return-do-switch-nonexhaustive.ores
+        --diagnostic "non-exhaustive return do match/switch")
+    oreslang_contract_test(reject_return_do_match_nonterminal return-do-match-nonterminal.ores
+        --diagnostic "return do match/switch requires every selected arm to return")
+    oreslang_contract_test(reject_value_switch_duplicate value-switch-duplicate.ores
+        --diagnostic "duplicate dispatch integer case")
+    oreslang_contract_test(reject_value_switch_duplicate_default value-switch-duplicate-default.ores
+        --diagnostic "duplicate switch default")
+    oreslang_contract_test(reject_value_switch_malformed_case value-switch-malformed-case.ores
+        --diagnostic "malformed dispatch integer separator")
+    oreslang_contract_test(reject_source_value_match_default_first value-match-default-first.ores
+        --diagnostic "unreachable match arm after wildcard")
+    oreslang_contract_test(reject_source_value_match_default_first_miss value-match-default-first-miss.ores
+        --diagnostic "match has no default/else keyword")
+    oreslang_contract_test(reject_value_match_duplicate_case value-match-duplicate-case.ores
+        --diagnostic "duplicate dispatch integer case")
+    oreslang_contract_test(reject_source_value_match_bare_default_first value-match-bare-default-first.ores
+        --diagnostic "match has no default/else keyword")
+    oreslang_contract_test(reject_source_value_match_on_default_first value-match-on-default-first.ores
+        --diagnostic "match has no default/else keyword")
+    oreslang_contract_test(reject_value_match_duplicate_default value-match-duplicate-default.ores
+        --diagnostic "duplicate match default")
+    oreslang_contract_test(reject_value_switch_grouped_duplicate value-switch-grouped-duplicate.ores
+        --diagnostic "duplicate dispatch integer case")
+    oreslang_contract_test(source_value_switch_default_first_grouped_ir value-switch-default-first-grouped.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(reject_unsupported_finally_source unsupported-finally-source.ores
+        --diagnostic "expected 'return' or a supported 'do match/switch' statement")
+    oreslang_contract_test(source_actor_field_ir actor-fields-counter.ores --ir "ores_actor_i64_fields_codegen_set")
+    oreslang_contract_test(source_actor_union_receive_ir actor-message-union.ores --ir "message_reset")
+    oreslang_contract_test(reject_actor_union_nonexhaustive actor-message-union-missing-arm.ores
+        --diagnostic "non-exhaustive actor message match")
+    oreslang_contract_test(reject_actor_union_duplicate_arm actor-message-union-duplicate-arm.ores
+        --diagnostic "duplicate actor message match arm")
+    oreslang_contract_test(reject_actor_union_undeclared_arm actor-message-union-undeclared-arm.ores
+        --diagnostic "match arm selects undeclared actor message variant")
+    oreslang_contract_test(reject_actor_union_duplicate_variant actor-message-union-duplicate-variant.ores
+        --diagnostic "ambiguous duplicate actor message variant")
+    oreslang_contract_test(source_actor_spawn_await_ir actor-spawn-await-source.ores --ir "ores_actor_host_poll_done")
+    oreslang_contract_test(source_actor_await_spawn_ir actor-await-spawn-source.ores --ir "ores_actor_host_poll_ready")
+    oreslang_contract_test(reject_spawn_foreign_actor actor-spawn-wrong-type.ores --diagnostic "source spawn actor must match enclosing actor declaration")
+    oreslang_contract_test(reject_spawn_without_done actor-spawn-missing-done.ores --diagnostic "expected 'await'")
+    oreslang_contract_test(reject_actor_send_wrong_payload actor-send-wrong-payload.ores
+        --diagnostic "ActorRef.send mailbox value does not match declared receive payload field")
+    oreslang_contract_test(reject_direct_actor_method actor-direct-method-forbidden.ores
+        --diagnostic "expected 'send'")
+    oreslang_contract_test(reject_actor_script_method_collision actor-script-method-collision.ores
+        --diagnostic "reserved actor lifecycle method")
+    oreslang_contract_test(reject_actor_field_unknown actor-fields-unknown.ores --diagnostic "unknown or forbidden actor field")
+    oreslang_contract_test(reject_actor_field_duplicate actor-fields-duplicate.ores --diagnostic "duplicate actor field")
+    oreslang_contract_test(reject_actor_field_escape actor-fields-escape.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_actor_readonly_field actor-fields-immutable.ores --diagnostic "cannot assign immutable actor field")
+    oreslang_contract_test(reject_actor_lifecycle_collision actor-fields-method-collision.ores --diagnostic "reserved actor lifecycle method")
+    oreslang_contract_test(reject_actor_without_fields unsupported-actor.ores --diagnostic "actor requires at least one int field")
     # Ownership remains Java-only. Reject all source ownership forms before
     # LLVM IR emission until a lifetime/provenance-aware typechecker exists.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "expected int expression")
@@ -78,18 +160,128 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
     if(ORE_CLANG)
+        oreslang_contract_test(native_exec_match_wildcard_last value-match-wildcard-last.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_match_wildcard_miss value-match-wildcard-miss.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_match_return value-match-return.ores --run 42 --clang "${ORE_CLANG}")
+
+
+
+
+        oreslang_contract_test(native_exec_nested_match_switch value-match-nested-switch-return.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_do_switch_nested_value do-switch-nested-value-return.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_return_do_match_nested_value return-do-match-nested-value.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_switch_return value-switch-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_match_capture value-match-capture.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_do_match_continue do-match-continue.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_do_switch_return do-switch-early-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_return_do_match return-do-match.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_return_do_switch return-do-switch.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_switch_default_before_cases value-switch-default-first.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_value_switch_default_first_grouped value-switch-default-first-grouped.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_return_do_switch_default_before_cases return-do-switch-default-first.ores
+            --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        oreslang_contract_test(native_exec_persistent_actor_fields actor-fields-counter.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_fields_generated_host.c")
+        oreslang_contract_test(native_exec_source_spawn_await actor-spawn-await-source.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
+        oreslang_contract_test(native_exec_source_await_spawn actor-await-spawn-source.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
+        oreslang_contract_test(native_exec_source_await_handler_panic actor-spawn-await-source.ores
+            --run 79 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_source_spawn_await_host.cpp")
+        set_tests_properties(native_exec_source_await_handler_panic PROPERTIES
+            ENVIRONMENT "ORES_ACTOR_TEST_HANDLER_PANIC=1")
+        # Executed generated tagged union receiver: two actor heaps,
+        # repeated Delta/Reset messages, forged schema/tag rejection.
+        oreslang_contract_test(native_exec_typed_union_actor_mail actor-message-union.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_typed_union_scheduled_host.cpp")
+        oreslang_contract_test(native_exec_typed_union_actor_mail_sanitized actor-message-union.ores
+            --run 0 --clang "${ORE_CLANG}" --native-sanitizers
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_typed_union_scheduled_host.cpp")
+        # Real compiler-generated Counter code reused by three independent
+        # ActorGroup-owned heaps with callback-resumed parent CONTROL.
+        oreslang_contract_test(native_exec_multi_actor_scheduled_group actor-fields-counter.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_scheduled_group_generated_host.cpp")
+        oreslang_contract_test(native_exec_multi_actor_scheduled_group_sanitized actor-fields-counter.ores
+            --run 0 --clang "${ORE_CLANG}" --native-sanitizers
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_scheduled_group_generated_host.cpp")
+        oreslang_contract_test(native_exec_actor_group_owned_fields actor-fields-counter.ores
+            --run 0 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness-cxx "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_group_owned_heap_generated_host.cpp")
 
 
     else()
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
+
+    # Persistent actor-owned heap contract, distinct from per-call owned
+    # scalar regions. Uses C11 atomics and cross-carrier thread migration.
+    find_package(Threads REQUIRED)
+    # Bounded logical actor / parent supervisor lanes: no carrier blocked
+    # on mailbox admission; CONTROL remains available during data saturation.
+    add_executable(oreslang-actor-exclusive-scheduler-test
+        tests/actor_exclusive_scheduler_test.cpp)
+    target_include_directories(oreslang-actor-exclusive-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-exclusive-scheduler-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-exclusive-scheduler-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_exclusive_scheduler_control_and_backpressure
+        COMMAND oreslang-actor-exclusive-scheduler-test)
+    set_tests_properties(native_actor_exclusive_scheduler_control_and_backpressure PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-actor-owned-heap-test
+        tests/actor_owned_heap_lifecycle_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-owned-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-owned-heap-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-owned-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_heap_quiescence
+        COMMAND oreslang-actor-owned-heap-test)
+    set_tests_properties(native_actor_owned_heap_quiescence PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-actor-physical-done-race-test
+        tests/actor_physical_done_race_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-physical-done-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-physical-done-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-physical-done-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_physical_done_two_loan_race
+        COMMAND oreslang-actor-physical-done-race-test)
+    set_tests_properties(native_actor_physical_done_two_loan_race
+        PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-owned-native-region-test
         tests/native_owned_region_test.c

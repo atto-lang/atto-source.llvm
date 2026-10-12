@@ -1,0 +1,17 @@
+define actor Counter as
+  let count: int = 5;
+  let offset: int = 7;
+  receive(ActorMail<{by: int}> mail): void {
+    self.count = self.count + mail.value.by;
+    self.end();
+    return;
+  }
+end
+
+fnc main(): int {
+  const worker = spawn Counter();
+  await worker.get_ready();
+  worker.send(infer struct{other: 20});
+  await worker.get_done();
+  return 0;
+}

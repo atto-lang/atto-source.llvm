@@ -1,0 +1,7 @@
+// Source cannot pass, return or manufacture heap/turn capabilities.
+define actor Counter as
+  let count: int = 5;
+  fnc read(): int {
+    return rt borrow self.count;
+  }
+end

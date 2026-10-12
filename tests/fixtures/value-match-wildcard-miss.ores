@@ -1,0 +1,7 @@
+// Canonical match falls back to its final wildcard on a miss.
+pub fnc main(): int {
+  return match 9 over
+    on 1 { return 0; }
+    on _ { return 42; }
+  end
+}

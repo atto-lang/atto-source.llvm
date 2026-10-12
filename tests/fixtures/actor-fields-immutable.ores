@@ -1,0 +1,7 @@
+define actor Readonly as
+  val offset: int = 7;
+  fnc change(): int {
+    self.offset = 9;
+    return self.offset;
+  }
+end

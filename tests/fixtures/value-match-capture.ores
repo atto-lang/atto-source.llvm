@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  const chosen: int = match 1 over
+    on 1 { return 40; }
+    on _ { return 0; }
+  end;
+  return chosen + 2;
+}

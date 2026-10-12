@@ -1,0 +1,7 @@
+// Generated source actor script function is private to the compiler.
+define actor Counter as
+  let count: int = 1;
+  pub fnc program_step(int delta): int {
+    return self.count + delta;
+  }
+end
