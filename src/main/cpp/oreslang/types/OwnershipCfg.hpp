@@ -139,6 +139,9 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
                     (value.possible & static_cast<ValueMask>(~kOwned)) | kDropped);
             return;
         case Operation::Kind::BorrowShared:
+            // The zero token denotes a pre-existing entry loan. A new CFG
+            // borrow must never impersonate that identity.
+            if (op.loan_id == 0) violation(op.place, "reserved entry loan identity");
             require_owned(op.place, value);
             if (value.exclusive_loan) violation(op.place, "shared borrow overlaps mutable loan");
             if (value.shared_loans == 65535) violation(op.place, "shared loan count exceeds bound");
@@ -147,6 +150,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             ++value.shared_loans;
             return;
         case Operation::Kind::BorrowExclusive:
+            if (op.loan_id == 0) violation(op.place, "reserved entry loan identity");
             require_owned(op.place, value);
             if (value.exclusive_loan || value.shared_loans)
                 violation(op.place, "overlapping exclusive loans");
