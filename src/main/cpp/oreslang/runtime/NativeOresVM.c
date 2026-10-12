@@ -6,6 +6,7 @@ typedef struct {
     OresNativeActorRef child;
     OresNativeActorRef supervisor;
     int terminal_published;
+    int host_finalized;
 } OresVMSupervisorRegistration;
 
 struct OresNativeVM {
@@ -135,6 +136,28 @@ OresNativeActorRef ores_native_vm_supervisor_of(
     return owner;
 }
 
+/* Explicit trusted-host completion receipt after external finalizers run.
+ * Scheduler DONE is necessary but cannot prove host-owned cleanup itself. */
+int ores_native_vm_confirm_supervised_finalized(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child) {
+    if (!vm || !valid_domain(domain)) return 0;
+    control_lock(vm);
+    int accepted = 0;
+    if (!vm->control_retired && child.actor_slot < vm->actor_slots[domain]) {
+        OresVMSupervisorRegistration* entry =
+            &vm->supervisors[domain][child.actor_slot];
+        if (same_actor(entry->child, child) && !entry->host_finalized
+            && !entry->terminal_published
+            && ores_native_actor_scheduler_poll_done(
+                vm->schedulers[domain], child)) {
+            entry->host_finalized = 1;
+            accepted = 1;
+        }
+    }
+    control_unlock(vm);
+    return accepted;
+}
+
 int ores_native_vm_publish_supervised_failure(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorTerminalFailure failure) {
@@ -151,6 +174,7 @@ int ores_native_vm_publish_supervised_failure(
         if (same_actor(entry->child, failure.child)
             && entry->supervisor.scheduler_domain != 0
             && !entry->terminal_published
+            && entry->host_finalized
             && ores_native_actor_scheduler_poll_done(
                 vm->schedulers[domain], failure.child)
             && ores_native_actor_scheduler_publish_failure(

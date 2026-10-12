@@ -56,9 +56,15 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
  * unsupervised or invalid child. Host metadata only. */
 OresNativeActorRef ores_native_vm_supervisor_of(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child);
+/* Trusted host receipt after external actor-owned resource finalization.
+ * Requires the exact child ActorRef and scheduler DONE, accepts only once.
+ * Does not itself execute destructors or verify cleanup outside the VM.
+ * Repeated/stale/unregistered/live child confirmations fail closed. */
+int ores_native_vm_confirm_supervised_finalized(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child);
 /* Trusted runtime terminal notice, never a guest-authorized public syscall.
  * Requires exact registered child, same-domain supervisor, STOP + quiescence,
- * and host-guaranteed resource finalization BEFORE publication. On a full
+ * and an explicit host finalization receipt BEFORE publication. On a full
  * parent CONTROL slot, returns 0 without consuming the terminal notice:
  * caller owns retry/escalation. On success publishes exactly once; it does
  * not itself restart, reclaim, or invoke policy synchronously. */

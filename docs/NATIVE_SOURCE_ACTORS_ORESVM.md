@@ -40,3 +40,16 @@ placement or typed ActorGroup source capability lowering. Supervisor
 relationships, guest `await`, continuation parking, cross-domain sends,
 and sandbox isolation still fail closed or require separate implementation.
 No actor is given its own OS scheduler.
+
+### Host finalization receipt before terminal CONTROL
+
+`ores_native_vm_confirm_supervised_finalized()` records a one-shot trusted-host
+completion receipt for an exact registered child after scheduler STOP and DONE.
+Publication through `ores_native_vm_publish_supervised_failure()` additionally
+requires that receipt; STOP or callback quiescence alone cannot authorize it.
+The host must close non-scheduler resources and release ownership **before**
+confirming. The VM checks receipt ordering, not the actual correctness of any
+external destructor. A duplicate, stale, live, unregistered, wrong-domain or
+post-retirement confirmation is rejected. Shutdown with unreported terminal
+notices still requires explicit host reconciliation/escalation; this change
+does not imply full source-level ActorGroup finalization.

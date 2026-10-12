@@ -150,6 +150,14 @@ int main(void) {
     OresNativeActorTerminalFailure grandchild_failure = {
         ORES_NATIVE_CONTROL_STOPPED, grandchild, 0, 7002
     };
+    /* Scheduler DONE is not proof that host-owned finalizers completed.
+     * Typed CONTROL must remain blocked until the trusted host receipts it. */
+    check(!ores_native_vm_publish_supervised_failure(
+        vm, ORES_NATIVE_VM_MAIN, grandchild_failure));
+    check(ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, grandchild));
+    check(!ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, grandchild));
     check(ores_native_vm_publish_supervised_failure(
         vm, ORES_NATIVE_VM_MAIN, grandchild_failure));
     until(&s->grandchild_seen, 1);
@@ -159,7 +167,9 @@ int main(void) {
     OresNativeActorTerminalFailure failure = {
         ORES_NATIVE_CONTROL_PANIC, s->child, 19, 7001
     };
-    /* Cannot report a live child, even if the parent is idle. */
+    /* Cannot finalize or report a live child, even if parent is idle. */
+    check(!ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, s->child));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
     check(ores_native_vm_try_send(vm, ORES_NATIVE_VM_MAIN, parent, 10)
         == ORES_NATIVE_SEND_ACCEPTED);
@@ -169,13 +179,26 @@ int main(void) {
     until(&s->child_blocked, 1);
     check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(!ores_native_vm_poll_done(vm, ORES_NATIVE_VM_MAIN, s->child));
+    check(!ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, s->child));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
     atomic_store(&s->release_child, 1);
     until(&s->child_finished, 1);
     /* The stopped child is still on a carrier until its turn ends. The
      * official VM publication must only succeed after poll_done. */
     check(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, s->child));
-    /* DONE alone is insufficient: the child still owes terminal CONTROL. */
+    check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
+    check(!ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_SHARED, s->child));
+    check(!ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, fake));
+    check(!ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, unsupervised));
+    check(ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, s->child));
+    check(!ores_native_vm_confirm_supervised_finalized(
+        vm, ORES_NATIVE_VM_MAIN, s->child));
+    /* DONE plus finalized still owes terminal CONTROL. */
     check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(ores_native_vm_publish_control(vm, ORES_NATIVE_VM_MAIN, parent, 21));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
