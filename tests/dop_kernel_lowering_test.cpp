@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <locale>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -15,8 +16,26 @@ static void expect(F fn) {
     throw std::runtime_error("expected DOP contract failure");
 }
 
+struct CommaPunct : std::numpunct<char> {
+protected:
+    char do_decimal_point() const override { return ','; }
+};
+
 int main() {
     using namespace oreslang::dop;
+    // A valid POD layout with undersized scalar slots must never become a
+    // HostBuffer: F32 memcpy used to write past its allocation.
+    for (auto bytes : {1u, 2u, 8u}) {
+        Plan invalid_width(Layout::AoS, 1, 1, bytes, bytes, 1);
+        expect<std::invalid_argument>([&] { HostBuffer buffer(invalid_width); });
+    }
+    // Emitted OpenCL must not inherit the process locale.
+    const std::locale saved = std::locale();
+    std::locale::global(std::locale(std::locale::classic(), new CommaPunct));
+    const auto portable_constant = cl_float(1.25f);
+    std::locale::global(saved);
+    check(portable_constant.find("1.25") != std::string::npos);
+    check(portable_constant.find(',') == std::string::npos);
     for (auto layout : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
         const auto lanes = layout == Layout::AoSoA ? 4u : 1u;
         Plan p(layout, 7, 3, 4, 16, lanes);
@@ -41,6 +60,9 @@ int main() {
 
     Plan p(Layout::SoA, 2, 1, 4, 8, 1);
     Kernel k(p, Element::F32, Op::Scale, 2.0f, 0.0f);
+    expect<std::invalid_argument>([&] {
+        Kernel invalid_op(p, Element::F32, static_cast<Op>(255), 1.0f, 0.0f);
+    });
     HostBuffer original(p);
     {
         auto loan = original.borrow_read();
