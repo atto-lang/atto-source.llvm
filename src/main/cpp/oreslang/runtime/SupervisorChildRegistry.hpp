@@ -51,6 +51,9 @@ public:
         std::uint64_t incarnation;
         std::uint64_t turn_generation;
         StopReceiptStatus status;
+        // True only after the source host-effect entry was claimed.
+        // This is not independent proof that STOP was externally applied.
+        bool host_invoked = false;
     };
     struct RestartReservation {
         ChildRef child;
@@ -390,6 +393,26 @@ public:
         state.phase = Phase::stopping;
         record_transition("stop.reserve", state, 0, turn_generation);
         return state;
+    }
+
+    /**
+     * Source-compiled host effect entry. Claim on CONTROL immediately
+     * before invoking the actual host STOP callback, not on its completion.
+     * The exact PENDING receipt may enter only once; uncertainty keeps the
+     * invocation flag fenced until authenticated reconciliation.
+     */
+    void claim_host_stop_invocation(
+            ChildRef child, OresNativeActorRef actor,
+            std::uint64_t incarnation, std::uint64_t turn_generation) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        auto& receipt = require_stop_receipt(
+            child, actor, incarnation, turn_generation);
+        if (receipt.status != StopReceiptStatus::pending
+                || receipt.host_invoked)
+            throw std::logic_error("STOP host invocation replay or classified outcome");
+        receipt.host_invoked = true;
+        record_transition("stop.invoke-asserted",
+                          children_.at(child.logical_child_id), 0, turn_generation);
     }
 
     /** Observability is immutable and keyed to the same physical generation. */
