@@ -261,6 +261,14 @@ if(BUILD_TESTING)
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "processed=3 last=23")
+        oreslang_contract_test(source_nested_enum_actor_ir source-tagged-nested-dispatch.ores
+            --ir "oreslang_source_actor_send_variant_checked")
+        oreslang_contract_test(native_nested_enum_actor_guest source-tagged-nested-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
         oreslang_contract_test(native_tagged_int_spread_actor source-tagged-int-spread-dispatch.ores
             --run 43 --clang "${ORE_CLANG}" --runs 20
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
@@ -590,6 +598,18 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-messagepack-v2-test PRIVATE Threads::Threads)
     add_test(NAME native_messagepack_v2_owned_actor_dispatch
         COMMAND oreslang-native-messagepack-v2-test)
+    # Production native decoder for Java-compatible finite nominal E(...)
+    # shape descriptors, exercised independently of the compiler encoder.
+    add_executable(oreslang-native-nested-enum-v2-test
+        tests/native_nested_enum_v2_runtime_test.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-nested-enum-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-nested-enum-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_nested_enum_v2_owned_decode
+        COMMAND oreslang-native-nested-enum-v2-test)
+
 
     # Compiler-facing source actor ABI: scalar/wire callbacks share one
     # exclusive NativeActorScheduler lane and common actor-owned field heap.
