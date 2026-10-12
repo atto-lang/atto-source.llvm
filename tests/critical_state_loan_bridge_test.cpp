@@ -10,7 +10,7 @@ int main() {
     FunctionEffects declared{static_cast<std::uint32_t>(FunctionEffect::StateRead)
             | static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
     CriticalStateCallback callback{};
-    callback.callback_critical = true;
+    callback.state_mode = CriticalStateMode::Write;
     callback.one_state_parameter = true;
     callback.inferred = declared;
 
@@ -54,7 +54,7 @@ int main() {
 
     // Fail closed on invalid source contracts, before state-loan allocation.
     auto missing = callback;
-    missing.callback_critical = false;
+    missing.state_mode = CriticalStateMode::None;
     CriticalStateLoan invalid;
     CHECK(invalid.begin(state, 123, 901, missing, declared)
             == CriticalStateAdmission::MissingCallbackCritical);
