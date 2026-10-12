@@ -33,7 +33,7 @@ bool reserved(std::string_view name) {
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "generator",
-        "pipeline", "expect_pipeline",
+        "pipeline", "expect_pipeline", "cancel_pipeline",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -457,6 +457,12 @@ private:
                 if (value.pipeline_actors.size() < 2
                     || value.pipeline_actors.size() > 16)
                     fail("pipeline requires between 2 and 16 ordered actors");
+            }
+            if (accept("cancel_pipeline")) {
+                require("(");
+                value.pipeline_cancel_actor = identifier();
+                require(")");
+                require(";");
             }
             if (accept("await")) {
                 value.ready_await_actor = identifier();
@@ -950,6 +956,9 @@ private:
                 }
                 if (fn.pipeline_expect_actor != fn.pipeline_actors.front())
                     throw std::runtime_error("expect_pipeline must name pipeline source");
+                if (!fn.pipeline_cancel_actor.empty()
+                    && fn.pipeline_cancel_actor != fn.pipeline_actors.front())
+                    throw std::runtime_error("cancel_pipeline must name pipeline source");
                 if (fn.actor_sends.size() != 1
                     || fn.actor_sends.front().reference != fn.pipeline_actors.front()
                     || fn.actor_stops.size() != fn.pipeline_actors.size())
@@ -957,8 +966,9 @@ private:
                 for (const auto& refName : fn.pipeline_actors)
                     if (std::count(fn.actor_stops.begin(), fn.actor_stops.end(), refName) != 1)
                         throw std::runtime_error("pipeline must stop each connected actor");
-            } else if (!fn.pipeline_expect_actor.empty()) {
-                throw std::runtime_error("expect_pipeline requires declared pipeline");
+            } else if (!fn.pipeline_expect_actor.empty()
+                       || !fn.pipeline_cancel_actor.empty()) {
+                throw std::runtime_error("expect_pipeline/cancel_pipeline requires declared pipeline");
             }
             // Actor references cannot be cast to i64 or used as scalar values.
             for (const auto& actor : liveActors) available.erase(actor);
