@@ -1,5 +1,7 @@
 #include "oreslang/runtime/NativeExecutionAuthority.h"
-#include <assert.h>
+#include <stdlib.h>
+/* Safety assertions must never disappear in NDEBUG/Release builds. */
+#define REQUIRE(condition) do { if (!(condition)) abort(); } while (0)
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -23,79 +25,79 @@ static void* contender(void* raw) {
     atomic_fetch_add(a->entered, 1);
     if (won) {
         while (!atomic_load(a->release)) sched_yield();
-        assert(ores_execution_owns(a->authority, claim));
-        assert(ores_execution_leave(a->authority, claim, 0));
-        assert(!ores_execution_leave(a->authority, claim, 0));
+        REQUIRE(ores_execution_owns(a->authority, claim));
+        REQUIRE(ores_execution_leave(a->authority, claim, 0));
+        REQUIRE(!ores_execution_leave(a->authority, claim, 0));
     }
     return NULL;
 }
 
 static void concurrent_carriers(void) {
     OresNativeExecutionAuthority authority;
-    assert(ores_execution_init(&authority));
+    REQUIRE(ores_execution_init(&authority));
     _Atomic int entered = 0, release = 0, winners = 0;
     ClaimArg args[CARRIERS];
     pthread_t threads[CARRIERS];
     for (int i = 0; i < CARRIERS; ++i) {
         args[i] = (ClaimArg){&authority, &entered, &release, &winners, (uint64_t)(i + 1)};
-        assert(pthread_create(&threads[i], NULL, contender, &args[i]) == 0);
+        REQUIRE(pthread_create(&threads[i], NULL, contender, &args[i]) == 0);
     }
     while (atomic_load(&entered) != CARRIERS) sched_yield();
-    assert(atomic_load(&winners) == 1);
-    assert(ores_execution_phase(&authority) == ORES_EXEC_RUNNING);
+    REQUIRE(atomic_load(&winners) == 1);
+    REQUIRE(ores_execution_phase(&authority) == ORES_EXEC_RUNNING);
     OresExecutionClaim forbidden = {0};
-    assert(!ores_execution_enter(&authority, 1, 99, 0, &forbidden));
+    REQUIRE(!ores_execution_enter(&authority, 1, 99, 0, &forbidden));
     atomic_store(&release, 1);
     for (int i = 0; i < CARRIERS; ++i)
-        assert(pthread_join(threads[i], NULL) == 0);
-    assert(ores_execution_phase(&authority) == ORES_EXEC_READY);
-    assert(ores_execution_destroy(&authority));
+        REQUIRE(pthread_join(threads[i], NULL) == 0);
+    REQUIRE(ores_execution_phase(&authority) == ORES_EXEC_READY);
+    REQUIRE(ores_execution_destroy(&authority));
 }
 static void suspend_stop_restart(void) {
     OresNativeExecutionAuthority a;
-    assert(ores_execution_init(&a));
+    REQUIRE(ores_execution_init(&a));
     OresExecutionClaim x={0}, y={0};
-    assert(ores_execution_enter(&a, 1, 7, 0, &x));
-    assert(!ores_execution_enter(&a, 1, 8, 0, &y));
-    assert(ores_execution_leave(&a, x, 1));
-    assert(ores_execution_phase(&a) == ORES_EXEC_SUSPENDED);
-    assert(ores_execution_enter(&a, 1, 8, 0, &y));
-    assert(!ores_execution_leave(&a, x, 0));
-    assert(!ores_execution_retired(&a, 1));
-    assert(ores_execution_stop(&a, 1));
-    assert(!ores_execution_retired(&a, 1));
-    assert(!ores_execution_enter(&a, 1, 9, 0, &x));
-    assert(ores_execution_leave(&a, y, 0));
-    assert(ores_execution_retired(&a, 1));
-    assert(!ores_execution_retired(&a, 1));
-    assert(ores_execution_restart(&a) == 2);
-    assert(!ores_execution_enter(&a, 1, 8, 0, &x));
-    assert(ores_execution_enter(&a, 2, 9, 0, &x));
-    assert(!ores_execution_leave(&a, y, 0));
-    assert(ores_execution_leave(&a, x, 0));
-    assert(ores_execution_stop(&a, 2));
-    assert(ores_execution_retired(&a, 2));
-    assert(ores_execution_destroy(&a));
+    REQUIRE(ores_execution_enter(&a, 1, 7, 0, &x));
+    REQUIRE(!ores_execution_enter(&a, 1, 8, 0, &y));
+    REQUIRE(ores_execution_leave(&a, x, 1));
+    REQUIRE(ores_execution_phase(&a) == ORES_EXEC_SUSPENDED);
+    REQUIRE(ores_execution_enter(&a, 1, 8, 0, &y));
+    REQUIRE(!ores_execution_leave(&a, x, 0));
+    REQUIRE(!ores_execution_retired(&a, 1));
+    REQUIRE(ores_execution_stop(&a, 1));
+    REQUIRE(!ores_execution_retired(&a, 1));
+    REQUIRE(!ores_execution_enter(&a, 1, 9, 0, &x));
+    REQUIRE(ores_execution_leave(&a, y, 0));
+    REQUIRE(ores_execution_retired(&a, 1));
+    REQUIRE(!ores_execution_retired(&a, 1));
+    REQUIRE(ores_execution_restart(&a) == 2);
+    REQUIRE(!ores_execution_enter(&a, 1, 8, 0, &x));
+    REQUIRE(ores_execution_enter(&a, 2, 9, 0, &x));
+    REQUIRE(!ores_execution_leave(&a, y, 0));
+    REQUIRE(ores_execution_leave(&a, x, 0));
+    REQUIRE(ores_execution_stop(&a, 2));
+    REQUIRE(ores_execution_retired(&a, 2));
+    REQUIRE(ores_execution_destroy(&a));
 }
 static void preadmitted_drain_and_exhaustion(void) {
     OresNativeExecutionAuthority a;
-    assert(ores_execution_init(&a));
-    assert(ores_execution_stop(&a, 1));
+    REQUIRE(ores_execution_init(&a));
+    REQUIRE(ores_execution_stop(&a, 1));
     OresExecutionClaim x={0};
-    assert(!ores_execution_enter(&a, 1, 2, 0, &x));
-    assert(ores_execution_enter(&a, 1, 2, 1, &x));
-    assert(!ores_execution_retired(&a, 1));
-    assert(ores_execution_leave(&a, x, 0));
-    assert(ores_execution_retired(&a, 1));
-    assert(ores_execution_restart(&a) == 2);
+    REQUIRE(!ores_execution_enter(&a, 1, 2, 0, &x));
+    REQUIRE(ores_execution_enter(&a, 1, 2, 1, &x));
+    REQUIRE(!ores_execution_retired(&a, 1));
+    REQUIRE(ores_execution_leave(&a, x, 0));
+    REQUIRE(ores_execution_retired(&a, 1));
+    REQUIRE(ores_execution_restart(&a) == 2);
     ores_execution_lock(&a);
     a.sequence = UINT64_MAX; /* deterministic test-only exhaustion */
     ores_execution_unlock(&a);
-    assert(!ores_execution_enter(&a, 2, 3, 0, &x));
-    assert(ores_execution_stop(&a, 2));
-    assert(ores_execution_retired(&a, 2));
-    assert(ores_execution_restart(&a) == 0);
-    assert(ores_execution_destroy(&a));
+    REQUIRE(!ores_execution_enter(&a, 2, 3, 0, &x));
+    REQUIRE(ores_execution_stop(&a, 2));
+    REQUIRE(ores_execution_retired(&a, 2));
+    REQUIRE(ores_execution_restart(&a) == 0);
+    REQUIRE(ores_execution_destroy(&a));
 }
 int main(void) {
     concurrent_carriers();
