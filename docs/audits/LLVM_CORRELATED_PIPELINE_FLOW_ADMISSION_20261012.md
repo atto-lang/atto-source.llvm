@@ -195,3 +195,51 @@ provenance integration and no observed regressions in the bounded compiler
 slice. They do **not** establish concurrent flows, route binding to the
 standalone `SourcePipelineFlows` admission registry, implementation-level
 TLA+ trace refinement, or Java/GraalVM Native Image parity.
+
+
+## Guest causal predecessor runtime hardening — 2026-10-12
+
+**Defect:** the compiled LLVM `SourceActorBootstrap` bridge previously required
+only nonzero predecessor IDs for directional DATA messages. The strict
+five-hop transcript verifier could detect an invalid lineage afterward,
+but the runtime did not enforce that the recorded parent was the last
+successfully admitted predecessor.
+
+**Repair:** under the existing `group.mutex` cancellation/publication
+linearization point, every pipeline DATA admission now compares the
+host-issued causal parent with `pipeline_last_message_id`. Root ingress
+requires an empty lineage and a trusted-main caller, while each directional
+hop must come from the physical currently executing adjacent actor in the
+same scheduler domain. A rejected, malformed, cancelled, or mailbox-full
+candidate does not advance the committed predecessor. The successful
+scheduler enqueue atomically commits the new message identity before
+another carrier may validate the delivered context. MessagePack v2 guest
+frames remain unmodified. This remains the compiler-trusted single-flow
+linear subset, not an implementation of the separate concurrent-flow
+registry.
+
+**Executable negative:** `native_compiled_pipeline_forged_parent_rejected`
+builds the real three-actor `.ores` program, deliberately corrupts the
+first source-forward turn's host-local parent before acquiring
+`group.mutex`, and checks recovery status 73
+(`SOURCE_PIPELINE_REJECTED_MAIL=3`), exactly one admitted root DATA
+envelope, no accepted descendant, and full three-actor physical teardown.
+It repeats 20 times and never links the fault hook in production builds.
+
+**Funded exact-source native evidence:**
+[Actions #38279710980](https://github.com/zed-pkg-test/java-app/actions/runs/38279710980)
+passed **165/165 original LLVM CTests** and matched **167/167 source/test
+Git blobs**, including 20 real guest forged-ancestry negatives and the
+existing safe/unsafe root-credit TLC check. The separately refreshed
+[actor-lifetime run #38279801405](https://github.com/zed-pkg-test/java-app/actions/runs/38279801405)
+also passed GCC race, Clang ASan/UBSan, bounded anti-ABA model and
+actual guest-compiled fixtures.
+
+**Formal follow-up:** `PipelineCausalParentAdmission.tla` models
+a bounded two-key host causal admission state machine and its optional
+forged-parent transition. A safe configuration should satisfy lineage,
+duplicate, terminal-state and type invariants; the unsafe configuration
+must exhibit `NoForgedCausalAdmission` counterexample. This bounded
+abstraction is NOT a proof of C scheduler lock-order or implementation
+trace refinement. The finalized funded result must be recorded separately
+after the checker actually runs.
