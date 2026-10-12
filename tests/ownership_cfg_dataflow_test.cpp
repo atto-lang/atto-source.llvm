@@ -284,6 +284,24 @@ int main() {
     entry_vs_lexical.entry.at("a").shared_loan_ids = {0, 89};
     assert(rejected([&] { verify(entry_vs_lexical); }));
 
+    // Anonymous entry identity 0 represents one legacy loan, not one loan
+    // per parameter. Two distinct parameter loans must carry unique IDs.
+    Graph duplicate_entry_zero;
+    duplicate_entry_zero.entry = {{"a", {kOwned, 1, false}},
+                                  {"b", {kOwned, 1, false}}};
+    duplicate_entry_zero.blocks = {{{op(Kind::ReleaseShared, "a"),
+                                     op(Kind::ReleaseShared, "b")}, {}}};
+    assert(rejected([&] { verify(duplicate_entry_zero); }));
+    duplicate_entry_zero.entry.at("a").shared_loan_ids = {401};
+    duplicate_entry_zero.entry.at("b").shared_loan_ids = {402};
+    verify(duplicate_entry_zero);
+    duplicate_entry_zero.entry.at("b") = {kOwned, 0, true};
+    duplicate_entry_zero.blocks = {{{op(Kind::ReleaseShared, "a"),
+                                     op(Kind::ReleaseExclusive, "b")}, {}}};
+    verify(duplicate_entry_zero);
+    duplicate_entry_zero.entry.at("a").shared_loan_ids.clear();
+    assert(rejected([&] { verify(duplicate_entry_zero); }));
+
     // Direct helper calls are not CFG sites and cannot mint token zero.
     State direct = {{"x", cell(kOwned)}};
     assert(rejected([&] { apply(op(Kind::BorrowShared, "x"), direct); }));
@@ -330,6 +348,14 @@ int main() {
     bad_entry.entry.at("x") = {kOwned, 1, false};
     bad_entry.blocks = {{{op(Kind::ReleaseShared, "x"), op(Kind::Read, "x")}, {}}};
     verify(bad_entry);
+
+    // Verify every CFG successor, not only edges reached by the worklist.
+    // An invalid edge in a currently unreachable block must not survive
+    // into native emission or become reachable after a later transform.
+    Graph unreachable_bad_edge;
+    unreachable_bad_edge.entry = {{"x", cell(kOwned)}};
+    unreachable_bad_edge.blocks = {{{}, {}}, {{}, {99}}};
+    assert(rejected([&] { verify(unreachable_bad_edge); }));
 
     assert(rejected([&] {
         Graph invalid;
