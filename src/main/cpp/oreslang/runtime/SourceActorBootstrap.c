@@ -127,15 +127,20 @@ static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0)
  * or terminate the process. Only the host-main waiter performs teardown. */
 static void pipeline_fail(int code) {
     if (code <= 0) return;
-    int expected = SOURCE_PIPELINE_OK;
-    if (!atomic_compare_exchange_strong_explicit(
-            &group.pipeline_failure, &expected, code,
-            memory_order_acq_rel, memory_order_acquire)) return;
-#ifdef ORESLANG_SOURCE_ACTOR_TESTING
-    fprintf(stderr, "SOURCE_PIPELINE_FAILURE code=%d\n", code);
-#endif
+    /* Publication and terminal cancellation share this mutex. The winner
+     * commits first; an enqueue cannot slip in after failure publication.
+     * Never wait for a foreign actor here: scheduler_send is nonblocking. */
     group_lock();
-    ensure(pthread_cond_broadcast(&group.pipeline_completed) == 0);
+    int expected = SOURCE_PIPELINE_OK;
+    const int won = atomic_compare_exchange_strong_explicit(
+            &group.pipeline_failure, &expected, code,
+            memory_order_acq_rel, memory_order_acquire);
+    if (won) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        fprintf(stderr, "SOURCE_PIPELINE_FAILURE code=%d\n", code);
+#endif
+        ensure(pthread_cond_broadcast(&group.pipeline_completed) == 0);
+    }
     group_unlock();
 }
 
@@ -640,8 +645,18 @@ static int source_send_binary_unlocked(SourceActor* actor,
     }
     accepted->variant_index = index;
     accepted->direction = direction;
-    if (!ores_native_actor_scheduler_send(group.scheduler, actor->ref,
-                                           (uint64_t)(uintptr_t)accepted)) {
+    /* The terminal-status / cancellation linearization point is shared
+     * with final DATA publication. Validate and allocate outside the lock,
+     * but never publish after cancellation won the group mutex. */
+    const int pipeline_route = actor->upstream || actor->downstream;
+    if (pipeline_route) group_lock();
+    int admitted = (!pipeline_route
+            || atomic_load_explicit(&group.pipeline_failure,
+                                    memory_order_acquire) == SOURCE_PIPELINE_OK)
+        && ores_native_actor_scheduler_send(group.scheduler, actor->ref,
+                                             (uint64_t)(uintptr_t)accepted);
+    if (pipeline_route) group_unlock();
+    if (!admitted) {
         ores_mp2_owned_release(&accepted->packet);
         free(accepted);
         atomic_fetch_sub_explicit(&actor->wire_reserved, 1,
@@ -797,14 +812,19 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
         pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
         return;
     }
-    if (atomic_load_explicit(&group.pipeline_failure, memory_order_acquire))
+    group_lock();
+    if (atomic_load_explicit(&group.pipeline_failure, memory_order_acquire)) {
+        group_unlock();
         return;
+    }
     if (!atomic_compare_exchange_strong_explicit(
         &group.pipeline_phase, &expected_phase, expected_phase + 1,
         memory_order_acq_rel, memory_order_acquire)) {
+        group_unlock();
         pipeline_fail(SOURCE_PIPELINE_BAD_PHASE);
         return;
     }
+    group_unlock();
     const SourceVariantContract* contract = &actor->variants[variant];
     ensure(contract->owned_enum_name && contract->declared_tag
         && strcmp(contract->value.shape, "T[S,I,I]") == 0);
@@ -826,17 +846,18 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
     ensure(at < sizeof(wire));
     /* This first slice is single-flow and fail-closed on saturation.
      * Future<T>-based suspension/backpressure belongs to the next slice. */
-    /* Count real scheduled direction admissions. These counters are not
-     * compiler-declared constants and cannot be supplied by the guest. */
-    if (direction == 1) {
+    /* Count only successful scheduler-admitted deliveries. A cancellation
+     * or mailbox rejection must not inflate observable hop counts. */
+    if (!source_send_binary(target, wire, at, (uint8_t)direction)) {
+        pipeline_fail(SOURCE_PIPELINE_REJECTED_MAIL);
+        return;
+    }
+    if (direction == 1)
         atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
                                   memory_order_acq_rel);
-    } else {
+    else
         atomic_fetch_add_explicit(&group.pipeline_backward_count, 1,
                                   memory_order_acq_rel);
-    }
-    if (!source_send_binary(target, wire, at, (uint8_t)direction))
-        pipeline_fail(SOURCE_PIPELINE_REJECTED_MAIL);
 }
 /* Returns a recoverable status; only trusted main may wait or tear down
  * the pipeline. Carrier workers never wait for downstream DATA delivery.
