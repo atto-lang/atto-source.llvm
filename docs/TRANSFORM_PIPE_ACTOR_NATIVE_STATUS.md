@@ -61,3 +61,34 @@ a runner (runner_id=0), so no source-org green status is claimed.
   a guarantee that state loans can cross an `await` boundary.
 - Keep the PR in draft until Java compilation/dispatch, scoped state lowering,
   release CI and cross-backend semantic conformance are verified.
+
+## Final hardening audit: destination, ingress, evidence (2026-10-12)
+
+- Each emitted `Enum.Case` must belong to the *recipient's* declared
+  forward/backward ingress domain. A globally shared union wire table
+  is transport metadata, not authorization for arbitrary message delivery.
+- Transform actors are interior stages only. The trusted root DATA ingress
+  uses direction 0 and cannot be dispatched to either transform hook.
+- The LLVM callback checks both trusted ingress direction and the actual
+  nominal case ordinal *before* entering user code. Invalid delivery
+  commits an explicit terminal route failure instead of silently returning
+  a scalar and later timing out.
+- Generated `_receive` callback symbol is compiler reserved.
+- Three new malformed compiled pipeline fixtures reject an incompatible
+  recipient domain and transform use as source or sink.
+- The Python compiler/native conformance harness uses explicit runtime
+  checks instead of `assert` statements, so `python -O` cannot disable
+  its required pass/fail checks.
+
+Funded private exact-source audit: 
+https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38300016507
+
+**17/17 selected CTests passed**, including the three 15-actor native
+pipeline spellings (five runs each), 10 negative compilation tests,
+strict-ingress IR inspection, optimized-Python negative canary and
+native execution, and three Clang ASan/UBSan executions. Exact-source
+Git blobs were verified before compiler/native builds.
+
+This is a focused **subset** gate, not full head CMake/CTest or a
+Java/GraalVM executable pipeline. The source repository still lacks
+allocated runner minutes; the private funded repo carries test only.
