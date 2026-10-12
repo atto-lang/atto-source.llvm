@@ -3,10 +3,10 @@ EXTENDS Naturals, FiniteSets, TLC
 \* Two independently correlated requests share one linear route.
 \* Abstracts the native SourcePipelineFlows registry and its lock-protected
 \* cancel/commit boundary, not physical delivery or guest actor execution.
-CONSTANT Flows, MaxHops, AllowLatePublish, AllowDoubleCommit
-ASSUME /\ Flows = {"a", "b"}
-       /\ MaxHops = 5
-       /\ AllowLatePublish \in BOOLEAN
+CONSTANT AllowLatePublish, AllowDoubleCommit
+Flows == {"a", "b"}
+MaxHops == 5
+ASSUME /\ AllowLatePublish \in BOOLEAN
        /\ AllowDoubleCommit \in BOOLEAN
 
 VARIABLES phase, pending, state, frozen, admitted
