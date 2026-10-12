@@ -195,3 +195,50 @@ Until these gates pass, do not silently treat `critical-read` as
 `critical`, treat `critical-write` as a plain function, or claim
 `transform-pipe` is an executable pipeline. Unsupported lowering must
 produce a clear diagnostic and no partially generated output.
+
+## Current implementation staging and effect contract (October 12, 2026)
+
+The lexical Java draft is [#755](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/755);
+the native fail-closed parser draft is [#254](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/254).
+A first Java runtime **admission substrate** is being developed in
+[#780](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/780),
+stacked on the existing logical exclusive critical gate
+[#577](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/577).
+It does not enable these source-level modifiers or integrate compiled
+protected-state access.
+
+Resolve the actor-state grammar against canonical Java
+[#760](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/760)
+and [#765](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/765)
+and LLVM [#257](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/257)
+and [#259](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/259):
+
+- `with state.read[, state.write]` is a verified effect upper bound; it
+  does **not** grant capabilities or acquire a synchronization permit.
+- `using state.read(...)` and `using state.write(...)` are **lexical**
+  state capabilities, independent of a callable's reader/writer gate.
+- A declaration `critical-read` may not infer `state.write` or grant
+  state-field access outside a scoped `using` loan. A declaration
+  `critical-write` alone does not grant `state.write` either.
+- Actor turns remain single-flight; a reader gate cannot silently schedule
+  two guest actor turns simultaneously. Parallel reads require independent
+  verified concurrent-admission metadata, not just a method modifier.
+- No live actor-state loan may cross suspension simply because a logical
+  critical ticket can survive it. The mode/effect/ownership proofs and
+  cancellation/supervision checks remain separate release gates.
+
+Phase-one Java `CriticalRwGate` admits multiple detached read tickets,
+a single writer, FIFO reader cohorts, and asynchronous waits. It currently
+**fails closed on all same-logical-task nested acquisitions**, including
+read->read and write->read, until reentrancy and cross-primitive lock-order
+proofs are implemented. These are future target semantics above, not
+claims of existing behavior.
+
+Isolated exact-Git-blob verification of the admission algorithm passed
+on private funded runner
+[run #38322201779](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38322201779).
+That job compiled the exact `CriticalRwGate` blob with a **test-only**
+`OresFuture`/scheduler adapter and executed admission and cancellation
+stress. It is **not** evidence for production `OresFuture` integration,
+full GraalVM or LLVM guest execution, compiler effect checking,
+supervisor generation fencing, sanitizer coverage, or ready-to-merge status.
