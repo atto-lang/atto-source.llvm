@@ -39,6 +39,14 @@ int main() {
         check(ores_native_actor_scheduler_acquire_restart_lease(
                   scheduler, candidate, &lease) && lease.nonce,
               "scheduler failed to issue a guarded lease");
+        OresNativeRestartLease recursive{};
+        check(!ores_native_actor_scheduler_acquire_restart_lease(
+                  scheduler, candidate, &recursive),
+              "same-thread nested lease acquisition must reject, not deadlock");
+        check(!ores_native_actor_scheduler_stop(scheduler, candidate),
+              "same-thread physical STOP during a lease must reject");
+        check(!ores_native_actor_scheduler_try_destroy(scheduler),
+              "same-thread destroy during a lease must reject");
         OresNativeRestartLease forged = lease;
         ++forged.nonce;
         check(!ores_native_actor_scheduler_publish_restart_lease(scheduler, forged)
@@ -97,5 +105,25 @@ int main() {
               && ores_native_actor_scheduler_send(scheduler, candidate, 99),
           "published incarnation could be re-admitted");
     shutdown(scheduler);
-    std::puts("NATIVE_RESTART_ADMISSION_LEASE_PASS guarded=3 unpublished=1 replay=1");
+    // A thread-affine token may not be consumed from another thread, even
+    // when its nonce and physical generation are otherwise exact.
+    scheduler = ores_native_actor_scheduler_open(1, 2, 1, no_op, nullptr);
+    check(scheduler != nullptr, "foreign-thread scheduler creation failed");
+    const auto hidden = ores_native_actor_scheduler_spawn_unpublished(scheduler, 0);
+    OresNativeRestartLease owned{};
+    check(ores_native_actor_scheduler_acquire_restart_lease(scheduler, hidden, &owned),
+          "thread-affine lease acquisition failed");
+    std::atomic<bool> foreign_rejected{false};
+    std::thread foreign([&] {
+        foreign_rejected.store(
+            !ores_native_actor_scheduler_publish_restart_lease(scheduler, owned)
+            && !ores_native_actor_scheduler_release_restart_lease(scheduler, owned));
+    });
+    foreign.join();
+    check(foreign_rejected.load(),
+          "foreign host thread used another thread's scheduler lease");
+    check(ores_native_actor_scheduler_release_restart_lease(scheduler, owned),
+          "original owner could not release thread-affine lease");
+    shutdown(scheduler);
+    std::puts("NATIVE_RESTART_ADMISSION_LEASE_PASS guarded=3 unpublished=1 replay=1 owner=1 reentry=1");
 }
