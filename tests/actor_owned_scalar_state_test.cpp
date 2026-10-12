@@ -25,6 +25,7 @@ int main() {
     });
     CriticalStateCallback checked{};
     checked.callback_critical = true;
+    checked.state_mode = CriticalStateMode::Write;
     checked.one_state_parameter = true;
     checked.inferred = {static_cast<std::uint32_t>(FunctionEffect::StateRead)
             | static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
@@ -32,24 +33,34 @@ int main() {
     const FunctionEffects readonly{static_cast<std::uint32_t>(FunctionEffect::StateRead)};
 
     check(state.ready_to_suspend(actor));
-    // The serial guarantee is stored on the actor's runtime instance, not
-    // supplied by a guest callback. It admits the optional critical marker.
+    // Serial admission never silently upgrades a plain read callback to
+    // mutable authority. The runtime Access.write guard is independent of
+    // the declared effect row.
     State serial_actor(actor + 1, {
         {"count", {State::Type::Int, std::int64_t{0}}}
     }, true);
     auto plain = checked;
     plain.callback_critical = false;
-    auto incremented = serial_actor.critical(actor + 1, 300, plain, allowed,
-            [&](State::Access& access) -> State::Value {
-        const auto count = std::get<std::int64_t>(access.read("count"));
-        access.write("count", count + 1);
-        return access.read("count");
-    });
-    check(std::get<std::int64_t>(incremented) == 1);
-    // Explicit critical continues to be legal on serial actors.
+    plain.state_mode = CriticalStateMode::Read;
+    plain.inferred = readonly;
     check(std::get<std::int64_t>(serial_actor.critical(
-            actor + 1, 301, checked, allowed,
+            actor + 1, 300, plain, readonly,
             [](State::Access& access) -> State::Value {
+        return access.read("count");
+    })) == 0);
+    rejects([&] {
+        (void) serial_actor.critical(actor + 1, 301, plain, allowed,
+                [](State::Access& access) -> State::Value {
+            access.write("count", std::int64_t{99});
+            return std::int64_t{99};
+        });
+    });
+    check(serial_actor.ready_to_suspend(actor + 1));
+    // Explicit critical write remains legal on serial actors.
+    check(std::get<std::int64_t>(serial_actor.critical(
+            actor + 1, 302, checked, allowed,
+            [](State::Access& access) -> State::Value {
+        access.write("count", std::int64_t{1});
         return access.read("count");
     })) == 1);
     rejects([&] {
