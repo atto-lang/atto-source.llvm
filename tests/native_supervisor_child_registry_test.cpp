@@ -521,6 +521,11 @@ int main() {
         check(entries[5].state->incarnation == 2
               && entries[5].replacement.has_value(),
               "native committed restart journal lost new incarnation");
+        check(entries[10].replacement.has_value()
+              && entries[10].replacement->scheduler_domain == doomed.scheduler_domain
+              && entries[10].replacement->actor_slot == doomed.actor_slot
+              && entries[10].replacement->generation == doomed.generation,
+              "cleanup-backed abort lost physical candidate identity");
         std::cout << "SUPERVISOR_REGISTRY_TRANSITIONS_V1=";
         for (std::size_t i = 0; i < entries.size(); ++i) {
             if (i) std::cout << '>';
