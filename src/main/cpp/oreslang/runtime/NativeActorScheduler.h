@@ -31,9 +31,11 @@ typedef void (*OresNativeActorPanicFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
  * Normal spawn claims one preallocated physical slot. The strictly limited
- * recycle_unpublished_done operation reclaims only stopped never-published
- * candidates, advancing their slot generation; previously active actors are
- * NOT currently recyclable because their callback ABI is slot-only.
+ * recycle_unpublished_done operation reclaims stopped never-published
+ * candidates. Previously active actors are recyclable only through the
+ * opt-in generation-aware callback mode after physical DONE and a sealed
+ * NORMAL exit. Attempted PANIC and legacy slot-callback generations remain
+ * quarantined. No guest compiler lowering is implied by the host ABI.
  * No ambient cross-actor mutable references or host heap allocations per
  * message are introduced by this scheduler.
  */
