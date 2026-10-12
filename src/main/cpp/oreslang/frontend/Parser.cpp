@@ -167,6 +167,13 @@ public:
 
     Program parse() {
         Program program;
+        // Java/GraalVM permits file-level imports before a wrapped module.
+        // Parse that prelude before deciding whether this is a module body.
+        while (token_.text == "import") {
+            if (!program.imports.empty())
+                fail("duplicate native module imports are unsupported");
+            program.imports.push_back(import_module());
+        }
         bool wrapped_module = false;
         if (accept("define")) {
             if (accept("serial")) {
