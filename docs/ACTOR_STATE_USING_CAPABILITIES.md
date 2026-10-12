@@ -1,5 +1,13 @@
 # Actor state access: canonical `self.handle_state` contract
 
+> **Pre-1.0 design update (2026-10-12):** The normative contract is
+> [WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md):
+> `with` declares permitted effects, `using` acquires lexical capabilities,
+> `self.handle_state(|state|...)` reads by default, and `critical`
+> grants exclusive write access. Historical syntax discussions below
+> are retained for audit history but are superseded where they disagree.
+
+
 Status: **restricted LLVM compiled execution verified; Java compiler fail-closed**.
 Updated October 12, 2026.
 
