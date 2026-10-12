@@ -297,13 +297,14 @@ public:
      * cleanup is fatal for this trusted native host (never ignore an orphan).
      *
      * The optional hook is only for trusted-host fault injection/tests. It
-     * runs outside publication/registry locks after recycle and before the
-     * new reservation; it must not initiate guest work on the hidden actor.
+     * hooks run outside publication/registry locks at the two handoff seams;
+     * they must not initiate guest work on the hidden actor.
      */
     SupervisorChildRegistry::Snapshot abort_recycle_and_admit_verified(
             SupervisorChildRegistry::RestartReservation previous,
             OresNativeActorRef discarded,
-            const std::function<void()>& after_recycle = {}) {
+            const std::function<void()>& after_recycle = {},
+            const std::function<void()>& before_admission = {}) {
         const auto restored = abort_cleaned_replacement(previous, discarded);
         if (restored.phase != SupervisorChildRegistry::Phase::finalized)
             throw std::logic_error("restart abort did not restore FINALIZED");
@@ -328,6 +329,7 @@ public:
             if (after_recycle) after_recycle();
             next = child_registry_->begin_restart(
                 previous.child, previous.failed_actor, previous.incarnation);
+            if (before_admission) before_admission();
             const auto committed = admit_verified_replacement(*next, hidden);
             return committed; // scheduler publication is complete and fenced
         } catch (...) {
