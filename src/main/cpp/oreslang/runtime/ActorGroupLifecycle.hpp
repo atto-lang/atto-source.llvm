@@ -184,6 +184,18 @@ public:
      */
     class RuntimeFinalizer final {
     public:
+        /** A physical native drop is forbidden while the manager can still
+         * dispatch any turn or has an admitted/reserved CONTROL continuation.
+         * Detachment publishes a no-new-turns fence. All fields belong to
+         * the ref's shared generation-fenced ticket and survive group close.
+         */
+        bool ready_for_resource_reclamation() const noexcept {
+            return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
+                && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
+                && !ref_.ticket_->control_active.load(std::memory_order_acquire)
+                && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
+        }
+
         bool finalized(std::string failure = "") const {
             return NativeActorGroup::finalized_after_close(
                 ref_, group_id_, std::move(failure));
@@ -248,12 +260,25 @@ public:
         return ControlTurn::executed;
     }
 
+    // The default root supervisor ID is a runtime-local routing label,
+    // never an authorization token or replacement for actor generation checks.
+    static constexpr std::uint64_t root_supervisor_id = 1;
+
     explicit NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
+        : NativeActorGroup(runtime_id, maximum_workers, root_supervisor_id) {}
+
+    NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers,
+                     std::uint64_t supervisor_id)
         : runtime_id_(runtime_id), maximum_workers_(maximum_workers),
+          supervisor_id_(supervisor_id),
           group_id_(next_group_id().fetch_add(1, std::memory_order_relaxed)) {
-        if (runtime_id == 0 || maximum_workers == 0)
-            throw std::invalid_argument("invalid ActorGroup runtime/capacity");
+        if (runtime_id == 0 || maximum_workers == 0 || supervisor_id == 0)
+            throw std::invalid_argument("invalid ActorGroup runtime/capacity/supervisor");
     }
+
+    std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t group_id() const noexcept { return group_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
 
     NativeActorGroup(const NativeActorGroup&) = delete;
     NativeActorGroup& operator=(const NativeActorGroup&) = delete;
@@ -617,6 +642,7 @@ private:
 
     const std::uint64_t runtime_id_;
     const std::size_t maximum_workers_;
+    const std::uint64_t supervisor_id_;
     const std::uint64_t group_id_;
     mutable std::mutex mutex_;
     bool closed_ = false;
