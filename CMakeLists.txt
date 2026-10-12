@@ -93,6 +93,16 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-effect-unwind-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-effect-unwind-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_typed_exception_unwind COMMAND oreslang-effect-unwind-test)
+    # Actor-local uncaught routing never admits PANIC into guest callbacks.
+    add_executable(oreslang-actor-local-failure-test tests/actor_local_failure_policy_test.cpp)
+    target_include_directories(oreslang-actor-local-failure-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-local-failure-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_local_unhandled_panic_bypass COMMAND oreslang-actor-local-failure-test)
+    # Authenticated data-only HTTP/SSR response framing, NOT socket I/O.
+    add_executable(oreslang-http-response-guard-test tests/http_response_frame_guard_test.cpp)
+    target_include_directories(oreslang-http-response-guard-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-http-response-guard-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_http_response_supervisor_guard COMMAND oreslang-http-response-guard-test)
     # Typed host-runtime bridge; native guest actor compiler lowering is still gated.
     add_executable(oreslang-effect-supervision-bridge-test tests/effect_supervision_bridge_test.cpp)
     target_include_directories(oreslang-effect-supervision-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
