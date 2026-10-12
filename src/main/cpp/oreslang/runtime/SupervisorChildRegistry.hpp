@@ -437,6 +437,9 @@ public:
         if (receipt.status != StopReceiptStatus::pending)
             throw std::logic_error(
                 "STOP receipt is not pending; uncertain effects require reconciliation");
+        if (!receipt.host_invoked)
+            throw std::logic_error(
+                "STOP cannot be applied before host invocation claim");
         receipt.status = StopReceiptStatus::applied;
         record_transition("stop.applied", children_.at(child.logical_child_id),
                           0, turn_generation);
