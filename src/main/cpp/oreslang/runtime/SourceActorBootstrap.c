@@ -228,6 +228,25 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
             &instance->wire_reserved, 1, memory_order_acq_rel);
         ensure(before > 0);
         is_pipeline_backward = direction == 2;
+        if (instance->on_variant && group.pipeline_count >= 2) {
+            const size_t index = instance->pipeline_index;
+            const size_t count = group.pipeline_count;
+            int minimum_after_turn = -1;
+            if (index == 0 && direction == 0)
+                minimum_after_turn = 1;
+            else if (index > 0 && index + 1 < count && direction == 1)
+                minimum_after_turn = (int)(index + 1);
+            else if (index + 1 == count && direction == 1)
+                minimum_after_turn = (int)count;
+            else if (index > 0 && direction == 2)
+                minimum_after_turn = (int)(2 * (count - 1) - index + 1);
+            if (minimum_after_turn >= 0
+                && atomic_load_explicit(&group.pipeline_phase,
+                                        memory_order_acquire) < minimum_after_turn)
+                pipeline_fail(SOURCE_PIPELINE_MISSING_HOP);
+            else if (minimum_after_turn < 0 && !(index == 0 && direction == 2))
+                pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
+        }
     } else {
         result = instance->on_message(instance->heap, turn.domain,
                                       turn.epoch, (int64_t)payload);
@@ -242,11 +261,18 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         if (is_pipeline_backward && group.pipeline_source == instance) {
             ensure(!group.pipeline_done);
             int expected = (int)(2 * (group.pipeline_count - 1));
-            ensure(atomic_compare_exchange_strong_explicit(
+            if (!atomic_compare_exchange_strong_explicit(
                 &group.pipeline_phase, &expected, expected + 1,
-                memory_order_acq_rel, memory_order_acquire));
-            group.pipeline_result = result;
-            group.pipeline_done = 1;
+                memory_order_acq_rel, memory_order_acquire)) {
+                int zero = SOURCE_PIPELINE_OK;
+                atomic_compare_exchange_strong_explicit(
+                    &group.pipeline_failure, &zero, SOURCE_PIPELINE_BAD_PHASE,
+                    memory_order_acq_rel, memory_order_acquire);
+            } else if (!atomic_load_explicit(&group.pipeline_failure,
+                                             memory_order_acquire)) {
+                group.pipeline_result = result;
+                group.pipeline_done = 1;
+            }
         }
         /* Backward delivery can overtake the emitting actor's finalizer on
          * another scheduler worker. Every completed pipeline DATA turn must
@@ -537,6 +563,22 @@ static int source_send_binary(SourceActor* actor,
                               uint8_t direction) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !source_enter_producer(actor))
         return 0;
+    if (actor->upstream || actor->downstream) {
+        if (atomic_load_explicit(&group.pipeline_failure, memory_order_acquire)) {
+            source_leave_producer(actor);
+            return 0;
+        }
+        if (direction == 0) {
+            int expected = 0;
+            if (actor != group.pipeline_source
+                    || !atomic_compare_exchange_strong_explicit(
+                        &group.pipeline_root_sent, &expected, 1,
+                        memory_order_acq_rel, memory_order_acquire)) {
+                source_leave_producer(actor);
+                return 0;
+            }
+        }
+    }
     int result = source_send_binary_unlocked(actor, wire, size, direction);
     source_leave_producer(actor);
     return result;
@@ -632,7 +674,12 @@ void oreslang_source_actor_send_variant_checked(
     // A one-way source-level send must have observable failure semantics.
     // This narrow bootstrap uses terminal host error until Future<T>
     // backpressure/cancellation has a proper compiler continuation.
-    ensure(oreslang_source_actor_send_variant(opaque, wire, size));
+    if (oreslang_source_actor_send_variant(opaque, wire, size)) return;
+    if (group.pipeline_source == opaque) {
+        pipeline_fail(SOURCE_PIPELINE_REJECTED_MAIL);
+        return;
+    }
+    ensure(0 && "source actor typed admission rejected");
 }
 
 /* Bounded three-actor pipeline bootstrap. This is a linear, single-flow
