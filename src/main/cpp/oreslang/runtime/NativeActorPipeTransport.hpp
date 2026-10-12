@@ -8,6 +8,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -52,10 +53,10 @@ public:
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
     std::shared_future<void> write_async(std::size_t edge, std::string payload) {
-        // Admission, promise settlement and the close publication share
-        // one barrier. A write cannot acknowledge DATA after terminal close
-        // has been published, even on a different edge.
-        std::lock_guard<std::mutex> publication(publication_mutex_);
+        // Shared admission and exclusive closure share one barrier. Writes
+        // on independent edges proceed concurrently, but none can publish
+        // DATA after terminal close begins, even on another edge.
+        std::shared_lock<std::shared_mutex> publication(publication_mutex_);
         auto& link = at(edge);
         std::lock_guard<std::mutex> lock(link.mutex);
         if (closed_.load(std::memory_order_acquire) || link.closed)
@@ -86,7 +87,7 @@ public:
         // Admission, promise settlement and the close publication share
         // one barrier. A write cannot acknowledge DATA after terminal close
         // has been published, even on a different edge.
-        std::lock_guard<std::mutex> publication(publication_mutex_);
+        std::shared_lock<std::shared_mutex> publication(publication_mutex_);
         auto& link = at(edge);
         std::lock_guard<std::mutex> lock(link.mutex);
         auto receiver = std::make_shared<std::promise<std::string>>();
@@ -123,7 +124,7 @@ public:
             // Serialize terminal publication with ALL admissions, not just
             // per-edge closure. A concurrent close() cannot return before
             // every pending transport Future has been settled.
-            std::lock_guard<std::mutex> publication(publication_mutex_);
+            std::unique_lock<std::shared_mutex> publication(publication_mutex_);
             if (closed_.exchange(true, std::memory_order_acq_rel)) return;
             for (auto& edge : edges_) {
                 std::lock_guard<std::mutex> lock(edge->mutex);
@@ -180,8 +181,9 @@ private:
     const std::vector<PipeConnection> schema_;
     std::vector<std::unique_ptr<Edge>> edges_;
     std::shared_ptr<NativeActorGroup> group_;
-    // Always acquired before an edge mutex. No host callback under this lock.
-    std::mutex publication_mutex_;
+    // Readers/writers on separate edges run in parallel; only closure gets
+    // the exclusive terminal publication barrier. Never held for host STOP.
+    std::shared_mutex publication_mutex_;
     std::atomic<bool> closed_{false};
 };
 
