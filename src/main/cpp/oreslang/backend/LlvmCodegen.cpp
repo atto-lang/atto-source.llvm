@@ -9,6 +9,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -169,6 +170,14 @@ std::string emit_verified_llvm_ir(const Program& source) {
     // actor.fields.size() slots and passing fresh scheduler turn tokens.
     for (const auto& actor : source.actors) {
         const std::string symbol = "oreslang_actor_" + actor.name;
+        /* A native host can interrogate this source-derived ABI marker before
+         * allocating a trusted isolated actor heap or allowing group spawn.
+         * The scalar-only native subset cannot carry arbitrary object refs.
+         * Marker alone does NOT implement process or memory isolation. */
+        new llvm::GlobalVariable(module, i64, true,
+                llvm::GlobalValue::ExternalLinkage,
+                llvm::ConstantInt::get(i64, actor.isolated ? 1 : 0),
+                symbol + "_isolation_kind");
         auto* initTy = llvm::FunctionType::get(
                 llvm::Type::getVoidTy(context), {ptr, i64, i64}, false);
         auto* initialize = llvm::Function::Create(
