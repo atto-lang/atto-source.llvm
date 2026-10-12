@@ -94,7 +94,14 @@ out-of-range registers, post-measurement gates and unmeasured circuits are
 rejected before emitting QASM or running the simulator. The simulator
 executes an ideal real-valued statevector, returns exact marginal
 probabilities, and offers deterministic seeded shot sampling (up to 1M
-shots). No noise model, complex phase gates, mid-circuit measurement,
+shots). Circuit builder admission rejects the 1,025th gate before
+retaining an unbounded intermediate list. Seeded sampling builds a validated
+CDF and uses upper-bound binary search, with complexity
+O(2^classicalBits + shots * classicalBits) rather than
+O(shots * 2^classicalBits). Zero-probability outcomes cannot be selected,
+and invalid probability mass fails closed. The native quantum regressions
+run under ASan/UBSan on both GCC and Clang in the standalone ABI/DOP gate.
+No noise model, complex phase gates, mid-circuit measurement,
 connectivity map or error correction is implemented. The QASM output uses
 OpenQASM 3.0 and the standard gate library.
 
