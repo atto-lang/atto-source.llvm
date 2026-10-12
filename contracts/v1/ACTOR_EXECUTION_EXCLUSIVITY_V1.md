@@ -14,6 +14,7 @@ For every live actor incarnation `a` and real instant `t`:
 `cardinality({ worker | worker is physically executing actor-owned code for a at t }) <= 1`.
 
 Actor-owned execution includes **all** user-defined actor handlers and methods,
+all ordinary/free/library functions reached transitively from an actor turn,
 actor constructor/initialization hooks, `receive`, actor-local `on_throw` /
 `on_raise`, `tear_down` / cleanup, suspended source task continuations,
 timers/HTTP/stream callbacks dispatched into the actor, supervisor CONTROL
