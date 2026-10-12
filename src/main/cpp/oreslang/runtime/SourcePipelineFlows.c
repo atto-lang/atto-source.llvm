@@ -125,6 +125,11 @@ OresFlowError ores_flow_open(OresFlowTable* table, uint64_t pipeline_id,
     if (callback_table == table) return ORES_FLOW_REENTRANT;
     for (uint8_t i = 0; i < stage_count; ++i) {
         if (!valid_actor(stages[i])) return ORES_FLOW_BAD_ARGUMENT;
+        /* No cross-domain actor graph adapter is implemented for this
+         * restricted linear pipeline. Fail closed until there is an
+         * explicitly authorized scheduler-bridge route capability. */
+        if (stages[i].scheduler_domain != stages[0].scheduler_domain)
+            return ORES_FLOW_BAD_ARGUMENT;
         for (uint8_t j = 0; j < i; ++j)
             if (stages[i].scheduler_domain == stages[j].scheduler_domain &&
                 stages[i].actor_id == stages[j].actor_id)
