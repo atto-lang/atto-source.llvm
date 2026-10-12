@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <set>
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
@@ -108,22 +109,30 @@ void mp_signed_i64(std::vector<std::uint8_t>& out, std::int64_t number) {
         out.push_back(static_cast<std::uint8_t>(bits >> shift));
 }
 std::vector<GuestNominalCase> tagged_cases(
-    const Program& program, const Actor& actor) {
-    if (actor.messages_type.empty()) return {};
+    const Program& program, const Actor& actor,
+    const std::vector<std::string>* shared_pipeline_cases = nullptr) {
+    if (actor.messages_type.empty() && !shared_pipeline_cases) return {};
     std::vector<std::string> names;
-    for (const auto& p : program.tagged_patterns)
-        if (p.name == actor.messages_type) names = p.alternatives;
-    for (const auto& e : program.enums)
-        if (e.name == actor.messages_type)
-            for (const auto& c : e.cases)
-                names.push_back(e.name + "." + c.name);
+    if (shared_pipeline_cases) names = *shared_pipeline_cases;
+    else {
+        for (const auto& p : program.tagged_patterns)
+            if (p.name == actor.messages_type) names = p.alternatives;
+        for (const auto& e : program.enums)
+            if (e.name == actor.messages_type)
+                for (const auto& c : e.cases)
+                    names.push_back(e.name + "." + c.name);
+    }
     if (names.empty()) return {};
     if (names.size() > 64)
         throw std::runtime_error("tagged actor exceeds native 64-case limit");
     std::vector<std::string> sorted = names;
     std::sort(sorted.begin(), sorted.end());
+    // In a pipeline, the same canonical union descriptor belongs to every
+    // stage. Transport ordinals and schema IDs must match across actors.
     std::string fingerprint = "oreslang.tagged.domain.v1/"
-                            + actor.messages_type + "/";
+                            + (shared_pipeline_cases
+                                ? std::string("pipeline.shared.v1")
+                                : actor.messages_type) + "/";
     for (const auto& name : sorted)
         fingerprint += std::to_string(name.size()) + ":" + name + ";";
     const std::string domain_hash = hex(sha(fingerprint));
@@ -250,12 +259,55 @@ std::string emit_verified_llvm_ir(const Program& source) {
     std::unordered_map<std::string, llvm::Constant*> taggedIdentities;
     std::unordered_map<std::string,
         std::unordered_map<std::string, llvm::Constant*>> taggedFrames;
+    // Resolve a single identical nominal wire ABI for each compiled linear
+    // pipeline. Handler ingress domains remain independent subsets; the
+    // scheduler supplies trusted direction and each handler rejects the
+    // opposite direction. An actor never chooses its own dispatch direction.
+    std::unordered_map<std::string, std::vector<std::string>> pipelineWireCases;
+    for (const auto& fn : source.functions) {
+        if (fn.pipeline_actors.empty()) continue;
+        std::set<std::string> unionCases;
+        std::vector<std::string> actorTypes;
+        for (const auto& ref : fn.pipeline_actors) {
+            const auto binding = std::find_if(fn.actor_spawns.begin(), fn.actor_spawns.end(),
+                [&](const ActorSpawnBinding& b) { return b.name == ref; });
+            if (binding == fn.actor_spawns.end())
+                throw std::runtime_error("pipeline binding lost before LLVM lowering");
+            actorTypes.push_back(binding->actor_type);
+            const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
+                [&](const Actor& a) { return a.name == binding->actor_type; });
+            if (actor == source.actors.end())
+                throw std::runtime_error("pipeline actor lost before LLVM lowering");
+            const std::vector<std::string> domains = actor->transform_pipe
+                ? std::vector<std::string>{actor->forward_messages_type, actor->backward_messages_type}
+                : std::vector<std::string>{actor->messages_type};
+            for (const auto& domain : domains) {
+                for (const auto& pattern : source.tagged_patterns)
+                    if (pattern.name == domain)
+                        unionCases.insert(pattern.alternatives.begin(),
+                                          pattern.alternatives.end());
+                for (const auto& en : source.enums)
+                    if (en.name == domain)
+                        for (const auto& item : en.cases)
+                            unionCases.insert(en.name + "." + item.name);
+            }
+        }
+        if (unionCases.empty() || unionCases.size() > 64)
+            throw std::runtime_error("pipeline wire union requires 1..64 nominal cases");
+        for (const auto& type : actorTypes) {
+            if (!pipelineWireCases.emplace(type,
+                    std::vector<std::string>(unionCases.begin(), unionCases.end())).second)
+                throw std::runtime_error("source actor appears in multiple pipeline groups");
+        }
+    }
     llvm::IRBuilder<> constants(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* contractTy = llvm::StructType::get(context, {ptr, ptr, ptr});
     auto* nominalTy = llvm::StructType::get(context, {ptr, i32});
     for (const auto& actor : source.actors) {
-        auto cases = tagged_cases(source, actor);
+        const auto pipeline = pipelineWireCases.find(actor.name);
+        auto cases = tagged_cases(source, actor,
+            pipeline == pipelineWireCases.end() ? nullptr : &pipeline->second);
         if (cases.empty()) continue;
         std::vector<llvm::Constant*> contracts, identities;
         const auto prefix = actor.name + ".tagged.";
@@ -308,7 +360,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
         actorFieldCounts.emplace(actor.name, std::max<std::size_t>(1, actor.fields.size()));
         const auto method = std::find_if(actor.methods.begin(), actor.methods.end(),
             [&](const Function& f) { return f.name ==
-                (actor.messages_type.empty() ? "on_message" : "receive"); });
+                (actor.transform_pipe ? "receive_forward"
+                    : actor.messages_type.empty() ? "on_message" : "receive"); });
         if (method != actor.methods.end() && method->parameters.size() == 1) {
             auto* msgType = taggedCases.count(actor.name)
                 ? llvm::FunctionType::get(i64, {ptr, i64, i64, i64, ptr, i64}, false)
@@ -316,7 +369,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
             actorMessageHandlers.emplace(actor.name, llvm::Function::Create(
                 msgType, llvm::Function::ExternalLinkage,
                 actorSymbolPrefix + actor.name + "_"
-                + (actor.messages_type.empty() ? "on_message" : "receive"), module));
+                + (actor.transform_pipe ? "receive"
+                    : actor.messages_type.empty() ? "on_message" : "receive"), module));
         }
     }
     const auto sourceSpawn = module.getOrInsertFunction(
@@ -794,6 +848,37 @@ std::string emit_verified_llvm_ir(const Program& source) {
             if (region) builder.CreateCall(heapClose, {region});
             builder.CreateRet(result);
         }
+        if (actor.transform_pipe) {
+            // The callback ABI is unchanged: direction comes only from the
+            // runtime's authenticated scheduler DATA turn, not user payload.
+            auto* callback = actorMessageHandlers.at(actor.name);
+            auto* forward = module.getFunction(symbol + "_receive_forward");
+            auto* backward = module.getFunction(symbol + "_receive_backward");
+            if (!forward || !backward
+                    || forward->getFunctionType() != callback->getFunctionType()
+                    || backward->getFunctionType() != callback->getFunctionType())
+                throw std::runtime_error("transform pipe callback ABI mismatch");
+            auto* entry = llvm::BasicBlock::Create(context, "direction.entry", callback);
+            auto* forwardBlock = llvm::BasicBlock::Create(context, "direction.forward", callback);
+            auto* backwardBlock = llvm::BasicBlock::Create(context, "direction.backward", callback);
+            auto* invalid = llvm::BasicBlock::Create(context, "direction.invalid", callback);
+            llvm::IRBuilder<> dispatch(entry);
+            auto ingress = module.getOrInsertFunction(
+                "oreslang_source_actor_pipeline_ingress",
+                llvm::FunctionType::get(i64, {}, false));
+            auto* direction = dispatch.CreateCall(ingress, {}, "scheduler.ingress");
+            auto* branches = dispatch.CreateSwitch(direction, invalid, 2);
+            branches->addCase(llvm::ConstantInt::get(i64, 1), forwardBlock);
+            branches->addCase(llvm::ConstantInt::get(i64, 2), backwardBlock);
+            std::vector<llvm::Value*> arguments;
+            for (auto& arg : callback->args()) arguments.push_back(&arg);
+            dispatch.SetInsertPoint(forwardBlock);
+            dispatch.CreateRet(dispatch.CreateCall(forward, arguments));
+            dispatch.SetInsertPoint(backwardBlock);
+            dispatch.CreateRet(dispatch.CreateCall(backward, arguments));
+            dispatch.SetInsertPoint(invalid);
+            dispatch.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
+        }
     }
 
     std::string diagnostics;
@@ -834,6 +919,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_source_actor_pipeline_connect"
                             && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
+                            && name != "oreslang_source_actor_pipeline_ingress"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_pipeline_expect_status"
                             && name != "oreslang_source_actor_pipeline_cancel"
