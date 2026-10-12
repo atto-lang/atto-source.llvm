@@ -212,3 +212,45 @@ Exact-source private native GCC, Clang ASan and UBSan tests passed in
 https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38317005320.
 The tests exercise the admission substrate; binding to the production
 scheduler and source-level compiler lowering remain independent release gates.
+
+
+## Scheduler admission and one-shot guest-entry bridge (2026-10-12)
+
+The native scheduler now offers an independently bounded, generation-fenced
+`ores_native_actor_scheduler_publish_state_wake` channel with **one typed
+state-wake slot per actor**. This channel never consumes the reserved
+supervisor CONTROL/PANIC slot. Delivery order across ready actors is:
+supervisor CONTROL/PANIC, actor-state READY/CANCELLED wake, then ordinary mail.
+All three run under the same scheduler-owned physical execution claim, and
+a busy actor cannot execute an additional wake in parallel.
+
+The native C++ `ActorStateReadWriteSchedulerBridge` connects the durable
+continuation pump to that scheduler API. The enqueue's successful return
+is the exact native admission receipt; failures leave durable notifications
+for retry. A READY callback must execute on the owning actor lane, revalidate
+its actor reference, and atomically claim the unique continuation using
+`registry.try_claim_ready`. The claim permits receiver-before-producer-ACK
+ordering, but rejects duplicate READY envelopes. The same actor callback
+finishes through `complete_dispatched`, which requires a previous claim.
+
+The original host-level `registry.complete` remains available for the
+existing standalone gate tests; production native guest paths MUST use the
+scheduler-checked `bridge.complete`. CANCELLED notifications are terminal
+bookkeeping only, never permission to enter guest code. The bridge/scheduler
+lifetimes require an external producer fence and final drain before destroy.
+
+**Exact-source verification:**
+- https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38316943271 —
+  new dedicated channel plus five older scheduler regressions passed under GCC
+  and Clang, with an ASan/UBSan pass for the new C test.
+- https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38317304752 —
+  integrated native-C scheduler and C++ continuation bridge passed under
+  strict GCC and Clang ASan/UBSan; covers receiver-before-ACK, replay,
+  forged actor incarnation and actor-lane-only claims. Runner is private and
+  verifies exact Git source blob IDs.
+
+**Still unsupported:** executable source-level `state {}`,
+`handle_state(critical-read/write)`, compiler-proved effects and borrow
+lifetimes, source-actor codegen integration, and cross-backend conformance.
+These runtime host adapters are not themselves a license for concurrent
+guest execution or escaping state loans.
