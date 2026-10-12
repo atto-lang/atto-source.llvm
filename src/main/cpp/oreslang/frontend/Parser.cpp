@@ -192,14 +192,10 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            // Admit the syntax into a sealed import AST. LLVM codegen must
-            // continue rejecting it until real module linking and typed ABI
-            // lowering exist; parsing alone is not executable parity.
+            // Match the Java parser: imports are permitted only in the
+            // file-level prelude, never inside a module or after a callable.
             if (token_.text == "import") {
-                if (!program.imports.empty())
-                    fail("duplicate native module imports are unsupported");
-                program.imports.push_back(import_module());
-                continue;
+                fail("native module imports must precede declarations");
             }
             if (accept("define")) {
                 if (accept("serial")) {
