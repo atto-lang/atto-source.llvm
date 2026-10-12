@@ -135,9 +135,19 @@ static void quarantine_saturation_does_not_settle_done() {
     // Mock FFI producers have now been stopped; the test supervisor verifies
     // their isolation and explicitly releases captured ownership.
     quarantine.release_after_verified_isolate_shutdown();
-    quarantine.release_overflow_after_verified_isolate_shutdown(second);
+    require(quarantine.isolate_shutdown_verified(), "shutdown verification lost");
+    require(barrier2.poll() == Poll::failed,
+            "overflowed actor must now fail done after verified isolation");
+    bool doneFailed = false;
+    try { r2.get_done().get(); }
+    catch (const std::exception&) { doneFailed = true; }
+    require(doneFailed, "overflowed actor fabricated successful done");
     require(second->quarantined_resources() == 0,
             "verified overflow discharge retained native callbacks");
+    require(barrier2.poll() == Poll::failed,
+            "overflowed actor re-entered native closer after terminal failure");
+    require(!quarantine.hold(first),
+            "verified isolation quarantine must remain sealed");
 }
 
 static void physical_reclamation_waits_for_admitted_actor_turn() {
