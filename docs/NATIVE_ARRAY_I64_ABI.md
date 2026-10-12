@@ -1,10 +1,17 @@
 # Native bounded `Array<int>` storage ABI (initial slice)
 
-This is a **trusted native runtime substrate only**. The Oreslang frontend does
-**not** yet parse/typecheck/lower `Array<int>`, class-owned array fields, or
-the linked queue's `Option<QueueEntry>`/mutable method syntax. The native
-compiler continues to reject all six Git-pinned queue fixtures with no partial
-LLVM IR. Do not use these runtime tests as evidence of native source parity.
+The compiler now admits a **narrow native source-level slice**:
+`let mut Array<int> a = new Array<int>();` as an exclusively owned,
+function-local array, and `a.add(v)`, `a.get(i)`, `a.set(i,v)`,
+`a.reserve(n)`, `a.length()` / `a.size()`. Calls lower directly to the
+checked native runtime C ABI with an owned lexical region and deterministic
+normal-return cleanup. The backend verifies LLVM IR before output and native
+CTest executes real `.ores` sources with Clang and ASan/UBSan.
+
+This is **not** general collection parity: array arguments, returns, copies,
+borrows, aliases, class or actor fields, exception/unwind semantics, mutable
+method receivers, and the queue's `Option<QueueEntry>` remain unsupported.
+The six Git-pinned queue fixtures still fail closed without partial IR.
 
 ## ABI and limits
 
@@ -56,11 +63,11 @@ slot reuse, and append past the maximum. The test-only token allocator hook
 also forces exhaustion and proves token reuse fails closed. The same exact
 sources should run under Clang ASan+UBSan before merge.
 
-## Required compiler follow-ups
+## Remaining compiler follow-ups
 
-1. Type/effect-aware parsing and source lowering for `Array<int>`, with
-   allocation/free at compiler-selected cleanup points, and an explicit
-   region value tied to the owning class/actor lifetime.
+1. Extend the verified function-local `Array<int>` slice to class/actor
+   owned fields and receiver borrowing. Currently only private lexical owner
+   creation and nonescaping direct calls are admitted.
 2. Class fields with owned array handles, transactional initialization,
    no field/reference escape, and deterministic destruction.
 3. A checked `Option<int>` and `Option<QueueEntry>` representation,

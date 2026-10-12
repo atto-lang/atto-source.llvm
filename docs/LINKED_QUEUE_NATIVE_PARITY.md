@@ -17,9 +17,10 @@ C++ or Java shims.
   [CI #38317849525](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38317849525).
   A passing result here only establishes rejection without IR. It does **not**
   establish LLVM queue execution, borrow safety or runtime parity.
-- Target missing slice: native-owned `Array<int>` and bounded class fields,
-  checked `new Array<int>()` / `add` / `get` / `set`, deterministic
-  `Option<int>`/queue entry snapshots and write-exclusive `mut self` calls.
+- Target missing slice: class/actor-owned `Array<int>` fields and methods,
+  `Option<int>` / queue-entry snapshots, `mut self` write loans, and
+  loops/branch-sensitive initialization. The new function-local array subset
+  is executable but not sufficient to compile the unchanged linked queue.
   Memory allocation, teardown, overflow and partial initialization must be
   safe on both normal execution and failure paths.
 - Retire this rejection gate only together with compiler-generated verified IR,
@@ -59,7 +60,9 @@ A bounded native integer-array owner ABI is now staged in
 Release and sanitizer security tests. See
 [NATIVE_ARRAY_I64_ABI.md](NATIVE_ARRAY_I64_ABI.md).
 
-This does **not** change the strict exact-source queue parser rejection.
-Passing a raw-array runtime CTest is distinct from supporting guest
-`Array<int>` syntax and checked class/Option lowering. The original six
-queue fixtures remain pinned and rejected without any partial IR.
+The first restricted `let mut Array<int>` source slice now compiles into
+verified LLVM IR and calls the trusted runtime ABI. Positive source programs
+are exercised with Clang and sanitizers. This is deliberately limited to
+nonescaping lexical owners, not class-held arrays or full class/Option
+lowering. The original six exact queue fixtures remain pinned and rejected
+without any partial IR; do not treat the new array CTests as queue parity.
