@@ -193,3 +193,22 @@ https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38312700057
 mirrored into private test repositories. A prior public test mirror was reset
 from its branch tips, but old Git objects/CI records may persist; track
 administrator purge in private issue #256.
+
+
+## Security re-audit: no uncontended admission bypass
+
+All state tickets, **including immediately acquired uncontended Read and
+Write grants**, require a separate acknowledged, bounded CONTROL admission
+before `ActorStateReadWriteContinuations::admitted` authorizes dispatch.
+Owning the logical gate ticket is **not** proof that the scheduler has
+assigned the actor's single guest execution lane. `cancel_pending` can
+revoke an initial Ready grant while it still awaits CONTROL acknowledgment.
+
+The adversarial tests reject completion before the first CONTROL receipt,
+exercise cancellation before first dispatch, and require a real pump
+admission receipt before considering an initial grant runnable.
+
+Exact-source private native GCC, Clang ASan and UBSan tests passed in
+https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38317005320.
+The tests exercise the admission substrate; binding to the production
+scheduler and source-level compiler lowering remain independent release gates.
