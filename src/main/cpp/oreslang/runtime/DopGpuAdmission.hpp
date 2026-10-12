@@ -53,6 +53,8 @@ inline GpuBinding preflight_gpu(
 
     // Separate input and output device allocations require two reservations.
     const auto total = checked_mul(bytes, 2);
+    if (total > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        throw std::overflow_error("DOP GPU reservation exceeds signed 64-bit ABI");
     const auto src = input.fence.snapshot();
     const auto dst = output.fence.snapshot();
     if (src.status != gpu::Status::Idle || dst.status != gpu::Status::Idle)
