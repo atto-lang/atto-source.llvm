@@ -164,6 +164,12 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            // Reject the complete import construct before expression/IR lowering.
+            // The native subset has no stdlib resolver, linker, bool/Any ABI or
+            // trap effect lowering; an imported assertion may not look callable.
+            if (token_.text == "import") {
+                fail("native module imports are unsupported until module resolution and linking are implemented");
+            }
             if (accept("define")) {
                 if (accept("serial")) {
                     require("actor");
