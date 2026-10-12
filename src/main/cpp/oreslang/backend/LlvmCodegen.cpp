@@ -694,16 +694,10 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 nominalWire = &*args++;
                 nominalWireSize = &*args++;
             }
+            // Actor fields are intentionally absent from the ordinary
+            // method-local namespace. State can be read only while lowering
+            // an authenticated, synchronous handle_state loan in an arm.
             std::unordered_map<std::string, llvm::Value*> locals;
-            for (std::size_t index = 0; index < actor.fields.size(); ++index) {
-                llvm::Value* value = builder.CreateCall(fieldRead,
-                    {heap, currentDomain, currentEpoch,
-                     llvm::ConstantInt::get(i64, index)}, actor.fields[index].name);
-                auto* slot = builder.CreateAlloca(i64, nullptr,
-                                                actor.fields[index].name + ".field");
-                builder.CreateStore(value, slot);
-                locals.emplace(actor.fields[index].name, slot);
-            }
             struct LocalSlot {llvm::Value* slot; bool heap;};
             std::vector<LocalSlot> ownedSlots;
             const auto count = std::count_if(method.locals.begin(), method.locals.end(),
@@ -757,20 +751,43 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             armParameters.emplace(arm.binders.front(), bound);
                         }
                     }
-                    for (const auto& assignment : arm.assignments) {
-                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                            [&](const LocalBinding& f) {
-                                return f.name == assignment.field;
-                            });
-                        if (field == actor.fields.end() || !field->field_mutable)
-                            throw std::runtime_error("invalid tagged actor field mutation");
-                        auto* updated = lower(*assignment.value, builder, i64,
-                                              armParameters, locals, declarations);
-                        builder.CreateCall(fieldWrite,
-                            {heap, currentDomain, currentEpoch,
-                             llvm::ConstantInt::get(i64,
-                                 std::distance(actor.fields.begin(), field)), updated});
-                        builder.CreateStore(updated, locals.at(assignment.field));
+                    if (!arm.assignments.empty())
+                        throw std::runtime_error(
+                            "direct actor class field mutation is forbidden");
+                    if (arm.state_loan) {
+                        // The heap snapshot, all mutations and the scalar
+                        // result are confined to this callback-lowering
+                        // region. The result is copied into the outer arm,
+                        // never an address or mutable reference.
+                        auto loanLocals = locals;
+                        for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                            auto* key = builder.CreateAlloca(
+                                i64, nullptr, "state." + actor.fields[i].name);
+                            auto* snapshot = builder.CreateCall(fieldRead,
+                                {heap, currentDomain, currentEpoch,
+                                 llvm::ConstantInt::get(i64, i)},
+                                "state.snapshot." + actor.fields[i].name);
+                            builder.CreateStore(snapshot, key);
+                            loanLocals.emplace("@state." + actor.fields[i].name, key);
+                        }
+                        for (const auto& assignment : arm.state_loan->assignments) {
+                            const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
+                                [&](const LocalBinding& f) { return f.name == assignment.field; });
+                            if (it == actor.fields.end() || !it->field_mutable)
+                                throw std::runtime_error(
+                                    "state loan references invalid or immutable key");
+                            auto* updated = lower(*assignment.value, builder, i64,
+                                armParameters, loanLocals, declarations);
+                            const auto index = std::distance(actor.fields.begin(), it);
+                            builder.CreateCall(fieldWrite,
+                                {heap, currentDomain, currentEpoch,
+                                 llvm::ConstantInt::get(i64, index), updated});
+                            builder.CreateStore(updated,
+                                loanLocals.at("@state." + assignment.field));
+                        }
+                        auto* copied = lower(*arm.state_loan->result, builder, i64,
+                                            armParameters, loanLocals, declarations);
+                        armParameters.emplace(arm.state_loan->result_binding, copied);
                     }
                     if (!arm.route_direction.empty()) {
                         const auto output = std::find_if(cases.begin(), cases.end(),
