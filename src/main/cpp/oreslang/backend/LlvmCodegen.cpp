@@ -125,6 +125,11 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::ModuleCall:
+            // Never materialize an untyped host symbol for stdlib members.
+            // The sealed AST must be linked to verified .ores lowering first.
+            throw std::runtime_error(
+                "native Assert module call awaits typed source-owned linking");
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
