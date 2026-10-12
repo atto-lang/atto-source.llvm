@@ -31,6 +31,15 @@ implementation, while LLVM still rejects unsupported guest serial actors.
    must not cancel a persistent serial actor serving unrelated messages. An
    expired, queued transfer is consumed as a tombstone without running guest
    receive. Its registry entry is reclaimed on consumption or actor teardown.
+   HTTP connection admission and transfer-token admission are independent:
+   each server reserves at most min(connection capacity, 1024) unclaimed
+   tokens (live or expired). A saturated transfer budget rejects dispatch
+   with 503 before emitting actor mail; timeouts do not free these slots until
+   the associated mail is consumed or revoked. There is no unsafe eviction of
+   tombstones whose actor mailbox messages might still arrive. Supervisor
+   counters transfer_backlog, transfer_backlog_limit, transfer_rejected, and
+   tombstones expose bounds, overload and cleanup progress; none grants
+   guest actor authority.
 4. Actor termination fails and reclaims outstanding transport exchanges;
    they are never automatically retried or transferred to a restarted actor.
    Automatic redelivery would duplicate non-idempotent state mutations.
