@@ -357,7 +357,7 @@ int main() {
         define actor Worker<messages=P> as
             receive(Message m) { }
         end
-    )", "LLVM tagged source subset requires payloadless or int cases");
+    )", "LLVM tagged source subset requires payloadless, int or nested enum cases");
 
     // Static compiler admission proves exact coverage, source-order
     // alternatives and binders before intentionally rejecting execution.
@@ -379,7 +379,7 @@ int main() {
         end
     )";
     rejects(taggedActor,
-        "LLVM tagged source subset requires payloadless or int cases");
+        "LLVM tagged source subset requires payloadless, int or nested enum cases");
     const auto arm = std::string("on E.Compute as (text, n) {}");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
             std::string("on E.Stop {}").size(), ""),
@@ -403,7 +403,7 @@ int main() {
     // shape without introducing duplicate bindings or shadowing.
     rejects(std::string(taggedActor).replace(taggedActor.find(arm), arm.size(),
             "on E.Compute as (_, _) {}"),
-            "LLVM tagged source subset requires payloadless or int cases");
+            "LLVM tagged source subset requires payloadless, int or nested enum cases");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Ping as label {}"),
             std::string("on E.Ping as label {}").size(), "on E.Ping as m {}"),
             "tagged payload binder shadows field, local or Message parameter");
