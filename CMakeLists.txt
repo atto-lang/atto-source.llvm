@@ -286,6 +286,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ir_transform_pipe_directional_handlers
         source-actor-pipeline-fifteen-dot.ores
         --ir "oreslang_source_actor_pipeline_ingress")
+    oreslang_contract_test(reject_transform_destination_domain
+        transform-pipe-recipient-domain-reject.ores
+        --diagnostic "pipeline destination ingress domain rejects routed case")
+    oreslang_contract_test(reject_transform_endpoint_first
+        transform-pipe-source-role-reject.ores
+        --diagnostic "transform pipe actor must be an interior pipeline stage")
+    oreslang_contract_test(reject_transform_endpoint_last
+        transform-pipe-sink-role-reject.ores
+        --diagnostic "transform pipe actor must be an interior pipeline stage")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
