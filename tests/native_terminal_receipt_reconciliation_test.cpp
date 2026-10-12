@@ -69,6 +69,12 @@ int main() {
                         ORES_NATIVE_CONTROL_PANIC, child, 9000, 444}),
                 "second terminal attempt bypassed one-shot identity");
         OresNativeTerminalReceipt receipt{};
+        // STOP won BEFORE ordinary CONTROL callback authorization. The
+        // original-parent claim MUST fail without consuming RECORDED evidence,
+        // even though the reconciler may later claim that same exact receipt.
+        require(!ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
+                    scheduler, parent, child, &receipt),
+                "stopped original parent claimed a new host CONTROL effect");
         require(ores_native_actor_scheduler_terminal_receipt(
                     scheduler, parent, child, &receipt)
                     && receipt.status == ORES_NATIVE_TERMINAL_RECEIPT_RECORDED
@@ -208,6 +214,73 @@ int main() {
                 "claimed PANIC was reclassified as normal exit");
         shutdown(scheduler);
     }
+    // Exercise the real scheduler mutex as the linearization point for a
+    // concurrently arriving STOP and ordinary parent callback claim. Exactly
+    // one wins. A failed ordinary claim keeps an unconsumed RECORDED receipt
+    // eligible for trusted recovery, never an ambiguous automatic replay.
+    for (unsigned attempt = 0; attempt < 100; ++attempt) {
+        auto* scheduler = ores_native_actor_scheduler_open_identity_control(
+            2, 2, 2, data, nullptr, panic, nullptr);
+        require(scheduler != nullptr, "race scheduler unavailable");
+        const auto parent = ores_native_actor_scheduler_spawn(scheduler, 0);
+        const auto child = ores_native_actor_scheduler_spawn(scheduler, 1);
+        expect_done(scheduler, child);
+        const OresNativeActorTerminalFailure failure{
+            ORES_NATIVE_CONTROL_PANIC, child, 9302, 544
+        };
+        require(ores_native_actor_scheduler_publish_failure(
+                    scheduler, parent, failure),
+                "race fixture did not publish terminal envelope");
+        std::atomic<bool> start{false}, claim_ok{false}, stop_ok{false};
+        OresNativeTerminalReceipt claimed{};
+        std::thread claimant([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            claim_ok.store(
+                ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
+                    scheduler, parent, child, &claimed) != 0);
+        });
+        std::thread stopper([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            stop_ok.store(ores_native_actor_scheduler_stop(scheduler, parent) != 0);
+        });
+        start.store(true, std::memory_order_release);
+        claimant.join();
+        stopper.join();
+        require(stop_ok.load(), "concurrent original parent STOP failed");
+        require(ores_native_actor_scheduler_wait_done(scheduler, parent),
+                "concurrent parent did not become physical DONE");
+        OresNativeTerminalReceipt current{};
+        require(ores_native_actor_scheduler_terminal_receipt(
+                    scheduler, parent, child, &current),
+                "raced STOP erased exact terminal receipt");
+        require(!ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
+                    scheduler, parent, child, &claimed),
+                "ordinary claim crossed post-STOP parent fence");
+        if (claim_ok.load()) {
+            require(current.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+                        && claimed.nonce != 0
+                        && ores_native_actor_scheduler_ack_terminal_receipt(
+                            scheduler, claimed),
+                    "pre-STOP claim did not retain one-use authority");
+        } else {
+            require(current.status == ORES_NATIVE_TERMINAL_RECEIPT_RECORDED,
+                    "STOP-first race consumed unclaimed receipt");
+            require(ores_native_actor_scheduler_claim_terminal_receipt(
+                        scheduler, parent, child, &claimed)
+                        && claimed.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+                        && ores_native_actor_scheduler_ack_terminal_receipt(
+                            scheduler, claimed),
+                    "STOP-first race was not eligible for exact recovery");
+        }
+        require(!ores_native_actor_scheduler_claim_terminal_receipt(
+                    scheduler, parent, child, &claimed),
+                "raced terminal receipt was consumed twice");
+        shutdown(scheduler);
+    }
+    std::puts("NATIVE_LIVE_PARENT_CLAIM_STOP_RACE_PASS iterations=100");
+
     std::puts("NATIVE_TERMINAL_RECEIPT_RECONCILE_PASS"
               " lost_parent=1 recovered=1 exact_once=1 uncertain=1 stale=1"
               " claimant_races=20");
