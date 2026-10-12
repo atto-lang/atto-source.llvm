@@ -79,7 +79,7 @@ TypeOK ==
     /\ pending \in [Flows -> BOOLEAN]
     /\ state \in [Flows -> {"active", "cancelled", "complete"}]
     /\ frozen \in [Flows -> 0..MaxHops]
-    /\ admitted \subseteq Flows \X 0..(MaxHops - 1)
+    /\ admitted \subseteq (Flows \X (0..(MaxHops - 1)))
 NoLateCommit ==
     \A f \in Flows: state[f] = "cancelled" => phase[f] = frozen[f]
 NoDuplicateCommit ==
