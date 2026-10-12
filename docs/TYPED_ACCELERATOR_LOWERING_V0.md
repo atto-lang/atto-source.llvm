@@ -36,7 +36,12 @@ CPU execution uses those same checked offsets rather than assuming contiguous
 packed arrays. Java uses a single-owner direct ByteBuffer and scoped read
 loans. Native uses byte storage and `memcpy` (avoids strict aliasing and
 unaligned type-punning). Both reject write-while-borrowed and moving while a
-read loan exists. Physical Java direct-buffer release remains GC-mediated;
+read loan exists. The native HostBuffer now also locks the wrapper-owned
+handle separately from its State, so concurrent borrow/take/close and move
+assignment cannot race on the state_ shared_ptr. Moves cannot overwrite live
+buffers or abandon outstanding loans. The exact-source 128-round
+borrow-versus-transfer regression passes GCC/Clang ASan+UBSan and GCC TSAN.
+Physical Java direct-buffer release remains GC-mediated;
 logical close is not yet explicit native memory deallocation.
 
 GPU lowering emits an **actual OpenCL C 1.2 kernel** with two-dimensional
