@@ -46,6 +46,10 @@ typedef struct {
     OresMp2Owned packet;
     size_t variant_index;
     uint8_t direction;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    uint64_t trace_ticket, trace_epoch;
+    uint8_t trace_hop;
+#endif
 } SourceWireDelivery;
 
 typedef struct SourceActor {
@@ -110,6 +114,79 @@ static SourceActorGroup group = {
 };
 /* The active context is issued only while a scheduler-owned DATA callback
  * is executing. A source program cannot forge it through message bytes. */
+
+/* Bounded native event evidence for the supported three-actor guest ONLY.
+ * No dynamic allocation or I/O on actor carriers. Append operations
+ * serialize on the existing group admission mutex. The "ticket" is a
+ * runtime-minted message admission ID, NOT a continuation capability. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+enum { TRACE_RESERVE = 1, TRACE_PUBLISH, TRACE_DELIVER,
+       TRACE_FINALIZE, TRACE_COMPLETE, TRACE_STOP };
+enum { TRACE_LIMIT = 128 };
+typedef struct { uint8_t op, hop; uint64_t ticket, epoch; } SourceTrace;
+static SourceTrace trace_events[TRACE_LIMIT];
+static size_t trace_count;
+static uint64_t trace_next_ticket;
+static int trace_enabled;
+static void trace_append_locked(uint8_t op, uint8_t hop,
+                                uint64_t ticket, uint64_t epoch) {
+    if (!trace_enabled) return;
+    ensure(trace_count < TRACE_LIMIT && epoch == 1);
+    trace_events[trace_count++] = (SourceTrace){op, hop, ticket, epoch};
+}
+static const char* trace_kind(uint8_t op) {
+    switch (op) {
+        case TRACE_RESERVE: return "reserve";
+        case TRACE_PUBLISH: return "publish";
+        case TRACE_DELIVER: return "deliver";
+        case TRACE_FINALIZE: return "finalize";
+        case TRACE_COMPLETE: return "complete";
+        case TRACE_STOP: return "stop";
+        default: ensure(0 && "invalid native trace kind"); return "";
+    }
+}
+/* Trusted host-main only, after ALL actor and root carriers are quiescent. */
+static void trace_dump(void) {
+    if (!trace_enabled) return;
+    ensure(trace_count == 22);
+    fputs("SOURCE_PIPELINE_TRACE_JSON {\"schemaVersion\":1,"
+          "\"kind\":\"compiled-actor-pipeline-trace-v1\","
+          "\"backend\":\"llvm-native\","
+          "\"sourceGitBlobSha1\":\"46579a917516899612fcd8c65c70b24b995c2c5a\","
+          "\"events\":[", stderr);
+    for (size_t i = 0; i < trace_count; ++i) {
+        const SourceTrace* e = &trace_events[i];
+        ensure(e->op >= TRACE_RESERVE && e->op <= TRACE_STOP);
+        if (i) fputc(',', stderr);
+        fprintf(stderr, "{\"seq\":%zu,\"op\":\"%s\",\"epoch\":%llu,"
+                "\"request\":", i, trace_kind(e->op),
+                (unsigned long long)e->epoch);
+        fputs(e->op == TRACE_STOP ? "null" : "\"r1\"", stderr);
+        fputs(",\"hop\":", stderr);
+        if (e->op <= TRACE_FINALIZE) fprintf(stderr, "%u", (unsigned)e->hop);
+        else fputs("null", stderr);
+        fputs(",\"ticket\":", stderr);
+        if (e->op <= TRACE_FINALIZE)
+            fprintf(stderr, "\"t%llu\"", (unsigned long long)e->ticket);
+        else fputs("null", stderr);
+        fputs(",\"stage\":", stderr);
+        if (e->op <= TRACE_FINALIZE) {
+            const char* stage = e->hop == 0 || e->hop == 4 ? "source"
+                : e->hop == 2 ? "sink" : "transform";
+            fprintf(stderr, "\"%s\"", stage);
+        } else fputs("null", stderr);
+        fputs(",\"variant\":", stderr);
+        if (e->op <= TRACE_FINALIZE)
+            fputs(e->hop < 3 ? "\"Signal.Data\"" : "\"Signal.Result\"", stderr);
+        else fputs("null", stderr);
+        fputs(",\"value\":", stderr);
+        fputs(e->op == TRACE_COMPLETE ? "19" : "null", stderr);
+        fputc('}', stderr);
+    }
+    fputs("]}\n", stderr);
+}
+#endif
+
 static _Thread_local SourceActor* active_pipeline_actor;
 static _Thread_local uint8_t active_pipeline_ingress;
 /* Optional test-only scheduler fault point. Production builds neither
@@ -213,10 +290,26 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     int64_t result;
     int is_pipeline_backward = 0;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    uint64_t delivered_ticket = 0, delivered_epoch = 0;
+    uint8_t delivered_hop = 0;
+#endif
     if (instance->on_wire || instance->on_variant) {
         SourceWireDelivery* accepted = (SourceWireDelivery*)(uintptr_t)payload;
         ensure(accepted && accepted->packet.bytes && accepted->packet.size);
         ensure(accepted->variant_index < instance->variant_count);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        if (trace_enabled && instance->on_variant) {
+            delivered_ticket = accepted->trace_ticket;
+            delivered_epoch = accepted->trace_epoch;
+            delivered_hop = accepted->trace_hop;
+            ensure(delivered_ticket && delivered_epoch == instance->ref.generation);
+            group_lock();
+            trace_append_locked(TRACE_DELIVER, delivered_hop,
+                                delivered_ticket, delivered_epoch);
+            group_unlock();
+        }
+#endif
         if (instance->on_variant) {
             SourceActor* prior = active_pipeline_actor;
             uint8_t prior_ingress = active_pipeline_ingress;
@@ -270,6 +363,11 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
      * release, and processed-result publication have all completed. */
     if (instance->upstream || instance->downstream || is_pipeline_backward) {
         group_lock();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        if (delivered_ticket)
+            trace_append_locked(TRACE_FINALIZE, delivered_hop,
+                                delivered_ticket, delivered_epoch);
+#endif
         if (is_pipeline_backward && group.pipeline_source == instance) {
             ensure(!group.pipeline_done);
             int expected = (int)(2 * (group.pipeline_count - 1));
@@ -610,6 +708,24 @@ static int source_send_binary_unlocked(SourceActor* actor,
     } while (!atomic_compare_exchange_weak_explicit(
         &actor->wire_reserved, &pending, pending + 1,
         memory_order_acq_rel, memory_order_relaxed));
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    uint64_t ticket = 0, event_epoch = 0;
+    uint8_t event_hop = 0;
+    if (trace_enabled && (actor->upstream || actor->downstream)) {
+        /* Credit is now reserved, before wire snapshot or publication. */
+        group_lock();
+        ensure(group.pipeline_count == 3 && actor->pipeline_index < 3);
+        ensure(direction <= 2);
+        event_hop = direction == 0 ? 0
+            : direction == 1 ? (uint8_t)actor->pipeline_index
+            : (uint8_t)(4 - actor->pipeline_index);
+        ensure(event_hop < 5 && actor->ref.generation == 1);
+        ticket = ++trace_next_ticket;
+        event_epoch = actor->ref.generation;
+        trace_append_locked(TRACE_RESERVE, event_hop, ticket, event_epoch);
+        group_unlock();
+    }
+#endif
     /* Snapshot once BEFORE consulting the nominal schema ID. Previously
      * selection parsed caller-owned wire bytes before the codec copied
      * them, leading to two different reads of a mutable sender buffer.
@@ -652,6 +768,11 @@ static int source_send_binary_unlocked(SourceActor* actor,
     }
     accepted->variant_index = index;
     accepted->direction = direction;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    accepted->trace_ticket = ticket;
+    accepted->trace_epoch = event_epoch;
+    accepted->trace_hop = event_hop;
+#endif
     /* The terminal-status / cancellation linearization point is shared
      * with final DATA publication. Validate and allocate outside the lock,
      * but never publish after cancellation won the group mutex. */
@@ -672,6 +793,10 @@ static int source_send_binary_unlocked(SourceActor* actor,
      * Commit the hop count BEFORE releasing the shared publication lock,
      * otherwise the final receive could complete before the producer count. */
     if (admitted && pipeline_route) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        if (ticket)
+            trace_append_locked(TRACE_PUBLISH, event_hop, ticket, event_epoch);
+#endif
         if (direction == 1)
             atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
                                       memory_order_acq_rel);
@@ -766,6 +891,11 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
     }
     group.pipeline_count = count;
     group.pipeline_source = first;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    trace_count = 0;
+    trace_next_ticket = 0;
+    trace_enabled = count == 3;
+#endif
     atomic_store_explicit(&group.pipeline_forward_count, 0, memory_order_release);
     atomic_store_explicit(&group.pipeline_backward_count, 0, memory_order_release);
     group.pipeline_done = 0;
@@ -940,6 +1070,12 @@ int32_t oreslang_source_actor_pipeline_expect_status(void* source,
             atomic_compare_exchange_strong_explicit(
                 &group.pipeline_failure, &zero, status,
                 memory_order_acq_rel, memory_order_acquire);
+        } else {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+            if (trace_enabled)
+                trace_append_locked(TRACE_COMPLETE, 0, 0,
+                                    actor->ref.generation);
+#endif
         }
     }
     group_unlock();
@@ -967,6 +1103,9 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
 }
 
 void oreslang_source_actor_stop(void* opaque) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    int dump_trace = 0;
+#endif
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     group_lock();
@@ -1016,6 +1155,9 @@ void oreslang_source_actor_stop(void* opaque) {
     ensure(atomic_load_explicit(&instance->wire_reserved,
                                  memory_order_acquire) == 0);
     release_source_variants(instance->variants, instance->variant_count);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    const uint64_t stopped_epoch = instance->ref.generation;
+#endif
     instance->magic = 0;
     free(instance);
     ensure(group.live > 0);
@@ -1030,6 +1172,10 @@ void oreslang_source_actor_stop(void* opaque) {
         ensure(ores_native_actor_scheduler_try_destroy(group.scheduler));
         group.scheduler = NULL;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        if (trace_enabled && group.pipeline_done) {
+            trace_append_locked(TRACE_STOP, 0, 0, stopped_epoch);
+            dump_trace = 1;
+        }
         fprintf(stderr,
             "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\n",
             group.next_slot, group.peak, SOURCE_GROUP_CARRIERS);
@@ -1038,4 +1184,7 @@ void oreslang_source_actor_stop(void* opaque) {
         group.peak = 0;
     }
     group_unlock();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (dump_trace) trace_dump();
+#endif
 }
