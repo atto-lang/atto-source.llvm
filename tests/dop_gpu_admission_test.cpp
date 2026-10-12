@@ -3,6 +3,7 @@
 #include <atomic>
 #include <thread>
 #include <optional>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -167,7 +168,7 @@ int main() {
         start.store(true, std::memory_order_release);
         t1.join();
         t2.join();
-        check(wins == 1 && rejects == 1);
+        check(wins.load() == 1 && rejects.load() == 1);
         check(left.status() == oreslang::gpu::Status::InFlight);
         check(right.status() == oreslang::gpu::Status::InFlight);
         const auto& winner = results[0].has_value() ? *results[0] : *results[1];
