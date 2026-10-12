@@ -19,6 +19,13 @@ typedef struct {
     pthread_t restart_lease_owner;
     /* Mutually exclusive terminal classification, under the scheduler lock. */
     unsigned failure_attempted, failure_published, normal_exit_sealed;
+    /* Exact failed-child generation retains a typed terminal envelope
+     * even if its original supervisor CONTROL admission fails. */
+    OresNativeActorRef terminal_parent;
+    OresNativeActorTerminalFailure terminal_failure;
+    uint64_t terminal_claim_nonce;
+    unsigned terminal_receipt_state;
+    unsigned terminal_was_published;
     uint64_t generation;
 } ActorLane;
 struct OresNativeActorScheduler {
@@ -27,6 +34,7 @@ struct OresNativeActorScheduler {
      * calls. STOP/retire cannot invalidate a leased physical incarnation. */
     pthread_mutex_t restart_publication_gate;
     uint64_t next_restart_lease_nonce;
+    uint64_t next_terminal_claim_nonce;
     pthread_cond_t ready;
     pthread_cond_t drained;
     ActorLane* actors;
@@ -329,6 +337,11 @@ OresNativeActorRef ores_native_actor_scheduler_recycle_unpublished_done(
             a->failure_attempted = 0;
             a->failure_published = 0;
             a->normal_exit_sealed = 0;
+            a->terminal_parent = (OresNativeActorRef){0};
+            a->terminal_failure = (OresNativeActorTerminalFailure){0};
+            a->terminal_claim_nonce = 0;
+            a->terminal_receipt_state = ORES_NATIVE_TERMINAL_RECEIPT_NONE;
+            a->terminal_was_published = 0;
             a->restart_lease_nonce = 0;
             a->restart_lease_owner = (pthread_t){0};
             for (size_t j = 0; j < s->per_actor_capacity; ++j)
@@ -372,6 +385,11 @@ OresNativeActorRef ores_native_actor_scheduler_recycle_normal_done(
             a->failure = (OresNativeActorTerminalFailure){0};
             a->failure_attempted = a->failure_published = 0;
             a->normal_exit_sealed = 0;
+            a->terminal_parent = (OresNativeActorRef){0};
+            a->terminal_failure = (OresNativeActorTerminalFailure){0};
+            a->terminal_claim_nonce = 0;
+            a->terminal_receipt_state = ORES_NATIVE_TERMINAL_RECEIPT_NONE;
+            a->terminal_was_published = 0;
             a->restart_lease_owner = (pthread_t){0};
             for (size_t j = 0; j < s->per_actor_capacity; ++j)
                 a->messages[j] = 0;
@@ -553,8 +571,20 @@ int ores_native_actor_scheduler_publish_failure(
         && parent.actor_slot != failure.child.actor_slot
         && failure.kind >= ORES_NATIVE_CONTROL_PANIC
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED;
-    if (attempted)
-        s->actors[failure.child.actor_slot].failure_attempted = 1;
+    /* Publication failure must not erase the first exact terminal
+     * envelope. Record BEFORE deciding whether parent CONTROL is open.
+     * Repeated attempts do not publish again: reconciliation owns retries. */
+    if (attempted) {
+        ActorLane* child = &s->actors[failure.child.actor_slot];
+        if (child->failure_attempted) {
+            attempted = 0;
+        } else {
+            child->failure_attempted = 1;
+            child->terminal_parent = parent;
+            child->terminal_failure = failure;
+            child->terminal_receipt_state = ORES_NATIVE_TERMINAL_RECEIPT_RECORDED;
+        }
+    }
     int ok = attempted && !s->retired
         && s->actors[parent.actor_slot].published
         && !s->actors[failure.child.actor_slot].failure_published
@@ -564,6 +594,7 @@ int ores_native_actor_scheduler_publish_failure(
     if (ok) {
         /* Claim terminal failure atomically against normal-exit sealing. */
         s->actors[failure.child.actor_slot].failure_published = 1;
+        s->actors[failure.child.actor_slot].terminal_was_published = 1;
         ActorLane* a = &s->actors[parent.actor_slot];
         a->failure = failure;
         a->control_is_failure = 1;
@@ -572,6 +603,85 @@ int ores_native_actor_scheduler_publish_failure(
         s->outstanding++;
         pthread_cond_signal(&s->ready);
     } else if (s->rejected != UINT64_MAX) s->rejected++;
+    unlock(s);
+    return ok;
+}
+/* Claims and acknowledgments are linearized by the same scheduler lock
+ * as terminal publication and physical DONE. They never dispatch host
+ * policy and never retry a possibly committed external side effect. */
+static int same_terminal_actor(OresNativeActorRef a, OresNativeActorRef b) {
+    return a.scheduler_domain == b.scheduler_domain
+        && a.actor_slot == b.actor_slot && a.generation == b.generation;
+}
+static int terminal_receipt_locked(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    if (!matching(s, child)) return 0;
+    ActorLane* lane = &s->actors[child.actor_slot];
+    if (lane->terminal_receipt_state == ORES_NATIVE_TERMINAL_RECEIPT_NONE
+        || !same_terminal_actor(lane->terminal_parent, parent)
+        || !same_terminal_actor(lane->terminal_failure.child, child))
+        return 0;
+    if (out) {
+        *out = (OresNativeTerminalReceipt){
+            lane->terminal_parent, lane->terminal_failure,
+            lane->terminal_claim_nonce, lane->terminal_receipt_state,
+            lane->terminal_was_published
+        };
+    }
+    return 1;
+}
+int ores_native_actor_scheduler_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    if (!s || !out) return 0;
+    lock(s);
+    int ok = terminal_receipt_locked(s, parent, child, out);
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_claim_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    if (!s || !out || executing == s) return 0;
+    lock(s);
+    int ok = terminal_receipt_locked(s, parent, child, NULL);
+    if (ok) {
+        ActorLane* lane = &s->actors[child.actor_slot];
+        ok = lane->terminal_receipt_state == ORES_NATIVE_TERMINAL_RECEIPT_RECORDED
+            && lane->retired && !lane->active && !lane->queued
+            && !lane->has_control && s->next_terminal_claim_nonce != UINT64_MAX;
+        if (ok) {
+            /* First successful claimant alone may cross into host CONTROL.
+             * A crash or ambiguous host failure leaves CLAIMED: never replay. */
+            uint64_t nonce = ++s->next_terminal_claim_nonce;
+            lane->terminal_claim_nonce = nonce;
+            lane->terminal_receipt_state = ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED;
+            ok = terminal_receipt_locked(s, parent, child, out);
+        }
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_ack_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeTerminalReceipt receipt) {
+    if (!s || receipt.status != ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+        || !receipt.nonce) return 0;
+    lock(s);
+    int ok = terminal_receipt_locked(s, receipt.original_parent,
+                                     receipt.failure.child, NULL);
+    if (ok) {
+        ActorLane* lane = &s->actors[receipt.failure.child.actor_slot];
+        const OresNativeActorTerminalFailure f = lane->terminal_failure;
+        ok = lane->terminal_receipt_state == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+            && lane->terminal_claim_nonce == receipt.nonce
+            && f.kind == receipt.failure.kind
+            && f.failure_code == receipt.failure.failure_code
+            && f.correlation == receipt.failure.correlation
+            && same_terminal_actor(f.child, receipt.failure.child);
+        if (ok)
+            lane->terminal_receipt_state = ORES_NATIVE_TERMINAL_RECEIPT_ACKNOWLEDGED;
+    }
     unlock(s);
     return ok;
 }
