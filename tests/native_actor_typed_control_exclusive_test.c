@@ -36,8 +36,10 @@ static void on_data(void* opaque, size_t actor, uint64_t payload) {
         require(payload == 13);
         check_actor(s, s->parent, s->child);
         int active = atomic_fetch_add(&s->data_active, 1) + 1;
-        if (active > 1) atomic_store(&s->parent_peak, active);
-        else atomic_store(&s->parent_peak, 1);
+        int peak = atomic_load(&s->parent_peak);
+        while (active > peak
+               && !atomic_compare_exchange_weak(&s->parent_peak, &peak, active)) { }
+        if (active > 1) atomic_fetch_add(&s->failures, 1);
         atomic_store(&s->parent_started, 1);
         while (!atomic_load(&s->release_parent)) tick();
         require(atomic_fetch_sub(&s->data_active, 1) == 1);
