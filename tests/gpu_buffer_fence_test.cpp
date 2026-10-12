@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 #include <utility>
+#include <type_traits>
 
 template<class Exception, class F> void expects(F fn) {
     try { fn(); } catch (const Exception&) { return; }
@@ -14,6 +15,8 @@ static void check(bool ok) {
 }
 int main() {
     using namespace oreslang::gpu;
+    static_assert(!std::is_constructible_v<Ticket, std::uint64_t, std::uint64_t>,
+            "guest must not forge GPU completion tickets from integers");
     const Identity id{"tenant-A", "device-0", 7};
     const Identity foreign{"tenant-B", "device-0", 7};
     BufferFence buffer(id, 1024);
@@ -22,7 +25,21 @@ int main() {
     check(buffer.status() == Status::InFlight);
     expects<std::logic_error>([&] { (void)buffer.take(); });
     expects<std::logic_error>([&] { buffer.close_after_retirement(); });
-    expects<std::logic_error>([&] { buffer.complete({6, first.sequence}, true); });
+    // A different allocation can legitimately reuse the SAME numeric
+    // generation and sequence. It must never provide completion authority.
+    BufferFence unrelated(id, 16);
+    auto foreign_ticket = unrelated.begin_command(id);
+    check(foreign_ticket.generation == first.generation
+            && foreign_ticket.sequence == first.sequence);
+    expects<std::logic_error>([&] { buffer.complete(foreign_ticket, true); });
+    expects<std::logic_error>([&] { buffer.cancel_pending(foreign_ticket); });
+    auto tampered = foreign_ticket;
+    tampered.generation = first.generation;
+    tampered.sequence = first.sequence;
+    expects<std::logic_error>([&] { buffer.complete(tampered, true); });
+    unrelated.complete(foreign_ticket, true);
+    unrelated.retire_after_backend_release(id);
+    unrelated.close_after_retirement();
     buffer.complete(first, true);
     expects<std::logic_error>([&] { buffer.complete(first, true); });
     auto owner = buffer.take();
