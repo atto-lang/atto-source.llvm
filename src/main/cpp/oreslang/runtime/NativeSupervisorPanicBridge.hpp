@@ -178,6 +178,44 @@ public:
         return child_registry_;
     }
 
+    /**
+     * Trusted bridge-to-scheduler admission adapter. The real scheduler
+     * must know the exact incarnation before the registry can publish it.
+     * Guest code never obtains this capability or a mutable admission token.
+     */
+    SupervisorChildRegistry::Snapshot admit_verified_replacement(
+            SupervisorChildRegistry::RestartReservation permit,
+            OresNativeActorRef replacement) {
+        if (replacement.scheduler_domain != parent_.scheduler_domain
+            || !ores_native_actor_scheduler_poll_ready(scheduler_, replacement))
+            throw std::logic_error("replacement is not physically scheduler-ready");
+        child_registry_->stage_replacement(permit, replacement);
+        child_registry_->acknowledge_replacement_admission(
+            permit, replacement, [&] {
+                return ores_native_actor_scheduler_poll_ready(scheduler_, replacement);
+            });
+        return child_registry_->replace(permit, replacement);
+    }
+
+    /**
+     * On a failed spawn/admission, the scheduler must report physical DONE
+     * before the old reservation is released. No automatic orphan cleanup.
+     */
+    SupervisorChildRegistry::Snapshot abort_cleaned_replacement(
+            SupervisorChildRegistry::RestartReservation permit,
+            OresNativeActorRef replacement) {
+        child_registry_->acknowledge_replacement_cleanup(
+            permit, replacement, [&] {
+                return ores_native_actor_scheduler_poll_done(scheduler_, replacement);
+            });
+        return child_registry_->abort_restart(permit);
+    }
+
+    /** Terminal supervisor teardown fences any in-flight RESTART commit. */
+    void fence_restart_publication() {
+        child_registry_->close_restart_admission();
+    }
+
     /** Host-only immutable view; neither ID alone grants guest authority. */
     SupervisorChildRegistry::Snapshot child_snapshot(
             SupervisorChildRegistry::ChildRef child) const {
