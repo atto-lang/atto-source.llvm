@@ -1,9 +1,10 @@
 # Future LLVM native runtime
 
 Track execution-domain/actor ABI work in [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
-This directory now contains experimental executable actor-carrier primitives and
-a fixed-capacity actor-owned graph heap, but it still lacks source-lowered
-Oreslang actor classes and a general-purpose native object allocator.
+This directory contains experimental executable actor-carrier primitives,
+a fixed-capacity actor-owned graph heap, and actor-owned byte-heap primitives.
+These prototypes do not provide a general-purpose native object allocator,
+tracing GC, or an OS-level sandbox.
 
 Java reference classes: `ActorRuntime`, `OresScheduler`, `OresFuture`, `RuntimeGarbageCollector`.
 Native phases: structured cancellation, generational wake IDs, pinned/relocatable async frames,
@@ -236,3 +237,41 @@ eventfd storage can be reclaimed. The hot send still does not allocate
 its payload, but handle refcount operations and OS notification costs are
 not strict hard-realtime certified. Copyable handles can outlive the actor
 and reject sends after it is destroyed.
+
+
+## ActorOwnedHeap: actor-specific non-GC storage (experimental)
+
+`ActorOwnedHeap<Bytes,Slots>` is a fixed-capacity, per-instance native
+byte region, not a managed Java object heap. The allocator never calls
+`malloc`, does not use reference counting, and cannot trigger a tracing GC.
+It returns opaque heap/slot/generation handles rather than raw pointers.
+`read`/`write` validate heap identity and bounds on every access;
+`remove` invalidates a slot, and `retire_quiesced` zeroes/invalidates the
+entire actor region without traversing reference cycles. A new heap at the
+same address has a new identity, preventing stale-handle ABA. Handle-to-handle
+links allow data-level cyclic relationships without owning pointer cycles.
+
+When **the final live allocation is removed**, the byte cursor resets and
+the region is zeroed, permitting repeated allocate/free cycles for a
+long-lived actor without triggering GC or exhausting a nonlive bump region.
+Slot **generations are not reset**, so old handles remain invalid. Partial
+frees **do not compact or reclaim bump bytes** while other allocations
+remain; longer-lived mixed-size allocations can still fragment the region
+and exhaust its fixed byte budget. Compaction and safe point/FFI pin
+coordination would require additional runtime work.
+
+**Limits**: only trivially copyable data, no real drop hooks, object
+ownership checker, actor-scoped root map, shared region, scheduler-integrated
+heap leases, concurrent-state synchronization, physical memory protection,
+host/guest bridge, or dynamic/traced cycle collection. The bytes are
+independent native storage, but concurrent access must be externally
+serialized or synchronized. A malicious in-process native module could
+ignore these APIs and access arbitrary memory; use a separate process or
+hardware-enforced sandbox for hostile code. There is no LLVM lowering of
+guest Oreslang actors to this heap yet. Per-actor independently running
+collectors are therefore **not** implemented.
+
+`native_actor_owned_heap_contract` tests two distinct heaps, bidirectional
+and self-cycles through non-owning handles, stale-slot invalidation, foreign
+heap rejection, overflow/budget refusal, retirement, address-reuse ABA,
+and 1,000 full-drain reclamation cycles without stale-handle resurrection.

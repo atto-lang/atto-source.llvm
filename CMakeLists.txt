@@ -55,6 +55,16 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_unique_parallel_tokens
         COMMAND oreslang-owned-i64-token-concurrent-regions-test)
     set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
+    # Header-only native arena proof: independent actor byte regions without
+    # tracing GC. This is not yet a compiled Oreslang actor object heap.
+    add_executable(oreslang-actor-owned-heap-test tests/actor_owned_heap_test.cpp)
+    target_include_directories(oreslang-actor-owned-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-owned-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_heap_contract
+        COMMAND oreslang-actor-owned-heap-test)
+
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
