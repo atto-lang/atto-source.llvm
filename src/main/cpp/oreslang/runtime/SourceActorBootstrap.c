@@ -689,6 +689,15 @@ static int source_send_binary_unlocked(SourceActor* actor,
      * but never publish after cancellation won the group mutex. */
     const int pipeline_route = actor->upstream || actor->downstream;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Read the validated, actor-owned canonical frame BEFORE enqueue.
+     * The receiving worker may free the frame immediately after admission.
+     * Diagnostic traces only report successfully admitted DATA below. */
+    int64_t admitted_trace_value = 0;
+    const int has_admitted_trace = pipeline_route
+        && ores_mp2_extract_tagged_i64_trusted(
+            accepted->packet.bytes, accepted->packet.size,
+            &admitted_trace_value);
+
     /* Allows a race test to force cancellation after validating owned wire
      * bytes but BEFORE the nonblocking scheduler admission commit. */
     /* The test hook compares the PUBLIC actor capability, not a private
@@ -716,6 +725,14 @@ static int source_send_binary_unlocked(SourceActor* actor,
      * Commit both root admission and directional counts BEFORE releasing
      * the shared publication lock, otherwise final receive can overtake. */
     if (admitted && pipeline_route) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        if (has_admitted_trace) {
+            fprintf(stderr,
+                "SOURCE_PIPELINE_ADMIT target=%zu direction=%u variant=%zu value=%lld\n",
+                actor->pipeline_index, (unsigned)direction,
+                index, (long long)admitted_trace_value);
+        }
+#endif
         if (direction == 0)
             atomic_store_explicit(&group.pipeline_root_sent, 1,
                                   memory_order_release);
