@@ -78,6 +78,35 @@ void mp_tag(std::vector<std::uint8_t>& out, std::uint32_t tag) {
             out.push_back(static_cast<std::uint8_t>(tag >> shift));
     }
 }
+/* Canonical MessagePack signed i64 payload. Enum case tags still use
+ * mp_tag and must be positive 32-bit values; payloads are independent and
+ * cover the full representable signed i64 range. Match Java's codec widths:
+ * fixint, uint8/16/32/64 and negative fixint/int8/16/32/64. */
+void mp_signed_i64(std::vector<std::uint8_t>& out, std::int64_t number) {
+    if (number >= 0) {
+        const auto value = static_cast<std::uint64_t>(number);
+        if (value <= UINT32_MAX) {
+            mp_tag(out, static_cast<std::uint32_t>(value));
+        } else {
+            out.push_back(0xcf);
+            for (int shift = 56; shift >= 0; shift -= 8)
+                out.push_back(static_cast<std::uint8_t>(value >> shift));
+        }
+        return;
+    }
+    if (number >= -32) {
+        out.push_back(static_cast<std::uint8_t>(number));
+        return;
+    }
+    const unsigned width = number >= INT8_MIN ? 1
+                          : number >= INT16_MIN ? 2
+                          : number >= INT32_MIN ? 4 : 8;
+    out.push_back(width == 1 ? 0xd0 : width == 2 ? 0xd1
+                : width == 4 ? 0xd2 : 0xd3);
+    const auto bits = static_cast<std::uint64_t>(number);
+    for (int shift = static_cast<int>(width * 8) - 8; shift >= 0; shift -= 8)
+        out.push_back(static_cast<std::uint8_t>(bits >> shift));
+}
 std::vector<GuestNominalCase> tagged_cases(
     const Program& program, const Actor& actor) {
     if (actor.messages_type.empty()) return {};
@@ -441,12 +470,20 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 llvm::Value* wirePtr = taggedFrames.at(actorType).at(send.tagged_variant);
                 std::size_t wireBytes = it->wire.size();
                 if (it->i64_payload) {
-                    if (!send.payload || send.payload->kind != Expression::Kind::Integer
-                            || send.payload->integer < 0
-                            || send.payload->integer > INT32_MAX)
-                        throw std::runtime_error("tagged int message requires int literal");
+                    if (!send.payload)
+                        throw std::runtime_error("tagged int message requires signed int literal");
+                    std::int64_t value;
+                    if (send.payload->kind == Expression::Kind::Integer) {
+                        value = send.payload->integer;
+                    } else if (send.payload->kind == Expression::Kind::Negate
+                               && send.payload->left
+                               && send.payload->left->kind == Expression::Kind::Integer) {
+                        value = -send.payload->left->integer;
+                    } else {
+                        throw std::runtime_error("tagged int message requires signed int literal");
+                    }
                     std::vector<std::uint8_t> frame = it->wire;
-                    mp_tag(frame, static_cast<std::uint32_t>(send.payload->integer));
+                    mp_signed_i64(frame, value);
                     wireBytes = frame.size();
                     const std::string bytes(reinterpret_cast<const char*>(frame.data()),
                                             frame.size());
