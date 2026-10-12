@@ -69,7 +69,16 @@ struct ReceiveBooleanArm {
 // Static admission representation for source `match m over { on Enum.Case
 // as (...) { } }`. Bodies remain unavailable to native codegen; matching
 // contracts are checked before the explicit fail-closed lowering gate.
+// Fixed-shape state is visible only during this scoped, synchronous
+// callback. The callback returns a copied i64 scalar, never a state loan.
+struct StateLoan {
+    std::string result_binding;
+    std::vector<FieldAssignment> assignments;
+    std::unique_ptr<Expression> result;
+};
+
 struct TaggedReceiveArm {
+    std::unique_ptr<StateLoan> state_loan;
     std::string qualified_case;
     // One terminal directional send after any field assignments; lowered
     // into a scheduler-admitted message, never a synchronous actor call.
@@ -148,7 +157,8 @@ struct Actor {
     bool transform_pipe = false;
     std::string forward_messages_type;
     std::string backward_messages_type;
-    std::vector<LocalBinding> fields;
+    bool state_declared = false;
+    std::vector<LocalBinding> fields; // compiler-owned fixed-key state map
     std::vector<Function> methods;
     std::size_t offset = 0;
 };
