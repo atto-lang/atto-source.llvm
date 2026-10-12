@@ -121,3 +121,45 @@ private source organization remain unable to execute steps.
 The preflight is still only a snapshot. A trusted provider must atomically
 claim both physical device allocations and their fences before dispatch;
 it cannot treat the returned descriptor as a security capability.
+
+## Exact-submission completion and exception safety
+
+**Security invariant:** generation/sequence values are diagnostic, not
+authorization. A completion must present the ticket issued for that exact
+allocation **and** submission. Java uses an inaccessible ticket constructor
+and compares the active ticket by reference identity. Native now uses a
+private, per-submission ref-counted seal embedded in the ticket; a foreign
+ticket with identical numerical generation and sequence cannot complete or
+cancel this allocation's operation. The native seal is created *before*
+marking the allocation IN_FLIGHT and is retained across cancellation until
+the backend acknowledges device quiescence.
+
+**Failure atomicity:** both device ticket objects, identity copies, and the
+paired response must be constructed before either allocation becomes
+IN_FLIGHT. Java additionally allocates its typed `ClaimedBinding` wrapper
+before calling the paired fence claim; assigning the issued ticket reference
+afterward cannot throw. Native enforces `noexcept` moves for both its typed
+binding and ticket pair at compile time. Rejected admissions leave both
+allocations idle, rather than issuing a partially claimed pair.
+
+**Locking:** Java's per-allocation State monitor protects all state, including
+the moved-owner bit. The paired claim acquires two State monitors in stable
+allocation-rank order, without taking an independent wrapper lock. Native
+serializes owner movement with State access and acquires both owner and
+allocation locks in deterministic order. Neither implementation blocks a
+carrier thread on a physical GPU completion: these are only short metadata
+transactions.
+
+**Cancellation:** a poisoned allocation cannot be moved or reused. Each
+ticket must reach its own authenticated completion/acknowledgment; releasing
+one of a pair is *not* evidence that the other is quiescent. The future
+device-provider/actor operation must coordinate both events, bytes quotas,
+and physical release before publishing an owned output.
+
+**Targeted verification:** exact-source Java fence compiled with `javac`
+and passed 1,000 reversed-order claim races plus 1,000 claim/take races in
+a standalone same-package harness. Exact-source native fence and regression
+test blobs were matched by Git SHA, compiled with Clang C++17
+`-Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined`, and
+the test passed. These tests are not the complete Java DOP/kernel JUnit
+suite, LLVM native CTest matrix, ThreadSanitizer, or real device execution.
