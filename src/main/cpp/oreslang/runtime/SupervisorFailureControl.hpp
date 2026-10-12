@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/ExceptionPolicy.hpp"
+#include "oreslang/runtime/SupervisorEnqueueGuard.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,11 @@ struct SupervisorFailureNotice {
     std::uint64_t generation;
     std::optional<std::uint64_t> spawned_by;
     std::string diagnostic;
+    // Optional typed native source identity; zeros for non-native host
+    // notices. Keep these at the end for existing aggregate initializers.
+    std::uint64_t native_terminal_kind = 0;
+    std::uint64_t failure_code = 0;
+    std::uint64_t correlation = 0;
 };
 
 /**
@@ -94,7 +100,7 @@ private:
         scheduled_ = true;
         try {
             auto self = shared_from_this();
-            if (!enqueue_([self] { self->drain(); })) {
+            if (!SupervisorEnqueueGuard::submit(enqueue_, [self] { self->drain(); })) {
                 scheduled_ = false;
                 failed_ = true;
                 undelivered_ += queue_.size();

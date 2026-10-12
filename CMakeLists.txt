@@ -599,4 +599,34 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_typed_panic_event
         COMMAND oreslang-native-supervisor-panic-test)
     set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
+
+    # Real native C scheduler's typed panic CONTROL callback is forwarded
+    # into the separate runtime-owned C++ supervisor process. The callback
+    # retains typed failure identity, cannot run policy inline, and can issue
+    # an authoritative native stop decision after an async supervisor turn.
+    add_executable(oreslang-native-supervisor-panic-bridge-test
+        tests/native_supervisor_panic_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-supervisor-panic-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-panic-bridge-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-panic-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_typed_panic_supervisor_process_bridge
+        COMMAND oreslang-native-supervisor-panic-bridge-test)
+    set_tests_properties(native_typed_panic_supervisor_process_bridge PROPERTIES TIMEOUT 30)
+
+    # Register the runtime-wide host CONTROL saturation/safe-shutdown proof
+    # in the same native test graph as the source compiler. This does not
+    # represent guest on_panic lowering or implicit source supervisor syntax.
+    add_executable(oreslang-supervisor-control-liveness-test
+        tests/supervisor_control_liveness_test.cpp)
+    target_include_directories(oreslang-supervisor-control-liveness-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-supervisor-control-liveness-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-supervisor-control-liveness-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_runtime_control_saturation_and_shutdown
+        COMMAND oreslang-supervisor-control-liveness-test)
+    set_tests_properties(native_runtime_control_saturation_and_shutdown PROPERTIES TIMEOUT 30)
 endif()

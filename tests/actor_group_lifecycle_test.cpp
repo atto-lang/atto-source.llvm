@@ -18,6 +18,125 @@ static void check(bool yes, const char* error) {
 
 int main() {
     {
+        // Inline CONTROL dispatch used to deadlock on the supervisor mutex
+        // and could execute policies on a failing child's physical carrier.
+        int callbacks = 0;
+        auto inline_enqueue = [](std::function<void()> work) {
+            work(); // invalid adapter: must be refused without deadlock
+            return true;
+        };
+        auto lane = std::make_shared<oreslang::runtime::SupervisorFailureControl>(2703, 2);
+        lane->install([&](const auto&) { ++callbacks; }, inline_enqueue);
+        lane->publish(oreslang::runtime::SupervisorFailureNotice{
+            2703, 2703, 1, 1, std::nullopt, "terminal"});
+        check(callbacks == 0 && !lane->healthy() && lane->undelivered() >= 1,
+              "inline supervisor CONTROL adapter was not rejected");
+        auto process = std::make_shared<oreslang::runtime::SupervisorProcess>(
+            2704, 2704, 2, inline_enqueue,
+            [&](const auto&) -> std::optional<oreslang::runtime::SupervisorProcess::Directive> {
+                ++callbacks;
+                return oreslang::runtime::SupervisorProcess::Directive::stop;
+            },
+            [&](const auto&) { ++callbacks; });
+        process->accept(oreslang::runtime::SupervisorFailureNotice{
+            2704, 2704, 1, 1, std::nullopt, "terminal"});
+        check(callbacks == 0 && !process->healthy() && process->undelivered() >= 1,
+              "inline supervisor process adapter ran guest policy");
+    }
+    {
+        // A supervisor's physical carrier is released across an await-like
+        // suspension, but its logical single-flight turn stays reserved.
+        NativeActorGroup group(2701, 4);
+        std::deque<std::function<void()>> dispatcher;
+        std::vector<oreslang::runtime::SupervisorProcess::Resolution> decisions;
+        int active = 0;
+        int maximum = 0;
+        int entered = 0;
+        auto enqueue = [&](std::function<void()> job) {
+            dispatcher.push_back(std::move(job));
+            return true;
+        };
+        auto process = group.install_supervisor_process(
+            4, enqueue,
+            [&](const oreslang::runtime::SupervisorFailureNotice& n)
+                -> std::optional<oreslang::runtime::SupervisorProcess::Directive> {
+                ++entered;
+                ++active;
+                maximum = std::max(maximum, active);
+                if (n.actor_id == 3 || n.actor_id == 4)
+                    return std::nullopt; // two distinct logical awaits
+                return oreslang::runtime::SupervisorProcess::Directive::stop;
+            },
+            [&](const oreslang::runtime::SupervisorProcess::Resolution& d) {
+                decisions.push_back(d);
+                --active;
+            });
+        auto a = group.adopt(2701, 1, 1, [] {});
+        auto b = group.adopt_child(a, 2701, 2, 1, [] {});
+        auto c = group.adopt_child(b, 2701, 3, 1, [] {});
+        auto d = group.adopt_child(b, 2701, 4, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b)
+              && group.mark_ready(c) && group.mark_ready(d),
+              "supervisor process family not ready");
+        check(group.finalized(c, "C terminal"), "C did not finalize");
+        check(group.finalized(d, "D terminal"), "D did not finalize");
+        check(decisions.empty() && dispatcher.size() == 1,
+              "policy unexpectedly ran on child finalizer");
+        auto run_one = [&] {
+            check(!dispatcher.empty(), "expected scheduled CONTROL turn");
+            auto job = std::move(dispatcher.front());
+            dispatcher.pop_front();
+            job();
+        };
+        run_one(); // underlying failure CONTROL dispatch
+        check(decisions.empty() && dispatcher.size() == 1,
+              "supervisor process must schedule its own admission turn");
+        run_one(); // process handles C and suspends
+        check(process->callback_active() && entered == 1 && decisions.empty(),
+              "await released the exclusive logical supervisor lease");
+        check(dispatcher.empty() && process->pending() == 2,
+              "second supervisor policy was executed while first suspended");
+        const auto c_epoch = process->current_epoch();
+        check(c_epoch != 0, "supervisor callback did not record continuation epoch");
+        check(process->resume(c_epoch,
+              oreslang::runtime::SupervisorProcess::Directive::escalate),
+              "supervisor could not enqueue await continuation");
+        // A resumed continuation is queued, not executed on foreign thread.
+        check(decisions.empty(), "resume invoked supervisor sink inline");
+        check(!process->resume(c_epoch,
+              oreslang::runtime::SupervisorProcess::Directive::restart),
+              "duplicate supervisor resume was admitted");
+        run_one(); // C's continuation: sink and schedule D
+        check(decisions.size() == 1 && entered == 1,
+              "first resolution crossed the await boundary incorrectly");
+        run_one(); // D's new exclusive admitted turn, also suspended
+        check(decisions.size() == 1 && entered == 2 && process->callback_active(),
+              "second supervisor turn incorrectly escaped its logical lease");
+        const auto d_epoch = process->current_epoch();
+        check(d_epoch != c_epoch && d_epoch != 0,
+              "new child failure reused stale supervisor invocation epoch");
+        check(!process->resume(c_epoch,
+              oreslang::runtime::SupervisorProcess::Directive::restart),
+              "late completion from C resumed D's unrelated CONTROL turn");
+        check(process->resume(d_epoch,
+              oreslang::runtime::SupervisorProcess::Directive::stop),
+              "current invocation continuation could not be admitted");
+        run_one();
+        check(decisions.size() == 2 && entered == 2,
+              "second supervisor continuation failed");
+        check(maximum == 1 && active == 0,
+              "supervisor policies overlapped on logical lane");
+        check(decisions[0].requested
+              == oreslang::runtime::SupervisorProcess::Directive::escalate
+              && decisions[0].notice.spawned_by == b.actor_id()
+              && decisions[1].requested
+              == oreslang::runtime::SupervisorProcess::Directive::stop,
+              "supervisor policy resolutions drifted");
+        check(process->resolved() == 2 && process->healthy(),
+              "supervisor process terminal resolution accounting drift");
+        group.close();
+    }
+    {
         // Native terminal CONTROL must be value-only and scheduler-enqueued,
         // not a direct child -> supervisor guest callback.
         NativeActorGroup group(2501, 3);
