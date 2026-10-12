@@ -125,14 +125,20 @@ static int valid_shape(const char** s, unsigned depth);
 static int typed_value(Reader* r, const char** shape, unsigned depth);
 
 static int descriptor_uint(const char** p, uint32_t cap, uint32_t* out) {
+    const char* begin = *p;
     uint32_t number = 0; unsigned digits = 0;
     while (**p >= '0' && **p <= '9') {
-        if (++digits > 10 || number > (cap - (uint32_t)(**p - '0')) / 10)
+        uint32_t digit = (uint32_t)(**p - '0');
+        if (++digits > 10 || digit > cap
+                || number > (cap - digit) / 10)
             return 0;
-        number = number * 10 + (uint32_t)(**p - '0');
+        number = number * 10 + digit;
         ++*p;
     }
-    if (!digits || (digits > 1 && (*p)[-digits] == '0')) return 0;
+    /* Do not negate the unsigned digit count to index from *p:
+     * unary minus on unsigned arithmetic wraps to a huge positive offset.
+     * ASan caught this in live compiled guest actor registration. */
+    if (!digits || (digits > 1 && begin[0] == '0')) return 0;
     *out = number;
     return 1;
 }
