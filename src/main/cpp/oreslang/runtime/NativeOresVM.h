@@ -40,6 +40,15 @@ typedef struct {
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
 size_t ores_native_vm_workers(const OresNativeVM* vm, enum OresNativeVMDomain domain);
+/* Security admission probe, NOT a capability grant.
+ * All four native scheduler domains are in-process host callbacks and have
+ * zero independent VM heaps or OS address-space boundaries, even UNTRUSTED.
+ * Return 0 for all current native domains and invalid refs. Production
+ * UNTRUSTED source must run through an independently validated Graal isolate
+ * or stronger externally sandboxed worker, never this callback alone.
+ */
+int ores_native_vm_has_hard_security_boundary(
+    const OresNativeVM* vm, enum OresNativeVMDomain domain);
 /* Number of physically started carriers, zero until first admitted work. */
 size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
