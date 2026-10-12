@@ -146,6 +146,8 @@ def main():
                     f"trial {trial}: {result.stderr}"
                 )
             if args.pipeline_three_actor_summary:
+                if result.returncode != 43:
+                    raise ValueError("compiled three-actor guest returned wrong exit status")
                 if result.stdout:
                     raise ValueError("unexpected compiled actor guest stdout")
                 verify_three_actor_pipeline_stderr(result.stderr)
