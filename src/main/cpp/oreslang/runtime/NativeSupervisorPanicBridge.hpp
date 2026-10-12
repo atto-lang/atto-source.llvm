@@ -299,12 +299,23 @@ public:
         const auto restored = abort_cleaned_replacement(permit, replacement);
         if (restored.phase != SupervisorChildRegistry::Phase::finalized)
             throw std::logic_error("restart abort did not restore FINALIZED");
-        const auto next = ores_native_actor_scheduler_recycle_unpublished_done(
-            scheduler_, replacement);
-        if (!next.scheduler_domain)
-            throw std::logic_error(
-                "physically cleaned replacement could not recycle safely");
-        return next;
+        // Cleanup/abort must remain possible after shutdown, but creating
+        // a new live hidden generation must NOT be possible once CONTROL
+        // has closed. Check the authoritative process barrier before taking
+        // the scheduler publication gate (consistent with RESTART commit).
+        // A close that wins this transaction leaves the OLD actor stopped.
+        return process_->with_healthy_restart_transaction([&] {
+            if (!child_registry_->restart_admission_open())
+                throw std::logic_error(
+                    "closed supervisor cannot recycle a live hidden candidate");
+            const auto next =
+                ores_native_actor_scheduler_recycle_unpublished_done(
+                    scheduler_, replacement);
+            if (!next.scheduler_domain)
+                throw std::logic_error(
+                    "physically cleaned replacement could not recycle safely");
+            return next;
+        });
     }
 
     /** Terminal supervisor teardown fences any in-flight RESTART commit. */
