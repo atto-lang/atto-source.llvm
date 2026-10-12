@@ -1515,6 +1515,12 @@ private:
                             if (arm.state_loan) {
                                 if (!actor.state_declared)
                                     throw std::runtime_error("handle_state requires an actor state map");
+                                // Scoped state authority never supplies a missing
+                                // declaration. Unlike legacy native fixtures, every
+                                // state-loan method must declare a `with` upper bound.
+                                if (!method.has_effect_bound)
+                                    throw std::runtime_error(
+                                        "actor state loan requires with effect declaration");
                                 if (method.has_effect_bound) {
                                     const auto allowed = [&](std::string_view effect) {
                                         return std::find(method.allowed_effects.begin(),

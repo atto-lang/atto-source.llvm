@@ -328,6 +328,9 @@ if(BUILD_TESTING)
     # A read capability must not emit any write-capable heap call.
     # with is the function effect upper bound; using obtains a scoped
     # capability. Neither may substitute for the other.
+    oreslang_contract_test(reject_with_using_omitted_effect_clause
+        actor-with-using-no-effect-reject.ores
+        --diagnostic "actor state loan requires with effect declaration")
     oreslang_contract_test(native_with_using_read_no_mutation
         actor-with-using-read-positive.ores
         --ir-not "call .*@ores_actor_i64_heap_field_write")
