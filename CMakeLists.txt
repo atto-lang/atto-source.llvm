@@ -194,6 +194,18 @@ if(BUILD_TESTING)
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=4")
     endif()
+    oreslang_contract_test(native_ir_sixteen_actor_bidirectional_pipeline
+        source-actor-pipeline-sixteen-stage.ores
+        --ir "oreslang_source_actor_pipeline_connect_many")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_sixteen_actor_bidirectional_pipeline
+            source-actor-pipeline-sixteen-stage.ores --run 43
+            --clang "${ORE_CLANG}" --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=16 typed=1 forward=15 backward=15 result=32")
+    endif()
     oreslang_contract_test(native_ir_two_actor_bidirectional_pipeline
         source-actor-pipeline-two-stage.ores --ir "oreslang_source_actor_pipeline_connect_many")
     oreslang_contract_test(native_ir_four_actor_bidirectional_pipeline
