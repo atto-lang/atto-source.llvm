@@ -167,6 +167,87 @@ int main() {
         control->close();
         shutdown(scheduler);
     }
+    // Simulate the host committing its CONTROL effect and losing only the
+    // scheduler receipt acknowledgment. Authoritative effect evidence is
+    // verified independently; recovery may ACK but must NEVER rerun policy.
+    {
+        auto* scheduler = ores_native_actor_scheduler_open_identity_control(
+            2, 2, 2, data, nullptr, panic, nullptr);
+        require(scheduler != nullptr, "lost-ACK scheduler unavailable");
+        const auto parent = ores_native_actor_scheduler_spawn(scheduler, 0);
+        const auto child = ores_native_actor_scheduler_spawn(scheduler, 1);
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::atomic<unsigned> committed{0}, policy_calls{0};
+        auto process = std::make_shared<SupervisorProcess>(
+            7401, parent.scheduler_domain, 4, control->adapter(),
+            [&](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                ++policy_calls;
+                return SupervisorProcess::Directive::acknowledge;
+            },
+            [&](const SupervisorProcess::Resolution&) { ++committed; });
+        auto registry = std::make_shared<SupervisorChildRegistry>(
+            7401, parent.scheduler_domain);
+        auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
+            scheduler, parent, process, registry);
+        expect_done(scheduler, child);
+        expect_done(scheduler, parent);
+        const OresNativeActorTerminalFailure failure{
+            ORES_NATIVE_CONTROL_PANIC, child, 4402, 721
+        };
+        require(!ores_native_actor_scheduler_publish_failure(
+                    scheduler, parent, failure),
+                "lost-ACK original CONTROL unexpectedly accepted PANIC");
+        OresNativeTerminalReceipt claim{};
+        require(ores_native_actor_scheduler_claim_terminal_receipt(
+                    scheduler, parent, child, &claim),
+                "lost-ACK receipt was not exclusively claimed");
+        process->accept(SupervisorFailureNotice{
+            7401, parent.scheduler_domain, child.actor_slot,
+            child.generation, parent.actor_slot, "known committed effect",
+            failure.kind, failure.failure_code, failure.correlation
+        });
+        auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (committed.load() != 1 && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+        require(committed.load() == 1 && policy_calls.load() == 1,
+                "host effect was not independently applied once");
+        require(!bridge->reconcile_claimed_terminal_ack(
+                    parent, child,
+                    [](const OresNativeTerminalReceipt&) { return false; }),
+                "unverified receipt advanced to acknowledged");
+        OresNativeTerminalReceipt pending{};
+        require(ores_native_actor_scheduler_terminal_receipt(
+                    scheduler, parent, child, &pending)
+                    && pending.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED,
+                "unproven receipt was released for retry");
+        require(bridge->reconcile_claimed_terminal_ack(
+                    parent, child, [&](const OresNativeTerminalReceipt& r) {
+                        return committed.load() == 1
+                            && policy_calls.load() == 1
+                            && r.nonce == claim.nonce
+                            && r.failure.correlation == failure.correlation;
+                    }), "independent commit receipt did not reconcile ACK");
+        require(!ores_native_actor_scheduler_claim_terminal_receipt(
+                    scheduler, parent, child, &pending),
+                "acknowledged receipt could execute host effect again");
+        bool duplicate_ack = false;
+        try {
+            (void) bridge->reconcile_claimed_terminal_ack(
+                parent, child,
+                [](const OresNativeTerminalReceipt&) { return true; });
+        } catch (const std::logic_error&) {
+            duplicate_ack = true;
+        }
+        require(duplicate_ack && committed.load() == 1
+                    && policy_calls.load() == 1,
+                "lost host acknowledgment caused a second effect");
+        bridge.reset();
+        process->close();
+        control->close();
+        shutdown(scheduler);
+    }
+
     // Concurrent reconcilers may all inspect the same pre-delivery receipt,
     // but exactly one can transition it to CLAIMED under the scheduler lock.
     // No mutable receipt token is shared by the racing host threads.
