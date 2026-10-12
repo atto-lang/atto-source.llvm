@@ -133,6 +133,10 @@ void oreslang_source_actor_pipeline_connect_many(void* const* stages, uint64_t c
 void oreslang_source_actor_pipeline_connect(void* source, void* transform, void* sink);
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                                uint64_t variant, int64_t value);
+/* Read-only, scheduler-authored DATA direction for the currently running
+ * compiled variant callback: 1 upstream->downstream, 2 downstream->upstream,
+ * 0 without a pipeline delivery. Never accepts an untrusted direction arg. */
+uint64_t oreslang_source_actor_pipeline_ingress(void);
 /* 0 is completed success. Nonzero is a terminal pipeline failure:
  * 1 wrong ingress, 2 invalid phase/replay, 3 rejected DATA admission,
  * 4 stage omitted its required hop, 5 timeout, 6 wrong final result,
