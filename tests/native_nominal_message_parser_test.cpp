@@ -261,7 +261,7 @@ int main() {
             stop worker;
             return 43;
         }
-    )", "LLVM tagged int send requires a positive or zero int literal");
+    )", "LLVM tagged int send requires a signed int literal");
     rejects(R"(
         define enum Values as Increment: int end
         define actor Counter<messages=Values> as
@@ -273,7 +273,7 @@ int main() {
             stop worker;
             return 43;
         }
-    )", "LLVM tagged int send requires a positive or zero int literal");
+    )", "LLVM tagged int send requires a signed int literal");
 
     // Existing bool-only actor receive semantics remain usable.
     auto legacy = parse_program(R"(
