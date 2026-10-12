@@ -113,3 +113,21 @@ ASan/UBSan, optimized-Python negative canary, eight new state isolation
 rejection gates, method-only actor acceptance, and prior directional domain
 rejections. This is not yet full-tree native suite validation. See
 `docs/ACTOR_STATE_INVARIANT.md` for the exact restriction and release limits.
+
+## Additional scoped capability hardening
+
+The restricted compiled tagged-actor profile now admits both
+`using state.read(|state| -> {...})` and
+`using state.write(critical |state| -> {...})`, in addition to the
+legacy write-capability spelling `self.handle_state(critical ...)`.
+
+The read mode statically disallows mutation and its generated LLVM IR
+contains no actor heap-field write call. Write requires `critical`.
+Both scopes reject suspension, reentrancy through arbitrary guest calls,
+nesting and state-reference escape. **Actor turns remain single-flight**,
+so read-only scopes do not imply concurrent reader scheduling.
+
+[Latest funded 45/45 CTests](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38313725825)
+include real 15-actor read/write examples and ASan/UBSan. See
+`docs/ACTOR_STATE_USING_CAPABILITIES.md`. This remains a focused
+restricted-profile proof, not full LLVM repository regression parity.
