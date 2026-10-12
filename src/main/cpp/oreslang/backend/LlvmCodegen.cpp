@@ -301,9 +301,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                 {ptr, ptr, i64}, false));
     const auto pipelineConnect = module.getOrInsertFunction(
-        "oreslang_source_actor_pipeline_connect",
+        "oreslang_source_actor_pipeline_connect_many",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
-                                {ptr, ptr, ptr}, false));
+                                {ptr, i64}, false));
     const auto pipelineEmit = module.getOrInsertFunction(
         "oreslang_source_actor_pipeline_emit_i64",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
@@ -373,10 +373,19 @@ std::string emit_verified_llvm_ir(const Program& source) {
             actorRefTypes.emplace(spawn.name, spawn.actor_type);
         }
         if (!fn.pipeline_actors.empty()) {
+            const auto count = fn.pipeline_actors.size();
+            // Borrowed stack array is only visible during the synchronous
+            // compiler-owned registration call. Runtime copies each opaque
+            // reference and retains no pointer into main's stack.
+            llvm::Value* ordered = builder.CreateAlloca(
+                ptr, llvm::ConstantInt::get(i64, count), "pipeline.ordered.refs");
+            for (std::size_t index = 0; index < count; ++index) {
+                llvm::Value* slot = builder.CreateInBoundsGEP(
+                    ptr, ordered, llvm::ConstantInt::get(i64, index));
+                builder.CreateStore(actorRefs.at(fn.pipeline_actors[index]), slot);
+            }
             builder.CreateCall(pipelineConnect,
-                {actorRefs.at(fn.pipeline_actors.at(0)),
-                 actorRefs.at(fn.pipeline_actors.at(1)),
-                 actorRefs.at(fn.pipeline_actors.at(2))});
+                {ordered, llvm::ConstantInt::get(i64, count)});
         }
         // Scalar locals are either stack owned ('int') or explicitly backed
         // by a bounded native lexical heap region ('owned int'). The latter
