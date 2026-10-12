@@ -25,25 +25,25 @@ static void independent_actors_progress_while_first_lane_is_busy() {
         std::atomic<int> a_turns{0}, b_turns{0}, control_a{0}, control_b{0};
 
         std::thread carrier([&] {
-            check(group.run_data_turn(a, [&] {
+            check(group.run_user_turn(a, [&] {
                 entered.set_value();
                 gate.wait(); // TEST ONLY; guest code cannot block a carrier
                 ++a_turns;
-            }) == NativeActorGroup::DataTurn::executed, "first DATA not admitted");
+            }) == NativeActorGroup::UserTurn::executed, "first DATA not admitted");
         });
         entered.get_future().wait();
-        check(group.run_data_turn(a, [&] { ++a_turns; })
-              == NativeActorGroup::DataTurn::busy,
+        check(group.run_user_turn(a, [&] { ++a_turns; })
+              == NativeActorGroup::UserTurn::busy,
               "same actor executed two DATA turns");
         check(group.enqueue_control(a, [&] { ++control_a; }),
               "CONTROL enqueue failed");
         check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::busy,
               "same actor CONTROL overlapped active DATA");
-        check(group.run_data_turn(a, [] {})
-              == NativeActorGroup::DataTurn::busy,
+        check(group.run_user_turn(a, [] {})
+              == NativeActorGroup::UserTurn::busy,
               "reserved CONTROL did not preempt DATA");
-        check(group.run_data_turn(b, [&] { ++b_turns; })
-              == NativeActorGroup::DataTurn::executed,
+        check(group.run_user_turn(b, [&] { ++b_turns; })
+              == NativeActorGroup::UserTurn::executed,
               "unrelated actor blocked by first actor");
         check(group.enqueue_control(b, [&] { ++control_b; }),
               "second actor CONTROL enqueue failed");
@@ -54,14 +54,14 @@ static void independent_actors_progress_while_first_lane_is_busy() {
         release.set_value();
         carrier.join();
         check(a_turns == 1, "first DATA turn completed twice");
-        check(group.run_data_turn(a, [] {})
-              == NativeActorGroup::DataTurn::busy,
+        check(group.run_user_turn(a, [] {})
+              == NativeActorGroup::UserTurn::busy,
               "DATA admitted ahead of reserved CONTROL");
         check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::executed,
               "queued CONTROL not admitted");
         check(control_a == 1, "queued CONTROL delivered twice");
-        check(group.run_data_turn(a, [&] { ++a_turns; })
-              == NativeActorGroup::DataTurn::executed,
+        check(group.run_user_turn(a, [&] { ++a_turns; })
+              == NativeActorGroup::UserTurn::executed,
               "DATA did not resume after CONTROL");
         check(a_turns == 2, "DATA resume failed");
         check(group.finalized(a) && group.finalized(b), "actors not finalized");
@@ -73,11 +73,11 @@ static void independent_actors_progress_while_first_lane_is_busy() {
 static void exceptions_retire_lanes_and_stale_refs_fail_closed() {
     NativeActorGroup group(504, 1);
     auto actor = group.adopt(504, 9, 1, [] {});
-    check(group.run_data_turn(actor, [] {}) == NativeActorGroup::DataTurn::retired,
+    check(group.run_user_turn(actor, [] {}) == NativeActorGroup::UserTurn::retired,
           "unready actor executed DATA");
     check(group.mark_ready(actor), "cannot ready actor");
     try {
-        (void)group.run_data_turn(actor, [] { throw std::runtime_error("data failure"); });
+        (void)group.run_user_turn(actor, [] { throw std::runtime_error("data failure"); });
         throw std::logic_error("DATA exception was swallowed");
     } catch (const std::runtime_error& error) {
         check(std::string(error.what()) == "data failure", "DATA exception altered");
@@ -90,10 +90,10 @@ static void exceptions_retire_lanes_and_stale_refs_fail_closed() {
     } catch (const std::runtime_error& error) {
         check(std::string(error.what()) == "panic", "CONTROL exception altered");
     }
-    check(group.run_data_turn(actor, [] {}) == NativeActorGroup::DataTurn::executed,
+    check(group.run_user_turn(actor, [] {}) == NativeActorGroup::UserTurn::executed,
           "exception stranded logical lane");
     check(group.finalized(actor), "exception stranded terminal acknowledgement");
-    check(group.run_data_turn(actor, [] {}) == NativeActorGroup::DataTurn::retired,
+    check(group.run_user_turn(actor, [] {}) == NativeActorGroup::UserTurn::retired,
           "retired actor admitted DATA");
     check(!group.enqueue_control(actor, [] {}), "retired actor admitted CONTROL");
 }
@@ -103,28 +103,38 @@ static void bounded_port_admission_obeys_priority_and_release_fences() {
     auto actor = group.adopt(505, 1, 1, [] {});
     auto& value = actor;
     oreslang::runtime::BoundedActorPort<std::unique_ptr<int>> port(1, sizeof(int));
+    enum class PortTurn { idle, executed, busy, retired };
     auto get = [&] {
-        return group.run_port_turn(value, port, [&](auto& delivery) {
-            check(*delivery.value() == 42, "wrong owned port value");
+        bool consumed = false;
+        // Acquire the current actor turn before touching the bounded port.
+        // The old run_port_turn helper is no longer an admission authority.
+        auto turn = group.run_user_turn(value, [&] {
+            auto delivery = port.try_receive();
+            if (!delivery) return;
+            consumed = true;
+            check(*delivery->value() == 42, "wrong owned port value");
             check(port.used_frames() == 1, "receive prematurely refunded credit");
-            check(delivery.acknowledge_released(), "acknowledgement failed");
+            check(delivery->acknowledge_released(), "acknowledgement failed");
         });
+        if (turn == NativeActorGroup::UserTurn::retired) return PortTurn::retired;
+        if (turn == NativeActorGroup::UserTurn::busy) return PortTurn::busy;
+        return consumed ? PortTurn::executed : PortTurn::idle;
     };
-    check(get() == NativeActorGroup::DataTurn::retired, "unready actor consumed port");
+    check(get() == PortTurn::retired, "unready actor consumed port");
     check(group.mark_ready(actor), "port actor not ready");
-    check(get() == NativeActorGroup::DataTurn::idle, "empty port was not idle");
+    check(get() == PortTurn::idle, "empty port was not idle");
     std::unique_ptr<int> payload = std::make_unique<int>(42);
     check(port.offer(std::move(payload), sizeof(int)), "owned message not admitted");
     check(group.enqueue_control(actor, [] {}), "CONTROL was not reserved");
-    check(get() == NativeActorGroup::DataTurn::busy,
+    check(get() == PortTurn::busy,
           "CONTROL priority failed to block DATA receive");
     check(port.used_frames() == 1, "busy actor consumed queued payload");
     check(group.run_control_turn(actor) == NativeActorGroup::ControlTurn::executed,
           "CONTROL did not execute");
-    check(get() == NativeActorGroup::DataTurn::executed,
+    check(get() == PortTurn::executed,
           "queued port frame not processed after CONTROL");
     check(port.used_frames() == 0, "owned credits not released");
-    check(get() == NativeActorGroup::DataTurn::idle, "empty port not reported idle");
+    check(get() == PortTurn::idle, "empty port not reported idle");
     check(group.finalized(actor), "port actor not finalized");
     port.close();
 }

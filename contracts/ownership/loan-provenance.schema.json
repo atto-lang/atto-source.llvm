@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ores-truffle-oreslang.github.io/contracts/ownership/loan-provenance.schema.json",
+  "title": "Oreslang loan provenance conformance record",
+  "description": "Compile-time conformance evidence, not a guest runtime authorization token.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "actorIncarnation",
+    "borrowSite",
+    "loanId",
+    "place",
+    "kind",
+    "action"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "1.0"
+    },
+    "actorIncarnation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "borrowSite": {
+      "type": "string",
+      "minLength": 1
+    },
+    "loanId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "place": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "shared",
+        "exclusive"
+      ]
+    },
+    "action": {
+      "enum": [
+        "borrow",
+        "release"
+      ]
+    }
+  }
+}

@@ -14,6 +14,14 @@
 
 namespace oreslang::runtime {
 
+namespace {
+thread_local HungryCarrier::NativeHeap* tls_actor_heap = nullptr;
+}
+
+HungryCarrier::NativeHeap* HungryCarrier::active_heap() noexcept {
+    return tls_actor_heap;
+}
+
 // An independent shared control block outlives the carrier. One atomic
 // admission word linearizes close versus in-flight producer leases.
 struct HungryCarrier::ProducerGate {
@@ -50,6 +58,26 @@ bool HungryCarrier::ProducerHandle::try_send(ActorMessage message) const noexcep
     } catch (...) {
         std::terminate();
     }
+}
+
+bool HungryCarrier::ProducerHandle::try_wake_control() const noexcept {
+    auto gate = gate_;
+    if (!gate) return false;
+    auto state = gate->leases.load(std::memory_order_acquire);
+    for (;;) {
+        if (state & ProducerGate::closing_bit) return false;
+        if ((state & ProducerGate::count_mask) == ProducerGate::count_mask)
+            return false;
+        if (gate->leases.compare_exchange_weak(state, state + 1,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire))
+            break;
+    }
+    struct LeaseGuard {
+        std::atomic<std::uint64_t>& leases;
+        ~LeaseGuard() { leases.fetch_sub(1, std::memory_order_release); }
+    } guard{gate->leases};
+    return gate->carrier->wake_control();
 }
 
 HungryCarrier::ProducerHandle HungryCarrier::producer_handle() const noexcept {
@@ -137,6 +165,9 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
       producer_gate_(std::make_shared<ProducerGate>(this)) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
+    if ((options_.supervisor_control == nullptr)
+            != (options_.supervisor_hooks == nullptr))
+        throw std::invalid_argument("supervisor CONTROL lane requires typed hooks");
     if (options_.require_exclusive_core || options_.require_strict_no_gc ||
         options_.require_hard_realtime)
         throw std::invalid_argument("strict CPU/GC/RT profile is not certified or implemented");
@@ -181,6 +212,21 @@ void HungryCarrier::start() {
         join();
         throw std::runtime_error("actor CPU affinity admission failed");
     }
+}
+
+bool HungryCarrier::wake_control() noexcept {
+    if (options_.supervisor_control == nullptr
+            || !setup_ok_.load(std::memory_order_acquire)
+            || stop_.load(std::memory_order_acquire)
+            || !options_.supervisor_control->urgent()) return false;
+    try {
+        actor_signal_.notify();
+    } catch (...) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+        return false;
+    }
+    return true;
 }
 
 bool HungryCarrier::enqueue_mpsc(ActorMessage message) noexcept {
@@ -237,6 +283,13 @@ void HungryCarrier::join() noexcept {
     } else {
         abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
     }
+    joined_.store(true, std::memory_order_release);
+}
+
+std::optional<CarrierRetirementProof> HungryCarrier::retirement_proof() const noexcept {
+    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value())
+        return std::nullopt;
+    return CarrierRetirementProof{*options_.heap_owner};
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
@@ -271,7 +324,11 @@ bool HungryCarrier::pin_cpu() noexcept {
 
 void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
+    // Only actor handler execution may access this heap. Suspension does not
+    // invalidate its handles; broker callbacks have no such capability.
+    tls_actor_heap = &actor_heap_;
     const auto step = handler_(actor_state_, message, resumed, result);
+    tls_actor_heap = nullptr;
     if (stop_.load(std::memory_order_acquire)) return;
     if (step.kind == StepKind::done) {
         completed_.fetch_add(1, std::memory_order_release);
@@ -305,7 +362,9 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
 void HungryCarrier::wait_actor() noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
     const auto ready = [this] {
-        return (!pending_ && has_input_ready())
+        return (options_.supervisor_control != nullptr
+                    && options_.supervisor_control->urgent())
+               || (!pending_ && has_input_ready())
                || (pending_ && results_.has_ready())
                || stop_.load(std::memory_order_acquire);
     };
@@ -329,7 +388,7 @@ void HungryCarrier::wait_actor() noexcept {
 void HungryCarrier::actor_loop() noexcept {
     const auto tag = std::hash<std::thread::id>{}(std::this_thread::get_id());
     thread_tag_.store(static_cast<std::uint64_t>(tag), std::memory_order_release);
-    const bool admitted = pin_cpu();
+    const bool admitted = pin_cpu() && actor_heap_.bind_carrier();
     setup_ok_.store(admitted, std::memory_order_release);
     setup_done_.store(true, std::memory_order_release);
     if (!admitted) {
@@ -338,6 +397,20 @@ void HungryCarrier::actor_loop() noexcept {
         return;
     }
     while (!stop_.load(std::memory_order_acquire)) {
+        // Parent CONTROL runs before user envelopes or IO continuations on
+        // this actor's own carrier, never on the producer/failed child's
+        // thread. The typed lane owns its independent bounded capacity.
+        if (options_.supervisor_control != nullptr
+                && options_.supervisor_control->urgent()) {
+            try {
+                (void)options_.supervisor_control->admit_turn(
+                    *options_.supervisor_hooks, false);
+            } catch (...) {
+                failures_.fetch_add(1, std::memory_order_relaxed);
+                request_stop();
+            }
+            continue;
+        }
         if (pending_) {
             Completion c;
             if (results_.try_pop(c)) {

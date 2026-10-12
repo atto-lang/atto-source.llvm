@@ -31,6 +31,17 @@ int main() {
     check(shots == simulate_shots(bell, 1000, 42));
     auto xstate = Builder(1, 1).x(0).measure(0, 0).build();
     check(simulate_probabilities(xstate) == std::vector<double>({0.0, 1.0}));
+    // Unlike Java enums, native gate tags can be forged through static_cast
+    // or FFI. They must not silently disappear from QASM/simulation.
+    expect<std::invalid_argument>([] {
+        (void)Circuit(1, 1, {{static_cast<Op>(255), 0, -1, -1},
+                             {Op::Measure, 0, -1, 0}});
+    });
+    expect<std::invalid_argument>([] {
+        (void)Circuit(1, 1, {{Op::X, 0, -1, -1},
+                             {static_cast<Op>(-1), 0, -1, -1},
+                             {Op::Measure, 0, -1, 0}});
+    });
     expect<std::invalid_argument>([] { (void)Builder(17, 1); });
     expect<std::invalid_argument>([] { (void)Builder(2, 2).cx(0, 0).measure(0, 0).build(); });
     expect<std::invalid_argument>([] { (void)Builder(2, 2).measure(0, 0).measure(0, 1).build(); });
@@ -38,5 +49,24 @@ int main() {
     expect<std::invalid_argument>([] { (void)Builder(2, 2).measure(0, 0).h(1).build(); });
     expect<std::invalid_argument>([] { (void)Builder(2, 2).h(0).build(); });
     expect<std::invalid_argument>([&] { (void)simulate_shots(bell, 1000001, 1); });
+    // A 16-bit distribution used to cost billions of linear-scan probes;
+    // it must be sampled with bounded work and remain seed-reproducible.
+    Builder broad(16, 16);
+    for (int bit = 0; bit < 16; ++bit) broad.h(bit);
+    for (int bit = 0; bit < 16; ++bit) broad.measure(bit, bit);
+    const auto broad_circuit = broad.build();
+    const auto samples = simulate_shots(broad_circuit, 100000, 918273);
+    check(std::accumulate(samples.begin(), samples.end(), std::uint64_t{0}) == 100000);
+    check(samples == simulate_shots(broad_circuit, 100000, 918273));
+
+    // Prefix sums with zero-weight outcomes must never select impossible bins.
+    const auto basis = Builder(2, 2).x(0).measure(0, 0).measure(1, 1).build();
+    const auto exact = simulate_shots(basis, 100000, 7);
+    check(exact[1] == 100000 && exact[0] == 0 && exact[2] == 0 && exact[3] == 0);
+
+    // Constructor-only checking allowed unbounded intermediate gate growth.
+    Builder quota(1, 1);
+    for (int i = 0; i < 1024; ++i) quota.x(0);
+    expect<std::invalid_argument>([&] { quota.measure(0, 0); });
     std::cout << "native quantum circuit QASM+statevector validation passed\n";
 }

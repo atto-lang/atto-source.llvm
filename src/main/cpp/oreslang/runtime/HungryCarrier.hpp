@@ -1,13 +1,17 @@
 #pragma once
+#include "oreslang/runtime/ActorHeapRetirementProof.hpp"
 #include "oreslang/runtime/BoundedMpscQueue.hpp"
 #include "oreslang/runtime/BoundedSpscQueue.hpp"
+#include "oreslang/runtime/ActorHeap.hpp"
 #include "oreslang/runtime/ParkingSignal.hpp"
+#include "oreslang/runtime/SupervisorControlTurn.hpp"
 #include <atomic>
 #include <array>
 #include <chrono>
 #include <mutex>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <thread>
 
 // Experimental native continuation carrier. This is an independent C++
@@ -61,6 +65,11 @@ struct CarrierStats {
 class HungryCarrier final {
     struct ProducerGate;
 public:
+    using NativeHeap = ActorHeap<64, 256>;
+    // Available only while executing on the actor's carrier.
+    // Do not retain across actor termination.
+    static NativeHeap* active_heap() noexcept;
+
     // Handles hold an independent shared lifetime gate. They may be copied,
     // sent to other native producer threads and survive carrier destruction.
     // Creation/copy can allocate or refcount; pre-create them before realtime
@@ -69,6 +78,9 @@ public:
     public:
         ProducerHandle() = default;
         bool try_send(ActorMessage message) const noexcept;
+        // Only wake after successful publication to a reserved slot.
+        // Uses the same shutdown gate as ordinary producers.
+        bool try_wake_control() const noexcept;
         explicit operator bool() const noexcept { return static_cast<bool>(gate_); }
     private:
         friend class HungryCarrier;
@@ -107,6 +119,10 @@ public:
         bool require_exclusive_core = false;  // fail closed until OS reservation manager exists
         bool require_strict_no_gc = false;    // fail closed until compiler/allocator proof exists
         bool require_hard_realtime = false;   // fail closed until watchdog/OS proof exists
+        std::optional<ActorHeapIdentity> heap_owner; // minted at supervisor admission
+        // Optional externally owned supervisor components; must outlive join.
+        oreslang::SupervisorControlTurn* supervisor_control = nullptr;
+        oreslang::SupervisorControlTurn::Hooks* supervisor_hooks = nullptr;
     };
     HungryCarrier(void* actor_state, ActorHandler handler, void* broker_state,
                   BrokerOperation operation, Options opts);
@@ -127,6 +143,8 @@ public:
     // A single external lifecycle owner calls join; it also initiates stop.
     // Joining/destroying from the actor or broker thread is fatal, not safe.
     void join() noexcept;
+    // May be minted only after all carrier/broker/producers are joined/drained.
+    std::optional<CarrierRetirementProof> retirement_proof() const noexcept;
     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
     CarrierStats stats() const noexcept;
 
@@ -148,9 +166,11 @@ private:
     bool pop_next_input(ActorMessage& message) noexcept;
     bool try_send_spsc(std::size_t lane, ActorMessage message) noexcept;
     bool enqueue_mpsc(ActorMessage message) noexcept;
+    bool wake_control() noexcept;
     bool pin_cpu() noexcept;
 
     void* actor_state_;
+    NativeHeap actor_heap_; // separate native heap for each dedicated carrier
     ActorHandler handler_;
     void* broker_state_;
     BrokerOperation operation_;
@@ -171,6 +191,7 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::atomic<bool> started_{false};
+    std::atomic<bool> joined_{false};
     std::atomic<bool> setup_done_{false};
     std::atomic<bool> setup_ok_{false};
     std::atomic<OperationTerminal> terminal_{OperationTerminal::idle};
