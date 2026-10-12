@@ -28,6 +28,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Real native parser/ownership code, not a fixture scanner. Successful
+    # parsing yields sealed AST import metadata; LLVM codegen still rejects
+    # unresolved modules until typed linking is implemented.
+    add_executable(oreslang-assert-import-parser-test
+        tests/native_assert_import_parser_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-assert-import-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-assert-import-parser-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_canonical_import_parser
+        COMMAND oreslang-assert-import-parser-test)
+
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
