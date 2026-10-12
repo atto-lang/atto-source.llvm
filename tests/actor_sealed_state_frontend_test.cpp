@@ -38,6 +38,13 @@ int main() {
         "define actor Counter as state { value: int; } end",
         "expected '='");
     must_reject(
+        "define actor Counter as state { first: int = 1 second: int = 2 } end",
+        "semicolons or newline");
+    must_reject(
+        "define actor Counter as let state: int = 2; "
+        "pub on_message(int n): int { return n; } end",
+        "reserved runtime-owned storage");
+    must_reject(
         "define actor Counter as state { value: String = 0; } end",
         "expected 'int'");
     must_reject(
