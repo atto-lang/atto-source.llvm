@@ -88,6 +88,15 @@ std::string emit_verified_llvm_ir(const Program& source) {
             "ores_actor_i64_heap_field_read",
             llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false));
 
+    llvm::FunctionCallee fieldInitMutable = module.getOrInsertFunction(
+            "ores_actor_i64_heap_field_init_mutable",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                    {ptr, i64, i64, i64, i64}, false));
+    llvm::FunctionCallee fieldWrite = module.getOrInsertFunction(
+            "ores_actor_i64_heap_field_write",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                    {ptr, i64, i64, i64, i64}, false));
+
     std::unordered_map<std::string, llvm::Function*> declarations;
 
     // Declare all functions first, enabling forward calls and recursion.
@@ -175,7 +184,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
         for (std::size_t index = 0; index < actor.fields.size(); ++index) {
             auto* value = lower(*actor.fields[index].initializer, initBuilder, i64,
                                 noValues, noValues, noFunctions);
-            initBuilder.CreateCall(fieldInit,
+            initBuilder.CreateCall(actor.fields[index].field_mutable ? fieldInitMutable : fieldInit,
                  {actorHeap, domain, epoch,
                   llvm::ConstantInt::get(i64, index), value});
         }
@@ -229,6 +238,19 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 locals.emplace(local.name, address);
                 ownedSlots.push_back({address, local.heap_owned});
             }
+            for (const auto& assignment : method.assignments) {
+                const auto match = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == assignment.field; });
+                // Parser validation proves the field exists and is mutable.
+                if (match == actor.fields.end() || !match->field_mutable)
+                    throw std::runtime_error("invalid actor field mutation lowering");
+                llvm::Value* updated = lower(*assignment.value, builder, i64,
+                                             parameters, locals, declarations);
+                builder.CreateCall(fieldWrite,
+                    {heap, currentDomain, currentEpoch,
+                     llvm::ConstantInt::get(i64, std::distance(actor.fields.begin(), match)), updated});
+                builder.CreateStore(updated, locals.at(assignment.field));
+            }
             auto* result = lower(*method.result, builder, i64,
                                  parameters, locals, declarations);
             for (auto iter = ownedSlots.rbegin(); iter != ownedSlots.rend(); ++iter) {
@@ -272,7 +294,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_owned_i64_region_drop"
                             && name != "oreslang_owned_i64_region_close"
                             && name != "ores_actor_i64_heap_field_init"
-                            && name != "ores_actor_i64_heap_field_read") {
+                            && name != "ores_actor_i64_heap_field_read"
+                            && name != "ores_actor_i64_heap_field_init_mutable"
+                            && name != "ores_actor_i64_heap_field_write") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }

@@ -54,8 +54,11 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
-    # Only immutable i64 fields + read-only actor methods are admitted.
+    # Strict i64 fields: immutable const/val, mutable let, synchronous method writes.
     oreslang_contract_test(actor_source_field_layout actor-owned-fields.ores --ir "oreslang_actor_Counter_read")
+    oreslang_contract_test(actor_source_mutable_field actor-owned-fields.ores --ir "ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_actor_immutable_write actor-immutable-write.ores --diagnostic "cannot assign immutable or unknown actor field")
+    oreslang_contract_test(reject_actor_unknown_write actor-unknown-write.ores --diagnostic "cannot assign immutable or unknown actor field")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
     oreslang_contract_test(reject_actor_duplicate_field actor-duplicate-field.ores --diagnostic "duplicate actor field")
     oreslang_contract_test(reject_actor_bad_field_type actor-unsupported-field.ores --diagnostic "expected 'int'")

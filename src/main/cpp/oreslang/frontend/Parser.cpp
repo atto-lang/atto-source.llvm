@@ -156,9 +156,10 @@ private:
         const bool braced = accept("{");
         // The first native actor subset deliberately admits only immutable
         // scalar fields and read-only methods; no async or user destructors.
-        while (token_.text == "const" || token_.text == "val") {
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
             LocalBinding field;
             field.offset = token_.offset;
+            field.field_mutable = token_.text == "let";
             advance();
             field.name = identifier();
             require(":");
@@ -170,7 +171,7 @@ private:
         }
         if (value.fields.empty()) fail("actor requires at least one scalar field");
         while (token_.text == "fnc" || token_.text == "routine" || token_.text == "pub") {
-            value.methods.push_back(function());
+            value.methods.push_back(function(true));
         }
         if (value.methods.empty()) fail("actor requires at least one read-only method");
         if (braced) require("}");
@@ -178,7 +179,7 @@ private:
         return value;
     }
 
-    Function function() {
+    Function function(bool actor_method = false) {
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
@@ -209,6 +210,17 @@ private:
             binding.initializer = expression();
             require(";");
             value.locals.push_back(std::move(binding));
+        }
+        // Restricted synchronous actor methods can update declared `let` fields.
+        while (actor_method && token_.kind == Kind::Identifier
+               && !reserved(token_.text)) {
+            FieldAssignment assignment;
+            assignment.offset = token_.offset;
+            assignment.field = identifier();
+            require("=");
+            assignment.value = expression();
+            require(";");
+            value.assignments.push_back(std::move(assignment));
         }
         require("return");
         value.result = expression();
@@ -398,6 +410,7 @@ private:
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             reserveGenerated(prefix + "init");
             std::unordered_set<std::string> fields;
+            std::unordered_set<std::string> mutableFields;
             // Deliberately restrict initializers to closed arithmetic:
             // initialization must not escape the actor turn or call FFI.
             const std::unordered_set<std::string> none;
@@ -406,6 +419,7 @@ private:
                 validate_expression(*field.initializer, none, noCalls);
                 if (!fields.insert(field.name).second)
                     throw std::runtime_error("duplicate actor field '" + field.name + "'");
+                if (field.field_mutable) mutableFields.insert(field.name);
             }
             std::unordered_set<std::string> methods;
             for (const auto& method : actor.methods) {
@@ -421,6 +435,12 @@ private:
                     validate_expression(*local.initializer, available, functions);
                     if (!available.insert(local.name).second)
                         throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
+                }
+                for (const auto& assignment : method.assignments) {
+                    if (!mutableFields.count(assignment.field)) {
+                        throw std::runtime_error("cannot assign immutable or unknown actor field '" + assignment.field + "'");
+                    }
+                    validate_expression(*assignment.value, available, functions);
                 }
                 validate_expression(*method.result, available, functions);
             }
