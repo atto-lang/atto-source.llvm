@@ -150,5 +150,39 @@ int main() {
     check(!published_child.scheduler_domain,
           "hidden scheduler slot unexpectedly permitted a second spawn");
     shutdown(typed);
-    std::puts("NATIVE_RESTART_ADMISSION_LEASE_PASS guarded=3 unpublished=1 replay=1 owner=1 reentry=1 control=1");
+    // Initial host registration is also a publication race: acquire a lease
+    // for an already routable actor and prove physical STOP cannot cross it.
+    auto* initial = ores_native_actor_scheduler_open(2, 2, 2, no_op, nullptr);
+    check(initial != nullptr, "initial registration scheduler failed");
+    const auto initial_child = ores_native_actor_scheduler_spawn(initial, 1);
+    OresNativeRestartLease registration{};
+    check(ores_native_actor_scheduler_acquire_registration_lease(
+              initial, initial_child, &registration),
+          "published initial child had no scheduler registration lease");
+    OresNativeRestartLease wrong_kind{};
+    check(!ores_native_actor_scheduler_acquire_restart_lease(
+              initial, initial_child, &wrong_kind),
+          "initial child was accepted as an unpublished RESTART");
+    std::atomic<bool> stop_started{false};
+    std::atomic<bool> stop_finished{false};
+    std::thread initial_stopper([&] {
+        stop_started.store(true);
+        check(ores_native_actor_scheduler_stop(initial, initial_child),
+              "initial child physical STOP failed");
+        stop_finished.store(true);
+    });
+    while (!stop_started.load()) std::this_thread::yield();
+    std::this_thread::sleep_for(15ms);
+    check(!stop_finished.load()
+              && ores_native_actor_scheduler_poll_published(initial, initial_child),
+          "initial registration readiness expired while protected");
+    check(ores_native_actor_scheduler_release_restart_lease(initial, registration),
+          "initial registration lease did not release");
+    initial_stopper.join();
+    check(stop_finished.load() &&
+              !ores_native_actor_scheduler_acquire_registration_lease(
+                  initial, initial_child, &wrong_kind),
+          "retired initial child regained registration authority");
+    shutdown(initial);
+    std::puts("NATIVE_RESTART_ADMISSION_LEASE_PASS guarded=3 unpublished=1 replay=1 owner=1 reentry=1 control=1 registration=1");
 }
