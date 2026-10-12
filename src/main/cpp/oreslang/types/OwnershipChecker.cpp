@@ -73,8 +73,13 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
     auto& owner = it->second;
     const bool valid = field.empty() ? owner.int_array :
         !owner.class_name.empty() && owner.class_array_fields.count(field);
-    if (!valid || (!field.empty() && owner.moved_fields.count(field)))
+    if (!valid || (!field.empty() && owner.moved_fields.count(field))) {
+        if (field.empty())
+            reject(receiver, write
+                ? "ownership violation: Array<int> mutation requires live let mut owner"
+                : "native Array<int> operation requires a live array owner");
         reject(receiver, "native Array<int> operation requires an owned Array<int> place");
+    }
     if (owner.mode != Mode::Value)
         reject(receiver, "ownership violation: Array<int> cannot be accessed through a borrowed class");
     if (owner.exclusive_loan || (write && owner.shared_loans))
