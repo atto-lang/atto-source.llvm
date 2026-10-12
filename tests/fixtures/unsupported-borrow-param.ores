@@ -1,3 +1,6 @@
-// LLVM does not implement borrow-parameter lifetime checking.
+// Modern ownership admission requires an explicit call-scoped loan.
 pub fnc inspect(borrow int item): int { return item; }
-pub fnc main(): int { return inspect(42); }
+pub fnc main(): int {
+  const value: int = 42;
+  return inspect(rt borrow value);
+}

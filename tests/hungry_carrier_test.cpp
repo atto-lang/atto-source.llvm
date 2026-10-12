@@ -518,10 +518,83 @@ static void test_spsc_lifetime_and_registration_limits() {
           "dedicated producer dereferenced destroyed actor");
 }
 
+struct HeapActorState {
+    std::atomic<int> phase{0};
+    std::atomic<int> errors{0};
+    std::uint64_t heap_identity = 0;
+    HungryCarrier::NativeHeap::Handle handle{};
+    HungryCarrier::NativeHeap::Handle foreign{};
+};
+static ActorStep heap_actor_handler(void* raw, ActorMessage, bool resumed,
+                                   std::int64_t result) noexcept {
+    auto& st = *static_cast<HeapActorState*>(raw);
+    auto* heap = HungryCarrier::active_heap();
+    if (!heap) { st.errors.fetch_add(1); return {}; }
+    if (!resumed) {
+        st.heap_identity = heap->identity();
+        if (st.foreign.heap) {
+            std::uint64_t ignored = 0;
+            if (heap->read(st.foreign, 0, &ignored, sizeof ignored))
+                st.errors.fetch_add(1);
+        }
+        auto h = heap->allocate(sizeof(std::uint64_t));
+        std::uint64_t value = 0x1234DEADBEEFULL;
+        if (!h || !heap->write(*h, 0, &value, sizeof value))
+            st.errors.fetch_add(1);
+        if (h) st.handle = *h;
+        st.phase.store(1, std::memory_order_release);
+        return {StepKind::await_io, 71, 30};
+    }
+    std::uint64_t observed = 0;
+    if (result != 71 || !heap->read(st.handle, 0, &observed, sizeof observed) ||
+        observed != 0x1234DEADBEEFULL || !heap->release(st.handle))
+        st.errors.fetch_add(1);
+    st.phase.store(2, std::memory_order_release);
+    return {};
+}
+static std::int64_t heap_broker(void* raw, std::int64_t payload,
+                                const std::atomic<bool>&) noexcept {
+    auto& st = *static_cast<HeapActorState*>(raw);
+    if (HungryCarrier::active_heap() != nullptr) st.errors.fetch_add(1);
+    return payload;
+}
+static void test_actor_heap_bound_to_carrier_across_await() {
+    HeapActorState first;
+    {
+        HungryCarrier actor(&first, heap_actor_handler, &first, heap_broker, {});
+        actor.start();
+        check(actor.producer_handle().try_send({1, 1}), "actor heap send rejected");
+        check(until([&] { return first.phase.load(std::memory_order_acquire) == 2; }, 2s),
+              "actor heap await did not resume");
+        actor.request_stop();
+        actor.join();
+    }
+    check(first.errors.load() == 0 && first.heap_identity != 0,
+          "first actor heap lifecycle failed");
+
+    HeapActorState second;
+    second.foreign = first.handle; // stale cross-actor token from destroyed carrier
+    {
+        HungryCarrier actor(&second, heap_actor_handler, &second, heap_broker, {});
+        actor.start();
+        check(actor.producer_handle().try_send({2, 2}), "second heap send rejected");
+        check(until([&] { return second.phase.load(std::memory_order_acquire) == 2; }, 2s),
+              "second actor heap await did not resume");
+        actor.request_stop();
+        actor.join();
+    }
+    check(second.errors.load() == 0 && first.heap_identity != second.heap_identity,
+          "actor heaps shared an identity or accepted foreign memory");
+    check(HungryCarrier::active_heap() == nullptr,
+          "native heap leaked to external supervisor thread");
+    std::cout << "PASS actor-local native heap across async and between carriers\n";
+}
+
 int main() {
     try {
         test_bounded_queue_head_readiness();
         test_fixed_arena_bounds_and_alignment();
+        test_actor_heap_bound_to_carrier_across_await();
         test_150ms_await_serial_and_same_carrier();
         test_actual_socket_io_off_carrier();
         test_pending_socket_cancel_does_not_block_join();
