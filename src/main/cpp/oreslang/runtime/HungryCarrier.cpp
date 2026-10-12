@@ -245,6 +245,13 @@ void HungryCarrier::join() noexcept {
     } else {
         abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
     }
+    joined_.store(true, std::memory_order_release);
+}
+
+std::optional<CarrierRetirementProof> HungryCarrier::retirement_proof() const noexcept {
+    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value())
+        return std::nullopt;
+    return CarrierRetirementProof{*options_.heap_owner};
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
