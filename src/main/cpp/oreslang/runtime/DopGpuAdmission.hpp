@@ -71,4 +71,20 @@ inline GpuBinding preflight_gpu(
     return GpuBinding{layout, artifact, src.identity, dst.identity, bytes, total};
 }
 
+struct ClaimedGpuBinding {
+    GpuBinding binding;
+    gpu::BufferFence::PairTickets tickets;
+};
+
+// A typed preflight is only advisory until this transaction claims BOTH
+// allocation fences. The provider remains responsible for real device
+// provenance and per-tenant quotas. A failed claim changes neither fence.
+inline ClaimedGpuBinding claim_gpu(const Kernel& kernel, GpuTarget target,
+                                  const DeviceBuffer& input, const DeviceBuffer& output) {
+    auto binding = preflight_gpu(kernel, target, input, output);
+    auto tickets = gpu::BufferFence::claim_pair(input.fence, output.fence,
+                                               binding.bytes_per_buffer);
+    return ClaimedGpuBinding{std::move(binding), std::move(tickets)};
+}
+
 } // namespace oreslang::dop
