@@ -49,6 +49,8 @@ struct ActorSpawnBinding {
 struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
+    // Nominal case, e.g. Messages.Stop; never lowered as scalar i64.
+    std::string tagged_variant;
     std::size_t offset = 0;
 };
 
@@ -64,12 +66,33 @@ struct ReceiveBooleanArm {
     std::size_t offset = 0;
 };
 
+// Static admission representation for source `match m over { on Enum.Case
+// as (...) { } }`. Bodies remain unavailable to native codegen; matching
+// contracts are checked before the explicit fail-closed lowering gate.
+struct TaggedReceiveArm {
+    std::string qualified_case;
+    // One terminal directional send after any field assignments; lowered
+    // into a scheduler-admitted message, never a synchronous actor call.
+    std::string route_direction;
+    std::string route_variant;
+    std::unique_ptr<Expression> route_payload;
+    std::vector<std::string> binders;
+    bool binds_payload = false;
+    bool tuple_destructure = false;
+    std::vector<FieldAssignment> assignments;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<LocalBinding> locals;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
+    std::vector<std::string> pipeline_actors; // compiler-owned 2..16 ordered refs
+    std::string pipeline_cancel_actor;  // trusted main, before any send
+    std::string pipeline_expect_actor;
+    std::int64_t pipeline_expect_value = 0;
     // Restricted initial compiler continuation: await ref.get_ready()
     // directly after spawning actors, before messages or cleanup.
     std::string ready_await_actor;
@@ -77,6 +100,7 @@ struct Function {
     std::vector<FieldAssignment> assignments;
     std::string match_subject;
     std::vector<ReceiveBooleanArm> boolean_arms;
+    std::vector<TaggedReceiveArm> tagged_arms;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
@@ -86,7 +110,7 @@ struct Function {
 // Closed structural variants, not arbitrary runtime object references.
 // Tuple/Array/List alternatives retain ordered element types and arity.
 struct MessageShape {
-    enum class Kind { Boolean, Integer, String, Tuple, Array, List };
+    enum class Kind { Boolean, Integer, String, Tuple, Array, List, FixedArray, FixedList };
     Kind kind;
     std::vector<MessageShape> elements;
 };
@@ -94,6 +118,26 @@ struct MessageShape {
 struct MessagePattern {
     std::string name;
     std::vector<MessageShape> alternatives;
+    std::size_t offset = 0;
+};
+
+// Parsed nominal tagged contracts. These are compile-time declarations only;
+// until LLVM's full typed DATA lowering is implemented they are deliberately
+// rejected when used as an actor mailbox instead of silently using scalar ABI.
+struct EnumCase {
+    std::string name;
+    MessageShape payload;
+    bool has_payload = false;
+    std::uint32_t tag = 0;
+};
+struct EnumDeclaration {
+    std::string name;
+    std::vector<EnumCase> cases;
+    std::size_t offset = 0;
+};
+struct TaggedPattern {
+    std::string name;
+    std::vector<std::string> alternatives;
     std::size_t offset = 0;
 };
 
@@ -110,6 +154,8 @@ struct Program {
     std::vector<Function> functions;
     std::vector<Actor> actors;
     std::vector<MessagePattern> message_patterns;
+    std::vector<EnumDeclaration> enums;
+    std::vector<TaggedPattern> tagged_patterns;
 };
 
 // Parse and statically validate a strict Java-compatible subset: int functions,

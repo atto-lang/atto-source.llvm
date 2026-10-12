@@ -27,7 +27,23 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Standalone LLVM frontend admission proof. The parser is linked directly
+    # so nominal declarations, monotonic tags and fail-closed actor usage can
+    # be tested without generating IR for unsupported tagged operations.
+    add_executable(oreslang-nominal-message-parser-test
+        tests/native_nominal_message_parser_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp)
+    target_include_directories(oreslang-nominal-message-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME source_nominal_enum_pattern_parser_gate
+        COMMAND oreslang-nominal-message-parser-test)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_compiled_pipeline_evidence_mutation_gate
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pipeline_guest_evidence.py")
+    add_test(NAME native_compiled_pipeline_evidence_python_optimized
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pipeline_guest_evidence.py")
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
@@ -143,6 +159,118 @@ if(BUILD_TESTING)
         --diagnostic "scalar local shadows actor reference")
     oreslang_contract_test(reject_source_actor_escape source-actor-spawn-escape.ores
         --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_source_actor_pipeline_forward_unlowered
+        source-actor-pipeline-forward-unavailable.ores
+        --diagnostic "self.forward requires native pipeline routing lowering")
+    oreslang_contract_test(reject_source_actor_pipeline_backward_unlowered
+        source-actor-pipeline-backward-unavailable.ores
+        --diagnostic "self.backward requires native pipeline routing lowering")
+    oreslang_contract_test(reject_pipeline_actor_without_declared_route
+        source-actor-pipeline-unbound.ores
+        --diagnostic "pipeline actor routing requires declared pipeline topology")
+    oreslang_contract_test(reject_pipeline_actor_wrong_route_direction
+        source-actor-pipeline-wrong-direction.ores
+        --diagnostic "pipeline route direction is not authorized for actor role")
+    oreslang_contract_test(native_ir_pipeline_cancelled
+        source-actor-pipeline-cancelled.ores --ir "oreslang_source_actor_pipeline_cancel")
+    oreslang_contract_test(native_ir_pipeline_wrong_result
+        source-actor-pipeline-wrong-result.ores --ir "oreslang_source_actor_pipeline_expect_status")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_pipeline_cancelled
+            source-actor-pipeline-cancelled.ores --run 77 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=7")
+        oreslang_contract_test(native_exec_pipeline_wrong_result
+            source-actor-pipeline-wrong-result.ores --run 76 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=6")
+    endif()
+    oreslang_contract_test(native_ir_missing_pipeline_backward_reply
+        source-actor-pipeline-missing-reply.ores --ir "oreslang_source_actor_pipeline_expect_status")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_missing_pipeline_backward_reply
+            source-actor-pipeline-missing-reply.ores
+            --run 74 --clang "${ORE_CLANG}" --runs 10
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=4")
+    endif()
+    # Linux/ELF fault-injection regression. The native runtime exposes a
+    # testing-only weak hook immediately before DATA publication; this CTest
+    # forces cancellation through that gap using a real compiled guest.
+    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_pipeline_cancel_publication_linearization
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_pipeline_cancel_publication.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_pipeline_cancel_publication_linearization
+            PROPERTIES TIMEOUT 45)
+        add_test(NAME native_pipeline_cancel_worker_forward_linearization
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_pipeline_cancel_publication.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}"
+                forward)
+        set_tests_properties(native_pipeline_cancel_worker_forward_linearization
+            PROPERTIES TIMEOUT 45)
+    endif()
+    oreslang_contract_test(native_ir_sixteen_actor_bidirectional_pipeline
+        source-actor-pipeline-sixteen-stage.ores
+        --ir "oreslang_source_actor_pipeline_connect_many")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_sixteen_actor_bidirectional_pipeline
+            source-actor-pipeline-sixteen-stage.ores --run 43
+            --clang "${ORE_CLANG}" --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=16 typed=1 forward=15 backward=15 result=32")
+    endif()
+    oreslang_contract_test(native_ir_two_actor_bidirectional_pipeline
+        source-actor-pipeline-two-stage.ores --ir "oreslang_source_actor_pipeline_connect_many")
+    oreslang_contract_test(native_ir_four_actor_bidirectional_pipeline
+        source-actor-pipeline-four-stage.ores --ir "oreslang_source_actor_pipeline_connect_many")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_two_actor_bidirectional_pipeline
+            source-actor-pipeline-two-stage.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=2 typed=1 forward=1 backward=1 result=24")
+        oreslang_contract_test(native_exec_four_actor_bidirectional_pipeline
+            source-actor-pipeline-four-stage.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=4 typed=1 forward=3 backward=3 result=29")
+    endif()
+    oreslang_contract_test(native_ir_three_actor_bidirectional_pipeline
+        source-actor-pipeline-bidirectional.ores
+        --ir "oreslang_source_actor_pipeline_emit_i64")
+    oreslang_contract_test(reject_spread_nonexhaustive_receive
+        source-tagged-int-spread-nonexhaustive.ores
+        --diagnostic "nonexhaustive tagged receive match")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_three_actor_bidirectional_pipeline
+            source-actor-pipeline-bidirectional.ores
+            --run 43 --clang "${ORE_CLANG}"
+            --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19"
+            --pipeline-three-actor-summary)
+    endif()
     oreslang_contract_test(source_actor_send_ir source-actor-send.ores
         --ir "oreslang_source_actor_send")
     oreslang_contract_test(source_actor_five_workers_ir source-actor-five-workers.ores
@@ -186,6 +314,66 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        # First source-compiled nominal enum actor end-to-end test:
+        # SHA-pinned Java-compatible schemas, closed pattern ordinal dispatch,
+        # checked DATA sends and actor-local state effects.
+        oreslang_contract_test(source_tagged_nominal_actor_ir source-tagged-payloadless-dispatch.ores
+            --ir "oreslang_source_actor_spawn_tagged_variants")
+        oreslang_contract_test(source_tagged_nominal_actor_java_schema source-tagged-payloadless-dispatch.ores
+            --ir "oreslang.enum.e5a943e4263cf4ff7a59b28b63ffbac5a6a3279952ec16ca95f26193831c33bf")
+        oreslang_contract_test(native_tagged_nominal_actor source-tagged-payloadless-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=14")
+        # Int-payload tagged messages share identical wire shape across
+        # distinct enum cases, yet dispatch to distinct typed receive arms.
+        oreslang_contract_test(source_tagged_int_payload_ir source-tagged-int-payload-dispatch.ores
+            --ir "oreslang_source_actor_tagged_i64")
+        oreslang_contract_test(source_tagged_int_spread_ir source-tagged-int-spread-dispatch.ores
+            --ir "oreslang_source_actor_tagged_i64")
+        oreslang_contract_test(native_tagged_int_payload source-tagged-int-payload-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
+        oreslang_contract_test(native_tagged_int_spread_actor source-tagged-int-spread-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
+        oreslang_contract_test(native_asan_tagged_int_payload source-tagged-int-payload-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
+        # Guest-signed i64 messages must retain Java-compatible canonical
+        # MessagePack widths (fixint, signed widths, unsigned widths and
+        # INT64_MIN/MAX), without narrowing payloads to the enum tag's i32.
+        oreslang_contract_test(native_tagged_int64_canonical_boundaries
+            source-tagged-int64-canonical-boundaries.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 16
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=9 last=-4294999972")
+        oreslang_contract_test(native_asan_tagged_int64_canonical_boundaries
+            source-tagged-int64-canonical-boundaries.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=9 last=-4294999972")
+        oreslang_contract_test(native_asan_tagged_nominal_actor source-tagged-payloadless-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=14")
         oreslang_contract_test(native_actor_bool_match_dispatch message-receive-bool-match.ores
             --run 43 --clang "${ORE_CLANG}" --runs 30
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
@@ -487,4 +675,79 @@ if(BUILD_TESTING)
                  COMMAND oreslang-actor-trace-test)
         set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
     endif()
+    # Canonical actor transport; exact Java MessagePack v2 golden vectors.
+    add_executable(oreslang-native-messagepack-v2-test
+        tests/native_messagepack_actor_v2_test.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-messagepack-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-messagepack-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_messagepack_v2_owned_actor_dispatch
+        COMMAND oreslang-native-messagepack-v2-test)
+
+    # Compiler-facing source actor ABI: scalar/wire callbacks share one
+    # exclusive NativeActorScheduler lane and common actor-owned field heap.
+    add_executable(oreslang-source-messagepack-v2-test
+        tests/native_source_actor_msgpack_v2_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-source-messagepack-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-messagepack-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_messagepack_v2_scheduler
+        COMMAND oreslang-source-messagepack-v2-test)
+
+    add_executable(oreslang-source-variants-v2-test
+        tests/native_source_actor_variants_v2_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-source-variants-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-variants-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_closed_variant_mailbox
+        COMMAND oreslang-source-variants-v2-test)
+
+    add_executable(oreslang-source-nominal-guard-v2-test
+        tests/native_source_actor_nominal_guard_v2_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-source-nominal-guard-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-nominal-guard-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_pinned_nominal_enum_identity
+        COMMAND oreslang-source-nominal-guard-v2-test)
+
+    add_executable(oreslang-source-scalar-compat-test
+        tests/native_source_actor_scalar_compat_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-source-scalar-compat-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-scalar-compat-test PRIVATE Threads::Threads)
+    add_test(NAME native_scalar_source_actor_backwards_compatibility
+        COMMAND oreslang-source-scalar-compat-test)
+
+    add_executable(oreslang-tagged-messagepack-v2-test
+        tests/native_tagged_message_v2_conformance_test.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-tagged-messagepack-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-tagged-messagepack-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_tagged_enum_messagepack_v2_java_parity
+        COMMAND oreslang-tagged-messagepack-v2-test)
+
 endif()

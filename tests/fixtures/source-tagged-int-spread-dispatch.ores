@@ -1,0 +1,35 @@
+// Closed match pattern spreads enum cases at compile time.\n// Executable typed MessagePack v2: two nominal variants share shape
+// T[S,I,I], but the actor dispatches on their declared enum identity.
+// The source compiler serializes each literal using the pinned schema and
+// the receiver narrows the bound integer in the correct arm.
+define enum Signals as
+    Ping = 1
+    Add: int = 2
+    Sub: int = 3
+end
+
+define match pattern WorkerMessages as
+    ...Signals
+end
+
+define actor Worker<messages=WorkerMessages> as
+    let count: int = 0;
+
+    receive(Message m) {
+        do match m over {
+            on Signals.Ping { count = count + 8; }
+            on Signals.Add as n { count = count + n; }
+            on Signals.Sub as n { count = count - n; }
+        }
+        return count;
+    }
+end
+
+pub fnc main(): int {
+    const worker = spawn Worker();
+    worker.send(Signals.Add(19));
+    worker.send(Signals.Sub(4));
+    worker.send(Signals.Ping);
+    stop worker;
+    return 43;
+}

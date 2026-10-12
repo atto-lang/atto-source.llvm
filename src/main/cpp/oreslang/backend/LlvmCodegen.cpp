@@ -1,11 +1,18 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <stdexcept>
+#include <string_view>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <utility>
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/SHA256.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -19,6 +26,140 @@
 
 namespace oreslang {
 namespace {
+
+// Source-compiled nominal identity follows Java TaggedMessageCodec byte-for-
+// byte; schema hashes are SHA-256 over a SORTED closed domain, not declaration
+// order, and variant identity includes its declared wire tag.
+struct GuestNominalCase {
+    std::string qualified;
+    std::string owner;
+    std::string schema;
+    std::uint32_t tag;
+    std::string shape;
+    std::array<std::uint8_t, 32> shape_hash;
+    std::vector<std::uint8_t> wire;
+    bool i64_payload = false;
+};
+std::array<std::uint8_t, 32> sha(std::string_view text) {
+    return llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(text.data()), text.size()));
+}
+std::string hex(const std::array<std::uint8_t, 32>& bytes) {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (const auto b : bytes) {
+        result.push_back(digits[b >> 4]);
+        result.push_back(digits[b & 15]);
+    }
+    return result;
+}
+void mp_string(std::vector<std::uint8_t>& out, const std::string& value) {
+    if (value.size() <= 31)
+        out.push_back(static_cast<std::uint8_t>(0xa0 | value.size()));
+    else if (value.size() <= 255) {
+        out.push_back(0xd9);
+        out.push_back(static_cast<std::uint8_t>(value.size()));
+    } else throw std::runtime_error("enum name exceeds wire string budget");
+    out.insert(out.end(), value.begin(), value.end());
+}
+void mp_tag(std::vector<std::uint8_t>& out, std::uint32_t tag) {
+    if (tag <= 127) out.push_back(static_cast<std::uint8_t>(tag));
+    else if (tag <= 255) {
+        out.push_back(0xcc);
+        out.push_back(static_cast<std::uint8_t>(tag));
+    } else if (tag <= 65535) {
+        out.push_back(0xcd);
+        out.push_back(static_cast<std::uint8_t>(tag >> 8));
+        out.push_back(static_cast<std::uint8_t>(tag));
+    } else {
+        out.push_back(0xce);
+        for (int shift = 24; shift >= 0; shift -= 8)
+            out.push_back(static_cast<std::uint8_t>(tag >> shift));
+    }
+}
+/* Canonical MessagePack signed i64 payload. Enum case tags still use
+ * mp_tag and must be positive 32-bit values; payloads are independent and
+ * cover the full representable signed i64 range. Match Java's codec widths:
+ * fixint, uint8/16/32/64 and negative fixint/int8/16/32/64. */
+void mp_signed_i64(std::vector<std::uint8_t>& out, std::int64_t number) {
+    if (number >= 0) {
+        const auto value = static_cast<std::uint64_t>(number);
+        if (value <= UINT32_MAX) {
+            mp_tag(out, static_cast<std::uint32_t>(value));
+        } else {
+            out.push_back(0xcf);
+            for (int shift = 56; shift >= 0; shift -= 8)
+                out.push_back(static_cast<std::uint8_t>(value >> shift));
+        }
+        return;
+    }
+    if (number >= -32) {
+        out.push_back(static_cast<std::uint8_t>(number));
+        return;
+    }
+    const unsigned width = number >= INT8_MIN ? 1
+                          : number >= INT16_MIN ? 2
+                          : number >= INT32_MIN ? 4 : 8;
+    out.push_back(width == 1 ? 0xd0 : width == 2 ? 0xd1
+                : width == 4 ? 0xd2 : 0xd3);
+    const auto bits = static_cast<std::uint64_t>(number);
+    for (int shift = static_cast<int>(width * 8) - 8; shift >= 0; shift -= 8)
+        out.push_back(static_cast<std::uint8_t>(bits >> shift));
+}
+std::vector<GuestNominalCase> tagged_cases(
+    const Program& program, const Actor& actor) {
+    if (actor.messages_type.empty()) return {};
+    std::vector<std::string> names;
+    for (const auto& p : program.tagged_patterns)
+        if (p.name == actor.messages_type) names = p.alternatives;
+    for (const auto& e : program.enums)
+        if (e.name == actor.messages_type)
+            for (const auto& c : e.cases)
+                names.push_back(e.name + "." + c.name);
+    if (names.empty()) return {};
+    if (names.size() > 64)
+        throw std::runtime_error("tagged actor exceeds native 64-case limit");
+    std::vector<std::string> sorted = names;
+    std::sort(sorted.begin(), sorted.end());
+    std::string fingerprint = "oreslang.tagged.domain.v1/"
+                            + actor.messages_type + "/";
+    for (const auto& name : sorted)
+        fingerprint += std::to_string(name.size()) + ":" + name + ";";
+    const std::string domain_hash = hex(sha(fingerprint));
+    std::vector<GuestNominalCase> result;
+    for (const auto& name : names) {
+        const auto dot = name.find('.');
+        const std::string owner = name.substr(0, dot);
+        const std::string variant = name.substr(dot + 1);
+        const auto decl = std::find_if(program.enums.begin(), program.enums.end(),
+            [&](const EnumDeclaration& d) { return d.name == owner; });
+        if (decl == program.enums.end())
+            throw std::runtime_error("unresolved enum identity while emitting LLVM");
+        const auto item = std::find_if(decl->cases.begin(), decl->cases.end(),
+            [&](const EnumCase& c) { return c.name == variant; });
+        if (item == decl->cases.end()
+                || (item->has_payload
+                    && item->payload.kind != MessageShape::Kind::Integer))
+            throw std::runtime_error("LLVM typed source subset requires payloadless or int cases");
+        const bool i64_payload = item->has_payload;
+        const std::string shape = i64_payload ? "T[S,I,I]" : "T[S,I]";
+        const auto shape_hash = sha("oreslang.actor.shape.v2/" + shape);
+        const std::uint32_t tag = item->tag;
+        const std::string schema = "oreslang.enum." + domain_hash + "."
+                                  + hex(sha(name + "#" + std::to_string(tag)));
+        std::vector<std::uint8_t> wire{0x94, 0x02};
+        mp_string(wire, schema);
+        wire.push_back(0xc4); wire.push_back(32);
+        wire.insert(wire.end(), shape_hash.begin(), shape_hash.end());
+        wire.push_back(i64_payload ? 0x93 : 0x92);
+        mp_string(wire, owner);
+        mp_tag(wire, tag);
+        result.push_back({name, owner, schema, tag, shape, shape_hash,
+                          std::move(wire), i64_payload});
+    }
+    return result;
+}
 
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
@@ -68,7 +209,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
     llvm::IntegerType* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Type* ptr = llvm::Type::getInt8PtrTy(context);
+    llvm::Type* ptr = llvm::PointerType::get(context, 0);
     llvm::FunctionCallee heapOpen = module.getOrInsertFunction(
             "oreslang_owned_i64_region_open",
             llvm::FunctionType::get(ptr, {i64}, false));
@@ -102,6 +243,57 @@ std::string emit_verified_llvm_ir(const Program& source) {
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::Function*> actorInitializers;
     std::unordered_map<std::string, llvm::Function*> actorMessageHandlers;
+    // Compiler-owned nominal metadata: source order fixes callback ordinal,
+    // while the SORTED domain fingerprint fixes Java-compatible wire identity.
+    std::unordered_map<std::string, std::vector<GuestNominalCase>> taggedCases;
+    std::unordered_map<std::string, llvm::Constant*> taggedContracts;
+    std::unordered_map<std::string, llvm::Constant*> taggedIdentities;
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, llvm::Constant*>> taggedFrames;
+    llvm::IRBuilder<> constants(context);
+    auto* i32 = llvm::Type::getInt32Ty(context);
+    auto* contractTy = llvm::StructType::get(context, {ptr, ptr, ptr});
+    auto* nominalTy = llvm::StructType::get(context, {ptr, i32});
+    for (const auto& actor : source.actors) {
+        auto cases = tagged_cases(source, actor);
+        if (cases.empty()) continue;
+        std::vector<llvm::Constant*> contracts, identities;
+        const auto prefix = actor.name + ".tagged.";
+        for (std::size_t i = 0; i < cases.size(); ++i) {
+            const auto& c = cases[i];
+            const std::string symbol = prefix + std::to_string(i);
+            const auto schema = constants.CreateGlobalStringPtr(c.schema,
+                symbol + ".schema", 0, &module);
+            const auto shapePtr = constants.CreateGlobalStringPtr(c.shape,
+                symbol + ".shape", 0, &module);
+            const auto owner = constants.CreateGlobalStringPtr(c.owner,
+                symbol + ".owner", 0, &module);
+            auto* rawHash = llvm::ConstantDataArray::get(context,
+                llvm::ArrayRef<std::uint8_t>(c.shape_hash.data(),
+                                             c.shape_hash.size()));
+            auto* hashGlobal = new llvm::GlobalVariable(module, rawHash->getType(),
+                true, llvm::GlobalValue::PrivateLinkage, rawHash, symbol + ".sha");
+            contracts.push_back(llvm::ConstantStruct::get(contractTy,
+                {schema, shapePtr, hashGlobal}));
+            identities.push_back(llvm::ConstantStruct::get(nominalTy,
+                {owner, llvm::ConstantInt::get(i32, c.tag)}));
+            const std::string wire(reinterpret_cast<const char*>(c.wire.data()),
+                                   c.wire.size());
+            taggedFrames[actor.name].emplace(c.qualified,
+                constants.CreateGlobalStringPtr(wire, symbol + ".wire", 0, &module));
+        }
+        auto* contractArray = llvm::ConstantArray::get(
+            llvm::ArrayType::get(contractTy, contracts.size()), contracts);
+        auto* identityArray = llvm::ConstantArray::get(
+            llvm::ArrayType::get(nominalTy, identities.size()), identities);
+        taggedContracts[actor.name] = new llvm::GlobalVariable(module,
+            contractArray->getType(), true, llvm::GlobalValue::PrivateLinkage,
+            contractArray, prefix + "contracts");
+        taggedIdentities[actor.name] = new llvm::GlobalVariable(module,
+            identityArray->getType(), true, llvm::GlobalValue::PrivateLinkage,
+            identityArray, prefix + "identities");
+        taggedCases.emplace(actor.name, std::move(cases));
+    }
     const std::string actorSymbolPrefix = "oreslang_actor_"
         + (source.module.empty() ? "" : source.module + "_");
     std::unordered_map<std::string, std::size_t> actorFieldCounts;
@@ -118,7 +310,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
             [&](const Function& f) { return f.name ==
                 (actor.messages_type.empty() ? "on_message" : "receive"); });
         if (method != actor.methods.end() && method->parameters.size() == 1) {
-            auto* msgType = llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false);
+            auto* msgType = taggedCases.count(actor.name)
+                ? llvm::FunctionType::get(i64, {ptr, i64, i64, i64, ptr, i64}, false)
+                : llvm::FunctionType::get(i64, {ptr, i64, i64, i64}, false);
             actorMessageHandlers.emplace(actor.name, llvm::Function::Create(
                 msgType, llvm::Function::ExternalLinkage,
                 actorSymbolPrefix + actor.name + "_"
@@ -128,6 +322,28 @@ std::string emit_verified_llvm_ir(const Program& source) {
     const auto sourceSpawn = module.getOrInsertFunction(
         "oreslang_source_actor_spawn",
         llvm::FunctionType::get(ptr, {ptr, ptr, i64}, false));
+    const auto sourceSpawnTagged = module.getOrInsertFunction(
+        "oreslang_source_actor_spawn_tagged_variants",
+        llvm::FunctionType::get(ptr, {ptr, ptr, i64, ptr, ptr, i64}, false));
+    const auto sourceSendTaggedChecked = module.getOrInsertFunction(
+        "oreslang_source_actor_send_variant_checked",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {ptr, ptr, i64}, false));
+    const auto pipelineConnect = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_connect_many",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {ptr, i64}, false));
+    const auto pipelineCancel = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_cancel",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
+    const auto pipelineEmit = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_emit_i64",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {i64, i64, i64}, false));
+    const auto pipelineExpect = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_expect_status",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                                {ptr, i64}, false));
     const auto sourceStop = module.getOrInsertFunction(
         "oreslang_source_actor_stop",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
@@ -163,17 +379,51 @@ std::string emit_verified_llvm_ir(const Program& source) {
             ++index;
         }
         std::unordered_map<std::string, llvm::Value*> actorRefs;
+        std::unordered_map<std::string, std::string> actorRefTypes;
         for (const auto& spawn : fn.actor_spawns) {
             auto found = actorMessageHandlers.find(spawn.actor_type);
             llvm::Value* handler = found == actorMessageHandlers.end()
                 ? static_cast<llvm::Value*>(llvm::ConstantPointerNull::get(
                     llvm::cast<llvm::PointerType>(ptr)))
                 : static_cast<llvm::Value*>(found->second);
-            auto* ref = builder.CreateCall(sourceSpawn,
-                {actorInitializers.at(spawn.actor_type), handler,
-                 llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
-                spawn.name + ".native.actor.ref");
+            llvm::Value* ref;
+            if (taggedCases.count(spawn.actor_type)) {
+                ref = builder.CreateCall(sourceSpawnTagged,
+                    {actorInitializers.at(spawn.actor_type), handler,
+                     llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type)),
+                     taggedContracts.at(spawn.actor_type),
+                     taggedIdentities.at(spawn.actor_type),
+                     llvm::ConstantInt::get(i64, taggedCases.at(spawn.actor_type).size())},
+                    spawn.name + ".native.tagged.actor.ref");
+            } else {
+                ref = builder.CreateCall(sourceSpawn,
+                    {actorInitializers.at(spawn.actor_type), handler,
+                     llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
+                    spawn.name + ".native.actor.ref");
+            }
             actorRefs.emplace(spawn.name, ref);
+            actorRefTypes.emplace(spawn.name, spawn.actor_type);
+        }
+        if (!fn.pipeline_actors.empty()) {
+            const auto count = fn.pipeline_actors.size();
+            // Borrowed stack array is only visible during the synchronous
+            // compiler-owned registration call. Runtime copies each opaque
+            // reference and retains no pointer into main's stack.
+            llvm::Value* ordered = builder.CreateAlloca(
+                ptr, llvm::ConstantInt::get(i64, count), "pipeline.ordered.refs");
+            for (std::size_t index = 0; index < count; ++index) {
+                llvm::Value* slot = builder.CreateInBoundsGEP(
+                    ptr, ordered, llvm::ConstantInt::get(i64, index));
+                builder.CreateStore(actorRefs.at(fn.pipeline_actors[index]), slot);
+            }
+            builder.CreateCall(pipelineConnect,
+                {ordered, llvm::ConstantInt::get(i64, count)});
+            if (!fn.pipeline_cancel_actor.empty()) {
+                // Only a trusted-main pre-ingress cancellation is admitted
+                // by the bounded parser; actor DATA handlers cannot call it.
+                builder.CreateCall(pipelineCancel,
+                    {actorRefs.at(fn.pipeline_cancel_actor)});
+            }
         }
         // Scalar locals are either stack owned ('int') or explicitly backed
         // by a bounded native lexical heap region ('owned int'). The latter
@@ -206,6 +456,49 @@ std::string emit_verified_llvm_ir(const Program& source) {
             locals.emplace(local.name, address);
             slots.push_back({address, local.heap_owned});
         }
+        auto emitSend = [&](llvm::IRBuilder<>& at, const ActorSend& send,
+                            const std::unordered_map<std::string, llvm::Value*>& refs,
+                            const std::unordered_map<std::string, llvm::Value*>& params,
+                            const std::unordered_map<std::string, llvm::Value*>& slots) {
+            const auto& actorType = actorRefTypes.at(send.reference);
+            if (!send.tagged_variant.empty()) {
+                const auto& cases = taggedCases.at(actorType);
+                const auto it = std::find_if(cases.begin(), cases.end(),
+                    [&](const GuestNominalCase& c) { return c.qualified == send.tagged_variant; });
+                if (it == cases.end())
+                    throw std::runtime_error("source tagged send outside closed domain");
+                llvm::Value* wirePtr = taggedFrames.at(actorType).at(send.tagged_variant);
+                std::size_t wireBytes = it->wire.size();
+                if (it->i64_payload) {
+                    if (!send.payload)
+                        throw std::runtime_error("tagged int message requires signed int literal");
+                    std::int64_t value;
+                    if (send.payload->kind == Expression::Kind::Integer) {
+                        value = send.payload->integer;
+                    } else if (send.payload->kind == Expression::Kind::Negate
+                               && send.payload->left
+                               && send.payload->left->kind == Expression::Kind::Integer) {
+                        value = -send.payload->left->integer;
+                    } else {
+                        throw std::runtime_error("tagged int message requires signed int literal");
+                    }
+                    std::vector<std::uint8_t> frame = it->wire;
+                    mp_signed_i64(frame, value);
+                    wireBytes = frame.size();
+                    const std::string bytes(reinterpret_cast<const char*>(frame.data()),
+                                            frame.size());
+                    wirePtr = at.CreateGlobalStringPtr(bytes);
+                } else if (send.payload) {
+                    throw std::runtime_error("payloadless tagged case cannot carry data");
+                }
+                at.CreateCall(sourceSendTaggedChecked,
+                    {refs.at(send.reference), wirePtr,
+                     llvm::ConstantInt::get(i64, wireBytes)});
+            } else {
+                auto* payload = lower(*send.payload, at, i64, params, slots, declarations);
+                at.CreateCall(sourceSend, {refs.at(send.reference), payload});
+            }
+        };
         llvm::Value* result = nullptr;
         if (!fn.ready_await_actor.empty()) {
             // First compiler-generated suspend point: the program's original
@@ -222,12 +515,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 {fn.ready_await_actor, &*resume->arg_begin()}};
             const std::unordered_map<std::string, llvm::Value*> noLocals;
             const std::unordered_map<std::string, llvm::Value*> noParams;
-            for (const auto& send : fn.actor_sends) {
-                auto* payload = lower(*send.payload, resumeBuilder, i64,
-                                      noParams, noLocals, declarations);
-                resumeBuilder.CreateCall(sourceSend,
-                    {resumedActors.at(send.reference), payload});
-            }
+            for (const auto& send : fn.actor_sends)
+                emitSend(resumeBuilder, send, resumedActors, noParams, noLocals);
+
             auto* resumedResult = lower(*fn.result, resumeBuilder, i64,
                                         noParams, noLocals, declarations);
             resumeBuilder.CreateRet(resumedResult);
@@ -236,11 +526,16 @@ std::string emit_verified_llvm_ir(const Program& source) {
         } else {
             result = lower(*fn.result, builder, i64, parameters,
                            locals, declarations);
-            for (const auto& send : fn.actor_sends) {
-                llvm::Value* payload = lower(*send.payload, builder, i64,
-                                              parameters, locals, declarations);
-                builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
-            }
+            for (const auto& send : fn.actor_sends)
+                emitSend(builder, send, actorRefs, parameters, locals);
+
+        }
+        llvm::Value* pipelineStatus = nullptr;
+        if (!fn.pipeline_expect_actor.empty()) {
+            pipelineStatus = builder.CreateCall(pipelineExpect, {
+                actorRefs.at(fn.pipeline_expect_actor),
+                llvm::ConstantInt::getSigned(i64, fn.pipeline_expect_value)},
+                "pipeline.terminal.status");
         }
         for (const auto& name : fn.actor_stops) {
             builder.CreateCall(sourceStop, {actorRefs.at(name)});
@@ -253,6 +548,19 @@ std::string emit_verified_llvm_ir(const Program& source) {
             }
         }
         if (region != nullptr) builder.CreateCall(heapClose, {region});
+        if (pipelineStatus) {
+            // The trusted-main boundary always stops every actor before
+            // converting a recoverable nonzero pipeline status into process
+            // exit status 70+reason. Actor carriers never exit the process.
+            auto* success = builder.CreateICmpEQ(
+                pipelineStatus, llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(context), 0));
+            auto* failureCode = builder.CreateAdd(
+                pipelineStatus, llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(context), 70));
+            result = builder.CreateSelect(
+                success, result, builder.CreateZExt(failureCode, i64));
+        }
         builder.CreateRet(result);
     }
 
@@ -300,6 +608,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
         for (const auto& method : actor.methods) {
             std::vector<llvm::Type*> types{ptr, i64, i64};
             types.insert(types.end(), method.parameters.size(), i64);
+            if (method.is_receiver && taggedCases.count(actor.name)) {
+                // Callback receives compiler-local case ordinal, owned frame
+                // bytes and length. The mailbox validates the nominal
+                // contract before the callback runs.
+                types.push_back(ptr);
+                types.push_back(i64);
+            }
             auto* signature = llvm::FunctionType::get(i64, types, false);
             auto existing = actorMessageHandlers.find(actor.name);
             auto* fn = (method.name == "on_message" || method.name == "receive")
@@ -318,6 +633,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
             std::unordered_map<std::string, llvm::Value*> parameters;
             for (const auto& name : method.parameters) {
                 parameters.emplace(name, &*args++);
+            }
+            llvm::Value* nominalWire = nullptr;
+            llvm::Value* nominalWireSize = nullptr;
+            if (method.is_receiver && taggedCases.count(actor.name)) {
+                nominalWire = &*args++;
+                nominalWireSize = &*args++;
             }
             std::unordered_map<std::string, llvm::Value*> locals;
             for (std::size_t index = 0; index < actor.fields.size(); ++index) {
@@ -349,6 +670,78 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 }
                 locals.emplace(local.name, address);
                 ownedSlots.push_back({address, local.heap_owned});
+            }
+            if (!method.tagged_arms.empty()) {
+                const auto& cases = taggedCases.at(actor.name);
+                auto* invalid = llvm::BasicBlock::Create(context, "match.invalid", fn);
+                auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
+                auto* dispatch = builder.CreateSwitch(
+                    parameters.at(method.match_subject), invalid,
+                    static_cast<unsigned>(method.tagged_arms.size()));
+                for (const auto& arm : method.tagged_arms) {
+                    const auto selected = std::find_if(cases.begin(), cases.end(),
+                        [&](const GuestNominalCase& c) {
+                            return c.qualified == arm.qualified_case;
+                        });
+                    if (selected == cases.end())
+                        throw std::runtime_error("compiler enum arm escaped closed domain");
+                    const std::size_t ordinal = std::distance(cases.begin(), selected);
+                    auto* armBlock = llvm::BasicBlock::Create(context,
+                        "match.nominal." + std::to_string(ordinal), fn);
+                    dispatch->addCase(llvm::ConstantInt::get(i64, ordinal), armBlock);
+                    builder.SetInsertPoint(armBlock);
+                    auto armParameters = parameters;
+                    if (selected->i64_payload && arm.binds_payload) {
+                        if (arm.binders.size() != 1 || arm.tuple_destructure)
+                            throw std::runtime_error("invalid int payload binder");
+                        if (arm.binders.front() != "_") {
+                            const auto reader = module.getOrInsertFunction(
+                                "oreslang_source_actor_tagged_i64",
+                                llvm::FunctionType::get(i64, {ptr, i64}, false));
+                            llvm::Value* bound = builder.CreateCall(reader,
+                                {nominalWire, nominalWireSize}, "tagged.int.bound");
+                            armParameters.emplace(arm.binders.front(), bound);
+                        }
+                    }
+                    for (const auto& assignment : arm.assignments) {
+                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                            [&](const LocalBinding& f) {
+                                return f.name == assignment.field;
+                            });
+                        if (field == actor.fields.end() || !field->field_mutable)
+                            throw std::runtime_error("invalid tagged actor field mutation");
+                        auto* updated = lower(*assignment.value, builder, i64,
+                                              armParameters, locals, declarations);
+                        builder.CreateCall(fieldWrite,
+                            {heap, currentDomain, currentEpoch,
+                             llvm::ConstantInt::get(i64,
+                                 std::distance(actor.fields.begin(), field)), updated});
+                        builder.CreateStore(updated, locals.at(assignment.field));
+                    }
+                    if (!arm.route_direction.empty()) {
+                        const auto output = std::find_if(cases.begin(), cases.end(),
+                            [&](const GuestNominalCase& c) {
+                                return c.qualified == arm.route_variant;
+                            });
+                        if (output == cases.end() || !output->i64_payload)
+                            throw std::runtime_error("LLVM pipeline route type contract mismatch");
+                        llvm::Value* routed = lower(*arm.route_payload, builder, i64,
+                                                    armParameters, locals, declarations);
+                        builder.CreateCall(pipelineEmit, {
+                            llvm::ConstantInt::get(i64,
+                                arm.route_direction == "forward" ? 1 : 2),
+                            llvm::ConstantInt::get(i64,
+                                std::distance(cases.begin(), output)),
+                            routed});
+                    }
+                    builder.CreateBr(joined);
+                }
+                builder.SetInsertPoint(invalid);
+                // Runtime's trusted nominal schema table makes this
+                // unreachable in well-formed deliveries, but never invoke
+                // an arbitrary arm on an out-of-range case ordinal.
+                builder.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
+                builder.SetInsertPoint(joined);
             }
             if (!method.boolean_arms.empty()) {
                 auto* subject = parameters.at(method.match_subject);
@@ -438,6 +831,15 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_read"
                             && name != "ores_actor_i64_heap_field_init_mutable"
                             && name != "ores_actor_i64_heap_field_write"
+                            && name != "oreslang_source_actor_pipeline_connect"
+                            && name != "oreslang_source_actor_pipeline_connect_many"
+                            && name != "oreslang_source_actor_pipeline_emit_i64"
+                            && name != "oreslang_source_actor_pipeline_expect"
+                            && name != "oreslang_source_actor_pipeline_expect_status"
+                            && name != "oreslang_source_actor_pipeline_cancel"
+                            && name != "oreslang_source_actor_spawn_tagged_variants"
+                            && name != "oreslang_source_actor_send_variant_checked"
+                            && name != "oreslang_source_actor_tagged_i64"
                             && name != "oreslang_source_actor_spawn"
                             && name != "oreslang_source_actor_stop"
                             && name != "oreslang_source_actor_send"
