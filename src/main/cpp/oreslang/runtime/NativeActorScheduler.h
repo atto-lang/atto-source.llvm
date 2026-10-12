@@ -146,6 +146,15 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Stronger than the actor execution claim alone: true ONLY from that
+ * scheduler's current STATE-WAKE callback, on its owning OS carrier, with
+ * the complete exact scheduler-delivered wake envelope. Ordinary DATA,
+ * supervisor CONTROL and PANIC turns can never satisfy this capability,
+ * even when they run on the same actor lane. Trusted runtime use only.
+ */
+int ores_native_actor_scheduler_is_current_state_wake(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorStateWake wake);
 /* Host CONTROL-plane wake only: signals an existing scheduler condition.
  * Does not admit actor mail, start workers, invoke guest code, or count as
  * a supervisor delivery receipt. Returns zero once retired.
