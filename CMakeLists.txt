@@ -698,6 +698,20 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # Across all actor-owned entrypoints (DATA and supervisor CONTROL), no
+    # actor can have two physical guest executors, even on separate workers.
+    add_executable(oreslang-native-actor-exclusive-control-test
+        tests/native_actor_exclusive_control_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-exclusive-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-exclusive-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-exclusive-control-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_exclusive_data_and_control
+        COMMAND oreslang-native-actor-exclusive-control-test)
+    set_tests_properties(native_actor_exclusive_data_and_control PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-actor-ready-queue-test
         tests/native_actor_scheduler_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
