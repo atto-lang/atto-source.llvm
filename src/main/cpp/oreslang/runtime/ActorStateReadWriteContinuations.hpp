@@ -84,14 +84,47 @@ public:
         }
     }
 
+    // Called ONLY from the trusted scheduler's verified actor callback,
+    // not on the producer thread. The producer can acknowledge admission
+    // after this callback starts; claim resolves that handoff race atomically.
+    // One-shot dispatch claims prevent duplicate/replayed READY envelopes
+    // from executing guest code twice.
+    [[nodiscard]] bool try_claim_ready(
+            const Notification& wake, Mode expected_mode) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (retired_ || wake.incarnation != incarnation_
+                || wake.status != Status::Ready) return false;
+        auto it = entries_.find(wake.continuation_id);
+        if (it == entries_.end() || it->second.status != Status::Ready
+                || it->second.mode != expected_mode || it->second.dispatched
+                || !gate_.holds(it->second.token, expected_mode)) return false;
+        it->second.dispatched = true;
+        it->second.needs_ack = false;
+        return true;
+    }
+
+    // A backend may finish only a previously claimed actor-lane wake. This
+    // is stronger than legacy complete() used in host-only gate tests.
+    void complete_dispatched(
+            std::uint64_t incarnation, std::uint64_t continuation_id) {
+        complete_impl(incarnation, continuation_id, true);
+    }
+
     // Complete an admitted, scheduler-dispatched actor operation.
     // Queued continuations must be cancelled, not falsely completed.
     void complete(std::uint64_t incarnation, std::uint64_t continuation_id) {
+        complete_impl(incarnation, continuation_id, false);
+    }
+
+private:
+    void complete_impl(std::uint64_t incarnation,
+                       std::uint64_t continuation_id, bool require_dispatch) {
         std::lock_guard<std::mutex> lock(mu_);
         validate_incarnation(incarnation);
         auto it = require_entry(continuation_id);
         if (retired_ || it->second.status != Status::Ready
                 || it->second.needs_ack
+                || (require_dispatch && !it->second.dispatched)
                 || !gate_.holds(it->second.token, it->second.mode)) {
             throw std::logic_error("continuation lacks an acknowledged state grant");
         }
@@ -100,6 +133,7 @@ public:
         mark_awakened(awakened);
     }
 
+public:
     // A pending continuation may already own a gate ticket while its
     // READY notification awaits CONTROL admission. That loan is not yet
     // dispatched and may safely be revoked. An acknowledged READY grant
@@ -203,6 +237,7 @@ private:
         Mode mode = Mode::Read;
         Status status = Status::Queued;
         bool needs_ack = false;
+        bool dispatched = false;
     };
     using Entries = std::map<std::uint64_t, Entry>;
     Entries::iterator require_entry(std::uint64_t id) {
