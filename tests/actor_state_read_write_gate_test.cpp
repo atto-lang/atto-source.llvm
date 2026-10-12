@@ -70,6 +70,36 @@ int main() {
         CHECK(!ordered.holds(admitted.front(), Gate::Mode::Read));
     }
 
+    // Active reader tickets have a hard cap independent of queued tickets.
+    {
+        Gate capped;
+        std::vector<Gate::Token> admitted;
+        admitted.reserve(Gate::max_active_readers);
+        for (std::size_t i = 0; i < Gate::max_active_readers; ++i) {
+            const auto result = capped.request(Gate::Mode::Read);
+            CHECK(result.admission == Gate::Admission::acquired);
+            admitted.push_back(result.token);
+        }
+        const auto overflow = capped.request(Gate::Mode::Read);
+        CHECK(overflow.admission == Gate::Admission::queued);
+        CHECK(capped.active_readers() == Gate::max_active_readers);
+        const auto next = capped.release(admitted.front());
+        CHECK(next.size() == 1 && next.front() == overflow.token);
+        CHECK(capped.active_readers() == Gate::max_active_readers);
+        CHECK(capped.retire().size() == Gate::max_active_readers);
+    }
+
+    // Invalid enum values cannot accidentally create a writer-less owner.
+    {
+        Gate strict;
+        bool bad_mode = false;
+        try { (void)strict.request(static_cast<Gate::Mode>(0xff)); }
+        catch (const std::invalid_argument&) { bad_mode = true; }
+        CHECK(bad_mode);
+        CHECK(strict.active_readers() == 0);
+        CHECK(strict.waiting() == 0);
+    }
+
     // Distinct gate scopes cannot release one another's tickets.
     Gate other;
     const auto foreign = other.request(Gate::Mode::Write);
