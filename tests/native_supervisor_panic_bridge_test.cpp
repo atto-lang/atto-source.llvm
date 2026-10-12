@@ -1025,6 +1025,11 @@ int main() {
         const OresNativeActorTerminalFailure failure{
             ORES_NATIVE_CONTROL_PANIC, child, 811, 912
         };
+        // An identity-mode callback must be backed by the real scheduler's
+        // exact typed terminal envelope, not a fabricated host argument.
+        check(ores_native_actor_scheduler_publish_failure(
+                  identity_scheduler, parent, failure),
+              "identity-mode fixture could not record terminal PANIC");
         check(!bridge->on_panic(
                   static_cast<std::size_t>(parent.actor_slot), failure),
               "slot-only callback bypassed identity-mode PANIC boundary");
