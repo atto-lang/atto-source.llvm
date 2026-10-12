@@ -138,6 +138,21 @@ public:
      * closed on stale/foreign/replayed child events or premature delivery.
      * Return false instead of throwing through a C ABI callback boundary.
      */
+    /**
+     * Generation-bearing PANIC entrypoint for identity-mode native callbacks.
+     * Compare the COMPLETE parent incarnation, not only the physical index:
+     * a stale parent carrier may not route terminal evidence into a newer
+     * supervisor that later occupies the same scheduler lane.
+     */
+    bool on_panic(OresNativeActorRef parent,
+                  const OresNativeActorTerminalFailure& failure) noexcept {
+        if (!valid(parent) || parent.scheduler_domain != parent_.scheduler_domain
+                || parent.actor_slot != parent_.actor_slot
+                || parent.generation != parent_.generation)
+            return false;
+        return on_panic(static_cast<std::size_t>(parent.actor_slot), failure);
+    }
+
     bool on_panic(std::size_t parent_slot,
                   const OresNativeActorTerminalFailure& failure) noexcept {
         try {
