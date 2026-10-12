@@ -211,13 +211,13 @@ int main() {
             auto old = m.create_group(1, 2);
             check(m.register_actor(88, 3), "close/rotate actor registration failed");
             std::atomic<bool> go{false};
-            std::atomic<bool> rotated{false};
+            std::vector<NativeActorMembershipRegistry::JoinCapability> issued;
             std::atomic<bool> unexpected{false};
             std::thread rotator([&] {
                 while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
                 try {
                     auto fresh = m.rotate_join(old);
-                    rotated.store(true, std::memory_order_release);
+                    issued.push_back(fresh);
                     // A concurrent close can win before this admission.
                     try { (void)m.join(fresh, 88, 3); }
                     catch (const std::logic_error&) { }
@@ -235,12 +235,19 @@ int main() {
                   "close/rotate resurrected membership or corrupted indexes");
             check(rejected([&] { (void)m.join(old, 88, 3); }),
                   "old capability admitted closed room after close/rotate");
+            for (const auto& rotatedPermit : issued) {
+                check(rejected([&] { (void)m.join(rotatedPermit, 88, 3); }),
+                      "rotated capability admitted closed room");
+            }
             auto successor = m.create_group(1, 2);
             check(rejected([&] { (void)m.join(old, 88, 3); }),
                   "old capability admitted recreated room after close/rotate");
+            for (const auto& rotatedPermit : issued) {
+                check(rejected([&] { (void)m.join(rotatedPermit, 88, 3); }),
+                      "rotated capability admitted recreated room");
+            }
             check(m.join(successor, 88, 3),
                   "new incarnation capability rejected after close/rotate");
-            (void)rotated;
         }
     }
 }
