@@ -13,62 +13,50 @@ static constexpr std::uint32_t IO = static_cast<std::uint32_t>(FunctionEffect::I
 int main() {
     CriticalStateCallback c{};
     c.one_state_parameter = true;
-    c.inferred = row(READ | WRITE);
+    c.inferred = row(READ);
     const auto using_rw = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
     CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::MissingCallbackCritical); // serial is not permission
+
+    c.state_mode = CriticalStateMode::Read;
+    CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);
-    c.intrinsic_critical = false;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
-            == CriticalStateAdmission::MissingIntrinsicCritical);
-    c.intrinsic_critical = true;
-    c.one_state_parameter = false;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
-            == CriticalStateAdmission::InvalidStateCallback);
-    c.one_state_parameter = true;
-    c.lexical = false;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
-            == CriticalStateAdmission::InvalidStateCallback);
-    c.lexical = true;
-    c.escapes = true;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
-            == CriticalStateAdmission::CallbackEscape);
-    c.escapes = false;
-    CHECK(admit_critical_handle_state(c, row(READ), true)
+    CHECK(admit_critical_handle_state(c, row(WRITE))
             == CriticalStateAdmission::EffectExceedsUsing);
-    // Verified serial admission cannot be inferred from the callback itself;
-    // the two-argument untrusted policy still fails closed.
+
+    c.inferred = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
-            == CriticalStateAdmission::MissingCallbackCritical);
-    c.callback_critical = true;
+            == CriticalStateAdmission::ReadModeCannotWrite); // using cannot upgrade read
+    CHECK(admit_critical_handle_state(c, row(READ | WRITE | IO))
+            == CriticalStateAdmission::ReadModeCannotWrite);
+
+    c.state_mode = CriticalStateMode::Write;
     CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::Accept);
+    CHECK(admit_critical_handle_state(c, row(WRITE))
+            == CriticalStateAdmission::EffectExceedsUsing);
+    c.inferred = row(WRITE); // pure overwrite is not an implicit read
+    CHECK(admit_critical_handle_state(c, row(WRITE))
             == CriticalStateAdmission::Accept);
 
     c.intrinsic_critical = false;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::MissingIntrinsicCritical);
     c.intrinsic_critical = true;
-
-    c.lexical = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
-            == CriticalStateAdmission::InvalidStateCallback);
-    c.lexical = true;
     c.one_state_parameter = false;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::InvalidStateCallback);
     c.one_state_parameter = true;
-
+    c.lexical = false;
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::InvalidStateCallback);
+    c.lexical = true;
     c.escapes = true;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::CallbackEscape);
     c.escapes = false;
-
-    CHECK(admit_critical_handle_state(c, row(READ))
-            == CriticalStateAdmission::EffectExceedsUsing);
-    c.inferred = row(READ);
-    CHECK(admit_critical_handle_state(c, row(READ))
-            == CriticalStateAdmission::Accept);
 
     c.inferred = row(READ | IO);
     CHECK(admit_critical_handle_state(c, row(READ))
