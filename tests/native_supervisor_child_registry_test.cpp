@@ -188,6 +188,12 @@ int main() {
     must_reject([&] {
         registry.record_stop_applied(stop_child.child, stop_actor, 1, 45);
     });
+    must_reject([&] {
+        registry.record_stop_applied(stop_child.child, stop_actor, 1, 44);
+    });
+    check(registry.stop_receipt(stop_child.child).status == Receipt::pending,
+          "native registry asserted host effect before invocation");
+    registry.claim_host_stop_invocation(stop_child.child, stop_actor, 1, 44);
     registry.record_stop_applied(stop_child.child, stop_actor, 1, 44);
     check(registry.stop_receipt(stop_child.child).status == Receipt::applied,
           "host proof did not advance exact reserved STOP receipt");
