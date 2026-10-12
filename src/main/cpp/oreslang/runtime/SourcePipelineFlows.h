@@ -71,8 +71,9 @@ typedef struct {
 /* A single try_publish must synchronously generation-check and perform
  * nonblocking bounded scheduler DATA admission. It holds ONLY the particular
  * flow's mutex: unrelated flows, opens and cancellations must still progress.
- * It MUST NOT wait, call flow-table APIs or invoke guest code. Same-table
- * callback reentry is rejected with ORES_FLOW_REENTRANT, not deadlocked.
+ * It MUST NOT wait, call ANY flow-table API (including another table),
+ * or invoke guest code. Cross-table callback reentry is rejected with
+ * ORES_FLOW_REENTRANT, not allowed to form a nested A->B->A deadlock.
  * No scheduler lock held by another flow may be acquired in reverse order.
  * The caller owns snapshot/credit cleanup on failure. Return 1 if admitted.
  * Retire of an in-use flow returns ORES_FLOW_BUSY, not a blocking wait.
