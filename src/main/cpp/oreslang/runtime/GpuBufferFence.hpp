@@ -112,6 +112,13 @@ public:
         std::lock_guard<std::mutex> guard(state_->lock);
         return state_->status;
     }
+    // A per-allocation metadata snapshot, not provider authorization.
+    struct Snapshot { Identity identity; std::uint64_t bytes; Status status; };
+    Snapshot snapshot() const {
+        active();
+        std::lock_guard<std::mutex> guard(state_->lock);
+        return Snapshot{state_->identity, state_->bytes, state_->status};
+    }
 
 private:
     explicit BufferFence(std::shared_ptr<State> state) : state_(std::move(state)) {}
