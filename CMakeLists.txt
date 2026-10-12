@@ -67,16 +67,28 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-    # Exact source snapshots from oreslang-linked-queue main (2026-10-12).
-    # Until native Array<int>/class lowering is implemented, reject all input
-    # without emitting partial LLVM IR. This is NOT successful native execution.
-    add_test(NAME native_linked_queue_exact_source_failclosed
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_linked_queue_fail_closed.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>"
-            --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/linked-queue")
-    set_tests_properties(native_linked_queue_exact_source_failclosed
-        PROPERTIES TIMEOUT 90)
+    # Exact queue snapshots are pinned to the merged upstream Git objects.
+    # An unsupported feature is NOT a blanket allowance to ignore arbitrary
+    # compiler failures. The harness also builds and runs supported scalar IR.
+    find_program(ORE_QUEUE_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    if(ORE_QUEUE_CLANG)
+        add_test(NAME native_linked_queue_exact_source_failclosed
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_linked_queue_fail_closed.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/linked-queue"
+                --clang "${ORE_QUEUE_CLANG}")
+        set_tests_properties(native_linked_queue_exact_source_failclosed
+            PROPERTIES TIMEOUT 120)
+    else()
+        message(STATUS "Linked-queue native execution control requires Clang; CTest gate omitted")
+    endif()
+    add_test(NAME native_linked_queue_harness_adversarial
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -p "test_native_linked_queue_fail_closed.py" -v)
+    set_tests_properties(native_linked_queue_harness_adversarial
+        PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
         add_executable(oreslang-messagepack-wire-v2-test

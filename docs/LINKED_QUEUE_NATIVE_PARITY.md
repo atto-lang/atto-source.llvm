@@ -27,3 +27,27 @@ C++ or Java shims.
   explicit native rejection of the five ownership negatives, and ASan/UBSan.
 
 Do not replace the Oreslang queue with a C++ surrogate and claim parity.
+
+
+## Fail-closed audit limitations and review protocol
+
+The native compiler currently rejects the queue at **parser admission**, not
+at checked `Array<int>` or class lowering. This distinction matters: it is
+not evidence that LLVM enforces queue ownership, nor that it can execute it.
+Do not silently weaken these expectations to accept any nonzero exit:
+
+- The fixture Git blob identities are checked before running a compiler.
+- A supported scalar Oreslang program must compile to verified LLVM IR,
+  successfully link with Clang and exit with the exact native status 42.
+- Each queue fixture must return status 1, produce **zero bytes** on stdout,
+  and match the pinned per-fixture parser diagnostic.
+- The harness's separate adversarial unit tests force generic crashes,
+  process misuse, stubbed success, partial/whitespace stdout, corrupted input,
+  and unrelated diagnostics to fail.
+- On compiler improvements, a changed error location or admission stage
+  intentionally turns this regression red; update the diagnostic only after
+  identifying and reviewing the new first unsupported construct.
+
+A passing CTest still proves only safe parser rejection and a separate scalar
+native execution path. LLVM support requires source compilation and actual
+instrumented execution of the queue fixtures before retiring this test.
