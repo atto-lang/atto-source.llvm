@@ -18,6 +18,13 @@ NEGATIVE_CASES = {
     "jit_macro": "@expand(jit)\nmacro_rules! id { ($x:expr) => { $x }; }\n" + BASE,
     "unannotated_macro": "macro_rules! id { ($x:expr) => { $x }; }\n" + BASE,
     "inline_annotation": "@inline(always)\n" + BASE,
+    "conditional_compilation": "@cfg(feature)\n" + BASE,
+    "alignment_attribute": "@align(64)\n" + BASE,
+    "actor_state_capability": "@RequiresState(write)\n" + BASE,
+    "generated_builder": "@GenerateBuilder\n" + BASE,
+    "misplaced_expand": "@expand(aot)\n" + BASE,
+    "trailing_attribute_after_valid_program": BASE + "@derive(Eq)\n",
+    "trailing_macro_after_valid_program": BASE + "macro_rules! x { () => { 42 }; }\n",
 }
 
 
@@ -39,7 +46,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oreslang-aot-attributes-") as directory:
         for target in ("host", "wasm32"):
             good = invoke(args.compiler, directory, "control_" + target,
-                          "// @derive(Eq) in comments is not active metadata\n" + BASE,
+                          "// @derive(Eq) in comments is not active metadata\n"
+                          + "/* macro_rules! fake { () => { 42 }; } */\n" + BASE,
                           target)
             if good.returncode or "define" not in good.stdout:
                 failures.append("positive control failed for " + target +
