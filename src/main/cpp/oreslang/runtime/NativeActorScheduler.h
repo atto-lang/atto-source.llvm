@@ -106,10 +106,15 @@ int ores_native_actor_scheduler_submit(
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* scheduler);
 /* Wait for every accepted callback to complete; may not be called from its worker. */
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
+/* Whether this OS thread is currently executing a callback from scheduler.
+ * Only intended for immediate deadlock prevention in VM teardown. */
+int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
 /* Requires retirement, drained tasks AND caller-owned submitter fence.
  * Returns 0 when not ready; after success the pointer is invalid.
  */
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler);
+/* Carriers created on demand, initially zero; includes workers until retirement. */
+size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* scheduler);

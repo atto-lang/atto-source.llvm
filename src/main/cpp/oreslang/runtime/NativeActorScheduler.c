@@ -23,8 +23,8 @@ struct OresNativeActorScheduler {
     ActorLane* actors;
     uint64_t* slots;
     pthread_t* threads;
-    size_t actor_count, per_actor_capacity, worker_count;
-    size_t next_actor, outstanding;
+    size_t actor_count, per_actor_capacity, worker_count, started_workers;
+    size_t next_actor, outstanding, runnable_lanes;
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
@@ -122,6 +122,12 @@ static void* carrier(void* raw) {
         lane->active = 0;
         s->outstanding--;
         s->completed++;
+        /* A lane contributes at most one runnable turn regardless of how
+         * many DATA/CONTROL messages it owns. */
+        if (!lane->queued && !lane->has_control) {
+            if (!s->runnable_lanes) abort();
+            --s->runnable_lanes;
+        }
         if (control) ++s->control_completed;
         if (lane->queued || lane->has_control) pthread_cond_signal(&s->ready);
         if (lane->retired && !lane->active && !lane->queued && !lane->has_control)
@@ -167,17 +173,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         pthread_mutex_destroy(&s->lock);
         goto allocation_failed;
     }
-    size_t started = 0;
-    while (started < workers && pthread_create(&s->threads[started], NULL, carrier, s) == 0)
-        ++started;
-    if (started != workers) {
-        ores_native_actor_scheduler_retire(s);
-        for (size_t i = 0; i < started; ++i) pthread_join(s->threads[i], NULL);
-        pthread_cond_destroy(&s->drained);
-        pthread_cond_destroy(&s->ready);
-        pthread_mutex_destroy(&s->lock);
-        goto allocation_failed;
-    }
+    /* Metadata-only bootstrap. The first accepted message starts carriers. */
     return s;
 allocation_failed:
     free(s->threads);
@@ -206,6 +202,22 @@ static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
         && s->actors[ref.actor_slot].spawned
         && s->actors[ref.actor_slot].generation == ref.generation;
 }
+/* The scheduler and its bounded queues exist at VM bootstrap, but no OS
+ * carriers are created until runnable work is actually admitted. Creation is
+ * under the scheduler mutex: competing producers cannot over-provision or
+ * race destruction. Workers follow DISTINCT occupied actor lanes, not the
+ * number of queued messages: one serialized actor cannot wake five idle
+ * pthreads just by filling its own mailbox. Failed creation never
+ * acknowledges an unserviceable first message. */
+static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
+    if (required > s->worker_count) required = s->worker_count;
+    while (s->started_workers < required) {
+        if (pthread_create(&s->threads[s->started_workers], NULL, carrier, s) != 0)
+            break;
+        ++s->started_workers;
+    }
+    return s->started_workers != 0;
+}
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
@@ -215,6 +227,12 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         return 0;
     }
     ActorLane* a = &s->actors[i];
+    const int new_lane = !a->active && !a->queued && !a->has_control;
+    if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
+        /* The caller counts a rejected admission, once. */
+        return 0;
+    }
+    if (new_lane) ++s->runnable_lanes;
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
@@ -258,8 +276,11 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             /* enqueue_locked and stop() arbitrate under this same lock.
              * A successful admission precedes stop, even if processing later
              * fails; a stop that wins first is always rejected. */
-            if (!enqueue_locked(s, (size_t)actor.actor_slot, payload)) abort();
-            status = ORES_NATIVE_SEND_ACCEPTED;
+            if (enqueue_locked(s, (size_t)actor.actor_slot, payload)) {
+                status = ORES_NATIVE_SEND_ACCEPTED;
+            } else {
+                status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+            }
         }
     }
     if (status != ORES_NATIVE_SEND_ACCEPTED && s->rejected != UINT64_MAX)
@@ -290,6 +311,13 @@ int ores_native_actor_scheduler_publish_control(
         && s->accepted != UINT64_MAX;
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
+        const int new_lane = !lane->active && !lane->queued;
+        if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
+            if (s->rejected != UINT64_MAX) ++s->rejected;
+            unlock(s);
+            return 0;
+        }
+        if (new_lane) ++s->runnable_lanes;
         lane->control_payload = payload;
         lane->control_is_failure = 0;
         lane->has_control = 1;
@@ -315,6 +343,13 @@ int ores_native_actor_scheduler_publish_failure(
         && s->accepted != UINT64_MAX;
     if (ok) {
         ActorLane* a = &s->actors[parent.actor_slot];
+        const int new_lane = !a->active && !a->queued;
+        if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
+            if (s->rejected != UINT64_MAX) ++s->rejected;
+            unlock(s);
+            return 0;
+        }
+        if (new_lane) ++s->runnable_lanes;
         a->failure = failure;
         a->control_is_failure = 1;
         a->has_control = 1;
@@ -384,6 +419,9 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     pthread_cond_broadcast(&s->ready);
     unlock(s);
 }
+int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
+    return s && executing == s;
+}
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
@@ -400,7 +438,7 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     unlock(s);
     if (!ready) return 0;
     /* Caller must externally fence producers; no concurrent API calls now. */
-    for (size_t i = 0; i < s->worker_count; ++i)
+    for (size_t i = 0; i < s->started_workers; ++i)
         if (pthread_join(s->threads[i], NULL) != 0) abort();
     if (pthread_cond_destroy(&s->drained) != 0
         || pthread_cond_destroy(&s->ready) != 0
@@ -417,6 +455,13 @@ static uint64_t counter(OresNativeActorScheduler* s, int which) {
     uint64_t n = which == 0 ? s->accepted : which == 1 ? s->rejected : s->completed;
     unlock(s);
     return n;
+}
+size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    size_t count = s->started_workers;
+    unlock(s);
+    return count;
 }
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* s) {
     return counter(s, 0);

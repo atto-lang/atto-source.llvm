@@ -652,6 +652,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-mailbox-test)
     set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
 
+    # VM-level ownership: four independent scheduler domains, five carriers
+    # by default; cross-domain ActorRefs cannot be admitted by another pool.
+    add_executable(oreslang-native-ores-vm-test
+        tests/native_ores_vm_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-ores-vm-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ores-vm-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ores-vm-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ores_vm_four_carrier_domains
+        COMMAND oreslang-native-ores-vm-test)
+    set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
     add_executable(oreslang-native-actor-ready-queue-test
         tests/native_actor_scheduler_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
