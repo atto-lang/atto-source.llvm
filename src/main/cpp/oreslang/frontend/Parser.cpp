@@ -644,7 +644,9 @@ private:
             if (token_.text == "rt") {
                 advance();
                 if (token_.text == "cooperate") {
-                    fail("native rt cooperate requires verified heap-owned continuation lowering");
+                    throw std::runtime_error(
+                        "native rt cooperate requires verified heap-owned continuation lowering"
+                        " at byte " + std::to_string(token_.offset));
                 }
                 fail("native rt expression statement unsupported until ownership/suspension lowering");
             }
@@ -772,7 +774,9 @@ private:
             advance();
             const auto operation = token_.text;
             if (operation == "cooperate") {
-                fail("native rt cooperate requires verified heap-owned continuation lowering");
+                throw std::runtime_error(
+                        "native rt cooperate requires verified heap-owned continuation lowering"
+                        " at byte " + std::to_string(token_.offset));
             }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
