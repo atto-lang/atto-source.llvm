@@ -155,6 +155,8 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             // The zero token denotes a pre-existing entry loan. A new CFG
             // borrow must never impersonate that identity.
             if (op.loan_id == 0) violation(op.place, "reserved entry loan identity");
+            if (!op.loan_id && !site_id)
+                violation(op.place, "borrow requires compiler site provenance");
             require_owned(op.place, value);
             if (value.exclusive_loan) violation(op.place, "shared borrow overlaps mutable loan");
             if (value.shared_loans == 65535) violation(op.place, "shared loan count exceeds bound");
@@ -164,6 +166,8 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::BorrowExclusive:
             if (op.loan_id == 0) violation(op.place, "reserved entry loan identity");
+            if (!op.loan_id && !site_id)
+                violation(op.place, "borrow requires compiler site provenance");
             require_owned(op.place, value);
             if (value.exclusive_loan || value.shared_loans)
                 violation(op.place, "overlapping exclusive loans");
@@ -271,6 +275,26 @@ inline Analysis verify(const Graph& graph) {
         if (place.shared_loans != place.shared_loan_ids.size() ||
                 place.exclusive_loan != place.exclusive_loan_id.has_value())
             violation(name, "unproven initial loan identity");
+    }
+    // Entry identities are just as authoritative as lexical CFG borrow
+    // sites. A borrowed parameter and a local borrow must not reuse an ID
+    // (even on disjoint places); two independently borrowed entry places
+    // also cannot claim the same nonzero origin. Zero is reserved only for
+    // the backward-compatible anonymous single-loan entry state.
+    std::map<std::uint64_t, std::string> entry_loan_owners;
+    for (const auto& [name, value] : entry) {
+        if (value.shared_loans > 1 && value.shared_loan_ids.count(0))
+            violation(name, "anonymous entry loan mixed with named loans");
+        auto record_entry_token = [&](std::uint64_t token) {
+            if (!token) return;
+            if (borrow_sites.count(token) ||
+                    !entry_loan_owners.emplace(token, name).second)
+                violation(name, "duplicate entry or lexical loan identity");
+        };
+        for (const auto token : value.shared_loan_ids)
+            record_entry_token(token);
+        if (value.exclusive_loan_id)
+            record_entry_token(*value.exclusive_loan_id);
     }
     Analysis result;
     result.incoming.resize(graph.blocks.size());
