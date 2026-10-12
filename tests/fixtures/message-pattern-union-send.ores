@@ -2,7 +2,7 @@ declare type match Patterns as
     (bool, string)
     string
     Array[string, string, string]
-    List[bool, bool]
+    List[bool]
 end
 define actor Foo<messages=Patterns> as
     receive(Message m) { }
