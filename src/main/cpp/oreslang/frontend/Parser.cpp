@@ -45,7 +45,7 @@ bool reserved(std::string_view name) {
         "int", "owned", "declare", "receive", "receive_forward",
         "receive_backward", "transform", "pipe", "forward_messages",
         "backward_messages", "Message", "bool", "string", "state",
-        "critical", "handle_state",
+        "critical", "handle_state", "using",
         "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -675,19 +675,39 @@ private:
                         }
                     }
                     require("{");
-                    // The sole admissible state operation in a tagged handler
-                    // is a synchronously completed critical callback that
-                    // returns one copied i64. No state reference survives.
+                    // State capabilities are compiler intrinsics, not
+                    // guest-callable methods or ordinary actor properties.
+                    // using state.read -> immutable, using state.write ->
+                    // exclusive mutation. Critical write is mandatory; the
+                    // legacy handle_state(critical ...) spells the same loan.
                     if (accept("const")) {
                         auto loan = std::make_unique<StateLoan>();
                         loan->result_binding = identifier();
                         require("=");
-                        require("self"); require(".");
-                        require("handle_state"); require("(");
-                        require("critical"); require("|"); require("state");
-                        require("|"); require("->"); require("{");
+                        if (accept("using")) {
+                            require("state"); require(".");
+                            if (accept("read"))
+                                loan->mode = StateLoan::Mode::Read;
+                            else if (accept("write"))
+                                loan->mode = StateLoan::Mode::Write;
+                            else fail("using state capability must be read or write");
+                            require("(");
+                            if (loan->mode == StateLoan::Mode::Write)
+                                require("critical");
+                            else if (token_.text == "critical")
+                                fail("using state.read cannot request a critical write loan");
+                        } else {
+                            require("self"); require(".");
+                            require("handle_state"); require("(");
+                            require("critical");
+                            loan->mode = StateLoan::Mode::Write;
+                        }
+                        require("|"); require("state"); require("|");
+                        require("->"); require("{");
                         state_loan_depth_ = 1;
                         while (token_.text == "state") {
+                            if (loan->mode == StateLoan::Mode::Read)
+                                fail("using state.read cannot mutate state");
                             FieldAssignment assignment;
                             assignment.offset = token_.offset;
                             require("state"); require(".");
@@ -697,6 +717,9 @@ private:
                             require(";");
                             loan->assignments.push_back(std::move(assignment));
                         }
+                        if (token_.text == "await" || token_.text == "select"
+                                || token_.text == "nb" || token_.text == "using")
+                            fail("state read/write loan cannot suspend or nest");
                         require("return");
                         loan->result = expression();
                         require(";");
@@ -1327,6 +1350,9 @@ private:
             const std::unordered_map<std::string, std::size_t> noCalls;
             for (const auto& field : actor.fields) {
                 validate_expression(*field.initializer, none, noCalls);
+                if (field.name == "state" || field.name == "using"
+                        || field.name == "read" || field.name == "write")
+                    throw std::runtime_error("actor state key conflicts with reserved capability name");
                 if (!fields.insert(field.name).second)
                     throw std::runtime_error("duplicate actor field '" + field.name + "'");
                 if (field.field_mutable) mutableFields.insert(field.name);
@@ -1444,8 +1470,10 @@ private:
                             if (arm.state_loan) {
                                 if (!actor.state_declared)
                                     throw std::runtime_error("handle_state requires an actor state map");
-                                if (arm.state_loan->assignments.empty())
-                                    throw std::runtime_error("critical state loan requires an explicit mutation");
+                                if (arm.state_loan->mode == StateLoan::Mode::Read
+                                        && !arm.state_loan->assignments.empty())
+                                    throw std::runtime_error(
+                                        "using state.read cannot mutate state");
                                 std::unordered_set<std::string> loanAvailable = armAvailable;
                                 for (const auto& field : actor.fields)
                                     loanAvailable.insert("@state." + field.name);
