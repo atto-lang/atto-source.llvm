@@ -443,7 +443,9 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
     lock(s);
     int done = matching(s, actor) && s->actors[actor.actor_slot].retired
         && !s->actors[actor.actor_slot].queued && !s->actors[actor.actor_slot].has_control
-        && !s->actors[actor.actor_slot].active;
+        && !s->actors[actor.actor_slot].active
+        && ores_execution_phase(&s->actors[actor.actor_slot].authority)
+            == ORES_EXEC_TERMINATED;
     unlock(s);
     return done;
 }
@@ -456,7 +458,8 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
         return 0;
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
-    while (lane->queued || lane->has_control || lane->active) {
+    while (lane->queued || lane->has_control || lane->active
+        || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     }
     unlock(s);
@@ -504,6 +507,16 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
     int ready = s->retired && !s->outstanding;
+    if (ready) {
+        for (size_t i = 0; i < s->actor_count; ++i) {
+            ActorLane* lane = &s->actors[i];
+            if (lane->spawned
+                && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED) {
+                ready = 0;
+                break;
+            }
+        }
+    }
     if (ready) pthread_cond_broadcast(&s->ready);
     unlock(s);
     if (!ready) return 0;
