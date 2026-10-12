@@ -30,8 +30,12 @@ typedef struct {
 typedef void (*OresNativeActorPanicFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
- * Spawning activates exactly one preallocated actor slot; no ambient cross-
- * actor mutable references, host heap allocation, or slot reincarnation.
+ * Normal spawn claims one preallocated physical slot. The strictly limited
+ * recycle_unpublished_done operation reclaims only stopped never-published
+ * candidates, advancing their slot generation; previously active actors are
+ * NOT currently recyclable because their callback ABI is slot-only.
+ * No ambient cross-actor mutable references or host heap allocations per
+ * message are introduced by this scheduler.
  */
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
