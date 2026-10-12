@@ -142,6 +142,12 @@ public:
             ~Reset() { flag.store(false, std::memory_order_release); }
         } reset{polling_};
 
+        // Closing the actor's mailbox alone is insufficient: an admitted
+        // guest/CONTROL turn may still be using its arena. Wait for the group
+        // to detach AND for its single-writer execution lease to quiesce
+        // before running any native resource destructor.
+        if (!finalizer_.ready_for_resource_reclamation()) return Poll::not_admitted;
+
         auto result = resources_->try_reclaim();
         if (result.status == ActorResourceRegistry::Reclaim::not_retired ||
                 result.status == ActorResourceRegistry::Reclaim::busy ||
