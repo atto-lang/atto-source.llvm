@@ -661,7 +661,7 @@ int main() {
 
     // True scheduler-backed RESTART admission and shutdown fencing. The
     // replacement must be physically READY, not just a fresh actor number.
-    for (int mode = 0; mode < 9; ++mode) {
+    for (int mode = 0; mode < 11; ++mode) {
         auto* runtime = ores_native_actor_scheduler_open_typed_control(
             3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
         check(runtime != nullptr, "restart proof scheduler startup failed");
@@ -857,8 +857,10 @@ int main() {
                   "published replacement did not physically terminate");
             bridge->fence_restart_publication();
             std::puts("NATIVE_SUPERVISOR_RECYCLED_RESTART_PASS old_gen=1 new_gen=2 cleanup=1 admitted=1");
-        } else if (mode == 5 || mode == 6) {
-            // Deterministic close at BOTH handoff seams:
+        } else if (mode == 5 || mode == 6 || mode == 9 || mode == 10) {
+            // Deterministic close at BOTH handoff seams, with full CONTROL
+            // closure (modes 5/6) or independent registry-fence-only closure
+            // (modes 9/10):
             // (5) after physical recycling but before next logical ticket,
             // (6) after ticket but before native admission.
             // The host transaction must stop+DONE the newly-live hidden
@@ -878,9 +880,9 @@ int main() {
                 try {
                     auto published = bridge->abort_recycle_and_admit_verified(
                         ticket, replacement,
-                        mode == 5 ? std::function<void()>(block_at_handoff)
+                        (mode == 5 || mode == 9) ? std::function<void()>(block_at_handoff)
                                   : std::function<void()>(),
-                        mode == 6 ? std::function<void()>(block_at_handoff)
+                        (mode == 6 || mode == 10) ? std::function<void()>(block_at_handoff)
                                   : std::function<void()>());
                     committed.store(published.phase ==
                         oreslang::runtime::SupervisorChildRegistry::Phase::active);
@@ -892,7 +894,7 @@ int main() {
                 while (!at_handoff.load(std::memory_order_acquire))
                     std::this_thread::yield();
                 bridge->fence_restart_publication();
-                process->close();
+                if (mode == 5 || mode == 6) process->close();
                 close_finished.store(true, std::memory_order_release);
             });
             recycler.join();
@@ -920,9 +922,13 @@ int main() {
                 if (std::string_view(event.operation) == "restart.abort") ++aborts;
                 if (std::string_view(event.operation) == "restart.commit") ++commits;
             }
-            check(aborts == (mode == 5 ? 1U : 2U) && commits == 0,
+            check(aborts == ((mode == 5 || mode == 9) ? 1U : 2U) && commits == 0,
                   "close-raced replacement lacked exactly-once ticket rollback");
-            std::puts(mode == 5
+            std::puts(mode == 9
+                ? "NATIVE_RECYCLE_REGISTRY_FENCE_PRE_RESERVE_PASS done=1 orphan=0"
+                : mode == 10
+                ? "NATIVE_RECYCLE_REGISTRY_FENCE_PRE_ADMIT_PASS done=1 orphan=0"
+                : mode == 5
                 ? "NATIVE_RECYCLE_CLOSE_BEFORE_RESERVE_PASS done=1 orphan=0"
                 : "NATIVE_RECYCLE_CLOSE_BEFORE_ADMISSION_PASS done=1 orphan=0");
         } else {
