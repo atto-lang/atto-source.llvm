@@ -43,6 +43,9 @@ if(BUILD_TESTING)
     add_test(NAME source_nominal_enum_pattern_parser_gate
         COMMAND oreslang-nominal-message-parser-test)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_compiled_pipeline_evidence_mutation_gate
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pipeline_guest_evidence.py")
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
@@ -272,7 +275,8 @@ if(BUILD_TESTING)
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
-            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19")
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19"
+            --pipeline-three-actor-summary)
     endif()
     oreslang_contract_test(source_actor_send_ir source-actor-send.ores
         --ir "oreslang_source_actor_send")
