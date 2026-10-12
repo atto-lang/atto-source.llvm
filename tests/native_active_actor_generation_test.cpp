@@ -134,6 +134,16 @@ int main() {
     check(valid(child) && valid(parent), "typed supervisor actors did not spawn");
     check(ores_native_actor_scheduler_publish_control(typed, parent, 33),
           "typed CONTROL rejected");
+    // The native CONTROL lane has one reserved slot. A second typed PANIC
+    // cannot be admitted before the earlier future callback drains; do
+    // not confuse intentional backpressure with generation ABI failure.
+    const auto control_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (ctrl.future_count.load() != 1
+            && std::chrono::steady_clock::now() < control_deadline)
+        std::this_thread::sleep_for(1ms);
+    check(ctrl.future_count.load() == 1,
+          "typed CONTROL callback did not finish before PANIC admission");
     check(ores_native_actor_scheduler_stop(typed, child)
               && ores_native_actor_scheduler_wait_done(typed, child),
           "PANIC child did not become physically DONE");
