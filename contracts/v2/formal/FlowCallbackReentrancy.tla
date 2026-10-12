@@ -9,11 +9,11 @@ ASSUME AllowNestedTableEntry \in BOOLEAN
 VARIABLES inCallbackA, enteredB, rejectedB, reenteredA, finished
 vars == <<inCallbackA, enteredB, rejectedB, reenteredA, finished>>
 Init ==
-    /\ ~inCallbackA
-    /\ ~enteredB
-    /\ ~rejectedB
-    /\ ~reenteredA
-    /\ ~finished
+    /\ inCallbackA = FALSE
+    /\ enteredB = FALSE
+    /\ rejectedB = FALSE
+    /\ reenteredA = FALSE
+    /\ finished = FALSE
 StartA ==
     /\ ~inCallbackA
     /\ ~finished
