@@ -162,6 +162,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_nested_unadmitted_trap_expression
         unsupported-trap-nested-call.ores
         --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
+    oreslang_contract_test(reject_binary_operand_trap_expression
+        unsupported-trap-binary-operand.ores
+        --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
     # Native source if/else CFG: separate branch states must join safely.
     # Real Clang execution, ASan/UBSan and no-partial-IR rejection matrix.
     if(ORE_CLANG)
