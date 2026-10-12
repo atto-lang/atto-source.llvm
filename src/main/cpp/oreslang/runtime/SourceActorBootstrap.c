@@ -512,6 +512,16 @@ static int source_send_binary(SourceActor* actor,
                               uint8_t direction) {
     return source_send_binary_expected(actor, wire, size, direction, SIZE_MAX);
 }
+/* Test-only witness for snapshot-bound variant authority. Do NOT
+ * export this API in production builds: only the compiled pipeline ABI
+ * may bind an expected route case at an active scheduler DATA turn. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+int oreslang_source_actor_send_expected_variant_test(
+    void* actor, const uint8_t* wire, size_t size, size_t expected_variant) {
+    return source_send_binary_expected((SourceActor*)actor, wire,
+                                       size, 0, expected_variant);
+}
+#endif
 static int source_send_binary_unlocked(SourceActor* actor,
                               const uint8_t* wire, size_t size,
                               uint8_t direction, size_t expected_variant) {
