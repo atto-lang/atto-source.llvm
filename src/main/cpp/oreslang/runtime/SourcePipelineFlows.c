@@ -34,8 +34,10 @@ struct OresFlowTable {
  * ordering, but IDs are atomic across multiple independent tables. */
 static _Atomic uint64_t next_flow_id = 1;
 static _Atomic uint64_t next_message_id = 1;
-/* Reject synchronous callback reentry with an error, not self-deadlock.
- * Cross-thread callbacks must still be strictly nonblocking. */
+/* Reject ALL synchronous registry entry from any publish callback.
+ * Checking only callback_table == table permits A->B->A lock inversion:
+ * B's nested publisher reset the TLS sentinel while A still owned a
+ * flow lock. Cross-thread callbacks must still be strictly nonblocking. */
 static _Thread_local const OresFlowTable* callback_table;
 static Flow* find_flow(OresFlowTable* table, uint64_t id);
 static uint64_t allocate_identity(_Atomic uint64_t* counter) {
@@ -122,7 +124,7 @@ OresFlowError ores_flow_open(OresFlowTable* table, uint64_t pipeline_id,
     if (!table || !pipeline_id || !route_generation || !stages || !flow_id ||
         stage_count < 2 || stage_count > ORES_FLOW_MAX_STAGES)
         return ORES_FLOW_BAD_ARGUMENT;
-    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
     for (uint8_t i = 0; i < stage_count; ++i) {
         if (!valid_actor(stages[i])) return ORES_FLOW_BAD_ARGUMENT;
         /* No cross-domain actor graph adapter is implemented for this
@@ -172,7 +174,7 @@ OresFlowError ores_flow_reserve(OresFlowTable* table, uint64_t flow_id,
     OresFlowActor sender, OresFlowDirection direction, uint64_t causal_parent,
     OresFlowTicket* out) {
     if (!table || !flow_id || !out) return ORES_FLOW_BAD_ARGUMENT;
-    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
     Flow* f = acquire_flow(table, flow_id);
     OresFlowError error = ORES_FLOW_OK;
     if (!f) error = ORES_FLOW_NOT_FOUND;
@@ -230,7 +232,7 @@ OresFlowError ores_flow_reserve(OresFlowTable* table, uint64_t flow_id,
 OresFlowError ores_flow_publish(OresFlowTable* table,
     const OresFlowTicket* ticket, OresFlowTryPublish try_publish, void* ctx) {
     if (!table || !ticket || !try_publish) return ORES_FLOW_BAD_ARGUMENT;
-    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
     Flow* f = acquire_flow(table, ticket->flow_id);
     OresFlowError error = ORES_FLOW_OK;
     if (!f) error = ORES_FLOW_NOT_FOUND;
@@ -243,6 +245,8 @@ OresFlowError ores_flow_publish(OresFlowTable* table,
         /* Copy the checked reservation: caller-provided ticket storage
          * cannot change mid-callback (nor be reused for another flow). */
         const OresFlowTicket pinned = f->ticket;
+        /* While this callback runs, *no* flow table API may be entered
+         * synchronously on this thread, including another table. */
         callback_table = table;
         const int admitted = try_publish(ctx, &pinned);
         callback_table = NULL;
@@ -262,7 +266,7 @@ OresFlowError ores_flow_publish(OresFlowTable* table,
 OresFlowError ores_flow_cancel(OresFlowTable* table, uint64_t flow_id,
     OresFlowActor source) {
     if (!table || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
-    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
     Flow* f = acquire_flow(table, flow_id);
     OresFlowError error;
     if (!f) error = ORES_FLOW_NOT_FOUND;
@@ -282,7 +286,7 @@ OresFlowError ores_flow_cancel(OresFlowTable* table, uint64_t flow_id,
 OresFlowError ores_flow_finish(OresFlowTable* table, uint64_t flow_id,
     OresFlowActor source, uint64_t causal_parent) {
     if (!table || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
-    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
     Flow* f = acquire_flow(table, flow_id);
     OresFlowError error;
     if (!f) error = ORES_FLOW_NOT_FOUND;
@@ -303,7 +307,7 @@ OresFlowError ores_flow_finish(OresFlowTable* table, uint64_t flow_id,
 OresFlowError ores_flow_snapshot(OresFlowTable* table, uint64_t flow_id,
     OresFlowSnapshot* out) {
     if (!table || !out || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
-    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
     Flow* f = acquire_flow(table, flow_id);
     if (!f) return ORES_FLOW_NOT_FOUND;
     out->state = f->state;
@@ -317,7 +321,7 @@ OresFlowError ores_flow_snapshot(OresFlowTable* table, uint64_t flow_id,
 }
 OresFlowError ores_flow_retire(OresFlowTable* table, uint64_t flow_id) {
     if (!table || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
-    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    if (callback_table != NULL) return ORES_FLOW_REENTRANT;
     /* Never wait under the directory mutex for a slow in-flight callback.
      * A busy flow is retried by trusted teardown AFTER fencing producers. */
     pthread_mutex_lock(&table->mutex);
