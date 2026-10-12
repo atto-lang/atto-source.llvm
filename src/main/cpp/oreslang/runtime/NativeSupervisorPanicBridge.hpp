@@ -192,6 +192,12 @@ public:
     SupervisorChildRegistry::Snapshot admit_verified_replacement(
             SupervisorChildRegistry::RestartReservation permit,
             OresNativeActorRef replacement) {
+        // An open native actor lane is insufficient authority after its
+        // owning supervisor CONTROL process has closed or failed.
+        if (!process_->healthy()) {
+            child_registry_->close_restart_admission();
+            throw std::logic_error("supervisor CONTROL is closed for RESTART");
+        }
         if (replacement.scheduler_domain != parent_.scheduler_domain
             || !ores_native_actor_scheduler_poll_ready(scheduler_, replacement))
             throw std::logic_error("replacement is not physically scheduler-ready");
@@ -204,6 +210,15 @@ public:
         // both the identity registry and panic-routing index are published.
         // Allocate the bridge entry BEFORE committing child generation.
         std::lock_guard<std::mutex> guard(mutex_);
+        // Re-evaluate both independent shutdown domains after the external
+        // proof. This closes the straightforward close-during-proof race;
+        // an atomic process/scheduler lease is still needed to exclude a
+        // stop immediately after this check.
+        if (!process_->healthy()
+            || !ores_native_actor_scheduler_poll_ready(scheduler_, replacement)) {
+            child_registry_->close_restart_admission();
+            throw std::logic_error("RESTART admission became unhealthy before commit");
+        }
         const Key key{replacement.actor_slot, replacement.generation};
         const SupervisorChildRegistry::Snapshot candidate{
             permit.child, replacement, permit.incarnation + 1,
