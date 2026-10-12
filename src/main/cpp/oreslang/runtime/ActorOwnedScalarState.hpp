@@ -65,12 +65,18 @@ public:
         Access& operator=(const Access&) = delete;
         Value read(const std::string& name) const {
             verify();
+            if (!inferred_effects_.has(FunctionEffect::StateRead)) {
+                throw std::runtime_error("actor state read exceeds verified callback effects");
+            }
             return store_->at(name).initial;
         }
         void write(const std::string& name, Value value) {
             verify();
             if (mode_ != CriticalStateMode::Write) {
                 throw std::runtime_error("read-only actor state loan cannot write");
+            }
+            if (!inferred_effects_.has(FunctionEffect::StateWrite)) {
+                throw std::runtime_error("actor state write exceeds verified callback effects");
             }
             auto& slot = store_->at(name);
             if (!fits(slot.type, value)) {
@@ -89,9 +95,9 @@ public:
     private:
         friend class ActorOwnedScalarState;
         Access(ActorOwnedScalarState& owner, CriticalStateLoan& loan,
-               CriticalStateMode mode)
+               CriticalStateMode mode, FunctionEffects inferred_effects)
             : owner_(&owner), loan_(&loan), store_(&owner.fields_),
-              mode_(mode) {}
+              mode_(mode), inferred_effects_(inferred_effects) {}
         static bool fits(Type type, const Value& value) {
             switch (type) {
                 case Type::Int: return std::holds_alternative<std::int64_t>(value);
@@ -110,6 +116,7 @@ public:
         CriticalStateLoan* loan_;
         std::map<std::string, Field>* store_;
         CriticalStateMode mode_;
+        FunctionEffects inferred_effects_;
     };
 
     template <class Callback>
@@ -125,7 +132,7 @@ public:
                 != CriticalStateAdmission::Accept) {
             throw std::runtime_error("critical actor state/effect admission denied");
         }
-        Access access(*this, loan, metadata.state_mode);
+        Access access(*this, loan, metadata.state_mode, metadata.inferred);
         // Only a scalar Value is returnable: no borrowed loan can escape in
         // the result. Destruction of loan unwinds on all exceptional exits.
         Value result = callback(access);
