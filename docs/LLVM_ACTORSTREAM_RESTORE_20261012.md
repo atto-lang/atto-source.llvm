@@ -104,3 +104,36 @@ Current scope and constraints:
 These are exact-source *host route* tests. Full CMake/CTest, scheduler
 integration, source-compiled LLVM actor execution, native trace provenance,
 and Java/LLVM source-identity parity remain unverified on this PR.
+
+## Terminal physical-DONE race audit (2026-10-12)
+
+A complete pipeline once returned `Done::Succeeded` after every physical
+DONE receipt, but a subsequently delivered `fail()` event could change its
+observable result to `Done::Failed`. That violates terminal-result
+monotonicity for an already completed, fully quiescent pipeline.
+
+The route now serializes the final scheduler-owned physical DONE receipt and
+terminal failure publication under the same mutex. A failure **before**
+successful whole-route physical completion remains fatal; a late failure
+**after** successful completion cannot revoke the observed success. Repeated
+late failures are idempotent. This is an ordering contract for authenticated
+scheduler notifications, not permission for a guest to suppress a real
+failure or fabricate a physical-DONE acknowledgment.
+
+The C++ regression now checks each stage's physical-DONE threshold at **every**
+phase 0..2N of the 2-, 3-, 4-, 15- and 16-stage pipeline routes. Premature
+physical termination must poison the route; eligible termination must not
+unregister surviving stage fences. It separately tests 100 concurrent final
+physical-DONE versus failure publication races per binary execution and checks
+that the terminal decision cannot change afterward.
+
+**Funded exact-source execution:** [CI #38320002813](https://github.com/zed-pkg-test/java-app/actions/runs/38320002813)
+verified the header Git blob `734e889647cc0c951297bc1f718c5a345e50849d`
+and test Git blob `e815aa02476a6cab9b32098ba02c22bf3c80a835`;
+GCC and Clang ASan/UBSan each passed 50 binary executions.
+
+**Unchanged release blockers:** the tests cover only the standalone native
+route contract. Source-compiled LLVM guest pipelines, scheduler-integrated
+exact publication receipts, all-stage native physical STOP/DONE evidence,
+full current-head CTest/ASan, and same-source Java/LLVM trace conformance
+remain unverified. Leave PR #262 in draft until those gates are closed.
