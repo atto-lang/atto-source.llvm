@@ -961,6 +961,9 @@ private:
                 throw std::runtime_error("unboxed recursive enum payload: "
                         + chain + " -> " + name);
             }
+            if (stack.size() >= 256)
+                throw std::runtime_error(
+                    "enum inline dependency chain exceeds maximum depth of 256");
             cycleState[name] = 1;
             stack.push_back(name);
             for (const auto& dependency : inlineEdges.at(name)) visit(dependency);
