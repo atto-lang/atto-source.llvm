@@ -650,7 +650,7 @@ int main() {
 
     // True scheduler-backed RESTART admission and shutdown fencing. The
     // replacement must be physically READY, not just a fresh actor number.
-    for (int mode = 0; mode < 2; ++mode) {
+    for (int mode = 0; mode < 3; ++mode) {
         auto* runtime = ores_native_actor_scheduler_open_typed_control(
             3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
         check(runtime != nullptr, "restart proof scheduler startup failed");
@@ -702,7 +702,7 @@ int main() {
                           ORES_NATIVE_CONTROL_PANIC, replacement, 19, 219}),
                   "new generation was missing from supervisor PANIC routing");
             bridge->fence_restart_publication();
-        } else {
+        } else if (mode == 1) {
             children->stage_replacement(ticket, replacement);
             rejected = false;
             try { (void) children->abort_restart(ticket); }
@@ -720,6 +720,25 @@ int main() {
             try { (void) children->begin_restart(child.child, dying, 1); }
             catch (const std::exception&) { rejected = true; }
             check(rejected, "closed bridge reopened restart admission");
+        } else {
+            // Closing CONTROL while the bridge remains alive must fence the
+            // replacement even though the physical scheduler actor is READY.
+            process->close();
+            rejected = false;
+            try { (void) bridge->admit_verified_replacement(ticket, replacement); }
+            catch (const std::logic_error&) { rejected = true; }
+            check(rejected, "closed supervisor published a READY replacement");
+            check(children->snapshot(child.child).phase
+                      == oreslang::runtime::SupervisorChildRegistry::Phase::restarting,
+                  "closed CONTROL changed pending RESTART reservation");
+            check(bridge->registered_children() == 0,
+                  "failed closed admission registered an uncommitted actor");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "rejected replacement did not physically clean up");
+            check(children->abort_restart(ticket).phase
+                      == oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "closed supervisor could not release unspawned claim");
         }
         bridge.reset();
         process->close();
