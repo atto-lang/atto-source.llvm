@@ -195,7 +195,7 @@ int main() {
                     generated += " To" + std::to_string(j) + ": E" + std::to_string(j);
                 }
             }
-            generated += " end\\n";
+            generated += " end\n";
         }
         for (unsigned k = 0; k < 3; ++k)
             for (unsigned i = 0; i < 3; ++i)
@@ -212,12 +212,12 @@ int main() {
                     && diagnostic.find("requires a portable nested enum wire codec")
                         == std::string::npos) {
                 std::cerr << "unexpected dependency diagnostic for mask "
-                          << mask << ": " << diagnostic << "\\n";
+                          << mask << ": " << diagnostic << "\n";
                 std::abort();
             }
         }
         if (cycle != rejectedCycle) {
-            std::cerr << "enum dependency closure mismatch mask " << mask << "\\n";
+            std::cerr << "enum dependency closure mismatch mask " << mask << "\n";
             std::abort();
         }
     }
