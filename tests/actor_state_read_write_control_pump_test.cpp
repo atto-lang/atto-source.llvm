@@ -15,10 +15,10 @@ using Mode = Registry::Mode;
 int main() {
     Registry registry;
     Pump pump(registry);
-    CHECK(registry.request(1, Mode::Read).status == Status::Ready);
-    CHECK(registry.request(2, Mode::Write).status == Status::Queued);
-    CHECK(registry.request(3, Mode::Read).status == Status::Queued);
-    registry.complete(1);
+    CHECK(registry.request(registry.incarnation(), 1, Mode::Read).status == Status::Ready);
+    CHECK(registry.request(registry.incarnation(), 2, Mode::Write).status == Status::Queued);
+    CHECK(registry.request(registry.incarnation(), 3, Mode::Read).status == Status::Queued);
+    registry.complete(registry.incarnation(), 1);
 
     std::array<Registry::Notification, 1> control{};
     std::size_t admitted = 0;
@@ -32,19 +32,19 @@ int main() {
     CHECK(admitted == 1 && control[0].continuation_id == 2);
     CHECK(control[0].status == Status::Ready);
     CHECK(pump.pump(try_admit) == 0); // no duplicates after receipt
-    CHECK(registry.admitted(2, Mode::Write));
-    registry.complete(2);
+    CHECK(registry.admitted(registry.incarnation(), 2, Mode::Write));
+    registry.complete(registry.incarnation(), 2);
     CHECK(registry.pending_notifications().size() == 1);
     CHECK(pump.pump(try_admit) == 0); // saturation does not lose event
     admitted = 0;
     CHECK(pump.pump(try_admit) == 1);
     CHECK(control[0].continuation_id == 3);
-    CHECK(registry.admitted(3, Mode::Read));
+    CHECK(registry.admitted(registry.incarnation(), 3, Mode::Read));
 
     // Retirement revokes an already queued READY receipt as well.
     registry.retire();
-    CHECK(!registry.admitted(3, Mode::Read));
-    CHECK(!registry.admitted(2, Mode::Write));
+    CHECK(!registry.admitted(registry.incarnation(), 3, Mode::Read));
+    CHECK(!registry.admitted(registry.incarnation(), 2, Mode::Write));
     CHECK(registry.pending_notifications().size() == 1);
     CHECK(pump.pump(try_admit) == 0);
     admitted = 0;
@@ -56,9 +56,9 @@ int main() {
     // Concurrent pumpers cannot acknowledge the same terminal event twice.
     Registry concurrency;
     Pump concurrent_pump(concurrency);
-    CHECK(concurrency.request(10, Mode::Read).status == Status::Ready);
-    CHECK(concurrency.request(11, Mode::Write).status == Status::Queued);
-    CHECK(concurrency.request(12, Mode::Read).status == Status::Queued);
+    CHECK(concurrency.request(concurrency.incarnation(), 10, Mode::Read).status == Status::Ready);
+    CHECK(concurrency.request(concurrency.incarnation(), 11, Mode::Write).status == Status::Queued);
+    CHECK(concurrency.request(concurrency.incarnation(), 12, Mode::Read).status == Status::Queued);
     concurrency.retire();
     std::array<Registry::Notification, 1> one_slot{};
     std::size_t occupied = 0;
