@@ -1333,6 +1333,18 @@ private:
             }
             std::unordered_set<std::string> methods;
             for (const auto& method : actor.methods) {
+                // Neither ordinary actor methods nor the legacy boolean
+                // receive matcher may touch actor state outside a scoped
+                // handle_state callback. Reject before the LLVM lowering
+                // attempts to resolve state as an ordinary class local.
+                if (!method.assignments.empty()
+                    || std::any_of(method.boolean_arms.begin(),
+                        method.boolean_arms.end(),
+                        [](const ReceiveBooleanArm& arm) {
+                            return !arm.assignments.empty();
+                        }))
+                    throw std::runtime_error(
+                        "actor state mutation requires scoped handle_state callback");
                 if (!methods.insert(method.name).second)
                     throw std::runtime_error("duplicate actor method '" + method.name + "'");
                 reserveGenerated(prefix + method.name);
