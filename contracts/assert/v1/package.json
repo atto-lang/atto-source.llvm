@@ -1,0 +1,12 @@
+{
+  "name": "oreslang-assert-contract-v1",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsp compile . --emit @typespec/json-schema"
+  },
+  "devDependencies": {
+    "@typespec/compiler": "1.16.0",
+    "@typespec/json-schema": "1.16.0"
+  }
+}
