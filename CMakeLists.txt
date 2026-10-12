@@ -658,6 +658,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-supervisor-panic-bridge-test)
     set_tests_properties(native_typed_panic_supervisor_process_bridge PROPERTIES TIMEOUT 30)
 
+    # Exact physical admission leases must serialize STOP and whole-scheduler
+    # retirement while unpublished actors remain unroutable.
+    add_executable(oreslang-native-restart-admission-lease-test
+        tests/native_restart_admission_lease_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-restart-admission-lease-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-restart-admission-lease-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-restart-admission-lease-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-restart-admission-lease-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_restart_admission_lease
+        COMMAND oreslang-native-restart-admission-lease-test)
+    set_tests_properties(native_restart_admission_lease PROPERTIES TIMEOUT 30)
+
     # Real scheduler typed PANIC -> native bridge -> registry-verified
     # compiler-owned self.stop(f.child) -> acknowledged / ambiguous STOP.
     # This is the opt-in source STOP slice, not arbitrary guest on_panic.
