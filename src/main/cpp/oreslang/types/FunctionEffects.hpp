@@ -21,6 +21,10 @@ enum class FunctionEffect : std::uint32_t {
 
 struct FunctionEffects {
     std::uint32_t bits = 0;
+    // Effect rows cross the native compiler/runtime admission boundary.
+    // Unknown bits must never be treated as a grant of new authority.
+    static constexpr std::uint32_t kKnownEffects = (1u << 10) - 1u;
+    constexpr bool valid() const { return (bits & ~kKnownEffects) == 0; }
     constexpr bool has(FunctionEffect effect) const {
         return (bits & static_cast<std::uint32_t>(effect)) != 0;
     }
