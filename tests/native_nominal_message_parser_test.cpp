@@ -162,6 +162,31 @@ int main() {
         define match Bad as ...Status end
     )", "expected 'pattern'");
 
+    // Nominal nested payload dependencies must never become structural
+    // string messages or silently allocate implicit self-references.
+    rejects("define enum Foo as Message1: Foo end",
+            "unboxed recursive enum payload: Foo -> Foo");
+    rejects(R"(
+        define enum Foo as ToBar: Bar end
+        define enum Bar as ToFoo: Foo end
+    )", "unboxed recursive enum payload: Foo -> Bar -> Foo");
+    rejects(R"(
+        define enum Foo as Message1: Tuple[int, Foo] end
+    )", "unboxed recursive enum payload: Foo -> Foo");
+    rejects(R"(
+        define enum Foo as Message1: Box[Foo] end
+    )", "requires a portable nested enum wire codec");
+    rejects(R"(
+        define enum Priority as Low High end
+        define enum Foo as Message1: Priority end
+    )", "requires a portable nested enum wire codec");
+    rejects("define enum Foo as Message1: Missing end",
+            "unknown enum payload type: Missing");
+    rejects(R"(
+        define enum Foo as Message1 = 1 end
+        define enum Foo as Message1: Foo end
+    )", "duplicate enum/pattern declaration");
+
     rejects("define enum Bad as A: string = 2 B: string = 1 end",
             "enum wire tags must increase monotonically");
     rejects("define enum Bad as A: string = 0 end",
