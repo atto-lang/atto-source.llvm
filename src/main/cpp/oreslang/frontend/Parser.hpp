@@ -143,8 +143,17 @@ struct ActorDecl {
     std::size_t offset = 0;
 };
 
+// Parsed standard-library import declarations. Resolution is independent of
+// host filesystem/module search paths; native linking remains gated in codegen.
+struct ModuleImport {
+    std::string symbol;
+    std::string canonical_path;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::string module;
+    std::vector<ModuleImport> imports;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
