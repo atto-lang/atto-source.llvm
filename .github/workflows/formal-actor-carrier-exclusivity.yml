@@ -5,11 +5,13 @@ on:
       - 'docs/formal/ReentrantActorExclusiveCarrier.*'
       - 'docs/formal/ACTOR_EXCLUSIVE_CARRIER_PROOF.md'
       - 'scripts/verify_actor_carrier_exclusivity.py'
+      - 'scripts/verify_actor_dispatch_tickets.py'
       - '.github/workflows/formal-actor-carrier-exclusivity.yml'
   push:
     paths:
       - 'docs/formal/ReentrantActorExclusiveCarrier.*'
       - 'scripts/verify_actor_carrier_exclusivity.py'
+      - 'scripts/verify_actor_dispatch_tickets.py'
       - '.github/workflows/formal-actor-carrier-exclusivity.yml'
   workflow_dispatch:
 
@@ -24,4 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Run safe model and unsafe mutation counterexample
-        run: python3 scripts/verify_actor_carrier_exclusivity.py
+        run: |
+          python3 scripts/verify_actor_carrier_exclusivity.py
+          python3 scripts/verify_actor_dispatch_tickets.py
