@@ -78,6 +78,39 @@ int main() {
         producer.join();
         pipe.close();
     }
+    // Close publishes its flag before acquiring every edge lock. A read
+    // racing that walk may drain a buffered message, but MUST NOT turn a
+    // previously queued write into an admitted message after publication.
+    // Put the target edge last so the closure walk has intervening work.
+    {
+        std::vector<PipeStage> long_stages;
+        long_stages.push_back({"Source", PipeRole::readable, "", "Message"});
+        for (int i = 0; i < 256; ++i)
+            long_stages.push_back({"Middle" + std::to_string(i),
+                                   PipeRole::transform, "Message", "Message"});
+        long_stages.push_back({"Sink", PipeRole::writable, "Message", ""});
+        NativeActorPipeTransport pipe(registry, supervisor, long_stages, 1, 3);
+        const auto last = pipe.edge_count() - 1;
+        pipe.write_async(last, "admitted").get();
+        auto pending = pipe.write_async(last, "must not be admitted");
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "last-edge writer unexpectedly admitted before close");
+        std::thread closer([&] { pipe.close(); });
+        while (!pipe.closed()) std::this_thread::yield();
+        std::string received;
+        try {
+            received = pipe.read_async(last).get();
+        } catch (...) {
+            closer.join();
+            throw;
+        }
+        closer.join();
+        check(received == "admitted",
+              "shutdown failed to preserve previously admitted last-edge data");
+        bool cancelled = false;
+        try { pending.get(); } catch (const std::logic_error&) { cancelled = true; }
+        check(cancelled, "shutdown promoted a queued last-edge writer");
+    }
     bool rejected = false;
     NativeSupervisorRegistry foreign(10, 10, 10);
     try { NativeActorPipeTransport bad(registry, foreign.root(), stages(), 1, 3); }
