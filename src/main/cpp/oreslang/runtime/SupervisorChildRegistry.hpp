@@ -190,6 +190,12 @@ public:
         return permit;
     }
 
+    /** Trusted read-only fence; never an admission capability by itself. */
+    bool restart_admission_open() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return !restart_closed_;
+    }
+
     void close_restart_admission() {
         std::lock_guard<std::mutex> guard(mutex_);
         if (restart_closed_) return;
