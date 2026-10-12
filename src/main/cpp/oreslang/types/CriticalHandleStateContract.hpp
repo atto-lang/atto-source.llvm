@@ -23,6 +23,7 @@ enum class CriticalStateAdmission : std::uint8_t {
     EffectExceedsWith,
     LoanAcrossSuspension,
     MissingContinuationFence,
+    InvalidEffectMetadata,
     ScopeDenied
 };
 
@@ -49,12 +50,18 @@ inline CriticalStateAdmission admit_critical_handle_state(
     // loan. 'critical' (Write) grants exclusive write authority. A verified
     // serial actor never upgrades an unmarked callback to mutable.
     (void)verified_serial_actor;
+    if (!with_effects.valid() || !callback.inferred.valid()) {
+        return CriticalStateAdmission::InvalidEffectMetadata;
+    }
     const auto mode = callback.state_mode;
-    // None is missing lowering metadata, NOT a synonym for READ. The
-    // frontend must explicitly lower plain lambdas to Read.
+    // None is missing lowering metadata, NOT a synonym for READ. Invalid
+    // discriminants must fail closed too, not bypass the Read/Write guard.
     if (mode == CriticalStateMode::None
             || (mode == CriticalStateMode::Write && !callback.callback_critical)) {
         return CriticalStateAdmission::MissingCallbackCritical;
+    }
+    if (mode != CriticalStateMode::Read && mode != CriticalStateMode::Write) {
+        return CriticalStateAdmission::InvalidStateCallback;
     }
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
