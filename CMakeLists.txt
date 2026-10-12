@@ -124,6 +124,24 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 45)
     endif()
 
+    # Two native host placement profiles, five real LLVM-compiled actors each.
+    # "private" profile uses per-actor OS processes, not source isoactor lowering.
+    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_http_llvm_five_actor_placement_matrix
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/http_actor_matrix_e2e.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor-owned-fields.ores"
+                --clang "${ORE_CLANG}"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --arena-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorArena.c"
+                --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_http_matrix_server.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        set_tests_properties(native_http_llvm_five_actor_placement_matrix
+            PROPERTIES TIMEOUT 420)
+    endif()
+
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
     find_package(Threads REQUIRED)
