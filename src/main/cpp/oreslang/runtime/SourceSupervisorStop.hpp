@@ -160,6 +160,10 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
                 runtime_id, n.actor_id, n.generation};
             children->begin_stop(
                 child, actor, n.logical_incarnation, resolution.turn_generation);
+            // Executed on the real supervisor CONTROL lane immediately before
+            // host STOP. A duplicate/lost-ACK continuation cannot re-enter.
+            children->claim_host_stop_invocation(
+                child, actor, n.logical_incarnation, resolution.turn_generation);
             try {
                 sink(resolution);
             } catch (...) {
