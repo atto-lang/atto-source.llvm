@@ -954,11 +954,34 @@ int32_t oreslang_source_actor_pipeline_expect_status(void* source,
 #endif
     return status;
 }
+int oreslang_source_actor_pipeline_try_cancel(void* source) {
+    /* Authorize the exact configured source and pre-ingress phase at the
+     * *same* group-mutex linearization point as final DATA publication.
+     * The compiler forbids late cancellation, but a direct C caller must
+     * not be allowed to bypass that boundary. No post-ingress cancellation
+     * capability is available in this initial synchronous protocol. */
+    group_lock();
+    int permitted = source && source == group.pipeline_source
+        && group.pipeline_count >= 2
+        && atomic_load_explicit(&group.pipeline_root_sent,
+                                memory_order_acquire) == 0
+        && atomic_load_explicit(&group.pipeline_phase,
+                                memory_order_acquire) == 0
+        && atomic_load_explicit(&group.pipeline_failure,
+                                memory_order_acquire) == SOURCE_PIPELINE_OK;
+    if (permitted) {
+        atomic_store_explicit(&group.pipeline_failure,
+                              SOURCE_PIPELINE_CANCELLED,
+                              memory_order_release);
+        ensure(pthread_cond_broadcast(&group.pipeline_completed) == 0);
+    }
+    group_unlock();
+    return permitted;
+}
 void oreslang_source_actor_pipeline_cancel(void* source) {
-    /* Explicit trusted-main cancellation; an in-flight actor DATA turn can
-     * finish but subsequent hops will be rejected and stops join the pool. */
-    if (source && source == group.pipeline_source)
-        pipeline_fail(SOURCE_PIPELINE_CANCELLED);
+    /* Legacy source-compatible void ABI. An unauthorized attempt is inert;
+     * callers that need an observable denial use try_cancel(). */
+    (void)oreslang_source_actor_pipeline_try_cancel(source);
 }
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
     ensure(oreslang_source_actor_pipeline_expect_status(source, expected)
