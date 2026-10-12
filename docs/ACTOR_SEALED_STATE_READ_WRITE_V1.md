@@ -290,3 +290,26 @@ https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38320107048
 passed GCC + Clang scheduler suites, cross-language C/C++ bridge
 tests, ASan + UBSan, same-actor DATA impersonation rejection, wrong-ticket
 and wrong-status rejection, and throw-then-writer-progress.
+
+
+## Native frontend sealed state AST gate — 2026-10-12
+
+The LLVM native parser now constructs an `ActorSealedState` containing
+its own fields, distinct from the older bounded scalar `ActorDecl.fields`
+layout. Its initial frontend subset recognizes `state { value: int = 0 }`
+without requiring the legacy `pub on_message(int)` actor callback. A
+unique-field check, explicit initialization, max-128 fields, and duplicate
+block rejection apply. Non-integer native state fields are not supported
+in this initial frontend subset, even though the Java AST can represent
+additional types.
+
+**Fail-closed compiler boundary:** native semantic validation rejects
+`ActorDecl.sealed_state` before legacy actor validation or LLVM codegen.
+`handle_state`, borrow scopes, read/write effects and runtime callback
+lowering remain unimplemented. AST recognition does not grant access to
+the host C++ state scheduler bridge by itself.
+
+Exact-source private GCC C++17 and Clang ASan/UBSan regression CI passed:
+https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38321829124.
+The run is a focused frontend/sanitizer test, NOT a full LLVM build, codegen
+suite or cross-backend compiled actor conformance.
