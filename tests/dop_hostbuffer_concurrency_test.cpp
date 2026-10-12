@@ -58,6 +58,24 @@ int main() {
         successor.close();
         must_reject_loan([&] { (void)successor.read(0, 0); });
     }
+    // Direct C++ move/assignment must enforce the same active-loan
+    // exclusion as the explicit take() method, without consuming the
+    // source on a rejected transfer.
+    Plan move_plan(Layout::AoS, 1, 1, 4, 4, 1);
+    HostBuffer borrowed_source(move_plan), retired_target(move_plan);
+    retired_target.close();
+    {
+        auto loan = borrowed_source.borrow_read();
+        must_reject_loan([&] { HostBuffer stolen(std::move(borrowed_source)); });
+        must_reject_loan([&] { retired_target = std::move(borrowed_source); });
+        if (borrowed_source.layout().rows() != 1)
+            throw std::runtime_error("failed native move consumed borrowed owner");
+    }
+    retired_target = std::move(borrowed_source);
+    retired_target.close();
+    HostBuffer closed_source(move_plan);
+    closed_source.close();
+    must_reject_loan([&] { HostBuffer bypass(std::move(closed_source)); });
     // Borrow admission and owner transfer contend on the *same wrapper*.
     // Exactly one wins. This used to race on HostBuffer::state_ itself
     // despite the shared backing State having an internal mutex.
