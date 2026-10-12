@@ -333,6 +333,23 @@ if(BUILD_TESTING)
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "processed=3 last=23")
+        # Guest-signed i64 messages must retain Java-compatible canonical
+        # MessagePack widths (fixint, signed widths, unsigned widths and
+        # INT64_MIN/MAX), without narrowing payloads to the enum tag's i32.
+        oreslang_contract_test(native_tagged_int64_canonical_boundaries
+            source-tagged-int64-canonical-boundaries.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 16
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=9 last=-4294999972")
+        oreslang_contract_test(native_asan_tagged_int64_canonical_boundaries
+            source-tagged-int64-canonical-boundaries.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=9 last=-4294999972")
         oreslang_contract_test(native_asan_tagged_nominal_actor source-tagged-payloadless-dispatch.ores
             --run 43 --clang "${ORE_CLANG}" --sanitize --runs 5
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
