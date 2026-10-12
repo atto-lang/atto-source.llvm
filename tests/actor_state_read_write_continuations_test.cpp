@@ -79,6 +79,34 @@ int main() {
     catch (const std::invalid_argument&) { rejected = true; }
     CHECK(rejected);
 
+    // Cancellation backpressure must not create unbounded retained
+    // continuation records while the CONTROL channel is unavailable.
+    Registry bounded;
+    CHECK(bounded.request(1, Mode::Read).status == Status::Ready);
+    for (std::uint64_t id = 2;
+         id <= Registry::max_outstanding_continuations; ++id) {
+        CHECK(bounded.request(id, Mode::Write).status == Status::Queued);
+        bounded.cancel_queued(id);
+    }
+    CHECK(bounded.pending_notifications().size() ==
+          Registry::max_outstanding_continuations - 1);
+    bool saturated = false;
+    try {
+        (void)bounded.request(Registry::max_outstanding_continuations + 1,
+                              Mode::Write);
+    } catch (const std::overflow_error&) {
+        saturated = true;
+    }
+    CHECK(saturated);
+    for (std::uint64_t id = 2;
+         id <= Registry::max_outstanding_continuations; ++id) {
+        CHECK(bounded.acknowledge(id, Status::Cancelled));
+    }
+    CHECK(bounded.request(Registry::max_outstanding_continuations + 1,
+                          Mode::Write).status == Status::Queued);
+    bounded.retire();
+    CHECK(bounded.pending_notifications().size() == 2);
+
     // Publication observation is retryable and side-effect free.
     Bridge retryable;
     CHECK(retryable.request(1, Mode::Read).status == Status::Ready);
