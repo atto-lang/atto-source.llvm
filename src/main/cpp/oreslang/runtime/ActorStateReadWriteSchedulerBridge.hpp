@@ -61,7 +61,8 @@ public:
     [[nodiscard]] bool try_enter(
             OresNativeActorStateWake wake, Mode expected_mode) {
         if (wake.status != ORES_NATIVE_RW_READY
-                || !ores_native_actor_scheduler_is_current_actor(scheduler_, actor_))
+                || !ores_native_actor_scheduler_is_current_state_wake(
+                    scheduler_, actor_, wake))
             return false;
         return registry_.try_claim_ready({
             wake.incarnation, wake.continuation_id, Registry::Status::Ready
@@ -70,8 +71,13 @@ public:
 
     // Must be called on that same actor turn after guest code has unwound.
     void complete(std::uint64_t continuation_id) {
-        if (!ores_native_actor_scheduler_is_current_actor(scheduler_, actor_))
-            throw std::logic_error("foreign carrier completing actor state operation");
+        const OresNativeActorStateWake active = {
+            registry_.incarnation(), continuation_id, ORES_NATIVE_RW_READY
+        };
+        if (!ores_native_actor_scheduler_is_current_state_wake(
+                scheduler_, actor_, active))
+            throw std::logic_error(
+                    "state completion requires exact owning RW wake callback");
         registry_.complete_dispatched(registry_.incarnation(), continuation_id);
     }
 
@@ -79,7 +85,8 @@ public:
     [[nodiscard]] bool is_own_cancellation(OresNativeActorStateWake wake) const noexcept {
         return wake.status == ORES_NATIVE_RW_CANCELLED
                 && wake.incarnation == registry_.incarnation()
-                && ores_native_actor_scheduler_is_current_actor(scheduler_, actor_);
+                && ores_native_actor_scheduler_is_current_state_wake(
+                    scheduler_, actor_, wake);
     }
 
 private:
