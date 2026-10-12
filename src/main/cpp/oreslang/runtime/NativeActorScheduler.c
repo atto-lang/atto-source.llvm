@@ -643,7 +643,10 @@ int ores_native_actor_scheduler_terminal_receipt(
 int ores_native_actor_scheduler_claim_terminal_receipt(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
     OresNativeActorRef child, OresNativeTerminalReceipt* out) {
-    if (!s || !out || executing == s) return 0;
+    /* Nonblocking claim is permitted on the parent CONTROL carrier. It
+     * acquires only the scheduler mutex, never waits on a publication gate
+     * or executes external policy. The caller owns host-side enqueue. */
+    if (!s || !out) return 0;
     lock(s);
     int ok = terminal_receipt_locked(s, parent, child, NULL);
     if (ok) {
