@@ -22,6 +22,7 @@ NEGATIVE_CASES = {
     "alignment_attribute": "@align(64)\n" + BASE,
     "actor_state_capability": "@RequiresState(write)\n" + BASE,
     "generated_builder": "@GenerateBuilder\n" + BASE,
+    "generated_json_accessor": "@FromJson(\"id\")\n" + BASE,
     "misplaced_expand": "@expand(aot)\n" + BASE,
     "trailing_attribute_after_valid_program": BASE + "@derive(Eq)\n",
     "trailing_macro_after_valid_program": BASE + "macro_rules! x { () => { 42 }; }\n",
