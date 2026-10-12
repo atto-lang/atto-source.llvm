@@ -20,11 +20,11 @@ make `-` part of ordinary identifiers.
 | `critical-write` | `critical` | Callable declaration modifier |
 | `critical` | unchanged | Exclusive callable modifier |
 
-A compound keyword has no whitespace around the hyphen. Unicode en/em
- dashes are not equivalent to U+002D and must not be silently normalized.
-A source format pass must never convert subtraction into a compound keyword.
-A compiler may tokenize `nb-select` as distinct adjacent `NB SELECT`
-tokens only if the syntax stays source-position-safe.
+Unicode en/em dashes are not equivalent to U+002D and must not be
+silently normalized. A source format pass must never convert subtraction
+into a compound keyword. The Java compiler may tokenize `nb-select` as
+distinct adjacent `NB SELECT` tokens when source positions remain accurate.
+
 A compound keyword has no whitespace around the hyphen. It must match
 *exactly* and in a supported grammar position: `critical - read` is not
 `critical-read`; `critical-readonly` is not a keyword. Do not greedily
@@ -125,20 +125,27 @@ executes under that host lock. Use FIFO writer-aware cohorts:
   the fairness barrier;
 - readers arriving behind a writer must queue, even while earlier readers
   still hold permits;
-- when the last reader exits, grant the oldest writer, or the contiguous
-  leading cohort of readers if they precede the next writer;
+- when active readers exit, admit the next FIFO-eligible reader cohort,
+  or grant the head writer **only after the final active reader releases**;
+  reader cohorts must never bypass a queued earlier writer;
 - no writer may run while any reader is active; no two writers overlap.
 
 Queues are bounded, have explicit overflow failure and do not starve
 queued writers under continuous read traffic. Exactly-once close releases
 permits on return, throw, raise, panic, cancellation, STOP/teardown, and
 runtime closure. A cancelled *granted but not yet resumed* waiter must
-release its grant and wake the next cohort. Do not hold the metadata mutex
+release its grant and wake the next cohort. Track `queued`, `granted`,
+`running`, and `released` states explicitly; exactly one path owns the
+transition to `released`. A grant/resume race must not leak permits or
+run guest code after cancellation or incarnation retirement. Do not hold the metadata mutex
 while completing futures or enqueueing scheduler work. Admission and
 teardown require generation fencing against stale resumes.
 
 Nested same-logical-continuation `read->read`, `write->write`, and
-`write->read` may reuse their owning ticket with lexical depth.
+`write->read` may reuse their owning ticket with lexical depth, **but**
+a nested read under a writer retains writer exclusivity until the outer
+write scope exits. A nested call in another continuation is not reentrant
+even when the actor ID is the same.
 `read->write` upgrade must be **rejected** to avoid two-reader deadlock;
 do not implicitly release the read gate and reacquire write because that
 loses atomicity. Cross-domain nested acquisition needs lock-order /
