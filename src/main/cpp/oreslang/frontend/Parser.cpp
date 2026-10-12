@@ -45,7 +45,7 @@ bool reserved(std::string_view name) {
         "int", "owned", "declare", "receive", "receive_forward",
         "receive_backward", "transform", "pipe", "forward_messages",
         "backward_messages", "Message", "bool", "string", "state",
-        "critical", "handle_state", "using",
+        "critical", "handle_state", "using", "with",
         "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -469,6 +469,25 @@ private:
             require(":");
             require("int");
         }
+        // "with" is a declaration of permitted effects, not a loan.
+        // "using" remains a scoped expression at the actual access site.
+        value.effects_declared = accept("with");
+        if (value.effects_declared) {
+            do {
+                require("state"); require(".");
+                const auto effect = identifier();
+                if (effect != "read" && effect != "write")
+                    fail("unsupported with effect in restricted native profile");
+                const std::string named = "state." + effect;
+                if (std::find(value.declared_effects.begin(),
+                              value.declared_effects.end(), named)
+                        != value.declared_effects.end())
+                    fail("duplicate with state effect");
+                value.declared_effects.push_back(named);
+            } while (accept(","));
+        }
+        if (token_.text == "using")
+            fail("using acquires scoped capabilities; use with for function effects");
         require("{");
         bool scalar_local_seen = false;
         while (token_.text == "const" || token_.text == "val") {
