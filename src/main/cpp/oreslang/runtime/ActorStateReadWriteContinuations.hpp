@@ -70,8 +70,12 @@ public:
             it->second.mode = mode;
             it->second.status = granted.admission == Gate::Admission::acquired
                     ? Status::Ready : Status::Queued;
-            // An immediately admitted caller already holds its receipt.
-            it->second.needs_ack = false;
+            // A gate ticket is not scheduler authorization. Even a grant
+            // obtained immediately must enter the bounded CONTROL channel
+            // and receive its exact READY admission receipt before execution.
+            // Otherwise an arbitrary host caller could bypass actor-lane
+            // scheduling simply by requesting an uncontended gate.
+            it->second.needs_ack = it->second.status == Status::Ready;
             issued_continuation_ = continuation_id;
             return {it->second.status, mode, incarnation_};
         } catch (...) {
