@@ -117,3 +117,8 @@ in DATA deliveries, physically finalized turns, typed replies/Future<T>,
 and safe producer fencing before destroy. The current C registry alone
 cannot safely authenticate untrusted FFI, preserve live message state after
 a cancelled flow, or prove cross-backend semantics. Do not merge this draft.
+
+The final topology guard rejects distinct scheduler domains within the same
+linear flow before reservation or DATA admission. This is the deliberately
+restricted single-scheduler implementation; cross-scheduler routing requires a
+future explicitly authorized bridge rather than matching only numeric IDs.
