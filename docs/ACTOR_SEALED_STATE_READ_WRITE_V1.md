@@ -161,3 +161,35 @@ dispatch (retirement can invalidate an already enqueued Ready item), and
 ensure all state loans are drained before quiescent retirement. No component
 here permits direct guest callback execution or parallel guest actor reads.
 Native and Java source lowering/effect checks are still outstanding.
+
+
+## Additional hardening: actor identity and notification delivery
+
+The continuation registry now requires a unique process-local **actor
+incarnation ID** for request, complete, cancel and admitted checks. READY and
+CANCELLED notifications carry that ID, and acknowledgement accepts the complete
+notification including incarnation and status. A stale READY receipt cannot
+authorize an actor whose slot/continuation number was reused following
+retirement.
+
+`cancel_pending` permits revoking a queued ticket or an admitted ticket whose
+READY notification has **not yet** received CONTROL acknowledgment. It refuses
+to cancel acknowledged grants, since the guest callback may be executing.
+The trusted scheduler must retire/quiesce for that stronger cancellation.
+
+CONTROL pumping is nonblocking even on recursive invocation and concurrent
+pump attempts, using an atomic fail-fast admission flag. Each pump copies at
+most its explicit CONTROL delivery budget, not the full cancellation backlog.
+Never treat a CONTROL signal/wake as an admission receipt; the actual bounded
+queue must accept a typed notification first.
+
+The exact-source native gate/continuation/CONTROL test suites, including
+incarnation reuse, missing acknowledgments, cancel-before-dispatch, reentrant
+pump, callback/retirement races, backlog saturation, and sanitizer checks,
+passed in **private** funded Actions run
+https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38312700057.
+
+**Security policy for further CI:** private Oreslang source must only be
+mirrored into private test repositories. A prior public test mirror was reset
+from its branch tips, but old Git objects/CI records may persist; track
+administrator purge in private issue #256.
