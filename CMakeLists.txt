@@ -183,6 +183,19 @@ if(BUILD_TESTING)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
     endif()
 
+    # Trusted host resource reclamation: close in reverse acquisition order only
+    # after active turns, outstanding loans and native callbacks quiesce.
+    add_executable(oreslang-actor-resource-registry-test
+        tests/actor_resource_registry_test.cpp)
+    target_include_directories(oreslang-actor-resource-registry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-resource-registry-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-resource-registry-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_resource_registry_quiescence
+        COMMAND oreslang-actor-resource-registry-test)
+    set_tests_properties(native_actor_resource_registry_quiescence PROPERTIES TIMEOUT 15)
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -218,6 +231,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_group_heap_loan_quiescence
         COMMAND oreslang-actor-group-heap-quiescence-test)
     set_tests_properties(native_actor_group_heap_loan_quiescence PROPERTIES TIMEOUT 15)
+    # Bind the actual native actor heap, resource registry and ActorGroup
+    # physical-done acknowledgment into one quiescence-checked host lifecycle.
+    add_executable(oreslang-native-actor-retirement-barrier-test
+        tests/native_actor_retirement_barrier_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-native-actor-retirement-barrier-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-retirement-barrier-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-retirement-barrier-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_done_resource_quiescence
+        COMMAND oreslang-native-actor-retirement-barrier-test)
+    set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
