@@ -21,6 +21,10 @@ def verify(clang: Path, source_root: Path, sanitizers: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="ores-native-int-array-llvm-") as tmp:
         exe = Path(tmp) / "abi-probe"
         command = [str(clang), "-std=c11", "-O1", "-Wall", "-Wextra", "-Werror",
+                   # A portable IR fixture deliberately has no target triple.
+                   # Clang assigns the selected host triple; preserve -Werror
+                   # for C while silencing only this expected IR-driver notice.
+                   "-Wno-override-module",
                    "-x", "ir", str(fixture), "-x", "c", str(source),
                    "-I", str(source_root / "src/main/cpp"),
                    "-o", str(exe)]
