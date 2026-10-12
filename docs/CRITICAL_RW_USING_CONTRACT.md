@@ -1,5 +1,13 @@
 # Critical / using / with — LLVM admission contract (pre-1.0)
 
+> **Pre-1.0 design update (2026-10-12):** The normative contract is
+> [WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md):
+> `with` declares permitted effects, `using` acquires lexical capabilities,
+> `self.handle_state(|state|...)` reads by default, and `critical`
+> grants exclusive write access. Historical syntax discussions below
+> are retained for audit history but are superseded where they disagree.
+
+
 This document supersedes the older `critical |s|`/signature-`using`
 effect conventions in `CRITICAL_HANDLE_STATE_USING_PARITY.md`.
 
