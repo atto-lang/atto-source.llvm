@@ -526,7 +526,7 @@ int main() {
             if (i) std::cout << '>';
             std::cout << entries[i].operation;
         }
-        std::cout << '\\n';
+        std::cout << '\n';
     }
 
     {
