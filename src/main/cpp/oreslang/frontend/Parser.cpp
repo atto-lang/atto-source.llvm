@@ -1018,11 +1018,15 @@ private:
                                 throw std::runtime_error("payloadless enum send has arguments");
                         } else if (member->payload.kind != MessageShape::Kind::Integer
                                    || !send.payload
-                                   || send.payload->kind != Expression::Kind::Integer
-                                   || send.payload->integer < 0
-                                   || send.payload->integer > INT32_MAX) {
+                                   || (send.payload->kind != Expression::Kind::Integer
+                                       && !(send.payload->kind == Expression::Kind::Negate
+                                            && send.payload->left
+                                            && send.payload->left->kind == Expression::Kind::Integer))) {
+                            // This compiler subset still requires a compile-time
+                            // signed-i64 literal. Do not silently lower general
+                            // expressions or truncate to a 32-bit enum tag.
                             throw std::runtime_error(
-                                "LLVM tagged int send requires a positive or zero int literal");
+                                "LLVM tagged int send requires a signed int literal");
                         }
                         continue;
                     }
