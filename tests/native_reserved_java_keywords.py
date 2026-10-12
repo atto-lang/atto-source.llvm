@@ -35,11 +35,11 @@ CASES = {
     ),
     "gpu-identifier": (
         "pub fnc gpu(): int { return 42; }",
-        "expected non-keyword identifier",
+        "native gpu/quantum boundary unsupported",
     ),
     "cpu-identifier": (
         "pub fnc cpu(): int { return 42; }",
-        "expected non-keyword identifier",
+        "native cpu execution block boundary unsupported",
     ),
     "quantum-callable": (
         "pub quantum fnc kernel(): int { return 42; }",
