@@ -206,7 +206,8 @@ hardening was merged into the Java actor-exclusivity branch without conflicts.
 The verified branch's `src/` + Maven manifest contains **266/266 exact Git
 blobs**. The funded
 [full Java verification run #38265067414](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38265067414)
-passed both focused actor-execution regressions and the complete Maven suite.
+passed both focused actor-execution regressions and the complete Maven suite:
+**1,475 Java tests passed, zero failures, zero errors, zero skipped**.
 
 **LLVM/native:** The funded
 [full CMake and CTest run #38266195840](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38266195840)
