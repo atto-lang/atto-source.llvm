@@ -77,6 +77,8 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     // provenance to addressable i64 storage. A nested call can temporarily
     // reborrow that same storage, but it cannot strengthen a shared borrow
     // into a mutable one. Its new loan ends at that nested call's return.
+    if (source.heap_owned && exclusive)
+        reject(expr, "ownership violation: native owned int mutable borrow needs handle-aware writeback");
     if (source.mode == Mode::Borrow && exclusive)
         reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
     if (exclusive && source.mode == Mode::Value && !source.mutable_owner)
