@@ -296,6 +296,12 @@ if(BUILD_TESTING)
         transform-pipe-sink-role-reject.ores
         --diagnostic "transform pipe actor must be an interior pipeline stage")
     # Canonical fixed-key state is the only actor-owned data declaration.
+    oreslang_contract_test(reject_actor_direct_method_write
+        actor-direct-method-write-reject.ores
+        --diagnostic "actor state mutation requires scoped handle_state callback")
+    oreslang_contract_test(reject_actor_direct_bool_arm_write
+        actor-direct-bool-arm-write-reject.ores
+        --diagnostic "actor state mutation requires scoped handle_state callback")
     oreslang_contract_test(native_ir_method_only_actor
         actor-method-only-positive.ores
         --ir "oreslang_actor_MethodOnly_increment")
