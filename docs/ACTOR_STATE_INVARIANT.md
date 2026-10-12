@@ -17,8 +17,13 @@ define actor Worker as
 end
 ```
 
-The canonical API is `self.handle_state`: no modifier means a
-read-only state loan; `critical` grants exclusive mutable access. The
+The canonical sealed intrinsic is `self.handle_state`: no modifier means a
+read-only state loan; `critical` grants exclusive mutable access. The equally
+canonical scoped forms `using state.read(callback)` and
+`using state.write(critical callback)` lower to that intrinsic.
+The enclosing function must declare the applicable `with state.read` and/or
+`with state.write` effect upper bound. See
+[WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md). The
 restricted LLVM tagged-message compiler supports both synchronous forms:
 
 ```ores
