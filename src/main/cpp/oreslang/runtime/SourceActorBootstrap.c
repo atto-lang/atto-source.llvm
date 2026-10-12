@@ -18,6 +18,7 @@
 #define SOURCE_GROUP_ROOT_SLOT (SOURCE_GROUP_SLOTS - 1u)
 
 #define SOURCE_MAX_VARIANTS 64u
+#define SOURCE_PIPELINE_MAX_STAGES 16u
 #define SOURCE_PRODUCER_CLOSED (UINT64_C(1) << 63)
 #define SOURCE_PRODUCER_COUNT (SOURCE_PRODUCER_CLOSED - 1)
 
@@ -41,6 +42,7 @@ typedef struct SourceActor {
     uint64_t id;
     struct SourceActor* upstream;
     struct SourceActor* downstream;
+    size_t pipeline_index; /* bound once at compiler-owned registration */
     OresActorI64Heap* heap;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
@@ -74,9 +76,9 @@ typedef struct {
     SourceActor* pipeline_source;
     int pipeline_done;
     int64_t pipeline_result;
-    atomic_int pipeline_phase; /* 0 -> 1 -> 2 -> 3 -> 4 -> 5 */
-    SourceActor* pipeline_middle;
-    SourceActor* pipeline_sink;
+    atomic_int pipeline_phase; /* 0..(2*(count-1)+1) */
+    SourceActor* pipeline_stages[SOURCE_PIPELINE_MAX_STAGES];
+    size_t pipeline_count;
     atomic_uint_fast64_t pipeline_forward_count;
     atomic_uint_fast64_t pipeline_backward_count;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
@@ -211,9 +213,9 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         group_lock();
         if (is_pipeline_backward && group.pipeline_source == instance) {
             ensure(!group.pipeline_done);
-            int expected = 4;
+            int expected = (int)(2 * (group.pipeline_count - 1));
             ensure(atomic_compare_exchange_strong_explicit(
-                &group.pipeline_phase, &expected, 5,
+                &group.pipeline_phase, &expected, expected + 1,
                 memory_order_acq_rel, memory_order_acquire));
             group.pipeline_result = result;
             group.pipeline_done = 1;
@@ -608,45 +610,59 @@ void oreslang_source_actor_send_variant_checked(
 /* Bounded three-actor pipeline bootstrap. This is a linear, single-flow
  * compiler-owned route: no graph branching, cycles, or guest-owned refs.
  * Source main configures the route before sending and joins before stop. */
-void oreslang_source_actor_pipeline_connect(void* first, void* middle, void* last) {
-    SourceActor* a = first;
-    SourceActor* b = middle;
-    SourceActor* c = last;
+void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
+                                                 uint64_t requested_count) {
+    ensure(opaque && requested_count >= 2
+        && requested_count <= SOURCE_PIPELINE_MAX_STAGES);
+    const size_t count = (size_t)requested_count;
+    SourceActor* stages[SOURCE_PIPELINE_MAX_STAGES] = {0};
+    /* Snapshot all opaque refs immediately; never retain the borrowed
+     * compiler-owned stack array. The group mutex is the admission barrier. */
+    for (size_t i = 0; i < count; ++i)
+        stages[i] = (SourceActor*)opaque[i];
     group_lock();
-    ensure(a && b && c && a != b && a != c && b != c
-        && group.scheduler && !group.pipeline_source);
-    SourceActor* chain[3] = {a, b, c};
-    ensure(a->variant_count >= 1 && a->on_variant);
-    for (size_t i = 0; i < 3; ++i) {
-        SourceActor* actor = chain[i];
-        ensure(actor->magic == SOURCE_ACTOR_MAGIC && actor->on_variant
+    ensure(group.scheduler && !group.pipeline_source && group.pipeline_count == 0);
+    SourceActor* const first = stages[0];
+    ensure(first && first->magic == SOURCE_ACTOR_MAGIC
+        && first->variant_count >= 1 && first->on_variant);
+    for (size_t i = 0; i < count; ++i) {
+        SourceActor* actor = stages[i];
+        ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC && actor->on_variant
             && !actor->upstream && !actor->downstream
-            && actor->variant_count == a->variant_count
+            && actor->variant_count == first->variant_count
             && actor->ref.actor_slot < group.next_slot
             && group.actors[actor->ref.actor_slot] == actor);
-        for (size_t v = 0; v < a->variant_count; ++v) {
-            const SourceVariantContract* lhs = &a->variants[v];
+        for (size_t k = 0; k < i; ++k) ensure(stages[k] != actor);
+        for (size_t v = 0; v < first->variant_count; ++v) {
+            const SourceVariantContract* lhs = &first->variants[v];
             const SourceVariantContract* rhs = &actor->variants[v];
             ensure(lhs->owned_enum_name && rhs->owned_enum_name
                 && lhs->declared_tag == rhs->declared_tag
                 && strcmp(lhs->owned_enum_name, rhs->owned_enum_name) == 0
                 && strcmp(lhs->value.schema_id, rhs->value.schema_id) == 0
-                && strcmp(lhs->value.shape, rhs->value.shape) == 0);
+                && strcmp(lhs->value.shape, rhs->value.shape) == 0
+                && memcmp(lhs->sha, rhs->sha, sizeof(lhs->sha)) == 0);
         }
     }
-    a->downstream = b;
-    b->upstream = a;
-    b->downstream = c;
-    c->upstream = b;
-    group.pipeline_source = a;
-    group.pipeline_middle = b;
-    group.pipeline_sink = c;
+    for (size_t i = 0; i < count; ++i) {
+        stages[i]->pipeline_index = i;
+        stages[i]->upstream = i > 0 ? stages[i - 1] : NULL;
+        stages[i]->downstream = i + 1 < count ? stages[i + 1] : NULL;
+        group.pipeline_stages[i] = stages[i];
+    }
+    group.pipeline_count = count;
+    group.pipeline_source = first;
     atomic_store_explicit(&group.pipeline_forward_count, 0, memory_order_release);
     atomic_store_explicit(&group.pipeline_backward_count, 0, memory_order_release);
     group.pipeline_done = 0;
     group.pipeline_result = 0;
     atomic_store_explicit(&group.pipeline_phase, 0, memory_order_release);
     group_unlock();
+}
+/* Retain old C embedding ABI; the compiler uses the general ordered route. */
+void oreslang_source_actor_pipeline_connect(void* first, void* middle, void* last) {
+    void* const stages[3] = {first, middle, last};
+    oreslang_source_actor_pipeline_connect_many(stages, 3);
 }
 static size_t pipeline_write_positive(uint8_t* dst, uint64_t n) {
     if (n <= 127) { dst[0] = (uint8_t)n; return 1; }
@@ -689,15 +705,17 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
     /* Only the actual scheduler-admitted ingress may authorize a directional
      * hop. The one-use phase CAS prevents duplicate, reordered or reentrant
      * sends, including when multiple actors occupy different workers. */
+    const size_t index = actor->pipeline_index;
+    const size_t count = group.pipeline_count;
+    ensure(count >= 2 && count <= SOURCE_PIPELINE_MAX_STAGES
+        && index < count && group.pipeline_stages[index] == actor);
     int expected_phase = -1;
-    if (direction == 1 && active_pipeline_ingress == 0
-            && actor == group.pipeline_source) expected_phase = 0;
-    else if (direction == 1 && active_pipeline_ingress == 1
-            && actor == group.pipeline_middle) expected_phase = 1;
-    else if (direction == 2 && active_pipeline_ingress == 1
-            && actor == group.pipeline_sink) expected_phase = 2;
-    else if (direction == 2 && active_pipeline_ingress == 2
-            && actor == group.pipeline_middle) expected_phase = 3;
+    if (direction == 1 && index + 1 < count
+        && active_pipeline_ingress == (index == 0 ? 0 : 1))
+        expected_phase = (int)index;
+    else if (direction == 2 && index > 0
+        && active_pipeline_ingress == (index + 1 == count ? 1 : 2))
+        expected_phase = (int)(2 * (count - 1) - index);
     ensure(expected_phase >= 0);
     ensure(atomic_compare_exchange_strong_explicit(
         &group.pipeline_phase, &expected_phase, expected_phase + 1,
