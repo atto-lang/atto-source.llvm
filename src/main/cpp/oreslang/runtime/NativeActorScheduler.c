@@ -267,17 +267,19 @@ OresNativeActorRef ores_native_actor_scheduler_spawn_unpublished(
     OresNativeActorScheduler* s, size_t i) {
     return spawn_internal(s, i, 0);
 }
-int ores_native_actor_scheduler_acquire_restart_lease(
+/* Registration and restart use the same scheduler publication gate.
+ * Only expected_published differentiates initial host registration from
+ * replacement publication, neither permits STOP until the lease releases. */
+static int acquire_admission_lease(
     OresNativeActorScheduler* s, OresNativeActorRef actor,
-    OresNativeRestartLease* out) {
+    OresNativeRestartLease* out, int expected_published) {
     if (!s || !out || owned_restart_lease) return 0;
-    /* The gate stays held only by the acquiring trusted host thread.
-     * STOP and whole-scheduler retirement take this same gate first. */
+    /* Same gate as physical STOP and whole-scheduler retirement. */
     if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
     lock(s);
     int ok = matching(s, actor) && !s->retired
         && !s->actors[actor.actor_slot].retired
-        && !s->actors[actor.actor_slot].published
+        && s->actors[actor.actor_slot].published == (unsigned)expected_published
         && !s->actors[actor.actor_slot].restart_lease_nonce
         && s->next_restart_lease_nonce != UINT64_MAX;
     if (ok) {
@@ -291,6 +293,16 @@ int ores_native_actor_scheduler_acquire_restart_lease(
     unlock(s);
     if (!ok && pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
     return ok;
+}
+int ores_native_actor_scheduler_acquire_restart_lease(
+    OresNativeActorScheduler* s, OresNativeActorRef actor,
+    OresNativeRestartLease* out) {
+    return acquire_admission_lease(s, actor, out, 0);
+}
+int ores_native_actor_scheduler_acquire_registration_lease(
+    OresNativeActorScheduler* s, OresNativeActorRef actor,
+    OresNativeRestartLease* out) {
+    return acquire_admission_lease(s, actor, out, 1);
 }
 static int matches_restart_lease(OresNativeActorScheduler* s,
                                   OresNativeRestartLease lease) {
