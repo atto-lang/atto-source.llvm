@@ -67,6 +67,13 @@ class GuestEvidenceTests(unittest.TestCase):
             verify_three_actor_pipeline_trace("SOURCE_PIPELINE_TRACE_JSON {not-json}\n")
         with self.assertRaises(ValueError):
             verify_three_actor_pipeline_trace(trace_line(payload) * 50)
+        with self.assertRaises(ValueError):
+            verify_three_actor_pipeline_trace(trace_line(
+                dict(payload, schemaVersion=True)))
+        duplicate=trace_line(payload).replace(
+            '"schemaVersion":1,', '"schemaVersion":1,"schemaVersion":1,', 1)
+        with self.assertRaises(ValueError):
+            verify_three_actor_pipeline_trace(duplicate)
 
     def test_complete_compiled_guest_summary(self):
         verify_three_actor_pipeline_stderr(VALID)
