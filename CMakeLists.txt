@@ -712,6 +712,21 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # VM-owned exact parent binding -> quiescent typed CONTROL publication.
+    # No guest supervisor compiler lowering is claimed by this host C test.
+    add_executable(oreslang-native-vm-supervisor-test
+        tests/native_vm_supervisor_owner_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-supervisor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-supervisor-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-supervisor-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_supervisor_owner_typed_quiescent_control
+        COMMAND oreslang-native-vm-supervisor-test)
+    set_tests_properties(native_vm_supervisor_owner_typed_quiescent_control
+        PROPERTIES TIMEOUT 30)
     add_executable(oreslang-native-actor-ready-queue-test
         tests/native_actor_scheduler_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)

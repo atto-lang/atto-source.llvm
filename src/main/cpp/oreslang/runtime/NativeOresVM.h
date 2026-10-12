@@ -25,6 +25,9 @@ typedef struct {
     size_t carrier_workers;   /* 0 => 5 */
     OresNativeActorTaskFn on_message; /* host callback; required */
     OresNativeActorTaskFn on_control; /* optional priority CONTROL callback */
+    /* Optional typed terminal-failure handler, serialized on parent's lane.
+     * This is not an actor-local panic catch or an external supervisor pool. */
+    OresNativeActorPanicFn on_failure;
     void* context;
 } OresNativeVMDomainConfig;
 
@@ -40,6 +43,26 @@ size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
+/* Trusted host-only immutable parentage. Child and supervisor must be distinct
+ * live actors in the SAME VM domain. A child slot is single-use. No delegation
+ * capability is granted to guest code, and no cross-domain parent is allowed.
+ * Failed registration leaves the child slot unspawned. */
+OresNativeActorRef ores_native_vm_spawn_supervised(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, OresNativeActorRef supervisor);
+/* Return immutable registered parent, or zero ref for missing, stale,
+ * unsupervised or invalid child. Host metadata only. */
+OresNativeActorRef ores_native_vm_supervisor_of(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child);
+/* Trusted runtime terminal notice, never a guest-authorized public syscall.
+ * Requires exact registered child, same-domain supervisor, STOP + quiescence,
+ * and host-guaranteed resource finalization BEFORE publication. On a full
+ * parent CONTROL slot, returns 0 without consuming the terminal notice:
+ * caller owns retry/escalation. On success publishes exactly once; it does
+ * not itself restart, reclaim, or invoke policy synchronously. */
+int ores_native_vm_publish_supervised_failure(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorTerminalFailure failure);
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);

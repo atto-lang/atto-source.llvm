@@ -2,8 +2,16 @@
 #include <pthread.h>
 #include <stdlib.h>
 
+typedef struct {
+    OresNativeActorRef child;
+    OresNativeActorRef supervisor;
+    int terminal_published;
+} OresVMSupervisorRegistration;
+
 struct OresNativeVM {
     OresNativeActorScheduler* schedulers[ORES_NATIVE_VM_DOMAIN_COUNT];
+    OresVMSupervisorRegistration* supervisors[ORES_NATIVE_VM_DOMAIN_COUNT];
+    size_t actor_slots[ORES_NATIVE_VM_DOMAIN_COUNT];
     size_t workers[ORES_NATIVE_VM_DOMAIN_COUNT];
     /* Metadata-only central CONTROL wake coordinator. No master pthread.
      * This is not the per-actor supervisor mail lane itself. */
@@ -31,10 +39,14 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
          * NativeActorScheduler additionally enforces its allocation limits. */
         if (!p->on_message || !p->actor_slots || !p->mailbox_capacity
             || workers > 128) goto failed;
-        vm->schedulers[i] = ores_native_actor_scheduler_open_control(
+        vm->schedulers[i] = ores_native_actor_scheduler_open_typed_control(
             p->actor_slots, p->mailbox_capacity, workers,
-            p->on_message, p->on_control, p->context);
+            p->on_message, p->on_control, p->on_failure, p->context);
         if (!vm->schedulers[i]) goto failed;
+        vm->supervisors[i] = (OresVMSupervisorRegistration*)calloc(
+            p->actor_slots, sizeof(*vm->supervisors[i]));
+        if (!vm->supervisors[i]) goto failed;
+        vm->actor_slots[i] = p->actor_slots;
         vm->workers[i] = workers;
     }
     return vm;
@@ -48,6 +60,8 @@ failed:
             if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
         }
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        free(vm->supervisors[i]);
     free(vm);
     return NULL;
 }
@@ -68,6 +82,84 @@ OresNativeActorRef ores_native_vm_spawn(
         ? ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot) : invalid;
 }
 
+
+/* An OresNativeActorRef has a scheduler-domain generation, never VM-global
+ * authority. Compare all fields; numeric slots alone are not identities. */
+static int same_actor(OresNativeActorRef a, OresNativeActorRef b) {
+    return a.scheduler_domain != 0
+        && a.scheduler_domain == b.scheduler_domain
+        && a.actor_slot == b.actor_slot && a.generation == b.generation;
+}
+static void control_lock(OresNativeVM* vm);
+static void control_unlock(OresNativeVM* vm);
+
+OresNativeActorRef ores_native_vm_spawn_supervised(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, OresNativeActorRef supervisor) {
+    OresNativeActorRef invalid = {0, 0, 0};
+    if (!vm || !valid_domain(domain)) return invalid;
+    control_lock(vm);
+    OresNativeActorRef child = invalid;
+    if (!vm->control_retired && actor_slot < vm->actor_slots[domain]
+        && supervisor.actor_slot != (uint64_t)actor_slot
+        && ores_native_actor_scheduler_poll_ready(vm->schedulers[domain], supervisor)) {
+        /* Serializes with VM stop/retire. The scheduler atomically rejects a
+         * reused slot; only a successful spawn can install parentage. */
+        child = ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
+        if (child.scheduler_domain) {
+            OresVMSupervisorRegistration* entry =
+                &vm->supervisors[domain][actor_slot];
+            entry->child = child;
+            entry->supervisor = supervisor;
+        }
+    }
+    control_unlock(vm);
+    return child;
+}
+
+OresNativeActorRef ores_native_vm_supervisor_of(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child) {
+    OresNativeActorRef invalid = {0, 0, 0};
+    if (!vm || !valid_domain(domain)) return invalid;
+    control_lock(vm);
+    OresNativeActorRef owner = invalid;
+    if (child.actor_slot < vm->actor_slots[domain]) {
+        const OresVMSupervisorRegistration* entry =
+            &vm->supervisors[domain][child.actor_slot];
+        if (same_actor(entry->child, child)) owner = entry->supervisor;
+    }
+    control_unlock(vm);
+    return owner;
+}
+
+int ores_native_vm_publish_supervised_failure(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorTerminalFailure failure) {
+    if (!vm || !valid_domain(domain)) return 0;
+    control_lock(vm);
+    int accepted = 0;
+    if (!vm->control_retired
+        && failure.child.actor_slot < vm->actor_slots[domain]) {
+        OresVMSupervisorRegistration* entry =
+            &vm->supervisors[domain][failure.child.actor_slot];
+        /* Do not publish while the child callback is active or queued:
+         * the supervisor must not see a terminal event ahead of teardown.
+         * The runtime caller is responsible for non-scheduler resources. */
+        if (same_actor(entry->child, failure.child)
+            && entry->supervisor.scheduler_domain != 0
+            && !entry->terminal_published
+            && ores_native_actor_scheduler_poll_done(
+                vm->schedulers[domain], failure.child)
+            && ores_native_actor_scheduler_publish_failure(
+                vm->schedulers[domain], entry->supervisor, failure)) {
+            entry->terminal_published = 1;
+            accepted = 1;
+        }
+    }
+    control_unlock(vm);
+    return accepted;
+}
+
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef ref, uint64_t payload) {
@@ -78,8 +170,14 @@ OresNativeSendStatus ores_native_vm_try_send(
 
 int ores_native_vm_stop(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
-    return vm && valid_domain(domain)
+    if (!vm || !valid_domain(domain)) return 0;
+    /* Keep stop ordered against supervised child registration so a child
+     * cannot inherit a parent concurrently passing into retirement. */
+    control_lock(vm);
+    int ok = !vm->control_retired
         && ores_native_actor_scheduler_stop(vm->schedulers[domain], ref);
+    control_unlock(vm);
+    return ok;
 }
 
 int ores_native_vm_poll_done(
@@ -170,6 +268,8 @@ int ores_native_vm_close(OresNativeVM* vm) {
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        free(vm->supervisors[i]);
     free(vm);
     return 1;
 }

@@ -22,6 +22,16 @@ private `OresNativeActorScheduler`.
   cold zero-carrier VM construction, constructor on a carrier, message
   results, and physical heap reclamation.
 
+The host OresVM facade also provides opt-in **typed supervisor parent
+registration** for same-domain actors. A supervisor is an immutable actor ref,
+not a new thread; the registered parent handles a typed terminal failure on
+its own exclusive CONTROL lane after the child has stopped and drained.
+Duplicate publication, stale refs, cross-domain parents and premature failure
+notices fail closed. A saturated parent CONTROL slot rejects publication so
+the trusted runtime must retain and retry/escalate the notice. Host ownership
+of resource finalization remains explicit; a drained turn alone does not
+reclaim non-scheduler actor resources.
+
 This is a **trusted MAIN-domain vertical slice**, not general actor
 placement or typed ActorGroup source capability lowering. Supervisor
 relationships, guest `await`, continuation parking, cross-domain sends,
