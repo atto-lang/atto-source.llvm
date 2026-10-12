@@ -166,7 +166,7 @@ int main() {
             "tagged receive match must inspect Message parameter");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
             std::string("on E.Stop {}").size(), "on E.Stop { self.respond(1); }"),
-            "expected '}'");
+            "unsupported self pipeline operation");
 
     // The executable, deliberately narrow LLVM source subset now admits
     // payloadless tagged sends, exhaustive arms and scalar actor state.
