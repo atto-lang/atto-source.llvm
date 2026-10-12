@@ -108,6 +108,7 @@ public:
             if (::flock(fd_, LOCK_EX | LOCK_NB) != 0)
                 throw std::runtime_error("journal has another writer");
             if (::fstat(fd_, &st) != 0 || !S_ISREG(st.st_mode)
+                || st.st_nlink != 1
                 || (st.st_mode & 0077) != 0)
                 throw std::runtime_error("journal must be private regular file");
             if (!existed) {
