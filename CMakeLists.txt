@@ -168,6 +168,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ir_three_actor_bidirectional_pipeline
         source-actor-pipeline-bidirectional.ores
         --ir "oreslang_source_actor_pipeline_emit_i64")
+    oreslang_contract_test(reject_spread_nonexhaustive_receive
+        source-tagged-int-spread-nonexhaustive.ores
+        --diagnostic "nonexhaustive tagged receive match")
     if(ORE_CLANG)
         oreslang_contract_test(native_exec_three_actor_bidirectional_pipeline
             source-actor-pipeline-bidirectional.ores
@@ -238,7 +241,15 @@ if(BUILD_TESTING)
         # distinct enum cases, yet dispatch to distinct typed receive arms.
         oreslang_contract_test(source_tagged_int_payload_ir source-tagged-int-payload-dispatch.ores
             --ir "oreslang_source_actor_tagged_i64")
+        oreslang_contract_test(source_tagged_int_spread_ir source-tagged-int-spread-dispatch.ores
+            --ir "oreslang_source_actor_tagged_i64")
         oreslang_contract_test(native_tagged_int_payload source-tagged-int-payload-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
+        oreslang_contract_test(native_tagged_int_spread_actor source-tagged-int-spread-dispatch.ores
             --run 43 --clang "${ORE_CLANG}" --runs 20
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
