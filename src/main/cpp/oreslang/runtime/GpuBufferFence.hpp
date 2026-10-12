@@ -47,10 +47,26 @@ public:
         : state_(std::make_shared<State>(std::move(identity), bytes)) {}
     BufferFence(const BufferFence&) = delete;
     BufferFence& operator=(const BufferFence&) = delete;
-    BufferFence(BufferFence&&) noexcept = default;
-    BufferFence& operator=(BufferFence&&) noexcept = default;
+    // Moving the owner is synchronized with all in-progress operations.
+    // The state mutex alone is insufficient: take() changes state_ itself.
+    BufferFence(BufferFence&& other) noexcept {
+        std::lock_guard<std::recursive_mutex> guard(other.owner_lock_);
+        state_ = std::move(other.state_);
+    }
+    BufferFence& operator=(BufferFence&& other) {
+        if (this == &other) return *this;
+        std::scoped_lock guard(owner_lock_, other.owner_lock_);
+        if (state_) {
+            std::lock_guard<std::mutex> state_guard(state_->lock);
+            if (state_->status != Status::Closed)
+                throw std::logic_error("cannot overwrite live device buffer owner");
+        }
+        state_ = std::move(other.state_);
+        return *this;
+    }
 
     BufferFence take() {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->status != Status::Idle)
@@ -59,6 +75,7 @@ public:
     }
 
     Ticket begin_command(const Identity& caller) {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller)) throw std::logic_error("foreign device identity");
@@ -71,6 +88,7 @@ public:
     }
 
     void complete(Ticket ticket, bool succeeded) {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         validate_inflight(ticket);
@@ -78,12 +96,14 @@ public:
         state_->backend_quiescent = true;
     }
     void cancel_pending(Ticket ticket) {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         validate_inflight(ticket);
         state_->status = Status::Poisoned;
     }
     void acknowledge_cancelled_device_event(Ticket ticket, const Identity& caller) {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller) || state_->status != Status::Poisoned
@@ -94,6 +114,7 @@ public:
         state_->backend_quiescent = true;
     }
     void retire_after_backend_release(const Identity& caller) {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller)) throw std::logic_error("foreign device identity");
@@ -102,12 +123,14 @@ public:
         state_->status = Status::Closed;
     }
     void close_after_retirement() const {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         if (!state_) return;
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->status != Status::Closed)
             throw std::logic_error("backend must release device buffer first");
     }
     Status status() const {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         return state_->status;
@@ -115,6 +138,7 @@ public:
     // A per-allocation metadata snapshot, not provider authorization.
     struct Snapshot { Identity identity; std::uint64_t bytes; Status status; };
     Snapshot snapshot() const {
+        std::lock_guard<std::recursive_mutex> owner_guard(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         return Snapshot{state_->identity, state_->bytes, state_->status};
@@ -123,6 +147,7 @@ public:
 private:
     explicit BufferFence(std::shared_ptr<State> state) : state_(std::move(state)) {}
     void active() const {
+        // Every caller holds owner_lock_, including const snapshot/status.
         if (!state_) throw std::logic_error("device ownership moved");
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->status == Status::Closed) throw std::logic_error("device buffer closed");
@@ -133,6 +158,7 @@ private:
             ticket.sequence != state_->sequence)
             throw std::logic_error("stale or mismatched device event");
     }
+    mutable std::recursive_mutex owner_lock_;
     std::shared_ptr<State> state_;
 };
 
