@@ -52,7 +52,8 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial"
+        "using", "requires", "serial", "critical-read", "critical-write",
+        "transform-pipe", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -93,6 +94,21 @@ public:
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+            // Only recognized, contiguous hyphenated keywords are one token.
+            // General identifiers must not consume '-' (subtraction).
+            const auto prefix = source_.substr(start, at_ - start);
+            for (const std::string_view spelling : {
+                    std::string_view("critical-read"), std::string_view("critical-write"),
+                    std::string_view("transform-pipe"), std::string_view("nb-select")}) {
+                const auto end = start + spelling.size();
+                if (spelling.substr(0, prefix.size()) == prefix &&
+                        source_.substr(start, spelling.size()) == spelling &&
+                        (end >= source_.size() ||
+                         (!identifier_part(source_[end]) && source_[end] != '-'))) {
+                    at_ = end;
+                    return {Kind::Identifier, source_.substr(start, spelling.size()), start};
+                }
+            }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
         if (digit(ch)) {
