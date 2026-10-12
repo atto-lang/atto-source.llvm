@@ -2,6 +2,7 @@
 """CTest harness: verify safe rejection, verified IR, and optional native execution."""
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,43 @@ def verify_three_actor_pipeline_stderr(stderr):
         "final physical ActorGroup barrier missing or duplicated"
     )
 
+def verify_three_actor_flow_context(stderr):
+    """Require actual native admission provenance, not a success substring.
+
+    All five directional messages must carry the same host-issued flow ID,
+    unique message IDs, a strict parent chain, and an unambiguous target
+    role. This is a single-flow guest proof, NOT multi-flow conformance.
+    """
+    prefix = "SOURCE_PIPELINE_CONTEXT_ADMIT "
+    rows = [line for line in stderr.splitlines() if line.startswith(prefix)]
+    assert len(rows) == 5, "expected five real scheduler DATA context commits"
+    pattern = re.compile(
+        r"SOURCE_PIPELINE_CONTEXT_ADMIT flow=(\d+) message=(\d+) "
+        r"parent=(\d+) target=(\d+) direction=(\d+) "
+        r"domain=(\d+) generation=(\d+)"
+    )
+    parsed = []
+    for row in rows:
+        match = pattern.fullmatch(row)
+        assert match is not None, "malformed host-issued context record"
+        parsed.append(tuple(map(int, match.groups())))
+    flow_id = parsed[0][0]
+    assert flow_id > 0
+    assert [(r[3], r[4]) for r in parsed] == [
+        (0, 0), (1, 1), (2, 1), (1, 2), (0, 2)
+    ], "compiled guest route used a wrong target or direction"
+    assert all(r[0] == flow_id for r in parsed), "cross-flow DATA contamination"
+    assert len({r[1] for r in parsed}) == 5
+    assert all(r[1] > 0 and r[5] > 0 and r[6] > 0 for r in parsed), (
+        "stale/zero message identity, domain, or incarnation"
+    )
+    assert len({r[5] for r in parsed}) == 1, "cross-domain DATA route"
+    assert parsed[0][2] == 0, "external source ingress has a forged parent"
+    assert all(parsed[i][2] == parsed[i - 1][1] for i in range(1, 5)), (
+        "broken runtime-owned causal chain"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -51,6 +89,7 @@ def main():
     parser.add_argument("--stderr")
     parser.add_argument("--stderr-count", type=int)
     parser.add_argument("--pipeline-three-actor-summary", action="store_true")
+    parser.add_argument("--pipeline-context-summary", action="store_true")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
@@ -135,6 +174,11 @@ def main():
                     "three-actor summary gate requires native compiled actor execution"
                 )
                 verify_three_actor_pipeline_stderr(result.stderr)
+            if args.pipeline_context_summary:
+                assert args.pipeline_three_actor_summary, (
+                    "context gate requires full physical guest transcript gate"
+                )
+                verify_three_actor_flow_context(result.stderr)
 
 
 if __name__ == "__main__":
