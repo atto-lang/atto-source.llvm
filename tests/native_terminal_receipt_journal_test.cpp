@@ -68,8 +68,9 @@ int main() {
     const auto k = key();
     {
         NativeTerminalReceiptJournal journal(path);
-        check(!journal.record_physical_done(k, [] { return true; }),
-              "DONE was allowed without recorded terminal");
+        rejects([&] {
+            (void)journal.record_physical_done(k, [] { return true; });
+        }, "DONE was allowed without recorded terminal");
         journal.record(k);
         rejects([&] { journal.record(k); },
                 "same exact terminal event recorded twice");
