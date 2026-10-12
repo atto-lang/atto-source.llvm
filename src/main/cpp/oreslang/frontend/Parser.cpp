@@ -15,7 +15,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, Symbol, End };
+enum class Kind { Identifier, Integer, String, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -102,6 +102,27 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Imports use canonical literal paths, not dynamic expressions,
+        // escapes, or host-controlled search paths.
+        if (ch == '"') {
+            ++at_;
+            const std::size_t body = at_;
+            while (at_ < source_.size() && source_[at_] != '"') {
+                const unsigned char byte =
+                    static_cast<unsigned char>(source_[at_]);
+                if (byte < 0x20 || byte == 0x7f || byte == '\\')
+                    throw std::runtime_error(
+                        "unsupported escape/control byte in native import string at byte "
+                        + std::to_string(at_));
+                ++at_;
+            }
+            if (at_ == source_.size())
+                throw std::runtime_error("unterminated native string at byte "
+                                         + std::to_string(start));
+            const std::string_view value = source_.substr(body, at_ - body);
+            ++at_;
+            return {Kind::String, value, start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -164,11 +185,14 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            // Reject the complete import construct before expression/IR lowering.
-            // The native subset has no stdlib resolver, linker, bool/Any ABI or
-            // trap effect lowering; an imported assertion may not look callable.
+            // Admit the syntax into a sealed import AST. LLVM codegen must
+            // continue rejecting it until real module linking and typed ABI
+            // lowering exist; parsing alone is not executable parity.
             if (token_.text == "import") {
-                fail("native module imports are unsupported until module resolution and linking are implemented");
+                if (!program.imports.empty())
+                    fail("duplicate native module imports are unsupported");
+                program.imports.push_back(import_module());
+                continue;
             }
             if (accept("define")) {
                 if (accept("serial")) {
@@ -190,6 +214,27 @@ public:
     }
 
 private:
+    ModuleImport import_module() {
+        ModuleImport imported;
+        imported.offset = token_.offset;
+        require("import");
+        require("module");
+        imported.symbol = identifier();
+        require("from");
+        if (token_.kind != Kind::String)
+            fail("native module import requires a literal canonical path");
+        imported.canonical_path = std::string(token_.text);
+        advance();
+        require(";");
+        // This is a fixed, host-independent namespace. Do not consult the
+        // working directory, symlinks or user packages for built-in modules.
+        if (imported.symbol != "Assert" ||
+                imported.canonical_path != "std/assert") {
+            fail("unsupported native module import: only sealed Assert from std/assert is staged");
+        }
+        return imported;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
