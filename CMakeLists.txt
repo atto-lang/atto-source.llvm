@@ -270,6 +270,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-owned-heap-test)
     set_tests_properties(native_actor_owned_heap_quiescence PROPERTIES TIMEOUT 20)
 
+    add_executable(oreslang-actor-physical-done-race-test
+        tests/actor_physical_done_race_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-physical-done-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-physical-done-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-physical-done-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_physical_done_two_loan_race
+        COMMAND oreslang-actor-physical-done-race-test)
+    set_tests_properties(native_actor_physical_done_two_loan_race
+        PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-owned-native-region-test
         tests/native_owned_region_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
