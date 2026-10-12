@@ -358,7 +358,7 @@ if(BUILD_TESTING)
         --diagnostic "with clause omits state.read effect")
     oreslang_contract_test(reject_duplicate_with_clause
         actor-with-using-duplicate-with-reject.ores
-        --diagnostic "expected '{'")
+        --diagnostic "duplicate with effect clause")
 
     # IR absence checks remain live even when Python runs with -O.
     oreslang_contract_test(native_ir_using_read_no_mutation
