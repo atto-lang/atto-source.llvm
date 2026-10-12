@@ -55,6 +55,12 @@ struct OresNativeActorScheduler {
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
+/* AUTHORIZATION, not merely delivery evidence: set only while the physical
+ * worker executes the scheduler-minted typed PANIC callback. The exact
+ * actor and envelope cannot be borrowed by a host thread or another turn. */
+static _Thread_local OresNativeActorRef executing_panic_parent;
+static _Thread_local OresNativeActorTerminalFailure executing_panic_failure;
+static _Thread_local int executing_typed_panic;
 /* Only the acquiring host thread may release a restart lease. In particular,
  * it must not synchronously STOP/retire the same scheduler: pthread normal
  * mutexes are not recursive and would deadlock on that reentry. */
@@ -137,6 +143,11 @@ static void* carrier(void* raw) {
         unlock(s);
 
         executing = s;
+        executing_typed_panic = typed_failure;
+        executing_panic_parent = typed_failure
+            ? identity : (OresNativeActorRef){0};
+        executing_panic_failure = typed_failure
+            ? failure : (OresNativeActorTerminalFailure){0};
         if (s->identity_callbacks) {
             if (typed_failure) {
                 if (s->identity_panic_callback)
@@ -154,6 +165,9 @@ static void* carrier(void* raw) {
         } else {
             s->callback(s->context, i, payload);
         }
+        executing_typed_panic = 0;
+        executing_panic_parent = (OresNativeActorRef){0};
+        executing_panic_failure = (OresNativeActorTerminalFailure){0};
         executing = NULL;
 
         lock(s);
@@ -696,6 +710,22 @@ int ores_native_actor_scheduler_claim_terminal_receipt(
 int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
     OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    return claim_terminal_receipt_internal(s, parent, child, out, 1,
+                                           (OresNativeActorRef){0});
+}
+int ores_native_actor_scheduler_claim_delivered_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    /* Fail closed before even inspecting the mutable scheduler state. A
+     * copied ActorRef or a queued terminal receipt is NOT a CONTROL carrier
+     * capability. The exact event must be the worker's current callback. */
+    if (!s || executing != s || !executing_typed_panic
+        || !s->identity_callbacks
+        || !same_terminal_actor(executing_panic_parent, parent)
+        || !same_terminal_actor(executing_panic_failure.child, child))
+        return 0;
+    /* The callback itself can be reentered by the trusted host; the existing
+     * scheduler-locked one-use terminal claim ensures only one succeeds. */
     return claim_terminal_receipt_internal(s, parent, child, out, 1,
                                            (OresNativeActorRef){0});
 }
