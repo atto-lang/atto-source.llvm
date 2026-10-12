@@ -177,6 +177,21 @@ private:
                     || failure.child.scheduler_domain != parent_.scheduler_domain)
                 return reject();
             Key key{failure.child.actor_slot, failure.child.generation};
+            OresNativeTerminalReceipt receipt{};
+            const bool has_scheduler_receipt =
+                ores_native_actor_scheduler_terminal_receipt(
+                    scheduler_, parent_, failure.child, &receipt) != 0;
+            // An identity-mode parent callback must be backed by an EXACT
+            // scheduler-minted PANIC envelope, not a forged host argument.
+            // Legacy slot callbacks retain compatibility for older embedders.
+            if (ores_native_actor_scheduler_uses_identity_callbacks(scheduler_)
+                    && !has_scheduler_receipt)
+                return reject();
+            if (has_scheduler_receipt &&
+                    (receipt.failure.kind != failure.kind
+                     || receipt.failure.failure_code != failure.failure_code
+                     || receipt.failure.correlation != failure.correlation))
+                return reject();
             SupervisorChildRegistry::Snapshot admitted;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -192,9 +207,17 @@ private:
                     return false;
                 }
                 admitted = registered_.at(key);
-                // Finalization must be established while the scheduler has
-                // confirmed physical child teardown. Capture the exact
-                // logical identity before the one-shot key is consumed.
+                // Claim before entering any external supervisor CONTROL
+                // effect. Even if enqueue throws after committing, no second
+                // claimant can execute the host effect again.
+                if (has_scheduler_receipt &&
+                    !ores_native_actor_scheduler_claim_terminal_receipt(
+                        scheduler_, parent_, failure.child, &receipt)) {
+                    ++rejected_;
+                    return false;
+                }
+                // The scheduler guarantees physical DONE, and the exact
+                // receipt remains CLAIMED on all subsequent exceptions.
                 child_registry_->finalized(
                     admitted.child, failure.child, admitted.incarnation);
                 registered_.erase(key);
@@ -213,6 +236,10 @@ private:
                 admitted.incarnation
             };
             process_->accept(copied); // enqueues only, never invokes policy inline
+            if (has_scheduler_receipt &&
+                !ores_native_actor_scheduler_ack_terminal_receipt(
+                    scheduler_, receipt))
+                return reject(); // external admission may have succeeded: no replay
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 ++accepted_;
