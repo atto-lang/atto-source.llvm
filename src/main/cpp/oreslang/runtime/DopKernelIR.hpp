@@ -120,7 +120,14 @@ public:
     HostBuffer(HostBuffer&&) noexcept = default;
     HostBuffer& operator=(HostBuffer&&) noexcept = default;
 
-    const Plan& layout() const { active(); return state_->layout; }
+    // Return a value: a borrowed reference to the owner-controlled State
+    // could otherwise dangle when an owned buffer is moved and released.
+    Plan layout() const {
+        if (!state_) throw std::logic_error("buffer moved or closed");
+        std::lock_guard<std::mutex> guard(state_->lock);
+        if (state_->closed) throw std::logic_error("buffer moved or closed");
+        return state_->layout;
+    }
     bool identical_storage(const HostBuffer& other) const noexcept {
         return state_ && state_ == other.state_;
     }
