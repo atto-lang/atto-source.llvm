@@ -200,7 +200,24 @@ public:
             permit, replacement, [&] {
                 return ores_native_actor_scheduler_poll_ready(scheduler_, replacement);
             });
-        return child_registry_->replace(permit, replacement);
+        // The same bridge mutex excludes terminal CONTROL dispatch until
+        // both the identity registry and panic-routing index are published.
+        // Allocate the bridge entry BEFORE committing child generation.
+        std::lock_guard<std::mutex> guard(mutex_);
+        const Key key{replacement.actor_slot, replacement.generation};
+        const SupervisorChildRegistry::Snapshot candidate{
+            permit.child, replacement, permit.incarnation + 1,
+            SupervisorChildRegistry::Phase::active};
+        auto [it, inserted] = registered_.emplace(key, candidate);
+        if (!inserted) throw std::logic_error("replacement already supervised");
+        try {
+            auto committed = child_registry_->replace(permit, replacement);
+            it->second = committed; // trivial identity value, no allocation
+            return committed;
+        } catch (...) {
+            registered_.erase(it);
+            throw;
+        }
     }
 
     /**
