@@ -414,8 +414,10 @@ static void* source_spawn(
     const OresMp2Contract* contracts, size_t variant_count,
     const OresSourceNominalCase* nominal) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+    /* Constructor-only actors are valid; they never accept DATA messages.
+     * Every actor with a message handler must choose exactly one transport. */
     ensure((on_message != NULL) + (on_wire != NULL)
-        + (on_variant != NULL) == 1);
+        + (on_variant != NULL) <= 1);
     SourceVariantContract* registered = NULL;
     if (on_wire || on_variant) {
         registered = source_copy_variants(contracts, variant_count, nominal);
@@ -694,8 +696,11 @@ static int source_send_binary_unlocked(SourceActor* actor,
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     /* Allows a race test to force cancellation after validating owned wire
      * bytes but BEFORE the nonblocking scheduler admission commit. */
+    /* The test hook compares the PUBLIC actor capability, not a private
+     * heap address. Fault injection must still work after handle fencing. */
     if (pipeline_route && oreslang_source_actor_test_before_pipeline_publish)
-        oreslang_source_actor_test_before_pipeline_publish(actor, direction);
+        oreslang_source_actor_test_before_pipeline_publish(
+            (void*)(uintptr_t)actor->id, direction);
 #endif
     if (pipeline_route) group_lock();
     int admitted = (!pipeline_route
