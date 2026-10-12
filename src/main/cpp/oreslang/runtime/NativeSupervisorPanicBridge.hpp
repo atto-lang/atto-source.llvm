@@ -385,9 +385,6 @@ public:
             OresNativeActorRef failed_child,
             const std::function<bool(const OresNativeTerminalReceipt&)>&
                 verify_committed_effect) {
-        if (durable_journal_)
-            throw std::logic_error(
-                "durable receipts require external-proof-bound reconciliation");
         if (!verify_committed_effect
                 || original_parent.scheduler_domain != parent_.scheduler_domain
                 || original_parent.actor_slot != parent_.actor_slot
@@ -405,27 +402,6 @@ public:
         return true;
     }
 
-    /**
-     * Trusted external-effect reconciliation for a journal-backed terminal.
-     * Verify the exact host commit ledger record outside journal locks,
-     * persist its SHA-256 evidence, and only then persist ACK. A timeout,
-     * policy invocation, or completed physical STOP is not proof.
-     */
-    bool reconcile_durable_external_effect(
-            const ExternalEffectProof& proof,
-            const std::function<bool(const ExternalEffectProof&)>& verifier) {
-        validate_durable_proof_owner(proof);
-        if (!durable_journal_->prove_external_effect(proof, verifier))
-            return false;
-        durable_journal_->acknowledge(proof);
-        return true;
-    }
-
-    /** A crash after fsynced proof but before ACK must not replay policy. */
-    void acknowledge_proven_durable_effect(const ExternalEffectProof& proof) {
-        validate_durable_proof_owner(proof);
-        durable_journal_->acknowledge(proof);
-    }
 
 public:
     /**
@@ -763,16 +739,6 @@ public:
     }
 
 private:
-    void validate_durable_proof_owner(const ExternalEffectProof& proof) const {
-        const auto& w = proof.key.words;
-        if (!durable_journal_ || w[0] != process_->supervisor_id()
-            || w[1] != process_->runtime_id()
-            || w[2] != parent_.scheduler_domain
-            || w[3] != parent_.actor_slot
-            || w[4] != parent_.generation)
-            throw std::logic_error(
-                "external proof belongs to another supervisor generation");
-    }
     DurableTerminalKey durable_identity(
             const OresNativeActorTerminalFailure& failure,
             const SupervisorChildRegistry::Snapshot& admitted) const {
