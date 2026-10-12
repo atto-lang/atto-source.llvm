@@ -22,9 +22,11 @@ reject them without producing IR. See [the native select parity contract](docs/S
 - CI covers positive/negative source-to-IR contracts and Clang compilation/execution of
   standalone `main` functions, when Clang is present.
 
-Oreslang `int` still lowers to `i64` for guest functions. For an unqualified
-zero-argument `main()`, native compilation now emits a separate `i32 @main()`
-C/OS wrapper that calls the internal Oreslang entrypoint. Falling off a
+Oreslang `int` still lowers to `i64` for guest functions. For a
+zero-argument `main()` (unqualified or `module.main`), native compilation
+emits a separate `i32 @main()` C/OS wrapper that calls the Oreslang
+entrypoint. An unqualified guest main gets an internal generated symbol;
+a module-qualified main retains its own exported guest symbol. Falling off a
 `main(): void` body returns status `0`. An integer `main()` must return
 a code within `0..255`; values outside that range return failure status `1`
 rather than silently truncating to an unrelated shell status. Native source
