@@ -82,7 +82,7 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
     f.control = std::make_shared<SupervisorControlScheduler>(2, 16);
     f.registry = std::make_shared<SupervisorChildRegistry>(supervisor, domain);
     f.host_receipts = std::make_unique<NativePhysicalStopEvidence>(
-        f.scheduler, supervisor, domain);
+        f.scheduler, f.registry);
     constexpr auto source = R"(
         define supervisor Root as
           on_panic(f: Failure): void {
@@ -127,10 +127,25 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
             // fabricated callback result and not evidence of other effects.
             // The lost-ACK case records DONE before throwing to CONTROL.
             if (!ambiguous || lost_ack) {
-                const auto evidence = f.host_receipts->observe_physical_done(
-                    f.registry->stop_receipt(
-                        SupervisorChildRegistry::ChildRef{
-                            supervisor, domain, n.logical_child_id}));
+                const auto current = f.registry->stop_receipt(
+                    SupervisorChildRegistry::ChildRef{
+                        supervisor, domain, n.logical_child_id});
+                // Even physical DONE cannot turn a forged, foreign
+                // reservation structure into a host-issued receipt.
+                auto forged = current;
+                forged.turn_generation++;
+                bool forged_rejected = false;
+                try { (void) f.host_receipts->observe_physical_done(forged); }
+                catch (const std::logic_error&) { forged_rejected = true; }
+                require(forged_rejected,
+                        "host ledger accepted a caller-forged STOP reservation");
+                const auto evidence =
+                    f.host_receipts->observe_physical_done(current);
+                bool replay_rejected = false;
+                try { (void) f.host_receipts->observe_physical_done(current); }
+                catch (const std::logic_error&) { replay_rejected = true; }
+                require(replay_rejected,
+                        "host ledger accepted duplicate physical DONE evidence");
                 require(evidence.control_turn == resolution.turn_generation
                         && evidence.incarnation == n.logical_incarnation
                         && evidence.actor.generation == n.generation,
