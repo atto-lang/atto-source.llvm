@@ -32,6 +32,21 @@ if(BUILD_TESTING)
     # removes test setup/side effects, producing false passes and hangs.
     # Keep assertions live whenever BUILD_TESTING is enabled.
     add_compile_options(-UNDEBUG)
+    # Canonical with/using state authorization is an independent native
+    # admission boundary. Run these in the normal CTest target graph, not
+    # only as an out-of-tree mirror smoke test.
+    foreach(contract IN ITEMS
+            critical_handle_state_contract
+            critical_state_loan_bridge
+            actor_owned_scalar_state)
+        add_executable(oreslang-${contract}-test
+            "tests/${contract}_test.cpp")
+        target_include_directories(oreslang-${contract}-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        add_test(NAME native_${contract}_admission
+            COMMAND oreslang-${contract}-test)
+    endforeach()
+
     # Standalone LLVM frontend admission proof. The parser is linked directly
     # so nominal declarations, monotonic tags and fail-closed actor usage can
     # be tested without generating IR for unsupported tagged operations.
