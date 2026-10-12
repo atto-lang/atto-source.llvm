@@ -312,3 +312,36 @@ These are verification gates on the checked PR #240 source revision,
 not a merge authorization. The stacked parent PR #180 advanced separately
 with native event traces; PR #239 must reconcile those changes before the
 full dependency stack is considered integration-mergeable.
+
+
+### Final funded verification after checked teardown
+
+- [Exact-source focused CI #38280292528](https://github.com/zed-pkg-test/java-app/actions/runs/38280292528):
+  all steps green. **10 GCC ASan/UBSan repetitions**, **20 Clang optimized
+  repetitions**; each C test pass covers 80 independently registered flows,
+  400 correlated hops, 200 cancellation/publication races, held publisher
+  isolation, cross-table callback reentry, and checked destruction. TLA+
+  two-flow model: **324 distinct states, zero violations**, both unsafe mutants
+  rejected. The callback lock-order model: **four distinct states** without
+  violations, its unsafe nested-entry mutant rejected. JSON Schema valid
+  and seven negative checks passed; TypeSpec compilation passed.
+- [Full original LLVM CMake/CTest #38280769953](https://github.com/zed-pkg-test/java-app/actions/runs/38280769953):
+  verified **167 exact source/test Git blobs** and passed **165/165 CTests**,
+  including the compiled guest forward/backward causal-admission checks,
+  native correlated-flow teardown regressions, and compiled guest evidence
+  under ordinary and Python optimized modes. Root credit TLC:
+  **12 distinct states**, unsafe preclaim rejected. Host causal-parent TLC:
+  **400 distinct states**, unsafe forged-parent mutant rejected. An
+  intermediate run failed solely because the new TLA+ mutant's `forged`
+  state was incompletely defined on one transition; the model was corrected
+  and the final run passed.
+- [Actor lifetime/ASan/compiled guest #38280769873](https://github.com/zed-pkg-test/java-app/actions/runs/38280769873):
+  all exact-source capabilities, producer-stop races, ASan/UBSan,
+  generation-lifetime TLC, and native-compiled guest executions passed.
+
+The executable native registry is **still a standalone host implementation**.
+The compiled `.ores` pipeline's host-issued flow context remains one-flow
+only and is not yet bound to that registry's per-flow DATA admissions. None of
+the bounded model results constitute a C implementation-refinement proof.
+Keep PR #240 draft and unmerged until actual multi-flow compiled execution,
+backpressure cancellation and cross-backend parity have executable evidence.
