@@ -58,13 +58,16 @@ static void suspend_stop_restart(void) {
     REQUIRE(ores_execution_init(&a));
     OresExecutionClaim x={0}, y={0};
     REQUIRE(ores_execution_enter(&a, 1, 7, 0, &x));
+    REQUIRE(!ores_execution_destroy(&a)); // Live callback; mutex itself is unlocked.
     REQUIRE(!ores_execution_enter(&a, 1, 8, 0, &y));
     REQUIRE(ores_execution_leave(&a, x, 1));
     REQUIRE(ores_execution_phase(&a) == ORES_EXEC_SUSPENDED);
+    REQUIRE(!ores_execution_destroy(&a)); // Pending logical continuation.
     REQUIRE(ores_execution_enter(&a, 1, 8, 0, &y));
     REQUIRE(!ores_execution_leave(&a, x, 0));
     REQUIRE(!ores_execution_retired(&a, 1));
     REQUIRE(ores_execution_stop(&a, 1));
+    REQUIRE(!ores_execution_destroy(&a)); // STOPPING is not quiescence.
     REQUIRE(!ores_execution_retired(&a, 1));
     REQUIRE(!ores_execution_enter(&a, 1, 9, 0, &x));
     REQUIRE(ores_execution_leave(&a, y, 0));
