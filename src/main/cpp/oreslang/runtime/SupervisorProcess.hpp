@@ -47,6 +47,9 @@ public:
             throw std::invalid_argument("invalid supervisor process admission");
     }
 
+    std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
+
     /** Trusted CONTROL receiver; does not run a user callback inline. */
     void accept(const SupervisorFailureNotice& notice) {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -118,6 +121,10 @@ public:
         return !failed_ && !closed_ && undelivered_ == 0;
     }
     void close() {
+        // Linearize shutdown with actual lifecycle decision side effects.
+        // A recursive fence supports a trusted decision that stops its own
+        // supervisor without deadlocking the CONTROL carrier.
+        std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return;
         closed_ = true;
@@ -170,6 +177,7 @@ private:
     }
 
     void finish(Directive decision) noexcept {
+        std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         Resolution resolution;
         try {
             std::lock_guard<std::mutex> guard(mutex_);
@@ -213,6 +221,8 @@ private:
     Enqueue enqueue_;
     Policy policy_;
     DecisionSink sink_;
+    // Always acquire decision_fence_ before mutex_ for close/finish.
+    mutable std::recursive_mutex decision_fence_;
     mutable std::mutex mutex_;
     std::deque<SupervisorFailureNotice> mailbox_;
     bool active_ = false;
