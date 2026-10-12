@@ -38,7 +38,7 @@ Admit(f) ==
     /\ pending[f] # None
     /\ phase[f] < MaxHops
     /\ (pending[f] = last[f] \/ AllowForgedParent)
-    /\ forged' = (forged \/ (pending[f] # last[f]))
+    /\ forged' = IF pending[f] # last[f] THEN TRUE ELSE forged
     /\ phase' = [phase EXCEPT ![f] = @ + 1]
     /\ last' = [last EXCEPT ![f] = phase[f] + 1]
     /\ pending' = [pending EXCEPT ![f] = None]
