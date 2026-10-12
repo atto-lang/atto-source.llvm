@@ -197,6 +197,13 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             check_value(*expr.right, locals, functions);
             return;
+        case Expression::Kind::ModuleCall:
+            // Imported functions are not native IR yet. Validate every
+            // argument's ownership without inventing a cross-module loan ABI.
+            // A call argument may not introduce an unscoped native borrow.
+            for (const auto& arg : expr.arguments)
+                check_value(*arg, locals, functions);
+            return;
         case Expression::Kind::Call:
             if (functions.at(expr.name)->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
@@ -232,6 +239,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Take:
         case Expression::Kind::Call:
+        case Expression::Kind::ModuleCall:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
