@@ -100,6 +100,16 @@ if(BUILD_TESTING)
                 --node "${ORE_NODE}"
                 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_tests_properties(wasm32_source_class_ownership_runtime PROPERTIES TIMEOUT 240)
+        # Actual .ores actor handler lowered to import-free Wasm, with a
+        # monotonic lifecycle and one private state image per Wasm instance.
+        add_test(NAME wasm32_source_actor_guest_lifecycle
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_source_actor_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --node "${ORE_NODE}"
+                --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        set_tests_properties(wasm32_source_actor_guest_lifecycle PROPERTIES TIMEOUT 120)
     endif()
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
