@@ -44,7 +44,8 @@ bool reserved(std::string_view name) {
         "let", "mut", "self", "true", "false", "null", "obj", "arr",
         "int", "owned", "declare", "receive", "receive_forward",
         "receive_backward", "transform", "pipe", "forward_messages",
-        "backward_messages", "Message", "bool", "string",
+        "backward_messages", "Message", "bool", "string", "state",
+        "critical", "handle_state",
         "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -100,11 +101,15 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        if (ch == '-' && at_ + 1 < source_.size() && source_[at_ + 1] == '>') {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         if (ch == ':' && at_ + 1 < source_.size() && source_[at_ + 1] == ':') {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("()[]{},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("()[]{},:;+-*=.<>|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -368,23 +373,33 @@ private:
         }
         require("as");
         const bool braced = accept("{");
-        // The first native actor subset deliberately admits only immutable
-        // scalar fields and read-only methods; no async or user destructors.
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
-            LocalBinding field;
-            field.offset = token_.offset;
-            field.field_mutable = token_.text == "let";
-            advance();
-            field.name = identifier();
-            require(":");
-            require("int");
-            require("=");
-            field.initializer = expression();
-            require(";");
-            value.fields.push_back(std::move(field));
+        // Actor data lives only in a single declared fixed-key state map.
+        // Ordinary class fields are never admitted on an actor, even when
+        // private, immutable, or declared before all methods.
+        if (accept("state")) {
+            value.state_declared = true;
+            require("{");
+            while (!accept("}")) {
+                if (token_.kind == Kind::End || value.fields.size() >= 64)
+                    fail("actor state requires closing '}' and at most 64 keys");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.name = identifier();
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                field.field_mutable = true;
+                value.fields.push_back(std::move(field));
+            }
+            accept(";");
         }
+        if (token_.text == "const" || token_.text == "val"
+                || token_.text == "let" || token_.text == "state")
+            fail("actor instance data must be declared in one state map");
         if (value.fields.empty() && value.messages_type.empty() && !transform_pipe)
-            fail("actor requires at least one scalar field");
+            fail("actor requires a declared state map or typed mailbox");
         while (token_.text == "fnc" || token_.text == "routine"
                || token_.text == "pub" || token_.text == "receive"
                || token_.text == "receive_forward" || token_.text == "receive_backward") {
@@ -662,15 +677,38 @@ private:
                         }
                     }
                     require("{");
-                    while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
-                        FieldAssignment assignment;
-                        assignment.offset = token_.offset;
-                        assignment.field = identifier();
+                    // The sole admissible state operation in a tagged handler
+                    // is a synchronously completed critical callback that
+                    // returns one copied i64. No state reference survives.
+                    if (accept("const")) {
+                        auto loan = std::make_unique<StateLoan>();
+                        loan->result_binding = identifier();
                         require("=");
-                        assignment.value = expression();
+                        require("self"); require(".");
+                        require("handle_state"); require("(");
+                        require("critical"); require("|"); require("state");
+                        require("|"); require("->"); require("{");
+                        state_loan_depth_ = 1;
+                        while (token_.text == "state") {
+                            FieldAssignment assignment;
+                            assignment.offset = token_.offset;
+                            require("state"); require(".");
+                            assignment.field = identifier();
+                            require("=");
+                            assignment.value = expression();
+                            require(";");
+                            loan->assignments.push_back(std::move(assignment));
+                        }
+                        require("return");
+                        loan->result = expression();
                         require(";");
-                        arm.assignments.push_back(std::move(assignment));
+                        state_loan_depth_ = 0;
+                        require("}"); require(")"); require(";");
+                        arm.state_loan = std::move(loan);
                     }
+                    // Legacy direct field mutation is intentionally rejected.
+                    if (token_.kind == Kind::Identifier && !reserved(token_.text))
+                        fail("actor state mutation requires scoped handle_state callback");
                     if (accept("self")) {
                         require(".");
                         if (accept("forward")) arm.route_direction = "forward";
@@ -858,8 +896,16 @@ private:
             advance();
             return expr;
         }
-        if (token_.kind != Kind::Identifier || reserved(token_.text)) {
+        if (token_.kind != Kind::Identifier
+                || (reserved(token_.text)
+                    && !(state_loan_depth_ && token_.text == "state"))) {
             fail("expected int expression");
+        }
+        if (state_loan_depth_ && token_.text == "state") {
+            require("state"); require(".");
+            auto value = make_expression(Expression::Kind::Variable, offset);
+            value->name = "@state." + identifier();
+            return value;
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
@@ -1548,6 +1594,7 @@ private:
 
     Lexer lexer_;
     Token token_;
+    unsigned state_loan_depth_ = 0;
 };
 
 } // namespace
