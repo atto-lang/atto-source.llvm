@@ -301,9 +301,11 @@ public:
                     || current.actor.actor_slot != failed_child.actor_slot
                     || current.actor.generation != failed_child.generation)
                 throw std::logic_error("stale logical child PANIC authority");
-            if (!ores_native_actor_scheduler_claim_terminal_receipt(
-                    scheduler_, parent_, failed_child, &receipt))
-                throw std::logic_error("terminal host effect already claimed");
+            if (!ores_native_actor_scheduler_claim_recovered_parent_terminal_receipt(
+                    scheduler_, parent_, recovered_parent, failed_child,
+                    &receipt))
+                throw std::logic_error(
+                    "recovered parent stopped or terminal host effect already claimed");
             child_registry_->finalized(
                 admitted.child, failed_child, admitted.incarnation);
             registered_.erase(found);
