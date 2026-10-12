@@ -106,10 +106,10 @@ can return that copied scalar from an exhaustive tagged match via an LLVM PHI,
 without exposing the state loan. Direct class mutation, duplicate maps, unknown
 state keys, unscoped reads, and state reference escapes have negative fixtures.
 
-[Funded exact-source GitHub Actions #38311796992](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38311796992)
-passed **24/24 focused CTests**. These include three complete compiled
+[Funded exact-source GitHub Actions #38312289067](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38312289067)
+passed **26/26 focused CTests**. These include three complete compiled
 15-actor forward/backward pipelines (five repeats each), native Clang
-ASan/UBSan, optimized-Python negative canary, six new state isolation
+ASan/UBSan, optimized-Python negative canary, eight new state isolation
 rejection gates, method-only actor acceptance, and prior directional domain
 rejections. This is not yet full-tree native suite validation. See
 `docs/ACTOR_STATE_INVARIANT.md` for the exact restriction and release limits.
