@@ -692,6 +692,15 @@ int main() {
                       oreslang::runtime::SupervisorChildRegistry::Phase::active
                       && committed.incarnation == 2,
                   "native scheduler-backed RESTART failed to publish next incarnation");
+            check(bridge->registered_children() == 1,
+                  "replacement was published without its panic-routing index");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "replacement did not physically finalize after commit");
+            check(bridge->on_panic(supervisor.actor_slot,
+                      OresNativeActorTerminalFailure{
+                          ORES_NATIVE_CONTROL_PANIC, replacement, 19, 219}),
+                  "new generation was missing from supervisor PANIC routing");
             bridge->fence_restart_publication();
         } else {
             children->stage_replacement(ticket, replacement);
