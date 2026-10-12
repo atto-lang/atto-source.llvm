@@ -95,13 +95,17 @@ public:
         mark_awakened(awakened);
     }
 
-    // Cancellation of pending admissions does not execute user code.
-    void cancel_queued(std::uint64_t incarnation, std::uint64_t continuation_id) {
+    // A pending continuation may already own a gate ticket while its
+    // READY notification awaits CONTROL admission. That loan is not yet
+    // dispatched and may safely be revoked. An acknowledged READY grant
+    // can be running guest code and MUST NOT be cancelled here.
+    void cancel_pending(std::uint64_t incarnation, std::uint64_t continuation_id) {
         std::lock_guard<std::mutex> lock(mu_);
         validate_incarnation(incarnation);
         auto it = require_entry(continuation_id);
-        if (retired_ || it->second.status != Status::Queued) {
-            throw std::logic_error("only queued actor state admission may be cancelled");
+        if (retired_ || (it->second.status != Status::Queued
+                && !(it->second.status == Status::Ready && it->second.needs_ack))) {
+            throw std::logic_error("only undispatched actor state admission may be cancelled");
         }
         auto awakened = gate_.release(it->second.token);
         it->second.status = Status::Cancelled;
