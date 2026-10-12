@@ -2,6 +2,10 @@
 #include <stdexcept>
 #include <iostream>
 #include <type_traits>
+#include <atomic>
+#include <exception>
+#include <optional>
+#include <thread>
 
 template<class Exception, class F> void expects(F fn) {
     try { fn(); } catch (const Exception&) { return; }
@@ -60,5 +64,53 @@ int main() {
     failed.retire_after_backend_release(second);
     failed.close_after_retirement();
     expects<std::invalid_argument>([&] { (void)BufferFence(second, 0); });
+    // Deterministic concurrent start: a command admission and transfer
+    // compete on *the same* owner wrapper. Exactly one may succeed, and
+    // ThreadSanitizer must observe no state_ or generation data races.
+    for (int trial = 0; trial < 128; ++trial) {
+        BufferFence contended(id, 16);
+        std::optional<BufferFence> transferred;
+        std::optional<Ticket> admitted;
+        std::atomic<bool> go{false};
+        std::exception_ptr admission_error, transfer_error;
+        std::thread command([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { admitted = contended.begin_command(id); }
+            catch (const std::logic_error&) { }
+            catch (...) { admission_error = std::current_exception(); }
+        });
+        std::thread transfer([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { transferred.emplace(contended.take()); }
+            catch (const std::logic_error&) { }
+            catch (...) { transfer_error = std::current_exception(); }
+        });
+        go.store(true, std::memory_order_release);
+        command.join();
+        transfer.join();
+        if (admission_error) std::rethrow_exception(admission_error);
+        if (transfer_error) std::rethrow_exception(transfer_error);
+        check(admitted.has_value() != transferred.has_value());
+        if (admitted) {
+            contended.complete(*admitted, true);
+            contended.retire_after_backend_release(id);
+            contended.close_after_retirement();
+        } else {
+            transferred->retire_after_backend_release(id);
+            transferred->close_after_retirement();
+            expects<std::logic_error>([&] { (void)contended.status(); });
+        }
+    }
+    // Move assignment must not orphan an unretired underlying buffer.
+    BufferFence existing(id, 4), incoming(id, 4);
+    expects<std::logic_error>([&] { existing = std::move(incoming); });
+    check(existing.status() == Status::Idle);
+    check(incoming.status() == Status::Idle);
+    existing.retire_after_backend_release(id);
+    existing.close_after_retirement();
+    existing = std::move(incoming);
+    check(existing.status() == Status::Idle);
+    existing.retire_after_backend_release(id);
+    existing.close_after_retirement();
     std::cout << "native device fence lifecycle tests passed\n";
 }
