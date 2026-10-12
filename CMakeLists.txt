@@ -33,6 +33,8 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
     target_include_directories(oreslang-owned-i64-region-security-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-owned-i64-region-security-test PRIVATE
+        ORESLANG_NATIVE_TEST_TOKEN_EXHAUSTION=1)
     target_compile_options(oreslang-owned-i64-region-security-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_owned_region_slot_security
