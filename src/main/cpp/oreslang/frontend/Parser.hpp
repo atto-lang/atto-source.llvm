@@ -97,6 +97,8 @@ struct TaggedReceiveArm {
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
+    bool effects_declared = false;
+    std::vector<std::string> declared_effects; // restricted state.read / state.write row
     std::vector<LocalBinding> locals;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
