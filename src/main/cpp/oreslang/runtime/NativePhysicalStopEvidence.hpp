@@ -57,12 +57,17 @@ public:
      * and before returning a STOP acknowledgment to guest CONTROL.
      */
     Attestation observe_physical_done(const StopReceipt& requested) {
+        // The owner must call close() before destroying its scheduler.
+        // Keep scheduler use under the same mutex as close(), so a concurrent
+        // observer cannot race the final lifetime revocation.
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (!scheduler_)
+            throw std::logic_error("native STOP evidence ledger closed");
         if (!authoritative(requested))
             throw std::logic_error("foreign, forged or unclaimed native STOP receipt");
         if (!ores_native_actor_scheduler_poll_done(
                 scheduler_, requested.failed_actor))
             throw std::logic_error("native STOP has no physical DONE barrier");
-        std::lock_guard<std::mutex> guard(mutex_);
         const auto key = binding(requested);
         if (observed_.count(key))
             throw std::logic_error("physical STOP receipt already recorded");
@@ -85,13 +90,44 @@ public:
      * acknowledgment was lost. Never reexecutes a STOP effect.
      */
     bool confirms_physical_done(const StopReceipt& requested) const {
-        if (!authoritative(requested)) return false;
         std::lock_guard<std::mutex> guard(mutex_);
+        if (!scheduler_ || !authoritative(requested)) return false;
         const auto it = observed_.find(binding(requested));
         if (it == observed_.end()) return false;
         // Even a valid old ledger entry must not authorize a still-live actor.
         return ores_native_actor_scheduler_poll_done(
             scheduler_, requested.failed_actor) != 0;
+    }
+
+    /**
+     * Reclaim only independently attested, already ACKNOWLEDGED evidence.
+     * This must precede registry child retirement; unresolved STOPs remain
+     * quarantined and cannot be silently discarded to regain capacity.
+     */
+    bool forget_acknowledged(const StopReceipt& supplied) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (!scheduler_) return false;
+        try {
+            const auto current = registry_->stop_receipt(supplied.child);
+            if (current.status != Status::acknowledged
+                || !current.host_invoked
+                || binding(current) != binding(supplied))
+                return false;
+            return observed_.erase(binding(current)) == 1;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    /**
+     * The trusted scheduler owner MUST close this adapter and allow close()
+     * to finish before calling scheduler try_destroy(). All future reads
+     * fail closed. The ledger is volatile, so close() cannot recover a crash.
+     */
+    void close() noexcept {
+        std::lock_guard<std::mutex> guard(mutex_);
+        scheduler_ = nullptr;
+        observed_.clear();
     }
 
     std::size_t size() const {
@@ -147,7 +183,7 @@ private:
                 r.failed_actor.generation, r.incarnation, r.turn_generation};
     }
 
-    OresNativeActorScheduler* const scheduler_;
+    OresNativeActorScheduler* scheduler_;
     const std::shared_ptr<SupervisorChildRegistry> registry_;
     mutable std::mutex mutex_;
     std::map<Key, Attestation> observed_;
