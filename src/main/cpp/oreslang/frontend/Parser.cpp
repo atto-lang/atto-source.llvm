@@ -206,8 +206,45 @@ private:
         actor.name = identifier();
         require("as");
         const bool braced = accept("{");
-        if (token_.text == "state") {
-            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
+        if (accept("state")) {
+            require("{");
+            ActorSealedState state;
+            std::unordered_set<std::string> state_names;
+            while (token_.text != "}") {
+                if (token_.kind == Kind::End) {
+                    fail("unterminated sealed actor state block");
+                }
+                if (state.fields.size() >= 128) {
+                    fail("sealed actor state exceeds 128 fields");
+                }
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.name = identifier();
+                if (field.name == "state" || !state_names.insert(field.name).second) {
+                    fail("duplicate or reserved sealed actor state field '" + field.name + "'");
+                }
+                require(":");
+                // Native frontend only recognizes typed-i64 scalar AST today;
+                // richer sealed field types must not be confused with the
+                // older 16-slot actor field layout.
+                require("int");
+                require("=");
+                field.initializer = expression();
+                accept(";"); // source newline/closing '}' is also valid
+                state.fields.push_back(std::move(field));
+            }
+            require("}");
+            actor.sealed_state = std::move(state);
+            if (token_.text == "state") {
+                fail("duplicate sealed actor state block");
+            }
+            if (token_.text != (braced ? "}" : "end")) {
+                fail("native actor state methods require sealed handle_state "
+                     "effects and continuation lowering; currently unsupported");
+            }
+            if (braced) require("}");
+            else require("end");
+            return actor;
         }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
@@ -956,6 +993,14 @@ private:
         }
         std::unordered_map<std::string, const ActorDecl*> actor_types;
         for (const auto& actor : program.actors) {
+            // Keep this gate before any legacy-field semantic checks or LLVM
+            // lowering. Parsing the distinct state AST cannot turn on unsafe
+            // actor guest code or treat sealed slots as plain scalar fields.
+            if (actor.sealed_state.has_value()) {
+                throw std::runtime_error(
+                    "native sealed actor state AST is recognized but "
+                    "handle_state effects and scheduler scope lowering are disabled");
+            }
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
                     || functions.count(actor.name))
                 throw std::runtime_error("duplicate actor/class/function symbol '" + actor.name + "'");
