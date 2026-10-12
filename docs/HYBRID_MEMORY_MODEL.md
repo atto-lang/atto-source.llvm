@@ -33,11 +33,11 @@ whereas compiler-generated drop glue must actually free each last-owned value.
   terminates on destructor rather than permitting a use-after-free.
 - Each experimental native `HungryCarrier` now creates a separate
   `OwnedHeap` instance with a configurable `actor_heap_limit_bytes` budget.
-  `HungryCarrier::current_actor_heap()` returns that heap only during that
+  `HungryCarrier::active_heap()` returns its current bounded byte heap only during that
   actor's handler turn; the I/O broker and supervisor see null. The carrier
-  closes the heap after worker/producer quiescence, recording a lifecycle
-  failure if allocations remain alive. Per-carrier live bytes and object
-  counts appear in `CarrierStats`. This is *logical ownership isolation*,
+  retires its heap after worker/producer quiescence. Byte allocations use
+  generation-fenced handles and per-turn `live_blocks()` checks; `CarrierStats`
+  reports protocol failures rather than the removed object/byte counters. This is *logical ownership isolation*,
   not an OS-protected or hostile-tenant sandbox; arbitrary native callbacks
   can still deliberately leak pointers.
 - The LLVM frontend/codegen now accepts a narrowly restricted class form:
@@ -45,12 +45,11 @@ whereas compiler-generated drop glue must actually free each last-owned value.
   whose only permitted use is reading integer fields in an int expression.
   These are allocated with LLVM `alloca` and reclaimed on function return,
   with no managed heap roots, malloc or tracing. Unknown fields, duplicate
-  field names, returned objects, borrowed objects, and unsupported moves
-  fail compilation. This **does not implement nontrivial source destructors**.
-- `CMakeLists.txt` continues to reject source `rt borrow`, `rt take`,
-  and other general ownership forms. The backend has no full
-  owner-provenance/lifetime checker, source-level heap drop elaboration, or
-  cycle collector. The native RAII allocator is currently a runtime primitive
+  field names, returned objects and unsupported moves fail compilation; supported
+  call-scoped class borrows use the current ownership checker. This **does not implement nontrivial source destructors**.
+- The current compiler admits bounded call-scoped `rt borrow` and checked
+  `rt take` through its ownership CFG. Unsupported borrows, effects, and graph
+  layouts fail before IR; this is not a general heap or cycle collector. The native RAII allocator is currently a runtime primitive
   and must not be misrepresented as source-level heap codegen.
 - Physical memory in the Java/Graal backend still depends on the JVM GC,
   even when source ownership is checked.

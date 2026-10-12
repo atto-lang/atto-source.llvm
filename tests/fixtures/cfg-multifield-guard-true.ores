@@ -1,0 +1,9 @@
+define class Player as
+  pub let int health = 90;
+  pub let int stamina = 80;
+end
+pub fnc main(): int {
+  let Player p = new Player();
+  if (p.health eq 90) { return p.stamina - 38; } fi
+  return 0;
+}

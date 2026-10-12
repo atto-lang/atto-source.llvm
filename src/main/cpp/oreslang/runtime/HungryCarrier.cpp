@@ -15,11 +15,11 @@
 namespace oreslang::runtime {
 
 namespace {
-thread_local OwnedHeap* current_actor_owned_heap = nullptr;
-} // namespace
+thread_local HungryCarrier::NativeHeap* tls_actor_heap = nullptr;
+}
 
-OwnedHeap* HungryCarrier::current_actor_heap() noexcept {
-    return current_actor_owned_heap;
+HungryCarrier::NativeHeap* HungryCarrier::active_heap() noexcept {
+    return tls_actor_heap;
 }
 
 // An independent shared control block outlives the carrier. One atomic
@@ -142,7 +142,6 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
                              Options options)
     : actor_state_(actor_state), handler_(handler), broker_state_(broker_state),
       operation_(operation), options_(options),
-      actor_heap_(options.actor_heap_limit_bytes),
       producer_gate_(std::make_shared<ProducerGate>(this)) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
@@ -246,18 +245,16 @@ void HungryCarrier::join() noexcept {
     } else {
         abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
     }
-    // Quiescent actor retirement must not leave live heap allocations.
-    // Do not deallocate their backing storage underneath retained host
-    // handles; keep this a recorded contract violation instead of a UAF.
-    try {
-        actor_heap_.close();
-    } catch (const std::logic_error&) {
-        failures_.fetch_add(1, std::memory_order_relaxed);
-    }
+    joined_.store(true, std::memory_order_release);
+}
+
+std::optional<CarrierRetirementProof> HungryCarrier::retirement_proof() const noexcept {
+    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value())
+        return std::nullopt;
+    return CarrierRetirementProof{*options_.heap_owner};
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
-    const auto heap = actor_heap_.stats();
     return {accepted_.load(std::memory_order_acquire),
             completed_.load(std::memory_order_acquire),
             io_done_.load(std::memory_order_acquire),
@@ -266,10 +263,7 @@ CarrierStats HungryCarrier::stats() const noexcept {
             stale_.load(std::memory_order_acquire),
             failures_.load(std::memory_order_acquire),
             thread_tag_.load(std::memory_order_acquire),
-            abandoned_on_stop_.load(std::memory_order_acquire),
-            static_cast<std::uint64_t>(heap.live_bytes),
-            static_cast<std::uint64_t>(heap.live_objects),
-            heap.closed};
+            abandoned_on_stop_.load(std::memory_order_acquire)};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -292,12 +286,11 @@ bool HungryCarrier::pin_cpu() noexcept {
 
 void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
-    // The heap is discoverable only for the lexical handler call on this
-    // carrier. A broker or unrelated carrier has a distinct TLS context.
-    OwnedHeap* previous_heap = current_actor_owned_heap;
-    current_actor_owned_heap = &actor_heap_;
+    // Only actor handler execution may access this heap. Suspension does not
+    // invalidate its handles; broker callbacks have no such capability.
+    tls_actor_heap = &actor_heap_;
     const auto step = handler_(actor_state_, message, resumed, result);
-    current_actor_owned_heap = previous_heap;
+    tls_actor_heap = nullptr;
     if (stop_.load(std::memory_order_acquire)) return;
     if (step.kind == StepKind::done) {
         completed_.fetch_add(1, std::memory_order_release);
@@ -355,7 +348,7 @@ void HungryCarrier::wait_actor() noexcept {
 void HungryCarrier::actor_loop() noexcept {
     const auto tag = std::hash<std::thread::id>{}(std::this_thread::get_id());
     thread_tag_.store(static_cast<std::uint64_t>(tag), std::memory_order_release);
-    const bool admitted = pin_cpu();
+    const bool admitted = pin_cpu() && actor_heap_.bind_carrier();
     setup_ok_.store(admitted, std::memory_order_release);
     setup_done_.store(true, std::memory_order_release);
     if (!admitted) {

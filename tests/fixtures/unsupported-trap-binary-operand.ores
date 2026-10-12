@@ -1,0 +1,3 @@
+pub fnc main(): int {
+  return 1 + trap (41);
+}

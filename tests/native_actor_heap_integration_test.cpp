@@ -18,24 +18,17 @@ struct State {
     std::atomic<int> destroyed{0};
     std::atomic<int> failures{0};
     std::atomic<int> broker_calls{0};
-    std::atomic<OwnedHeap*> heap{nullptr};
+    std::atomic<HungryCarrier::NativeHeap*> heap{nullptr};
 };
-struct Payload {
-    explicit Payload(std::atomic<int>& drops) noexcept : drops_(&drops) {}
-    ~Payload() noexcept { drops_->fetch_add(1, std::memory_order_relaxed); }
-private:
-    std::atomic<int>* drops_;
-};
-
 static ActorStep handler(void* actor_state, ActorMessage message,
                          bool resumed, std::int64_t result) noexcept {
     auto& state = *static_cast<State*>(actor_state);
-    auto* heap = HungryCarrier::current_actor_heap();
+    auto* heap = HungryCarrier::active_heap();
     if (!heap) {
         ++state.failures;
         return {StepKind::done, 0, 0};
     }
-    auto* expected = static_cast<OwnedHeap*>(nullptr);
+    auto* expected = static_cast<HungryCarrier::NativeHeap*>(nullptr);
     if (!state.heap.compare_exchange_strong(expected, heap) &&
         state.heap.load() != heap) {
         ++state.failures;
@@ -44,14 +37,16 @@ static ActorStep handler(void* actor_state, ActorMessage message,
         return {StepKind::await_io, 5, 0};
     if (message.id == 99 && result != 10) ++state.failures;
 
-    try {
-        auto owned = heap->make<Payload>(state.destroyed);
-        auto borrow = owned.borrow();
-        borrow.with([](const Payload&) {});
-        borrow.reset();
-        owned.drop();
-    } catch (...) {
+    auto owned = heap->allocate(sizeof(std::int64_t));
+    std::int64_t observed = 0;
+    if (!owned || !heap->write(*owned, 0, &message.input, sizeof message.input)
+            || !heap->read(*owned, 0, &observed, sizeof observed)
+            || observed != message.input || !heap->release(*owned)
+            || heap->read(*owned, 0, &observed, sizeof observed)
+            || heap->live_blocks() != 0) {
         ++state.failures;
+    } else {
+        ++state.destroyed; // exactly one reclaimed byte allocation per turn
     }
     ++state.finished;
     return {StepKind::done, 0, 0};
@@ -60,7 +55,7 @@ static ActorStep handler(void* actor_state, ActorMessage message,
 static std::int64_t broker(void* broker_state, std::int64_t value,
                            const std::atomic<bool>&) noexcept {
     auto& state = *static_cast<State*>(broker_state);
-    if (HungryCarrier::current_actor_heap() != nullptr) ++state.failures;
+    if (HungryCarrier::active_heap() != nullptr) ++state.failures;
     ++state.broker_calls;
     return value * 2;
 }
@@ -73,11 +68,10 @@ static bool until(const std::atomic<int>& value, int target) {
 }
 
 int main() {
-    check(HungryCarrier::current_actor_heap() == nullptr,
+    check(HungryCarrier::active_heap() == nullptr,
           "supervisor must not access actor-local heap");
     State a, b;
     HungryCarrier::Options opts;
-    opts.actor_heap_limit_bytes = sizeof(Payload);
     HungryCarrier first(&a, handler, &a, broker, opts);
     HungryCarrier second(&b, handler, &b, broker, opts);
     first.start();
@@ -103,19 +97,14 @@ int main() {
     check(a.heap.load() != nullptr && b.heap.load() != nullptr &&
           a.heap.load() != b.heap.load(), "two native actors shared heap identity");
     check(a.destroyed == 21 && b.destroyed == 7,
-          "actor-owned objects not dropped exactly once");
+          "actor-owned byte allocations not reclaimed exactly once");
     check(a.failures == 0 && b.failures == 0,
           "broker/handler crossed actor memory boundary");
     check(a.broker_calls == 1 && b.broker_calls == 0,
           "broker async contract was not exercised");
-    check(a_stats.actor_heap_closed && b_stats.actor_heap_closed,
-          "actor heap retirement did not close");
-    check(a_stats.actor_live_objects == 0 && b_stats.actor_live_objects == 0 &&
-          a_stats.actor_live_bytes == 0 && b_stats.actor_live_bytes == 0,
-          "actor-owned heap retained allocations");
     check(a_stats.protocol_failures == 0 && b_stats.protocol_failures == 0,
           "carrier reported lifecycle failure");
-    check(HungryCarrier::current_actor_heap() == nullptr,
+    check(HungryCarrier::active_heap() == nullptr,
           "actor-local heap leaked into supervisor thread");
     std::cout << "PASS: native carriers have separate ownership heaps; no heap "
                  "access on broker/supervisor, async resume, deterministic "
