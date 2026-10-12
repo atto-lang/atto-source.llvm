@@ -218,6 +218,15 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+    # Native guest loops and source rt cooperate remain rejected until
+    # executable heap-continuation lowering is implemented. No partial LLVM IR.
+    oreslang_contract_test(native_rt_while_loop_failclosed
+        native-rt-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_failclosed
+        native-rt-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+
 
     add_executable(oreslang-ownership-cfg-dataflow-test
         tests/ownership_cfg_dataflow_test.cpp)
