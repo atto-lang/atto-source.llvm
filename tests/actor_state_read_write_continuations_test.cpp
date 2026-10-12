@@ -132,7 +132,7 @@ int main() {
     catch (const std::invalid_argument&) { stale_identity_rejected = true; }
     CHECK(stale_identity_rejected);
     stale_identity_rejected = false;
-    try { replacement.request(previous.incarnation(), 3, Mode::Read); }
+    try { (void)replacement.request(previous.incarnation(), 3, Mode::Read); }
     catch (const std::invalid_argument&) { stale_identity_rejected = true; }
     CHECK(stale_identity_rejected);
     CHECK(replacement.acknowledge(current_ready));
