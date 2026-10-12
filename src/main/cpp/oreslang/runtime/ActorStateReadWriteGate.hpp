@@ -47,6 +47,7 @@ public:
     };
 
     static constexpr std::size_t max_waiters = 8192;
+    static constexpr std::size_t max_active_readers = 1024;
 
     ActorStateReadWriteGate() : scope_(mint_scope()) {}
     ActorStateReadWriteGate(const ActorStateReadWriteGate&) = delete;
@@ -57,7 +58,8 @@ public:
         if (closed_) throw std::logic_error("actor state gate retired");
         // Once a writer has queued, later readers cannot bypass it.
         const bool available = waiting_.empty() &&
-                (mode == Mode::Read ? !writer_active_ : owners_.empty());
+                (mode == Mode::Read ? !writer_active_ && owners_.size() < max_active_readers
+                                    : owners_.empty());
         if (!available && waiting_.size() >= max_waiters) {
             throw std::overflow_error("actor state gate waiter limit exceeded");
         }
@@ -178,7 +180,8 @@ private:
             }
             return;
         }
-        while (!waiting_.empty() && waiting_.front().mode == Mode::Read) {
+        while (!waiting_.empty() && waiting_.front().mode == Mode::Read
+                && owners_.size() < max_active_readers) {
             const Token ticket = waiting_.front().token;
             owners_.splice(owners_.end(), waiting_, waiting_.begin());
             admitted.push_back(ticket);
