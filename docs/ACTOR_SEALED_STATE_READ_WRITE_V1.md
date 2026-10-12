@@ -101,3 +101,37 @@ and does **not** promise callback-wide atomicity across await.
 
 See `CRITICAL_HANDLE_STATE_USING_PARITY.md` and
 `CRITICAL_CALLABLE_SEMANTICS.md` in the LLVM repository for prior contracts.
+
+
+## Hardening audit (2026-10-12)
+
+The first implementation found and addressed the following boundary gaps:
+
+1. Java parsing denies direct `self.state` within actor classes and rejects
+   actor-defined `handle_state` methods (including `static fnc` declarations).
+   Java's type checker additionally rejects `.state` access based on a
+   receiver's nominal actor type; aliases cannot bypass the literal syntax
+   check. These checks do not imply the positive state schema is lowered.
+2. The native RW admission substrate caps **active reader tickets at 1024**
+   and queued tickets at **8192**. Writers are FIFO-ordered; arriving readers
+   cannot overtake an already queued writer. Modes outside Read/Write reject
+   before any ticket is minted.
+3. C++ admission transfers allocated linked-list nodes from waiting to active
+   ownership, without further allocation during handoff. Before changing
+   ownership the release method reserves all needed wake-list space, so
+   an allocation failure cannot strand a newly admitted ticket. Linear
+   active-ticket lookup is the deliberate safety tradeoff pending profiling.
+4. Retirement returns **all outstanding owner/waiter tokens** for terminal
+   cancellation instead of silently dropping waiting continuations. Runtime
+   scheduler integration MUST consume this batch and signal cancellations
+   outside the gate metadata mutex. This adapter is not integrated yet.
+5. Multithread cancellation/handoff, queue ordering, retirement and active
+   reader bounds have targeted C++ tests. CI jobs currently fail before steps
+   execute; those tests remain unverified on a build runner.
+
+**Must remain draft:** no source-level critical-read/write effect or loan
+lowering, no trusted immutable snapshot proof, no scheduler ticket binding
+to guest continuations, no user-visible actor-state read concurrency, and
+no demonstrated Java/LLVM end-to-end parity. A successful native gate test
+is not evidence that guest actor execution is race-safe. Explicit read-to-write
+upgrades are forbidden pending versioned retry semantics.
