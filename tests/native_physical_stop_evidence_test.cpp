@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <atomic>
+#include <thread>
 #include <stdexcept>
 
 using namespace oreslang::runtime;
@@ -78,6 +80,37 @@ int main() {
           "reconciliation did not commit stopped child");
     check(!evidence.confirms_physical_done(receipt),
           "acknowledged STOP was incorrectly left eligible for reconciliation");
+
+    // Completed STOP records may be pruned only after acknowledgement,
+    // before retiring the child identity. This prevents a 65k-entry leak.
+    const auto acknowledged = registry->stop_receipt(child.child);
+    check(evidence.forget_acknowledged(acknowledged) && evidence.size() == 0,
+          "ACKed STOP proof was not reclaimed");
+    check(!evidence.forget_acknowledged(acknowledged)
+              && !evidence.confirms_physical_done(receipt),
+          "pruned STOP evidence was replayable");
+
+    // Concurrent readers cannot outlive the native scheduler: close() waits
+    // for their critical sections and future observation fails closed.
+    std::atomic<bool> exit_readers{false};
+    std::atomic<unsigned> reads{0};
+    std::thread reader([&] {
+        while (!exit_readers.load(std::memory_order_acquire)) {
+            (void) evidence.confirms_physical_done(receipt);
+            ++reads;
+        }
+    });
+    while (reads.load() < 100) std::this_thread::yield();
+    evidence.close();
+    evidence.close();
+    exit_readers.store(true, std::memory_order_release);
+    reader.join();
+    check(!evidence.confirms_physical_done(receipt) && evidence.size() == 0,
+          "closed ledger could still read a native scheduler");
+    bool closed_rejected = false;
+    try { (void) evidence.observe_physical_done(receipt); }
+    catch (const std::logic_error&) { closed_rejected = true; }
+    check(closed_rejected, "closed ledger accepted physical DONE");
 
     ores_native_actor_scheduler_retire(scheduler);
     check(ores_native_actor_scheduler_drain(scheduler)
