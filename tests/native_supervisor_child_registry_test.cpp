@@ -343,6 +343,50 @@ int main() {
             [](const SupervisorChildRegistry::StopReceipt&) { return true; });
     });
 
+    // Physical RESTART candidates are tracked separately from logical child
+    // identity. No commit without admission and no abort while still alive.
+    SupervisorChildRegistry gated{2217, 42};
+    const OresNativeActorRef failed{42, 110, 1};
+    const auto target = gated.register_child(failed);
+    gated.finalized(target.child, failed, 1);
+    const auto ticket = gated.begin_restart(target.child, failed, 1);
+    const OresNativeActorRef staged{42, 111, 1};
+    must_reject([&] { gated.replace(ticket, staged); });
+    gated.stage_replacement(ticket, staged);
+    must_reject([&] { gated.abort_restart(ticket); });
+    must_reject([&] { gated.replace(ticket, staged); });
+    must_reject([&] {
+        gated.acknowledge_replacement_admission(
+            ticket, staged, [] { return false; });
+    });
+    gated.acknowledge_replacement_admission(
+        ticket, staged, [&] {
+            check(gated.snapshot(target.child).phase
+                      == SupervisorChildRegistry::Phase::restarting,
+                  "admission callback was invoked holding registry mutex");
+            return true;
+        });
+    must_reject([&] { gated.abort_restart(ticket); });
+    gated.close_restart_admission();
+    must_reject([&] { gated.replace(ticket, staged); });
+    must_reject([&] {
+        gated.acknowledge_replacement_cleanup(
+            ticket, staged, [] { return false; });
+    });
+    gated.acknowledge_replacement_cleanup(
+        ticket, staged, [&] {
+            check(gated.snapshot(target.child).phase
+                      == SupervisorChildRegistry::Phase::restarting,
+                  "cleanup callback was invoked holding registry mutex");
+            return true;
+        });
+    must_reject([&] { gated.replace(ticket, staged); });
+    gated.abort_restart(ticket);
+    check(gated.snapshot(target.child).phase
+              == SupervisorChildRegistry::Phase::finalized,
+          "cleanup-backed restart rollback did not restore FINALIZED");
+    must_reject([&] { gated.begin_restart(target.child, failed, 1); });
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
