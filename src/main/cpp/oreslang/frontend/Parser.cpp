@@ -997,13 +997,21 @@ private:
                 if (!member.has_payload) continue;
                 std::function<bool(const MessageShape&)> needsNewCodec;
                 needsNewCodec = [&](const MessageShape& shape) {
-                    // Box<int> is just as unsupported over the wire as
-                    // Box<Foo>. Do not grant transport because a box lacks
-                    // a nested nominal enum reference.
-                    if (shape.kind == MessageShape::Kind::EnumRef
-                            || shape.kind == MessageShape::Kind::Box) return true;
-                    for (const auto& child : shape.elements)
-                        if (needsNewCodec(child)) return true;
+                    // Only direct EnumRef to a *closed nullary* enum has
+                    // source guest lowering and native E-shape validation.
+                    // Collections of enum values and boxed payloads remain
+                    // rejected until the runtime can own their allocations.
+                    if (shape.kind == MessageShape::Kind::Box) return true;
+                    if (shape.kind == MessageShape::Kind::EnumRef) {
+                        const auto found = enumNames.find(shape.nominal_name);
+                        return found == enumNames.end() || std::any_of(
+                            found->second->cases.begin(), found->second->cases.end(),
+                            [](const EnumCase& c) { return c.has_payload; });
+                    }
+                    for (const auto& child : shape.elements) {
+                        if (child.kind == MessageShape::Kind::EnumRef || needsNewCodec(child))
+                            return true;
+                    }
                     return false;
                 };
                 if (needsNewCodec(member.payload))
@@ -1425,6 +1433,10 @@ private:
                                 validate_expression(*arm.route_payload, armAvailable, functions);
                             }
                             if (arm.binds_payload) {
+                                if (matched->has_payload &&
+                                        matched->payload.kind == MessageShape::Kind::EnumRef)
+                                    throw std::runtime_error(
+                                        "nested variant binder requires LLVM enum projection lowering");
                                 if (!matched->has_payload)
                                     throw std::runtime_error(
                                         "cannot destructure payloadless enum variant");
