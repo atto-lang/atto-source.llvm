@@ -56,6 +56,9 @@ public:
     [[nodiscard]] Request request(Mode mode) {
         std::lock_guard<std::mutex> lock(mu_);
         if (closed_) throw std::logic_error("actor state gate retired");
+        if (mode != Mode::Read && mode != Mode::Write) {
+            throw std::invalid_argument("unsupported reader/writer mode");
+        }
         // Once a writer has queued, later readers cannot bypass it.
         const bool available = waiting_.empty() &&
                 (mode == Mode::Read ? !writer_active_ && owners_.size() < max_active_readers
