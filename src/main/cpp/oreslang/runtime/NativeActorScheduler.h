@@ -10,6 +10,12 @@ typedef struct {
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
+/* Host-only, thread-affine admission guard. The scheduler pins this exact
+ * physical incarnation until release. Never export it to guest code. */
+typedef struct {
+    OresNativeActorRef actor;
+    uint64_t nonce;
+} OresNativeRestartLease;
 enum { ORES_NATIVE_CONTROL_PANIC = 1, ORES_NATIVE_CONTROL_CANCELLED = 2,
        ORES_NATIVE_CONTROL_STOPPED = 3 };
 typedef struct {
@@ -29,6 +35,23 @@ typedef void (*OresNativeActorPanicFn)(
  */
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
+/* Replacement candidates are physically allocated but cannot receive normal
+ * mail, even through legacy index submit, until publication commits. */
+OresNativeActorRef ores_native_actor_scheduler_spawn_unpublished(
+    OresNativeActorScheduler* scheduler, size_t actor_slot);
+/* Serializes RESTART publication with physical stop/global retirement without
+ * holding the scheduler's internal lock over registry operations. A successful
+ * lease must be released exactly once on its acquiring host thread; stop and
+ * retire wait for that release. Nonrecursive: no stop/retire under a lease. */
+int ores_native_actor_scheduler_acquire_restart_lease(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeRestartLease* out);
+/* Called only AFTER logical identity/routing publication while the lease is
+ * held; makes the physical lane externally routable. */
+int ores_native_actor_scheduler_publish_restart_lease(
+    OresNativeActorScheduler* scheduler, OresNativeRestartLease lease);
+int ores_native_actor_scheduler_release_restart_lease(
+    OresNativeActorScheduler* scheduler, OresNativeRestartLease lease);
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
 int ores_native_actor_scheduler_stop(
@@ -94,7 +117,9 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open(
  */
 int ores_native_actor_scheduler_submit(
     OresNativeActorScheduler* scheduler, size_t actor_index, uint64_t payload);
-/* No new tasks after retirement, but previously accepted tasks drain. */
+/* No new tasks after retirement, but previously accepted tasks drain.
+ * This host-only operation waits for active publication leases to release;
+ * never call it from inside a lease-owning host transaction. */
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* scheduler);
 /* Wait for every accepted callback to complete; may not be called from its worker. */
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
