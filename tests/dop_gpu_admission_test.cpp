@@ -178,5 +178,25 @@ int main() {
         dst.complete(winner.output_ticket, true);
     }
 
+    for (int i = 0; i < 50; ++i) {
+        BufferFence left(Identity{"t", "d", 101}, 16);
+        BufferFence right(Identity{"t", "d", 102}, 16);
+        std::optional<BufferFence::PairTickets> tickets;
+        std::optional<BufferFence> moved;
+        std::thread claimant([&] {
+            try { tickets = BufferFence::claim_pair(left, right, 16); }
+            catch (const std::logic_error&) { }
+        });
+        std::thread mover([&] {
+            try { moved.emplace(right.take()); }
+            catch (const std::logic_error&) { }
+        });
+        claimant.join(); mover.join();
+        check(tickets.has_value() != moved.has_value());
+        if (tickets) {
+            left.complete(tickets->input_ticket, true);
+            right.complete(tickets->output_ticket, true);
+        } else check(left.status() == oreslang::gpu::Status::Idle);
+    }
     std::cout << "typed DOP GPU placement admission tests passed\n";
 }
