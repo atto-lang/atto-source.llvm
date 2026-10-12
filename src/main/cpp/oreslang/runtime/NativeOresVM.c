@@ -61,6 +61,15 @@ size_t ores_native_vm_workers(const OresNativeVM* vm, enum OresNativeVMDomain do
     return vm && valid_domain(domain) ? vm->workers[domain] : 0;
 }
 
+int ores_native_vm_has_hard_security_boundary(
+    const OresNativeVM* vm, enum OresNativeVMDomain domain) {
+    /* Four queues and four carrier pools cannot isolate memory or native
+     * pointers. Do not return true merely because the domain is UNTRUSTED. */
+    (void)vm;
+    (void)domain;
+    return 0;
+}
+
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot) {
     OresNativeActorRef invalid = {0, 0, 0};
