@@ -656,7 +656,7 @@ int main() {
         check(runtime != nullptr, "restart proof scheduler startup failed");
         const auto supervisor = ores_native_actor_scheduler_spawn(runtime, 0);
         const auto dying = ores_native_actor_scheduler_spawn(runtime, 1);
-        const auto replacement = ores_native_actor_scheduler_spawn(runtime, 2);
+        const auto replacement = ores_native_actor_scheduler_spawn_unpublished(runtime, 2);
         check(supervisor.scheduler_domain && dying.scheduler_domain
                   && replacement.scheduler_domain, "restart fixture spawn failed");
         auto control = std::make_shared<SupervisorControlScheduler>(2, 16);
@@ -677,6 +677,10 @@ int main() {
               "old actor did not physically finalize before restart");
         children->finalized(child.child, dying, 1);
         const auto ticket = children->begin_restart(child.child, dying, 1);
+        check(!ores_native_actor_scheduler_send(runtime, replacement, 42)
+                  && !ores_native_actor_scheduler_submit(
+                      runtime, static_cast<size_t>(replacement.actor_slot), 42),
+              "unpublished replacement accepted mail before logical commit");
         bool rejected = false;
         try {
             (void) bridge->admit_verified_replacement(
@@ -688,6 +692,8 @@ int main() {
         if (mode == 0) {
             const auto committed = bridge->admit_verified_replacement(
                 ticket, replacement);
+            check(ores_native_actor_scheduler_send(runtime, replacement, 42),
+                  "logically committed replacement remains unroutable");
             check(committed.phase ==
                       oreslang::runtime::SupervisorChildRegistry::Phase::active
                       && committed.incarnation == 2,
