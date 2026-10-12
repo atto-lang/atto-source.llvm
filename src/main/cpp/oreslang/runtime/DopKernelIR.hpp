@@ -258,7 +258,11 @@ inline std::string cl_float(float value) {
 
 inline OpenClArtifact lower_opencl(const Kernel& kernel, GpuTarget target) {
     const auto& p = kernel.layout;
+    // Empty host layouts are valid, but zero-work NDRange dispatch is not
+    // a supported GPU capability; fail closed instead of emitting it.
     if (target.address_bits != 64 || !target.float32
+            || target.maximum_buffer_bytes == 0 || target.maximum_rows == 0
+            || p.rows() == 0 || p.byte_length() == 0
             || p.byte_length() > target.maximum_buffer_bytes
             || p.rows() > target.maximum_rows)
         throw std::invalid_argument("GPU target cannot admit kernel effects or buffer");
