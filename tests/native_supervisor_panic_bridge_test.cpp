@@ -714,10 +714,15 @@ int main() {
             check(ores_native_actor_scheduler_stop(runtime, replacement)
                       && ores_native_actor_scheduler_wait_done(runtime, replacement),
                   "replacement did not physically finalize after commit");
-            check(bridge->on_panic(supervisor.actor_slot,
-                      OresNativeActorTerminalFailure{
-                          ORES_NATIVE_CONTROL_PANIC, replacement, 19, 219}),
-                  "new generation was missing from supervisor PANIC routing");
+            const OresNativeActorTerminalFailure panic_notice{
+                ORES_NATIVE_CONTROL_PANIC, replacement, 19, 219
+            };
+            check(!bridge->on_panic(OresNativeActorRef{
+                       supervisor.scheduler_domain, supervisor.actor_slot,
+                       supervisor.generation + 1}, panic_notice),
+                  "forged supervisor callback incarnation reached CONTROL");
+            check(bridge->on_panic(supervisor, panic_notice),
+                  "exact generation-aware parent PANIC did not route");
             bridge->fence_restart_publication();
         } else if (mode == 1) {
             children->stage_replacement(ticket, replacement);
