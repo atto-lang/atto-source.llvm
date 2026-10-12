@@ -135,3 +135,29 @@ to guest continuations, no user-visible actor-state read concurrency, and
 no demonstrated Java/LLVM end-to-end parity. A successful native gate test
 is not evidence that guest actor execution is race-safe. Explicit read-to-write
 upgrades are forbidden pending versioned retry semantics.
+
+
+## Native continuation CONTROL handoff (additional hardening)
+
+The native backend now has three **runtime primitives**, not yet a completed
+compiler/scheduler feature:
+
+- `ActorStateReadWriteGate`: FIFO read/write tickets, bounded readers
+  and waiters, generational scope, cancellation and retirement fences.
+- `ActorStateReadWriteContinuations`: trusted monotonically identified
+  continuation registry; durable Ready/Cancelled status until CONTROL admission
+  acknowledges the exact status; terminal notifications survive failed
+  enqueue attempts. Registry records including unacknowledged cancellations
+  are capped at 9,216 to prevent memory growth when CONTROL is saturated.
+- `ActorStateReadWriteControlPump`: serializes bounded nonblocking CONTROL
+  admission attempts; accepts a scheduler-provided noexcept receipt callback.
+  Failed admission leaves the event pending; it never invokes guest code.
+
+The adapter deliberately **does not use** the reserved supervisor panic slot
+as a normal RW wake queue. The production scheduler must provide a separate
+bounded delivery path, confirm a receipt only after admission, enforce
+single-flight actor execution, check `registry.admitted(id, mode)` at actual
+dispatch (retirement can invalidate an already enqueued Ready item), and
+ensure all state loans are drained before quiescent retirement. No component
+here permits direct guest callback execution or parallel guest actor reads.
+Native and Java source lowering/effect checks are still outstanding.
