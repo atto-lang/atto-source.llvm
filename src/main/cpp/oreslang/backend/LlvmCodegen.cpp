@@ -309,8 +309,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                 {i64, i64, i64}, false));
     const auto pipelineExpect = module.getOrInsertFunction(
-        "oreslang_source_actor_pipeline_expect",
-        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+        "oreslang_source_actor_pipeline_expect_status",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
                                 {ptr, i64}, false));
     const auto sourceStop = module.getOrInsertFunction(
         "oreslang_source_actor_stop",
@@ -484,10 +484,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 emitSend(builder, send, actorRefs, parameters, locals);
 
         }
+        llvm::Value* pipelineStatus = nullptr;
         if (!fn.pipeline_expect_actor.empty()) {
-            builder.CreateCall(pipelineExpect, {
+            pipelineStatus = builder.CreateCall(pipelineExpect, {
                 actorRefs.at(fn.pipeline_expect_actor),
-                llvm::ConstantInt::getSigned(i64, fn.pipeline_expect_value)});
+                llvm::ConstantInt::getSigned(i64, fn.pipeline_expect_value)},
+                "pipeline.terminal.status");
         }
         for (const auto& name : fn.actor_stops) {
             builder.CreateCall(sourceStop, {actorRefs.at(name)});
@@ -500,6 +502,19 @@ std::string emit_verified_llvm_ir(const Program& source) {
             }
         }
         if (region != nullptr) builder.CreateCall(heapClose, {region});
+        if (pipelineStatus) {
+            // The trusted-main boundary always stops every actor before
+            // converting a recoverable nonzero pipeline status into process
+            // exit status 70+reason. Actor carriers never exit the process.
+            auto* success = builder.CreateICmpEQ(
+                pipelineStatus, llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(context), 0));
+            auto* failureCode = builder.CreateAdd(
+                pipelineStatus, llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(context), 70));
+            result = builder.CreateSelect(
+                success, result, builder.CreateZExt(failureCode, i64));
+        }
         builder.CreateRet(result);
     }
 
@@ -774,6 +789,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
                             && name != "oreslang_source_actor_pipeline_expect"
+                            && name != "oreslang_source_actor_pipeline_expect_status"
                             && name != "oreslang_source_actor_spawn_tagged_variants"
                             && name != "oreslang_source_actor_send_variant_checked"
                             && name != "oreslang_source_actor_tagged_i64"
