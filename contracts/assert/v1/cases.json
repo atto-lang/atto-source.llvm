@@ -1,0 +1,249 @@
+{
+  "schema_version": "1.0.0",
+  "stdlib_module": "std/assert",
+  "cases": [
+    {
+      "id": "equal_int_true",
+      "operation": "equal",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "9"
+        },
+        {
+          "kind": "int",
+          "value": "9"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": true
+      }
+    },
+    {
+      "id": "equal_int_false",
+      "operation": "equal",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "9"
+        },
+        {
+          "kind": "int",
+          "value": "10"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": false
+      }
+    },
+    {
+      "id": "equal_string_true",
+      "operation": "equal",
+      "operands": [
+        {
+          "kind": "string",
+          "value": "ore"
+        },
+        {
+          "kind": "string",
+          "value": "ore"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": true
+      }
+    },
+    {
+      "id": "not_equal_int_true",
+      "operation": "not_equal",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "9"
+        },
+        {
+          "kind": "int",
+          "value": "10"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": true
+      }
+    },
+    {
+      "id": "not_equal_int_false",
+      "operation": "not_equal",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "9"
+        },
+        {
+          "kind": "int",
+          "value": "9"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": false
+      }
+    },
+    {
+      "id": "same_primitive_true",
+      "operation": "same",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "3"
+        },
+        {
+          "kind": "int",
+          "value": "3"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": true
+      }
+    },
+    {
+      "id": "true_bool",
+      "operation": "true",
+      "operands": [
+        {
+          "kind": "bool",
+          "value": "true"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": true
+      }
+    },
+    {
+      "id": "false_bool",
+      "operation": "false",
+      "operands": [
+        {
+          "kind": "bool",
+          "value": "false"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": true
+      }
+    },
+    {
+      "id": "equal_throws_success",
+      "operation": "equal_throws",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "3"
+        },
+        {
+          "kind": "int",
+          "value": "3"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "returned",
+        "boolean": true
+      }
+    },
+    {
+      "id": "equal_throws_raw_error",
+      "operation": "equal_throws",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "3"
+        },
+        {
+          "kind": "int",
+          "value": "4"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "throw",
+        "message_contains": "Assert.equal: values are not equal"
+      }
+    },
+    {
+      "id": "equal_throws_trap_none",
+      "operation": "equal_throws",
+      "operands": [
+        {
+          "kind": "int",
+          "value": "3"
+        },
+        {
+          "kind": "int",
+          "value": "4"
+        }
+      ],
+      "trapped": true,
+      "expected": {
+        "kind": "none"
+      }
+    },
+    {
+      "id": "false_throws_trap_none",
+      "operation": "false_throws",
+      "operands": [
+        {
+          "kind": "bool",
+          "value": "true"
+        }
+      ],
+      "trapped": true,
+      "expected": {
+        "kind": "none"
+      }
+    },
+    {
+      "id": "fail_trap_none",
+      "operation": "fail",
+      "operands": [
+        {
+          "kind": "string",
+          "value": "intentional"
+        }
+      ],
+      "trapped": true,
+      "expected": {
+        "kind": "none"
+      }
+    },
+    {
+      "id": "fail_raw_error",
+      "operation": "fail",
+      "operands": [
+        {
+          "kind": "string",
+          "value": "intentional"
+        }
+      ],
+      "trapped": false,
+      "expected": {
+        "kind": "throw",
+        "message_contains": "intentional"
+      }
+    }
+  ]
+}
