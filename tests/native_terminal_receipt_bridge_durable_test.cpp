@@ -257,6 +257,53 @@ int main() {
         ExternalEffectProof proof{key, nonce, {}};
         for (unsigned i = 0; i < proof.evidence_sha256.size(); ++i)
             proof.evidence_sha256[i] = static_cast<std::uint8_t>(i + 1);
+        // The live scheduler is CLAIMED and the journal is CLAIMED. This
+        // is the state where the former scheduler-only reconciliation API
+        // could silently ACK without the durable external-effect proof.
+        bool legacy_denied = false;
+        try {
+            (void)bridge->reconcile_claimed_terminal_ack(
+                parent, child,
+                [](const OresNativeTerminalReceipt&) { return true; });
+        } catch (const std::logic_error&) { legacy_denied = true; }
+        OresNativeTerminalReceipt unproven{};
+        check(legacy_denied
+                  && ores_native_actor_scheduler_terminal_receipt(
+                      s, parent, child, &unproven)
+                  && unproven.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+                  && journal->inspect(key).phase == DurableTerminalPhase::claimed,
+              "scheduler-only ACK escaped durable CLAIMED quarantine");
+
+        // Malformed logical/event/nonce evidence may not invoke a verifier,
+        // even if the hostile caller supplies a verifier that returns true.
+        for (unsigned field : {7U, 9U, 11U, 12U}) {
+            auto forged = proof;
+            ++forged.key.words[field];
+            unsigned checks = 0;
+            bool rejected = false;
+            try {
+                rejected = !bridge->reconcile_durable_terminal_effect(
+                    forged, [&](const auto&) { ++checks; return true; });
+            } catch (const std::logic_error&) { rejected = true; }
+            check(rejected && checks == 0
+                      && journal->inspect(key).phase
+                             == DurableTerminalPhase::claimed,
+                  "forged durable terminal identity was admitted");
+        }
+        {
+            auto forged = proof;
+            ++forged.nonce;
+            unsigned checks = 0;
+            bool rejected = false;
+            try {
+                rejected = !bridge->reconcile_durable_terminal_effect(
+                    forged, [&](const auto&) { ++checks; return true; });
+            } catch (const std::logic_error&) { rejected = true; }
+            check(rejected && checks == 0
+                      && journal->inspect(key).phase
+                             == DurableTerminalPhase::claimed,
+                  "forged durable journal nonce was accepted");
+        }
         bool verified = false;
         check(!bridge->reconcile_durable_terminal_effect(
                   proof, [&](const auto&) { return verified; }),
