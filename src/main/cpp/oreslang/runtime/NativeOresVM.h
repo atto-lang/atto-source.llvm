@@ -45,6 +45,13 @@ OresNativeSendStatus ores_native_vm_try_send(
     OresNativeActorRef actor, uint64_t payload);
 int ores_native_vm_stop(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* External trusted host barriers for compiler-generated linear ActorRef
+ * stop/teardown. They do not implement source-level suspend or Future<T>.
+ * Never call wait_done from a VM carrier callback. */
+int ores_native_vm_poll_done(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+int ores_native_vm_wait_done(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 int ores_native_vm_publish_control(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef parent, uint64_t payload);
