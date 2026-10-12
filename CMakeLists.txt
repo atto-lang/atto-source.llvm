@@ -71,18 +71,21 @@ if(BUILD_TESTING)
     # An unsupported feature is NOT a blanket allowance to ignore arbitrary
     # compiler failures. The harness also builds and runs supported scalar IR.
     find_program(ORE_QUEUE_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
-    if(ORE_QUEUE_CLANG)
-        add_test(NAME native_linked_queue_exact_source_failclosed
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_linked_queue_fail_closed.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/linked-queue"
-                --clang "${ORE_QUEUE_CLANG}")
-        set_tests_properties(native_linked_queue_exact_source_failclosed
-            PROPERTIES TIMEOUT 120)
-    else()
-        message(STATUS "Linked-queue native execution control requires Clang; CTest gate omitted")
+    # Never silently omit the admission test when Clang is absent: a reduced
+    # test count must not look like proof of a successful compiler/runtime gate.
+    # The test explicitly fails if its native execution control is unavailable.
+    if(NOT ORE_QUEUE_CLANG)
+        message(WARNING "Linked-queue CTest will fail: Clang is required for the native execution control")
+        set(ORE_QUEUE_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang-executable")
     endif()
+    add_test(NAME native_linked_queue_exact_source_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_linked_queue_fail_closed.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/linked-queue"
+            --clang "${ORE_QUEUE_CLANG}")
+    set_tests_properties(native_linked_queue_exact_source_failclosed
+        PROPERTIES TIMEOUT 120)
     add_test(NAME native_linked_queue_harness_adversarial
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover
             -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
