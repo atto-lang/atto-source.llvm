@@ -712,6 +712,12 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (token_.text == "trap") {
+            // Reserved for Option-valued ordinary-error capture. Reject it
+            // before IR generation: accepting a normal value here would erase
+            // the guest failure channel and violate panic/raise precedence.
+            fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
+        }
         if (token_.text == "rt") {
             const auto offset = token_.offset;
             advance();
