@@ -243,3 +243,44 @@ must exhibit `NoForgedCausalAdmission` counterexample. This bounded
 abstraction is NOT a proof of C scheduler lock-order or implementation
 trace refinement. The finalized funded result must be recorded separately
 after the checker actually runs.
+
+
+## Callback lock-order and checked teardown audit (2026-10-12)
+
+### Reentrancy bug fixed
+
+The original `callback_table == table` guard prevented only immediate
+same-table callback recursion. It did not stop **A→B→A** recursion: a callback
+holding a per-flow lock in table A could publish into B, and B's nested callback
+would overwrite the thread-local callback marker before re-entering A. A
+self-deadlock could then occur under A's still-held lock.
+
+Every registry entrypoint now refuses entry while **any** publish callback is
+active on its thread, irrespective of the table targeted. The pinned ticket
+and flow lock remain held until the callback completes; unrelated callers on
+other threads may still progress. A deterministic C regression attempts
+open/reserve/publish/cancel/finish/snapshot/retire against a second table from
+inside a callback and verifies `ORES_FLOW_REENTRANT` and preservation of its
+unconsumed reservation. It then publishes the second flow normally.
+
+The bounded two-table `FlowCallbackReentrancy.tla` contract model checks
+`NoNestedRegistryEntry` and `NoCallbackLockCycle`; its deliberately unsafe
+nested-entry mutant must be rejected. This **does not** establish C11
+implementation trace refinement.
+
+### Teardown lifecycle bug fixed
+
+The former `ores_flow_table_destroy` could free a table while it still held
+registered active, reserved or terminal-but-unretired flows, silently losing
+correlation/terminal state. The new `ores_flow_table_try_destroy` is
+nonblocking: it returns `ORES_FLOW_REENTRANT` inside callbacks,
+`ORES_FLOW_BUSY` for currently locked flow slots, and
+`ORES_FLOW_INCOMPLETE` for any unretired slot. Only a quiescent, empty
+registry can return OK and free its storage. The historical void
+`ores_flow_table_destroy` now fails closed on rejected teardown rather than
+silently discarding the table.
+
+**Critical contract:** the scheduler owner must still fence and join external
+producers *before* trying destruction; the check cannot create a producer
+shutdown barrier from thin air. This remains experimental host-side API,
+not production-integrated guest cancellation/finalization.
