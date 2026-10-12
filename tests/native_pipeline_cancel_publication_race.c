@@ -22,6 +22,7 @@ static pthread_mutex_t gate = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ready = PTHREAD_COND_INITIALIZER;
 static pthread_t canceller;
 static void* source;
+static void* downstream;
 static int thread_started;
 static int publication_waiting;
 static int cancellation_done;
@@ -49,7 +50,8 @@ void __wrap_oreslang_source_actor_pipeline_connect_many(
     if (!stages || count != 2 || thread_started) abort();
     __real_oreslang_source_actor_pipeline_connect_many(stages, count);
     source = stages[0];
-    if (!source || pthread_create(&canceller, NULL,
+    downstream = stages[1];
+    if (!source || !downstream || pthread_create(&canceller, NULL,
                                  terminal_cancellation, NULL) != 0) abort();
     thread_started = 1;
 }
@@ -57,11 +59,14 @@ void __wrap_oreslang_source_actor_pipeline_connect_many(
 void oreslang_source_actor_test_before_pipeline_publish(
     void* actor, unsigned direction) {
 #ifdef ORESLANG_CANCEL_RACE_FORWARD_HOP
+    /* The hook receives the DESTINATION mailbox, not the emitting source. */
     const unsigned target_direction = 1;
+    const void* expected_actor = downstream;
 #else
     const unsigned target_direction = 0;
+    const void* expected_actor = source;
 #endif
-    if (actor != source || direction != target_direction) return;
+    if (actor != expected_actor || direction != target_direction) return;
     if (pthread_mutex_lock(&gate) != 0) abort();
     if (publication_waiting) abort();
     publication_waiting = 1;
