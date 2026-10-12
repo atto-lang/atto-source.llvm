@@ -160,6 +160,27 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         return !failed_ && !closed_ && !close_after_commit_ && undelivered_ == 0;
     }
+
+    /*
+     * Trusted, bounded host publication transaction. Coordinate RESTART
+     * with the same decision/close barrier used by authoritative STOP.
+     * Acquire the decision fence first, then the process mutex; callers
+     * may acquire the native scheduler publication gate and bridge/registry
+     * mutexes *inside* this scope, never in the reverse order.
+     *
+     * The callback must perform only bounded, callback-free host identity
+     * mutations; no guest work, blocking Future or external lifecycle
+     * effect may execute here. The process lock makes failure classification
+     * and CONTROL close atomic with the host registry publication.
+     */
+    template <typename Fn>
+    decltype(auto) with_healthy_restart_transaction(Fn&& publication) {
+        std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (failed_ || closed_ || close_after_commit_ || undelivered_ != 0)
+            throw std::logic_error("supervisor CONTROL cannot publish RESTART");
+        return std::forward<Fn>(publication)();
+    }
     void close() {
         // Linearize shutdown with actual lifecycle decision side effects.
         // A recursive fence supports a trusted decision that stops its own
