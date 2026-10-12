@@ -448,6 +448,31 @@ int main() {
         exclusive.abort_restart(claim_b);
     }
 
+    // Staging consumes a physical scheduler generation even if the actor
+    // is cleaned and its uncommitted RESTART reservation is aborted. Otherwise
+    // stale callbacks could address a reused slot+generation (ABA).
+    {
+        SupervisorChildRegistry abandoned{5517, 42};
+        const OresNativeActorRef old{42, 160, 1};
+        const OresNativeActorRef spawned{42, 161, 1};
+        const auto child = abandoned.register_child(old);
+        abandoned.finalized(child.child, old, 1);
+        auto claim = abandoned.begin_restart(child.child, old, 1);
+        abandoned.stage_replacement(claim, spawned);
+        abandoned.acknowledge_replacement_cleanup(
+            claim, spawned, [] { return true; });
+        abandoned.abort_restart(claim);
+        must_reject([&] { abandoned.register_child(spawned); });
+        const auto renewed = abandoned.begin_restart(child.child, old, 1);
+        must_reject([&] { abandoned.stage_replacement(renewed, spawned); });
+        abandoned.abort_restart(renewed);
+        // A genuinely new physical scheduler generation may still enter.
+        const auto newer = abandoned.register_child(
+            OresNativeActorRef{42, spawned.actor_slot, spawned.generation + 1});
+        check(newer.incarnation == 1 && newer.child != child.child,
+              "fenced physical generation blocked a genuinely new incarnation");
+    }
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
