@@ -1,6 +1,9 @@
 #include "oreslang/runtime/GpuBufferFence.hpp"
 #include <stdexcept>
 #include <iostream>
+#include <atomic>
+#include <thread>
+#include <utility>
 
 template<class Exception, class F> void expects(F fn) {
     try { fn(); } catch (const Exception&) { return; }
@@ -46,5 +49,37 @@ int main() {
     failed.retire_after_backend_release(second);
     failed.close_after_retirement();
     expects<std::invalid_argument>([&] { (void)BufferFence(second, 0); });
+
+    // Concurrent take() versus reading the old owner used to race on state_:
+    // active() returned and take() moved the pointer before the second access.
+    // Either operation may win, but never crash or publish a stale snapshot.
+    for (int iteration = 0; iteration < 300; ++iteration) {
+        BufferFence candidate(Identity{"tenant", "race-device", 50}, 64);
+        std::atomic<bool> start{false};
+        std::thread observer([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            try {
+                const auto snapshot = candidate.snapshot();
+                check(snapshot.bytes == 64 && snapshot.status == Status::Idle);
+            } catch (const std::logic_error&) {
+                // take() won; the old wrapper is correctly invalidated.
+            }
+        });
+        start.store(true, std::memory_order_release);
+        auto transferred = candidate.take();
+        observer.join();
+        check(transferred.status() == Status::Idle);
+        expects<std::logic_error>([&] { (void)candidate.snapshot(); });
+    }
+
+    BufferFence current(Identity{"tenant", "replacement", 60}, 16);
+    BufferFence incoming(Identity{"tenant", "replacement", 61}, 16);
+    expects<std::logic_error>([&] { current = std::move(incoming); });
+    check(current.status() == Status::Idle);
+    check(incoming.status() == Status::Idle);
+    current.retire_after_backend_release(Identity{"tenant", "replacement", 60});
+    current = std::move(incoming);
+    check(current.status() == Status::Idle);
+    expects<std::logic_error>([&] { (void)incoming.snapshot(); });
     std::cout << "native device fence lifecycle tests passed\n";
 }
