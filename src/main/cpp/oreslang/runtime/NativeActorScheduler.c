@@ -4,6 +4,15 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdatomic.h>
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
+#include <errno.h>
+/* Only compiled in the isolated fault-injection CTest; absent in production. */
+static _Atomic int fail_next_carrier_create;
+void ores_native_actor_scheduler_test_fail_next_create(void) {
+    atomic_store_explicit(&fail_next_carrier_create, 1, memory_order_relaxed);
+}
+#endif
+static int create_carrier(pthread_t* tid, void* context);
 
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
@@ -209,14 +218,26 @@ static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
  * number of queued messages: one serialized actor cannot wake five idle
  * pthreads just by filling its own mailbox. Failed creation never
  * acknowledges an unserviceable first message. */
+static int create_carrier(pthread_t* tid, void* context) {
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
+    /* Fail exactly the next OS worker creation, without ever linking this
+     * fault injector into the production ABI or exported symbol table. */
+    if (atomic_exchange_explicit(
+            &fail_next_carrier_create, 0, memory_order_relaxed))
+        return EAGAIN;
+#endif
+    return pthread_create(tid, NULL, carrier, context);
+}
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
     while (s->started_workers < required) {
-        if (pthread_create(&s->threads[s->started_workers], NULL, carrier, s) != 0)
+        if (create_carrier(&s->threads[s->started_workers], s) != 0)
             break;
         ++s->started_workers;
     }
-    return s->started_workers != 0;
+    /* An existing busy carrier cannot be counted as additional capacity.
+     * Never acknowledge another independent lane on a failed growth step. */
+    return s->started_workers >= required;
 }
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
@@ -229,7 +250,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     ActorLane* a = &s->actors[i];
     const int new_lane = !a->active && !a->queued && !a->has_control;
     if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
-        /* The caller counts a rejected admission, once. */
+        if (s->rejected != UINT64_MAX) ++s->rejected;
         return 0;
     }
     if (new_lane) ++s->runnable_lanes;
@@ -262,6 +283,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
     lock(s);
     OresNativeSendStatus status;
+    int counted_in_enqueue = 0;
     if (!matching(s, actor)) {
         status = ORES_NATIVE_SEND_INVALID_REF;
     } else {
@@ -279,11 +301,14 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             if (enqueue_locked(s, (size_t)actor.actor_slot, payload)) {
                 status = ORES_NATIVE_SEND_ACCEPTED;
             } else {
+                /* enqueue_locked already counted this rejected admission. */
+                counted_in_enqueue = 1;
                 status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
             }
         }
     }
-    if (status != ORES_NATIVE_SEND_ACCEPTED && s->rejected != UINT64_MAX)
+    if (status != ORES_NATIVE_SEND_ACCEPTED && !counted_in_enqueue
+        && s->rejected != UINT64_MAX)
         s->rejected++;
     unlock(s);
     return status;

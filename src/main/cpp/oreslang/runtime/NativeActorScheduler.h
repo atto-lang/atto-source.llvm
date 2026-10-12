@@ -118,6 +118,10 @@ size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* sc
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* scheduler);
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
+/* Test-only deterministic worker-create failure; no production symbol. */
+void ores_native_actor_scheduler_test_fail_next_create(void);
+#endif
 #ifdef __cplusplus
 }
 #endif
