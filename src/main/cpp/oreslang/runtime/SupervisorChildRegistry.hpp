@@ -36,6 +36,12 @@ public:
         }
     };
     enum class Phase { active, finalized, restarting, stopping, stopped };
+    enum class ReplacementPhase { spawned, admitted, cleaned };
+    struct ReplacementState {
+        OresNativeActorRef actor;
+        std::uint64_t next_incarnation;
+        ReplacementPhase phase;
+    };
     enum class StopReceiptStatus { pending, applied, acknowledged, uncertain };
     struct StopReceipt {
         ChildRef child;
@@ -133,6 +139,8 @@ public:
             std::uint64_t incarnation) {
         std::lock_guard<std::mutex> guard(mutex_);
         require_expected(child, failed_actor, incarnation, Phase::finalized);
+        if (restart_closed_ || replacements_.count(child.logical_child_id))
+            throw std::logic_error("supervisor restart admission closed or conflicting");
         if (incarnation == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("logical child incarnation exhausted");
         RestartReservation permit{
@@ -451,6 +459,8 @@ private:
     mutable std::mutex mutex_;
     inline static std::atomic<std::uint64_t> next_global_child_id_{0};
     inline static std::atomic<std::uint64_t> next_restart_nonce_{0};
+    bool restart_closed_ = false;
+    std::unordered_map<std::uint64_t, ReplacementState> replacements_;
     std::unordered_map<std::uint64_t, std::uint64_t> pending_restarts_;
     std::unordered_map<std::uint64_t, std::uint64_t> pending_stops_;
     std::unordered_map<std::uint64_t, StopReceipt> stop_receipts_;
