@@ -63,6 +63,11 @@ public:
         return state_->entries.size();
     }
 
+    bool isolate_shutdown_verified() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->discharged;
+    }
+
     /**
      * Trusted supervisor ONLY, following an independently verified shutdown
      * of the entire native isolation domain. Never infer that proof from a
@@ -184,7 +189,16 @@ public:
         if (result.status == ActorResourceRegistry::Reclaim::failed) {
             // Quarantine must retain the exact failed registry, including any
             // native allocation closer's captured shared ownership.
-            if (!quarantine_.hold(resources_)) return Poll::quarantine_full;
+            if (!quarantine_.hold(resources_)) {
+                // Quarantine exhaustion must hold DONE pending until a
+                // supervisor independently proves isolate shutdown. Once
+                // that trusted proof is published, no failed callback may
+                // execute again, and overflowed captures can be discarded
+                // before completing DONE exceptionally.
+                if (!quarantine_.isolate_shutdown_verified())
+                    return Poll::quarantine_full;
+                quarantine_.release_overflow_after_verified_isolate_shutdown(resources_);
+            }
             if (!finalizer_.finalized("native actor resource reclamation failed"))
                 return Poll::not_admitted;
             terminal_.store(Poll::failed, std::memory_order_release);
