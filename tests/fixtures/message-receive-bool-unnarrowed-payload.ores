@@ -1,0 +1,11 @@
+declare type match Signals as bool end
+define actor Worker<messages=Signals> as
+    let total: int = 0;
+    receive(Message m) {
+        match m {
+            true => { total = total + m; }
+            false => { total = total + 2; }
+        }
+        return total;
+    }
+end

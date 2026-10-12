@@ -1,0 +1,18 @@
+declare type match Signals as bool end
+define actor Worker<messages=Signals> as
+    let total: int = 0;
+    receive(Message m) {
+        match m {
+            true => { total = total + 1; }
+            false => { total = total + 2; }
+        }
+        return total;
+    }
+end
+pub fnc main(): int {
+    const worker = spawn Worker();
+    worker.send(true);
+    worker.send(false);
+    stop worker;
+    return 43;
+}

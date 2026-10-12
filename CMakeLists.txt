@@ -72,6 +72,20 @@ if(BUILD_TESTING)
     # main may spawn one or more typed actors and must stop each exactly once.
     # Source await, actor methods, and cross-boundary ref escape remain rejected.
     # Closed actor inbox declarations: module-local and top-level contracts.
+    oreslang_contract_test(actor_receive_exhaustive_bool_ir message-receive-bool-match.ores
+        --ir "match.true")
+    oreslang_contract_test(actor_receive_bool_conditional_ir message-receive-bool-match.ores
+        --ir "match.false")
+    oreslang_contract_test(reject_receive_bool_nonexhaustive message-receive-bool-nonexhaustive.ores
+        --diagnostic "nonexhaustive receive boolean match")
+    oreslang_contract_test(reject_receive_bool_duplicate_arm message-receive-bool-duplicate.ores
+        --diagnostic "duplicate receive boolean match arm")
+    oreslang_contract_test(reject_receive_bool_wrong_subject message-receive-bool-wrong-subject.ores
+        --diagnostic "receive match must inspect Message parameter")
+    oreslang_contract_test(reject_receive_bool_wrong_contract message-receive-int-bool-match.ores
+        --diagnostic "receive match true/false requires bool-only contract")
+    oreslang_contract_test(reject_unnarrowed_message_payload message-receive-bool-unnarrowed-payload.ores
+        --diagnostic "match arm Message payload binding is not narrowed")
     oreslang_contract_test(actor_message_shape_declaration message-pattern-shapes.ores
         --ir "oreslang_actor_Foo_receive")
     oreslang_contract_test(actor_module_typed_receive_symbols message-pattern-module.ores
@@ -172,6 +186,18 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_owned_lexical owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        oreslang_contract_test(native_actor_bool_match_dispatch message-receive-bool-match.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 30
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=3")
+        oreslang_contract_test(native_asan_actor_bool_match_dispatch message-receive-bool-match.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize --runs 10
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=3")
         oreslang_contract_test(native_actor_typed_bool_module message-pattern-module.ores
             --run 43 --clang "${ORE_CLANG}" --runs 20
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
