@@ -116,6 +116,8 @@ struct Function {
     std::size_t offset = 0;
     bool exported = false;
     bool is_receiver = false;
+    bool has_effect_bound = false;
+    std::vector<std::string> allowed_effects; // canonical `with` upper bound
 };
 
 // Closed structural variants, not arbitrary runtime object references.
