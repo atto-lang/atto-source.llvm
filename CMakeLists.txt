@@ -37,6 +37,18 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     add_test(NAME source_nominal_enum_pattern_parser_gate
         COMMAND oreslang-nominal-message-parser-test)
+    # Independent native implementation of the exact nested-enum MessagePack
+    # v2 golden vector. This checks compiler metadata and wire compatibility,
+    # NOT compiled LLVM nested guest actor execution.
+    add_executable(oreslang-nested-enum-v2-wire-test
+        tests/native_nested_enum_v2_wire_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp)
+    target_include_directories(oreslang-nested-enum-v2-wire-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-nested-enum-v2-wire-test PRIVATE ${ORE_LLVM_LIBS})
+    add_test(NAME nested_enum_v2_native_golden_vector
+        COMMAND oreslang-nested-enum-v2-wire-test)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
