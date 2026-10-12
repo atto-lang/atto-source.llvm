@@ -655,6 +655,17 @@ static int source_send_binary_unlocked(SourceActor* actor,
                                     memory_order_acquire) == SOURCE_PIPELINE_OK)
         && ores_native_actor_scheduler_send(group.scheduler, actor->ref,
                                              (uint64_t)(uintptr_t)accepted);
+    /* A consumer can run on another carrier immediately after enqueue.
+     * Commit the hop count BEFORE releasing the shared publication lock,
+     * otherwise the final receive could complete before the producer count. */
+    if (admitted && pipeline_route) {
+        if (direction == 1)
+            atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
+                                      memory_order_acq_rel);
+        else if (direction == 2)
+            atomic_fetch_add_explicit(&group.pipeline_backward_count, 1,
+                                      memory_order_acq_rel);
+    }
     if (pipeline_route) group_unlock();
     if (!admitted) {
         ores_mp2_owned_release(&accepted->packet);
@@ -846,18 +857,10 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
     ensure(at < sizeof(wire));
     /* This first slice is single-flow and fail-closed on saturation.
      * Future<T>-based suspension/backpressure belongs to the next slice. */
-    /* Count only successful scheduler-admitted deliveries. A cancellation
-     * or mailbox rejection must not inflate observable hop counts. */
-    if (!source_send_binary(target, wire, at, (uint8_t)direction)) {
+    /* The target admission path commits direction counters atomically with
+     * bounded scheduler enqueue, before consumers can publish completion. */
+    if (!source_send_binary(target, wire, at, (uint8_t)direction))
         pipeline_fail(SOURCE_PIPELINE_REJECTED_MAIL);
-        return;
-    }
-    if (direction == 1)
-        atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
-                                  memory_order_acq_rel);
-    else
-        atomic_fetch_add_explicit(&group.pipeline_backward_count, 1,
-                                  memory_order_acq_rel);
 }
 /* Returns a recoverable status; only trusted main may wait or tear down
  * the pipeline. Carrier workers never wait for downstream DATA delivery.
