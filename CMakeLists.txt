@@ -673,6 +673,27 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-restart-admission-lease-test)
     set_tests_properties(native_restart_admission_lease PROPERTIES TIMEOUT 30)
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # GNU link-wrapper fault injection: no uninitialized mutex destroy
+        # and no publication-gate leak on partial pthread startup.
+        add_executable(oreslang-native-restart-startup-fault-test
+            tests/native_restart_startup_fault_test.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-restart-startup-fault-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-restart-startup-fault-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-restart-startup-fault-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        target_link_options(oreslang-native-restart-startup-fault-test PRIVATE
+            -Wl,--wrap=pthread_mutex_init
+            -Wl,--wrap=pthread_mutex_destroy
+            -Wl,--wrap=pthread_create)
+        add_test(NAME native_restart_startup_faults
+            COMMAND oreslang-native-restart-startup-fault-test)
+        set_tests_properties(native_restart_startup_faults PROPERTIES TIMEOUT 20)
+    endif()
+
+
     add_executable(oreslang-native-restart-control-fence-test
         tests/native_supervisor_restart_control_fence_test.cpp)
     target_include_directories(oreslang-native-restart-control-fence-test PRIVATE
