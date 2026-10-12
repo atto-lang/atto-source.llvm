@@ -199,7 +199,49 @@ int main() {
                 return count;
             }
         end
-    )", "requires a portable nested enum wire codec");
+    )", "nested variant binder requires LLVM enum projection lowering");
+    auto compiledNested = parse_program(R"(
+        define enum Bar as Start = 1 Done = 2 end
+        define enum Foo as First: Bar Second: Bar end
+        define actor Worker<messages=Foo> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over {
+                    on Foo.First { count = count + 1; }
+                    on Foo.Second { count = count + 1; }
+                }
+                return count;
+            }
+        end
+        pub fnc main(): int {
+            const worker = spawn Worker();
+            worker.send(Foo.First(Bar.Start()));
+            worker.send(Foo.Second(Bar.Done()));
+            stop worker;
+            return 43;
+        }
+    )");
+    assert(compiledNested.functions.at(0).actor_sends.size() == 2);
+    assert(compiledNested.functions.at(0).actor_sends.at(0).nested_tagged_variant ==
+           "Bar.Start");
+    rejects(R"(
+        define enum Bar as Start = 1 end
+        define enum Wrong as Other = 1 end
+        define enum Foo as First: Bar end
+        define actor Worker<messages=Foo> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over { on Foo.First { count = count + 1; } }
+                return count;
+            }
+        end
+        pub fnc main(): int {
+            const worker = spawn Worker();
+            worker.send(Foo.First(Wrong.Other()));
+            stop worker;
+            return 43;
+        }
+    )", "nested enum owner does not match declared payload");
     // Box is still a compiler-only indirection, even when it contains int
     // rather than an enum. The actor wire code must never infer a codec.
     rejects(R"(
