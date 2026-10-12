@@ -771,6 +771,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_init_mutable"
                             && name != "ores_actor_i64_heap_field_write"
                             && name != "oreslang_source_actor_pipeline_connect"
+                            && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_spawn_tagged_variants"
