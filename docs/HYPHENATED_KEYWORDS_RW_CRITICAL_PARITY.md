@@ -1,0 +1,172 @@
+# Hyphenated compound keywords and reader/writer critical declarations
+
+Status: **language contract only; executable compiler/runtime support is not established by this document**.
+Implement and verify separately in Java/GraalVM and LLVM/OresVM before advertising the
+examples as runnable. This contract is intended to align with Java critical
+callable PR #577, Java actor-pipeline issue #643 / PR #640, Java rt-proxy
+nonparking RW-lock issue #336, and LLVM native CriticalGate.
+
+## Lexical contract
+
+The hyphen is the ASCII hyphen-minus **U+002D** (`-`), not a Unicode dash.
+Only explicitly enumerated *compound keywords* are recognized; **do not**
+make `-` part of ordinary identifiers.
+
+| Compound spelling | Compatibility spelling | Context |
+| --- | --- | --- |
+| `transform-pipe` | `transform pipe` | Actor role modifier, before `actor` |
+| `nb-select` | `nb select` | Nonblocking static/dynamic select expression/statement |
+| `critical-read` | no pre-existing read equivalent | Callable declaration modifier |
+| `critical-write` | `critical` | Callable declaration modifier |
+| `critical` | unchanged | Exclusive callable modifier |
+
+A compound keyword has no whitespace around the hyphen. It must match
+*exactly* and in a supported grammar position: `critical - read` is not
+`critical-read`; `critical-readonly` is not a keyword. Do not greedily
+combine names/keywords in arbitrary expressions, particularly `a-b`,
+`a - b`, `a--b`, `x-1`, `foo->bar`, or negative numbers. Keep source
+ranges/columns accurate, including the hyphen, for diagnostics and formatter
+round-trip. Formatter should prefer the hyphenated spelling for compound
+keywords and preserve user-chosen `critical` as an accepted write alias.
+A token-based implementation may recognize adjacent
+`IDENT/KEYWORD MINUS IDENT/KEYWORD` only in the designated parser context;
+it must not change arithmetic tokenization.
+
+## Surface examples
+
+```ores
+define transform-pipe actor Foo as
+    // Role-admission and stream lowering are governed by the pipeline contract.
+end
+
+pub fnc critical-read read_balance(): int {
+    return balance;
+}
+
+pub fnc critical-write update_balance(value: int): void {
+    balance = value;
+}
+
+pub fnc critical update_balance_compat(value: int): void {
+    balance = value;
+}
+
+// Equivalent to nb select { ... } or nb select from cases:
+nb-select { on readch(events) as event { handle(event); } }
+```
+
+The exact placement `pub fnc critical-read name(...)` is supported as well
+as `pub critical-read fnc name(...)`, matching the existing callable
+modifier-permutation policy. Instance method forms (bare name, `method`,
+legacy `fnc`) receive the same mode when supported.
+
+## Reader/writer scope
+
+Every protected *domain* owns **one** RW admission gate, not separate read
+and write gates. Match existing critical owner scopes:
+- instance methods: per-object gate shared by all critical modes on that object;
+- file/module functions: per-code-unit, per-execution-context gate;
+- static class functions: per-declaring-class, per-execution-context gate.
+
+No process-wide global lock across tenant isolates/VMs. Additional explicit
+shared-resource gate binding is future work and must use trusted ownership
+capabilities; annotating an arbitrary function does not magically protect
+external shared data.
+
+| Permit | Allowed together |
+| --- | --- |
+| `critical-read` | Other read permits on the same domain |
+| `critical-write` | No readers or other writers on that domain |
+| `critical` | Exact alias for `critical-write` |
+
+Ordinary (unannotated) methods are **not** implicitly serialized by the
+gate. The type/effect/ownership checker must reject unguarded access to
+state that is declared protected by this domain. Merely parsing the modifier
+or wrapping one method in a lock is not a memory-safety guarantee.
+`critical-read` forbids effects that mutate its protected state, including
+indirect writes through aliases/calls; mutating unrelated isolated locals
+is allowed. An unknown call effect fails closed. Actor single-flight
+execution remains the actor's independent guarantee: reader permits do
+not grant concurrent execution if that actor itself admits only one turn.
+
+## Admission, fairness and completion
+
+Use logical invocation/continuation IDs, not JVM `Thread`s, pthread IDs,
+or physical carrier identity. On contention, queue a bounded cancellable
+waiter and **suspend the logical continuation**, releasing the carrier;
+resume admitted work through a scheduler-controlled resume path (not as
+inline guest code under the gate mutex). A synchronous caller that cannot
+suspend must fail closed on actor-carrier contention rather than park it.
+Prefer `suspend critical-read` / `suspend critical-write` for functions
+that may contend and need resumable admission.
+
+A short metadata lock may serialize queue operations, but guest code never
+executes under that host lock. Use FIFO writer-aware cohorts:
+- an idle gate may admit a reader immediately;
+- multiple readers may hold simultaneously until a queued writer forms
+  the fairness barrier;
+- readers arriving behind a writer must queue, even while earlier readers
+  still hold permits;
+- when the last reader exits, grant the oldest writer, or the contiguous
+  leading cohort of readers if they precede the next writer;
+- no writer may run while any reader is active; no two writers overlap.
+
+Queues are bounded, have explicit overflow failure and do not starve
+queued writers under continuous read traffic. Exactly-once close releases
+permits on return, throw, raise, panic, cancellation, STOP/teardown, and
+runtime closure. A cancelled *granted but not yet resumed* waiter must
+release its grant and wake the next cohort. Do not hold the metadata mutex
+while completing futures or enqueueing scheduler work. Admission and
+teardown require generation fencing against stale resumes.
+
+Nested same-logical-continuation `read->read`, `write->write`, and
+`write->read` may reuse their owning ticket with lexical depth.
+`read->write` upgrade must be **rejected** to avoid two-reader deadlock;
+do not implicitly release the read gate and reacquire write because that
+loses atomicity. Cross-domain nested acquisition needs lock-order /
+wait-for-cycle checks; distinct logical continuations must never inherit
+another invocation's permit.
+
+## Suspension and state loans
+
+A *logical admission permit* is not an OS mutex, and the `suspend`
+callable model may retain it across a compiler-lowered await only when
+the continuation, cancellation, and ownership contracts are proven.
+That does **not** authorize carrying a mutable/reference actor-state
+loan through suspension. Keep the existing strict `handle_state`
+loan-fencing and effect restrictions. Never create an implicit await
+inside an ordinary synchronous `critical-read` or `critical-write`
+call: type/effect-check the suspension boundary.
+
+Reader/writer critical regions do not change supervisor CONTROL ordering,
+actor incarnation isolation, or actor panic routing. A task's permit must
+never be stolen or shared by a second actor continuation.
+
+## Cross-backend acceptance gates (all required)
+
+1. Lexer/parser/formatter golden vectors for all four hyphenated spellings,
+   modifiers before/after `fnc`, and arithmetic/arrow/whitespace near-misses.
+2. Type/effect/borrow tests: read-only vs protected writes, transitive
+   mutation through callees, unknown effects, actor-state loans, and non-
+   suspending calls that might block.
+3. Scheduler stress with readers > carriers, writers > carriers,
+   writer fairness under a hot read stream, and per-domain independence.
+4. Linearizable read/write histories: never R+W or W+W overlap;
+   simultaneous reads permitted when the actor admission policy allows.
+5. Cleanup tests for queued and granted waiter cancellation, panic,
+   exception, double release, queue capacity, shutdown and incarnation
+   generation changes.
+6. Deadlock tests for recursive same-domain calls, illegal read->write
+   upgrade, A->B->A across domains, and parent/child logical tasks.
+7. Formal state machine: enforce writer exclusivity and reader/writer
+   exclusion as invariants; model-test lost wakeups, reader cohorts and
+   cancellations; include intentionally unsafe transitions that yield
+   counterexamples.
+8. Run the **exact source revision** through executable Java/GraalVM and
+   LLVM tests, with native sanitizer runs where applicable. LLVM's existing
+   CriticalGate native test alone does not prove guest source support.
+
+Until these gates pass, do not silently treat `critical-read` as
+`critical`, treat `critical-write` as a plain function, or claim
+`transform-pipe` is an executable pipeline. Unsupported lowering must
+produce a clear diagnostic and no partially generated output.
