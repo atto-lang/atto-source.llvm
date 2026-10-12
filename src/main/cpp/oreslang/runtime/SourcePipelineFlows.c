@@ -67,10 +67,12 @@ static Flow* acquire_flow(OresFlowTable* table, uint64_t id) {
 
 static int actor_equal(OresFlowActor a, OresFlowActor b) {
     return a.actor_id == b.actor_id &&
-           a.actor_generation == b.actor_generation;
+           a.actor_generation == b.actor_generation &&
+           a.scheduler_domain == b.scheduler_domain;
 }
 static int valid_actor(OresFlowActor actor) {
-    return actor.actor_id != 0 && actor.actor_generation != 0;
+    return actor.actor_id != 0 && actor.actor_generation != 0 &&
+           actor.scheduler_domain != 0;
 }
 static Flow* find_flow(OresFlowTable* table, uint64_t id) {
     for (size_t i = 0; i < ORES_FLOW_MAX_ACTIVE; ++i)
@@ -124,7 +126,8 @@ OresFlowError ores_flow_open(OresFlowTable* table, uint64_t pipeline_id,
     for (uint8_t i = 0; i < stage_count; ++i) {
         if (!valid_actor(stages[i])) return ORES_FLOW_BAD_ARGUMENT;
         for (uint8_t j = 0; j < i; ++j)
-            if (stages[i].actor_id == stages[j].actor_id)
+            if (stages[i].scheduler_domain == stages[j].scheduler_domain &&
+                stages[i].actor_id == stages[j].actor_id)
                 return ORES_FLOW_BAD_ARGUMENT;
     }
     pthread_mutex_lock(&table->mutex);
@@ -177,7 +180,7 @@ OresFlowError ores_flow_reserve(OresFlowTable* table, uint64_t flow_id,
     else {
         uint32_t phase = f->phase;
         uint32_t n = f->stage_count;
-        OresFlowActor expected_sender = {0, 0};
+        OresFlowActor expected_sender = {0, 0, 0};
         OresFlowDirection expected_direction;
         uint8_t destination;
         if (phase == 0) {
