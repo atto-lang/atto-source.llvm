@@ -189,6 +189,43 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
   interleavings, actor-generation ABA, multiple simultaneous flows,
   cancellation while awaiting backpressure, or branch correlation.
 
+## Runtime audit: failure, binding races, and causal replay (2026-10-11)
+
+- Java/GraalVM now fences a pipeline when a participant physically terminates
+  **before its required DATA hop or successful source completion**, including
+  an actor that ends normally but prematurely. The termination hook poisons
+  the single-flow phase and dispatches fail-stop notifications to other actors
+  without calling sibling finalizers under the departing actor's lifecycle
+  monitor. Compiled guest regressions terminate Sink before `backward` and
+  Transform before `forward`; the source's `get_done()` fails promptly.
+  Ordinary results still return **19**. Exact-source funded JVM verification
+  [#38194635486](https://github.com/zed-pkg-test/java-app/actions/runs/38194635486)
+  passed **1,467 tests (zero failures/errors/skips)**.
+- Java also publishes linear pipeline binding under the runtime lifecycle
+  lock and **revalidates the binding at mailbox DATA publication**; a send
+  prepared while an actor was still unbound cannot sneak into a subsequently
+  bound pipeline. The follow-up exact-source [JVM run
+  #38194804088](https://github.com/zed-pkg-test/java-app/actions/runs/38194804088)
+  and [Native AOT/hybrid run #38194804074](https://github.com/zed-pkg-test/java-app/actions/runs/38194804074)
+  passed. Full deterministic binding-race fault injection remains a separate
+  verification task.
+- LLVM's `SourceActorBootstrap` now records **scheduler-issued incoming DATA
+  direction** on the worker-local callback context and enforces atomic,
+  one-use causal phases (source forward, transform forward, sink backward,
+  transform backward, source receipt). A wrong-ingress `self.forward()`
+  from the source's backward result is **compiled but rejected by the
+  runtime**, not silently relayed.
+- Funded [LLVM run #38195059645](https://github.com/zed-pkg-test/java-app/actions/runs/38195059645)
+  passed exact source hashes, real compiler/IR, the 100 native repeated
+  executions, the 30 ASan/UBSan repeated executions, and the guest-source
+  wrong-ingress replay rejection. In this early native slice, an invalid
+  phase is still a process-level invariant failure; typed error propagation
+  and graceful destination teardown are **not implemented**.
+- The 17-state TLA+ model currently captures a simpler bounded
+  reservation/admission protocol. It **does not prove** the stage termination
+  hook, route-installation race, or scheduler-issued ingress context. Those
+  require extended model/refinement checks and controlled concurrent tests.
+
 ## Current admission status
 
 Java/GraalVM now admits compiler-checked `self.forward` and `self.backward`
