@@ -40,6 +40,10 @@ struct OresNativeActorScheduler {
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
+    OresNativeActorIdentityTaskFn identity_callback;
+    OresNativeActorIdentityTaskFn identity_control_callback;
+    OresNativeActorIdentityPanicFn identity_panic_callback;
+    unsigned identity_callbacks;
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
@@ -116,12 +120,32 @@ static void* carrier(void* raw) {
             lane->queued--;
         }
         lane->active = 1;
+        /* Copy the identity while holding the scheduler lock. The lane
+         * cannot reincarnate while active, so delayed stale references
+         * carry the ORIGINAL generation, never a newly reused slot. */
+        const OresNativeActorRef identity = {
+            s->domain, (uint64_t)i, lane->generation
+        };
         unlock(s);
 
         executing = s;
-        if (typed_failure) s->panic_callback(s->context, i, failure);
-        else if (control) s->control_callback(s->context, i, payload);
-        else s->callback(s->context, i, payload);
+        if (s->identity_callbacks) {
+            if (typed_failure) {
+                if (s->identity_panic_callback)
+                    s->identity_panic_callback(s->context, identity, failure);
+            } else if (control) {
+                if (s->identity_control_callback)
+                    s->identity_control_callback(s->context, identity, payload);
+            } else {
+                s->identity_callback(s->context, identity, payload);
+            }
+        } else if (typed_failure) {
+            s->panic_callback(s->context, i, failure);
+        } else if (control) {
+            if (s->control_callback) s->control_callback(s->context, i, payload);
+        } else {
+            s->callback(s->context, i, payload);
+        }
         executing = NULL;
 
         lock(s);
@@ -142,11 +166,17 @@ static void* carrier(void* raw) {
         unlock(s);
     }
 }
-OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
+static OresNativeActorScheduler* open_scheduler(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
-    OresNativeActorPanicFn panic_callback, void* ctx) {
-    if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
+    OresNativeActorPanicFn panic_callback,
+    OresNativeActorIdentityTaskFn identity_callback,
+    OresNativeActorIdentityTaskFn identity_control_callback,
+    OresNativeActorIdentityPanicFn identity_panic_callback,
+    void* ctx) {
+    if ((!callback && !identity_callback)
+        || (callback && identity_callback)
+        || !actors || actors > 1024 || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
@@ -163,6 +193,10 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->callback = callback;
     s->control_callback = control_callback;
     s->panic_callback = panic_callback;
+    s->identity_callback = identity_callback;
+    s->identity_control_callback = identity_control_callback;
+    s->identity_panic_callback = identity_panic_callback;
+    s->identity_callbacks = identity_callback != NULL;
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i)
         s->actors[i].messages = s->slots + i * capacity;
@@ -201,6 +235,21 @@ allocation_failed:
     free(s->actors);
     free(s);
     return NULL;
+}
+OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
+    size_t actors, size_t capacity, size_t workers,
+    OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
+    OresNativeActorPanicFn panic_callback, void* ctx) {
+    return open_scheduler(actors, capacity, workers, callback,
+        control_callback, panic_callback, NULL, NULL, NULL, ctx);
+}
+OresNativeActorScheduler* ores_native_actor_scheduler_open_identity_control(
+    size_t actors, size_t capacity, size_t workers,
+    OresNativeActorIdentityTaskFn callback,
+    OresNativeActorIdentityTaskFn control_callback,
+    OresNativeActorIdentityPanicFn panic_callback, void* ctx) {
+    return open_scheduler(actors, capacity, workers, NULL, NULL, NULL,
+        callback, control_callback, panic_callback, ctx);
 }
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actors, size_t capacity, size_t workers,
@@ -279,6 +328,48 @@ OresNativeActorRef ores_native_actor_scheduler_recycle_unpublished_done(
             a->generation++;
             a->retired = 0;
             a->spawned = 1;
+            a->published = 0;
+            missing = (OresNativeActorRef){
+                s->domain, old.actor_slot, a->generation
+            };
+        }
+    }
+    unlock(s);
+    if (pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+    return missing;
+}
+/*
+ * Normal active-generation reuse is only permitted when no legacy callback
+ * can have used a slot index. The host must first claim physical DONE and
+ * seal that incarnation as a normal exit. A terminal PANIC attempt forever
+ * excludes recycling here: receipt reconciliation belongs to supervisor.
+ */
+OresNativeActorRef ores_native_actor_scheduler_recycle_normal_done(
+    OresNativeActorScheduler* s, OresNativeActorRef old) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s || owned_restart_lease == s) return missing;
+    if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
+    lock(s);
+    int allowed = !s->retired && s->identity_callbacks && matching(s, old);
+    if (allowed) {
+        ActorLane* a = &s->actors[old.actor_slot];
+        allowed = a->retired && a->published && a->normal_exit_sealed
+            && !a->active && !a->queued && !a->has_control
+            && !a->failure_attempted && !a->failure_published
+            && !a->restart_lease_nonce && a->generation < UINT64_MAX;
+        if (allowed) {
+            a->head = a->tail = a->queued = 0;
+            a->control_payload = 0;
+            a->control_is_failure = 0;
+            a->failure = (OresNativeActorTerminalFailure){0};
+            a->failure_attempted = a->failure_published = 0;
+            a->normal_exit_sealed = 0;
+            a->restart_lease_owner = (pthread_t){0};
+            for (size_t j = 0; j < s->per_actor_capacity; ++j)
+                a->messages[j] = 0;
+            a->generation++;
+            a->spawned = 1;
+            a->retired = 0;
             a->published = 0;
             missing = (OresNativeActorRef){
                 s->domain, old.actor_slot, a->generation
@@ -415,7 +506,10 @@ int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* s, OresNativeActorRef parent, uint64_t payload) {
     if (!s) return 0;
     lock(s);
-    int ok = !s->retired && s->control_callback && matching(s, parent)
+    int ok = !s->retired
+        && (s->identity_callbacks ? s->identity_control_callback != NULL
+                                  : s->control_callback != NULL)
+        && matching(s, parent)
         && s->actors[parent.actor_slot].published
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
@@ -441,7 +535,9 @@ int ores_native_actor_scheduler_publish_failure(
      * CONTROL queue is saturated or the parent has already retired. The
      * caller must escalate/retry; it must never relabel the child as normal.
      */
-    int attempted = s->panic_callback != NULL
+    int attempted =
+        (s->identity_callbacks ? s->identity_panic_callback != NULL
+                               : s->panic_callback != NULL)
         && matching(s, parent) && matching(s, failure.child)
         && s->actors[failure.child.actor_slot].published
         && s->actors[failure.child.actor_slot].retired
