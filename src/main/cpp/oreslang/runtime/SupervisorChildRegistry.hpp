@@ -236,7 +236,9 @@ public:
     /** Identity commit only; caller must have admitted a fresh actor. */
     Snapshot replace(RestartReservation permit, OresNativeActorRef replacement) {
         std::lock_guard<std::mutex> guard(mutex_);
-        check_reservation(permit);
+        const auto candidate = require_candidate(permit, replacement);
+        if (restart_closed_ || candidate.phase != ReplacementPhase::admitted)
+            throw std::logic_error("replacement lacks physical admission or supervisor closed");
         validate_actor(replacement);
         if (same_actor(replacement, permit.failed_actor)
             || active_actors_.count(actor_key(replacement)))
@@ -262,6 +264,7 @@ public:
         stored.incarnation = permit.incarnation + 1;
         stored.phase = Phase::active;
         seen_it->second = replacement.generation;
+        replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
         return stored;
     }
@@ -270,8 +273,13 @@ public:
     Snapshot abort_restart(RestartReservation permit) {
         std::lock_guard<std::mutex> guard(mutex_);
         check_reservation(permit);
+        const auto candidate = replacements_.find(permit.child.logical_child_id);
+        if (candidate != replacements_.end()
+            && candidate->second.phase != ReplacementPhase::cleaned)
+            throw std::logic_error("replacement physical cleanup required before abort");
         auto& stored = children_.at(permit.child.logical_child_id);
         stored.phase = Phase::finalized;
+        replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
         return stored;
     }
