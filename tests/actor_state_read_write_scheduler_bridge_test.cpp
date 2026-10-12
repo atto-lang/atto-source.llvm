@@ -1,6 +1,7 @@
 #include "oreslang/runtime/ActorStateReadWriteSchedulerBridge.hpp"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
