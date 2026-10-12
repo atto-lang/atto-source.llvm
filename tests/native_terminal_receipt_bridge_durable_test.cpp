@@ -155,7 +155,7 @@ int main() {
         foreign.key.words[4]++;
         bool foreign_denied = false;
         try {
-            (void)bridge->reconcile_durable_external_effect(
+            (void)bridge->reconcile_durable_terminal_effect(
                 foreign, [](const auto&) { return true; });
         } catch (const std::logic_error&) { foreign_denied = true; }
         check(foreign_denied, "foreign original-parent proof bypassed journal owner");
@@ -167,7 +167,7 @@ int main() {
             check(!bridge->reconcile_durable_terminal_effect(evidence, denied),
                   "unverified coupled ACK released durable quarantine");
         } else {
-            check(!bridge->reconcile_durable_external_effect(evidence, denied),
+            check(!bridge->reconcile_durable_terminal_effect(evidence, denied),
                   "unverified CONTROL effect released durable quarantine");
         }
         const auto verified = [&](const auto& p) {
@@ -181,7 +181,7 @@ int main() {
                       evidence, verified),
                   "completed durable ACK was replayed");
         } else {
-            check(bridge->reconcile_durable_external_effect(evidence, verified),
+            check(bridge->reconcile_durable_terminal_effect(evidence, verified),
                   "independently checked host CONTROL effect not proven");
         }
         check(journal->inspect(key).phase == DurableTerminalPhase::acknowledged,
