@@ -72,6 +72,8 @@ struct ReceiveBooleanArm {
 // Fixed-shape state is visible only during this scoped, synchronous
 // callback. The callback returns a copied i64 scalar, never a state loan.
 struct StateLoan {
+    enum class Mode { Read, Write };
+    Mode mode = Mode::Write;
     std::string result_binding;
     std::vector<FieldAssignment> assignments;
     std::unique_ptr<Expression> result;
