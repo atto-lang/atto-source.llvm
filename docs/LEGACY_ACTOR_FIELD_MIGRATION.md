@@ -4,9 +4,10 @@ Status: **release blocker** (2026-10-12).
 
 The new actor rule forbids ordinary class instance data in actors. Only
 `state { key: Type = initializer; }` supplies actor-owned data, and state
-access requires scoped `using state.read(...)` /
-`using state.write(critical ...)` (or the restricted legacy
-`handle_state(critical ...)` write alias). User-defined actor methods
+access uses `self.handle_state(|state| -> {...})` for read-only
+loans and `self.handle_state(critical |state| -> {...})` for
+exclusive writes. Prototype `using state.read/write` aliases
+remain only in the restricted native implementation. User-defined actor methods
 remain allowed.
 
 The following preexisting source fixtures were inspected on the LLVM
@@ -41,9 +42,9 @@ targeted 45-test funded using-capability gate:
    early legacy-field syntax rejection.
 3. General ordinary actor method and legacy boolean-match state access
    require real ownership-aware lowering before these historical fixtures
-   can be fully migrated. The currently executable LLVM `using` subset
+   can be fully migrated. The currently executable LLVM `handle_state` subset
    covers only exhaustive **tagged receive arms** and fixed `int` keys.
-4. Keep Java/GraalVM fail-closed until equivalent guest `using`
+4. Keep Java/GraalVM fail-closed until equivalent guest `handle_state`
    capability semantics exist; do not rewrite source tests to weaken that
    safety boundary.
 5. Re-run full relevant repository CMake/CTest, Java Maven/JUnit,
@@ -55,7 +56,7 @@ legacy actor-field usages in the repository. It is not a claim that every
 listed test fails the same way or that these are all the outstanding gaps.
 
 Focused new-capability evidence:
-https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38313725825
-(45 selected native CTests) and
-https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38313160385
-(25 focused JDK25 compiler checks).
+https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314809579
+(57 selected native CTests) and
+https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314867754
+(27 focused JDK25 compiler checks).
