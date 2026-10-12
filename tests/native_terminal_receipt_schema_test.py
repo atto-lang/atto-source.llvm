@@ -122,6 +122,42 @@ wrong["claim_nonce"] = "1"
 wrong["external_effect_proof"] = copy.deepcopy(external)
 wrong["external_effect_proof"]["claim_nonce"] = "2"
 invalid.append(wrong)
+# Contract edge cases: zero authority and nonces must be rejected even
+# though actor slots and some failure values may legitimately be zero.
+wrong = copy.deepcopy(base)
+wrong["key"]["supervisor_id"] = "0"
+invalid.append(wrong)
+wrong = copy.deepcopy(base)
+wrong["phase"] = "claimed"
+wrong["physical_done_proof"] = copy.deepcopy(physical)
+wrong["claim_nonce"] = "0"
+invalid.append(wrong)
+wrong = copy.deepcopy(base)
+wrong["phase"] = "claimed"
+wrong["physical_done_proof"] = copy.deepcopy(physical)
+wrong["claim_nonce"] = str(UINT64_MAX + 1)
+invalid.append(wrong)
+wrong = copy.deepcopy(base)
+wrong["phase"] = "effect_proven"
+wrong["physical_done_proof"] = copy.deepcopy(physical)
+wrong["claim_nonce"] = "1"
+wrong["external_effect_proof"] = copy.deepcopy(external)
+wrong["external_effect_proof"]["claim_nonce"] = "0"
+invalid.append(wrong)
+
+valid_max = copy.deepcopy(base)
+valid_max["phase"] = "claimed"
+valid_max["physical_done_proof"] = copy.deepcopy(physical)
+valid_max["claim_nonce"] = str(UINT64_MAX)
+semantic_check(valid_max)
+
+# This targeted source-level assertion checks the intended TypeSpec scalar
+# mapping, while a full TypeSpec compilation remains a separate CI concern.
+TYPESPEC = SCHEMA.with_suffix(".tsp").read_text()
+assert "claim_nonce?: NonZeroUInt64Decimal;" in TYPESPEC, (
+    "TypeSpec and JSON Schema disagree on nonzero receipt claim nonce"
+)
+
 for index, doc in enumerate(invalid):
     try:
         semantic_check(doc)
