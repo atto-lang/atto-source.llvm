@@ -12,6 +12,7 @@ static void check(bool yes, const char* why) {
     if (!yes) throw std::runtime_error(why);
 }
 static void no_op(void*, size_t, std::uint64_t) {}
+static void no_panic(void*, size_t, OresNativeActorTerminalFailure) {}
 
 static void shutdown(OresNativeActorScheduler* scheduler) {
     ores_native_actor_scheduler_retire(scheduler);
@@ -125,5 +126,29 @@ int main() {
     check(ores_native_actor_scheduler_release_restart_lease(scheduler, owned),
           "original owner could not release thread-affine lease");
     shutdown(scheduler);
-    std::puts("NATIVE_RESTART_ADMISSION_LEASE_PASS guarded=3 unpublished=1 replay=1 owner=1 reentry=1");
+    // Hidden actor incarnations must not be usable as a CONTROL destination
+    // or fabricate a terminal PANIC about an incarnation never published.
+    auto* typed = ores_native_actor_scheduler_open_typed_control(
+        3, 2, 2, no_op, no_op, no_panic, nullptr);
+    check(typed != nullptr, "typed CONTROL scheduler failed to open");
+    const auto control_parent = ores_native_actor_scheduler_spawn(typed, 0);
+    const auto hidden_child = ores_native_actor_scheduler_spawn_unpublished(typed, 1);
+    const auto hidden_parent = ores_native_actor_scheduler_spawn_unpublished(typed, 2);
+    check(!ores_native_actor_scheduler_publish_control(typed, hidden_parent, 3),
+          "unpublished destination accepted ordinary CONTROL");
+    check(ores_native_actor_scheduler_stop(typed, hidden_child),
+          "hidden actor cleanup stop failed");
+    const OresNativeActorTerminalFailure hidden_failure{
+        ORES_NATIVE_CONTROL_PANIC, hidden_child, 101, 20261011
+    };
+    check(!ores_native_actor_scheduler_publish_failure(
+              typed, control_parent, hidden_failure),
+          "unpublished candidate forged a typed PANIC envelope");
+    check(ores_native_actor_scheduler_seal_normal_exit(typed, hidden_child),
+          "rejected hidden PANIC poisoned finalization classification");
+    const auto published_child = ores_native_actor_scheduler_spawn(typed, 2);
+    check(!published_child.scheduler_domain,
+          "hidden scheduler slot unexpectedly permitted a second spawn");
+    shutdown(typed);
+    std::puts("NATIVE_RESTART_ADMISSION_LEASE_PASS guarded=3 unpublished=1 replay=1 owner=1 reentry=1 control=1");
 }
