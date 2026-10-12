@@ -200,6 +200,31 @@ int main() {
             }
         end
     )", "requires a portable nested enum wire codec");
+    // Box is still a compiler-only indirection, even when it contains int
+    // rather than an enum. The actor wire code must never infer a codec.
+    rejects(R"(
+        define enum Payload as Boxed: Box<int> end
+        define actor Worker<messages=Payload> as
+            receive(Message m) {
+                do match m over {
+                    on Payload.Boxed as data { }
+                }
+                return 0;
+            }
+        end
+    )", "requires a portable nested enum wire codec");
+    rejects(R"(
+        define enum Payload as Wrapped: Tuple[int, Box<int>] end
+        define actor Worker<messages=Payload> as
+            receive(Message m) {
+                do match m over {
+                    on Payload.Wrapped as data { }
+                }
+                return 0;
+            }
+        end
+    )", "requires a portable nested enum wire codec");
+
     rejects("define enum Foo as Message1: Missing end",
             "unknown enum payload type: Missing");
     // Bounded model check: all 2^9 directed 3-enum dependency graphs.
