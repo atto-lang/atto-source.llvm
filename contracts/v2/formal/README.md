@@ -1,5 +1,22 @@
 # Bounded formal single-flow pipeline model
 
+## Two-flow correlated admission model (new experimental API)
+
+`ConcurrentPipelineFlows.tla` models two independently keyed flows across five
+directional admission hops, including reservation, publication,
+per-flow cancellation and completion. The safe config intentionally permits
+terminal quiescence (`CHECK_DEADLOCK FALSE`). It checks no late admission,
+no duplicate accounting, no pending reservation on terminal states and
+no premature completion. Both late-publish and double-commit mutant configs
+must produce counterexamples.
+
+This is a bounded **host-state abstraction** only: it does not yet prove
+`SourcePipelineFlows.c` refines TLA+, much less the production
+`SourceActorBootstrap` callback/worker/credit integration. Physical
+delivered-versus-admitted state, graph routing, fairness, futures and
+incarnation restarts remain separate models/tests. CI must test exact source
+blobs and use positive + deliberate-negative model checks.
+
 \`LinearPipelineSingleFlow.tla\` is a TLC-executable safety model of the
 fixed root → source → transform → sink → transform → source admission
 protocol currently used by the initial Java/GraalVM and LLVM pipeline slices.
@@ -46,17 +63,17 @@ runtime-minted authority and context binding, not merely guess-resistant IDs.
 This model does not prove C11 memory-order refinement, general `Future<T>`
 continuations or multi-flow routing.
 
-## Bounded single-flow root credit
 
-`SourceRootAdmissionCredit.tla` models the first root message's single-use
-credit with rejected frames, successful DATA publication, and cancellation.
-A rejected frame must not consume the credit; the one-use token commits with
-the first successful publication. `SourceRootAdmissionCreditMutant.cfg`
-permits the historical pre-validation root credit claim, which TLC must
-reject via `NoBurnedRootCredit`.
+## Cross-table publisher callback lock-order model
 
-[Exact-source funded verification #38267399924](https://github.com/zed-pkg-test/java-app/actions/runs/38267399924):
-12 distinct states, no safe-model invariant violations, preclaim mutation
-counterexample, and all 161 CTests passed. TLC uses `-deadlock` because this
-bounded abstraction has intentional terminal states. This does not prove
-a C memory model implementation refinement or general multiple-flow liveness.
+`FlowCallbackReentrancy.tla` models a bounded A→B→A cross-table
+publisher callback cycle. The safe configuration
+`FlowCallbackReentrancy.cfg` forbids *any* flow-table operation while a
+publisher callback is executing, including an unrelated table. The unsafe
+`FlowCallbackReentrancyMutant.cfg` permits nested table entry and must fail
+`NoNestedRegistryEntry`.
+
+This tests the stated callback contract, not a lock-level C11 implementation
+refinement. The C executable additionally attempts all seven foreign-table
+operations while holding the outer flow callback mutex and verifies that
+none consumes the foreign reservation.

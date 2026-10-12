@@ -2,6 +2,7 @@
 """CTest harness: verify safe rejection, verified IR, and optional native execution."""
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,50 @@ def verify_three_actor_pipeline_stderr(stderr):
 
 
 
+def verify_three_actor_flow_context(stderr):
+    """Validate causal scheduler-issued DATA provenance on actual compiled guest.
+
+    This checks the existing one-flow guest route, NOT concurrent-flow parity.
+    Never depend on Python assertions: -O must not disable this security gate.
+    """
+    if not isinstance(stderr, str) or len(stderr) > 131072:
+        raise ValueError("invalid or oversized host-issued context evidence")
+    prefix = "SOURCE_PIPELINE_CONTEXT_ADMIT "
+    rows = [line for line in stderr.splitlines() if line.startswith(prefix)]
+    if len(rows) != 5:
+        raise ValueError("expected five real scheduler DATA context commits")
+    pattern = re.compile(
+        r"SOURCE_PIPELINE_CONTEXT_ADMIT flow=(\d+) message=(\d+) "
+        r"parent=(\d+) target=(\d+) direction=(\d+) "
+        r"domain=(\d+) generation=(\d+)"
+    )
+    parsed = []
+    for row in rows:
+        match = pattern.fullmatch(row)
+        if match is None:
+            raise ValueError("malformed host-issued context record")
+        parsed.append(tuple(map(int, match.groups())))
+    flow_id = parsed[0][0]
+    if flow_id <= 0:
+        raise ValueError("zero flow identity")
+    if [(r[3], r[4]) for r in parsed] != [
+        (0, 0), (1, 1), (2, 1), (1, 2), (0, 2)
+    ]:
+        raise ValueError("compiled guest routed to an unauthorized target/direction")
+    if any(r[0] != flow_id for r in parsed):
+        raise ValueError("cross-flow DATA contamination")
+    if len({r[1] for r in parsed}) != 5:
+        raise ValueError("duplicate message identity")
+    if any(r[1] <= 0 or r[5] <= 0 or r[6] <= 0 for r in parsed):
+        raise ValueError("zero message, domain, or actor incarnation")
+    if len({r[5] for r in parsed}) != 1:
+        raise ValueError("cross-domain DATA route")
+    if parsed[0][2] != 0:
+        raise ValueError("root ingress forged its causal parent")
+    if any(parsed[i][2] != parsed[i - 1][1] for i in range(1, 5)):
+        raise ValueError("broken runtime-owned causal chain")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -64,6 +109,7 @@ def main():
     parser.add_argument("--stderr")
     parser.add_argument("--stderr-count", type=int)
     parser.add_argument("--pipeline-three-actor-summary", action="store_true")
+    parser.add_argument("--pipeline-context-summary", action="store_true")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
@@ -151,6 +197,10 @@ def main():
                 if result.stdout:
                     raise ValueError("unexpected compiled actor guest stdout")
                 verify_three_actor_pipeline_stderr(result.stderr)
+            if args.pipeline_context_summary:
+                if not args.pipeline_three_actor_summary:
+                    raise ValueError("context gate requires full physical guest transcript gate")
+                verify_three_actor_flow_context(result.stderr)
 
 
 if __name__ == "__main__":
