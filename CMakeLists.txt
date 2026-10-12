@@ -106,13 +106,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_typed_match_ret_int typed-match-ret-int.ores
         --ir "dispatch.collected.value")
     oreslang_contract_test(source_typed_do_match_ret_int typed-do-match-ret-int.ores
-        --ir "do_match")
+        --ir "dispatch.do.arm")
     oreslang_contract_test(reject_value_match_duplicate_alias value-match-duplicate-alias.ores
         --diagnostic "duplicate match default")
     oreslang_contract_test(reject_typed_match_non_int typed-match-ret-string.ores
         --diagnostic "native match supports only ret=int")
     oreslang_contract_test(reject_typed_do_match_no_fallback typed-do-match-nonexhaustive.ores
         --diagnostic "non-exhaustive do match<ret=int>")
+    oreslang_contract_test(reject_typed_do_match_missing_arm_return typed-do-match-missing-return.ores
+        --diagnostic "do match<ret=int> requires every arm to return int")
     oreslang_contract_test(reject_value_match_duplicate_default value-match-duplicate-default.ores
         --diagnostic "duplicate match default")
     oreslang_contract_test(reject_value_switch_grouped_duplicate value-switch-grouped-duplicate.ores

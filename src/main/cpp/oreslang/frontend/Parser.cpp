@@ -416,13 +416,7 @@ private:
         // accepts the shared typed-match syntax only for i64/int results.
         bool typed_match_result = false;
         if (is_match && accept("<")) {
-            (void)accept("ret"); // match<int> is accepted shorthand.
-            if (token_.text == "=") {
-                if (token_.text != "=") fail("malformed match return contract");
-                advance();
-            } else if (token_.text != "int") {
-                fail("native match supports only ret=int");
-            }
+            if (accept("ret")) require("="); // match<int> is shorthand.
             if (!accept("int")) fail("native match supports only ret=int");
             require(">");
             typed_match_result = true;
