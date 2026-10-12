@@ -207,13 +207,19 @@ private:
                     return false;
                 }
                 admitted = registered_.at(key);
+                // Identity-mode callbacks also require the actual scheduler-minted
+                // typed CONTROL carrier. A recorded-but-queued receipt or
+                // copied parent ActorRef cannot authorize host delivery.
                 // Claim original-parent liveness AND one-use host authority under
                 // the scheduler mutex that serializes with physical STOP.
                 // STOP winning first preserves RECORDED evidence for recovery;
                 // a claim winning first remains an in-flight host effect.
                 if (has_scheduler_receipt &&
-                    !ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
-                        scheduler_, parent_, failure.child, &receipt)) {
+                    !(ores_native_actor_scheduler_uses_identity_callbacks(scheduler_)
+                        ? ores_native_actor_scheduler_claim_delivered_terminal_receipt(
+                            scheduler_, parent_, failure.child, &receipt)
+                        : ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
+                            scheduler_, parent_, failure.child, &receipt))) {
                     ++rejected_;
                     return false;
                 }
