@@ -57,3 +57,50 @@ execution, signed runtime tracing, or cross-backend parity evidence.
    enable authenticated FD3 trace conformance in platform-conformance #13.
 
 Release status: integration bridge / native host contract only; keep draft.
+
+## Follow-up authority and lifecycle audit (2026-10-12)
+
+Current scope and constraints:
+
+- Claims now carry an additional monotonic **route generation**. A stale
+  publication claim from a destroyed route must fail even if the replacement
+  is constructed at the **same native address** with the same first ticket.
+  The generation is process-local accidental-reuse fencing, NOT a
+  cryptographic credential; the caller remains trusted scheduler code.
+- Never silently interpret an invalid `Direction` numeric representation as
+  `Backward`. An unknown stage queried for a routing fence is an error,
+  not an indication that sending is authorized.
+- If the publication ticket allocator ever exhausts its 64-bit space, the
+  route becomes permanently failed. It must not retain an unsettled claim
+  or wrap back to a claim token that was already issued.
+- The route must not report success until its entire forward/reverse phase
+  and all physical DONE receipts are complete. Fatal failure wins over a
+  pending publication reservation. A sibling's pending valid publication
+  must NOT, by itself, cause another finished stage's physical DONE to fail.
+- **Integration obligation:** bind each actor generation to exactly one
+  live pipeline in the owning runtime's actor registry, and authenticate the
+  exact causal sender from the admitted DATA turn. These are NOT supplied
+  by the host-only state machine. Guest data must never supply actor IDs,
+  route generation, sender identity, stage indexes, or publication claims.
+- **Publication obligation:** a claim must be settled at exactly the real
+  mailbox DATA publication point. A caller that cannot confirm whether
+  publication happened must permanently fail/quarantine the route; it must
+  never assume pre-publication rollback when delivery may have occurred.
+- **Shutdown obligation:** every reserved publication must be committed,
+  rejected before publication, or terminally aborted; physical retirement
+  receipts must be taken from scheduler-owned generation-aware finalizers.
+
+### Verification evidence
+
+- [Funded native exact-source run #38319006169](https://github.com/zed-pkg-test/java-app/actions/runs/38319006169):
+  GCC and Clang ASan/UBSan passed; 50 executions per configuration.
+  Tested allocator-address reuse, stale root claims, and post-failure
+  settlement rejection.
+- [Funded native exact-source run #38319194539](https://github.com/zed-pkg-test/java-app/actions/runs/38319194539):
+  GCC and Clang ASan/UBSan passed; 50 executions per configuration.
+  Adds rejection of forged direction enum values and unknown-stage
+  admission-fence queries.
+
+These are exact-source *host route* tests. Full CMake/CTest, scheduler
+integration, source-compiled LLVM actor execution, native trace provenance,
+and Java/LLVM source-identity parity remain unverified on this PR.
