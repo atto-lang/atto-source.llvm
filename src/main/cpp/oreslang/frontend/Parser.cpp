@@ -1102,8 +1102,9 @@ private:
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
         // suspended/native execution frame or deferred callback.
-        if (token_.text == "select" || token_.text == "readch" ||
-            token_.text == "writech" || token_.text == "nb" ||
+        if (token_.text == "select" || token_.text == "nb-select" ||
+            token_.text == "readch" || token_.text == "writech" ||
+            token_.text == "nb" ||
             token_.text == "do" || token_.text == "await" ||
             token_.text == "yield" || token_.text == "cooperate") {
             throw std::runtime_error(
