@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
+#include <optional>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -282,44 +284,85 @@ public:
     }
 
     /**
-     * Canonical trusted host operation for a failed, never-published
-     * candidate: first confirm exact physical DONE, then consume the
-     * original one-use reservation in the child registry, and ONLY THEN
-     * recycle the physical scheduler slot with a bumped generation.
+     * One-shot, exception-safe native RESTART after a failed unpublished
+     * candidate. The old physical candidate must already be DONE. We first
+     * retire its original logical permit, then recycle the physical slot,
+     * acquire a NEW logical permit, and publish via the existing scheduler
+     * admission lease and CONTROL close fence.
      *
-     * A recycling failure never reverses the completed logical abort:
-     * callers must use a different physical slot or report capacity
-     * exhaustion. This intentionally cannot recycle a published actor.
-     * The newly returned ActorRef remains unpublished and requires a NEW
-     * logical RESTART reservation and scheduler admission lease.
+     * CRITICAL: no raw newly-live ActorRef escapes this operation. If closing
+     * CONTROL, staging, admission or a trusted injection hook fails AFTER
+     * recycling, this function physically stops and waits for exact DONE
+     * before rolling back the new logical reservation. An inability to prove
+     * cleanup is fatal for this trusted native host (never ignore an orphan).
+     *
+     * The optional hook is only for trusted-host fault injection/tests. It
+     * runs outside publication/registry locks after recycle and before the
+     * new reservation; it must not initiate guest work on the hidden actor.
      */
-    OresNativeActorRef abort_cleaned_and_recycle_unpublished(
-            SupervisorChildRegistry::RestartReservation permit,
-            OresNativeActorRef replacement) {
-        const auto restored = abort_cleaned_replacement(permit, replacement);
+    SupervisorChildRegistry::Snapshot abort_recycle_and_admit_verified(
+            SupervisorChildRegistry::RestartReservation previous,
+            OresNativeActorRef discarded,
+            const std::function<void()>& after_recycle = {}) {
+        const auto restored = abort_cleaned_replacement(previous, discarded);
         if (restored.phase != SupervisorChildRegistry::Phase::finalized)
             throw std::logic_error("restart abort did not restore FINALIZED");
-        // Cleanup/abort must remain possible after shutdown, but creating
-        // a new live hidden generation must NOT be possible once CONTROL
-        // has closed. Check the authoritative process barrier before taking
-        // the scheduler publication gate (consistent with RESTART commit).
-        // A close that wins this transaction leaves the OLD actor stopped.
-        return process_->with_healthy_restart_transaction([&] {
-            // Do not hold any bridge mutex while acquiring the scheduler
-            // publication gate: admission acquires scheduler gate BEFORE the
-            // bridge routing lock. Inverting that order could deadlock a
-            // concurrent CONTROL-close or admission transaction.
+
+        // Take CONTROL's decision/close gate before the scheduler's physical
+        // publication lock; no bridge routing mutex is held across recycling.
+        const auto hidden = process_->with_healthy_restart_transaction([&] {
             if (!child_registry_->restart_admission_open())
                 throw std::logic_error(
                     "closed supervisor cannot recycle a live hidden candidate");
-            const auto next =
-                ores_native_actor_scheduler_recycle_unpublished_done(
-                    scheduler_, replacement);
-            if (!next.scheduler_domain)
+            const auto actor = ores_native_actor_scheduler_recycle_unpublished_done(
+                scheduler_, discarded);
+            if (!actor.scheduler_domain)
                 throw std::logic_error(
                     "physically cleaned replacement could not recycle safely");
-            return next;
+            return actor;
         });
+        // From this point until successful publication THIS stack frame owns
+        // the hidden actor. Do not allow a callback or exception to abandon it.
+        std::optional<SupervisorChildRegistry::RestartReservation> next;
+        try {
+            if (after_recycle) after_recycle();
+            next = child_registry_->begin_restart(
+                previous.child, previous.failed_actor, previous.incarnation);
+            const auto committed = admit_verified_replacement(*next, hidden);
+            return committed; // scheduler publication is complete and fenced
+        } catch (...) {
+            const auto original = std::current_exception();
+            // No scheduler lease survives admit_verified_replacement's scope.
+            // Stop is idempotent with an already-completed actor; both cases
+            // require the authoritative exact-generation DONE check.
+            if (!ores_native_actor_scheduler_poll_done(scheduler_, hidden)) {
+                (void) ores_native_actor_scheduler_stop(scheduler_, hidden);
+                if (!ores_native_actor_scheduler_wait_done(scheduler_, hidden)
+                    || !ores_native_actor_scheduler_poll_done(scheduler_, hidden))
+                    std::terminate(); // never return while an orphan is live
+            }
+            if (next) {
+                // If staging succeeded, prove cleanup before logical abort.
+                // If admission failed before staging, no candidate exists and
+                // abort_restart consumes the otherwise-stranded new permit.
+                try {
+                    child_registry_->acknowledge_replacement_cleanup(
+                        *next, hidden, [&] {
+                            return ores_native_actor_scheduler_poll_done(
+                                scheduler_, hidden) != 0;
+                        });
+                } catch (const std::logic_error&) {
+                    // Accept only the no-candidate path: abort_restart itself
+                    // still rejects a live or uncleaned staged replacement.
+                }
+                try {
+                    (void) child_registry_->abort_restart(*next);
+                } catch (...) {
+                    std::terminate(); // preserve physical/logical ownership
+                }
+            }
+            std::rethrow_exception(original);
+        }
     }
 
     /** Terminal supervisor teardown fences any in-flight RESTART commit. */
