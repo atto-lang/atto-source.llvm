@@ -54,6 +54,43 @@ int main(void) {
     OresMp2Contract wrong = {schema, "T[S,I,E(3:Baz)[1:8:Message1=N;]]",
                              bytes + 4 + 143 + 2};
     assert(!ores_mp2_contract_valid(&wrong));
-    printf("NESTED_ENUM_NATIVE_RUNTIME_PASS bytes=%zu\n", sizeof(bytes));
+    /* Host-supplied descriptors are not necessarily compiler-generated.
+     * A malicious length must never index past its NUL terminator, even
+     * when the original digest would already reject the proposed shape.
+     * This exercises the actual validator under ASan/UBSan. */
+    const char* truncated[] = {
+        "E(", "E(256:", "E(3:", "E(3:Ba",
+        "E(3:Bar)", "E(3:Bar)[",
+        "E(3:Bar)[1:", "E(3:Bar)[1:256:",
+        "E(3:Bar)[1:8:", "E(3:Bar)[1:8:Message1=",
+        "E(3:Bar)[1:8:Message1=N", "E(3:Bar)[1:8:Message1=N;",
+        "E(3:Bar)[01:8:Message1=N;]",
+        "E(3:Bar)[1:08:Message1=N;]",
+        "E(3:Bar)[0:8:Message1=N;]",
+        "E(3:Bar)[4294967296:8:Message1=N;]",
+        "E(3:Bar)[1:8:Message1=N;1:2:No=N;]",
+        "E(3:Bar)[1:8:Message1=N;0:2:No=N;]",
+        "E(3:Bar)[1:8:Message1=N;2:5:Wrong=N"
+    };
+    for (size_t i = 0; i < sizeof(truncated)/sizeof(truncated[0]); ++i) {
+        OresMp2Contract broken = {schema, truncated[i], c.shape_sha256};
+        assert(!ores_mp2_contract_valid(&broken));
+    }
+    /* Mutate every byte of the authenticated frame: any single-byte
+     * change to this minimal nested-nullary golden must be rejected. */
+    for (size_t i = 0; i < sizeof(bytes); ++i) {
+        const uint8_t old = bytes[i];
+        bytes[i] ^= 0x01;
+        /* Structural T[S,I,E(...)] validation alone cannot bind the
+         * outer enum owner or tag. Production source_send_binary
+         * ALWAYS applies the separate nominal identity gate afterwards. */
+        assert(!ores_mp2_validate_owned(&c, &frame)
+               || !ores_mp2_tagged_identity_matches_validated(
+                   &c, &frame, "Foo", 1));
+        bytes[i] = old;
+    }
+    assert(ores_mp2_validate_owned(&c, &frame));
+    printf("NESTED_ENUM_NATIVE_RUNTIME_PASS bytes=%zu negatives=%zu\n",
+           sizeof(bytes), sizeof(truncated)/sizeof(truncated[0]) + sizeof(bytes));
     return 0;
 }

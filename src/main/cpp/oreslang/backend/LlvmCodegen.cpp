@@ -320,6 +320,10 @@ std::string emit_verified_llvm_ir(const Program& source) {
         "oreslang_source_actor_pipeline_emit_i64",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                 {i64, i64, i64}, false));
+    const auto pipelineEmitVariant = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_emit_variant",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                {i64, i64, ptr, i64}, false));
     const auto pipelineExpect = module.getOrInsertFunction(
         "oreslang_source_actor_pipeline_expect",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
@@ -678,16 +682,30 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             [&](const GuestNominalCase& c) {
                                 return c.qualified == arm.route_variant;
                             });
-                        if (output == cases.end() || !output->i64_payload)
+                        if (output == cases.end())
                             throw std::runtime_error("LLVM pipeline route type contract mismatch");
-                        llvm::Value* routed = lower(*arm.route_payload, builder, i64,
-                                                    armParameters, locals, declarations);
-                        builder.CreateCall(pipelineEmit, {
-                            llvm::ConstantInt::get(i64,
-                                arm.route_direction == "forward" ? 1 : 2),
-                            llvm::ConstantInt::get(i64,
-                                std::distance(cases.begin(), output)),
-                            routed});
+                        const auto direction = llvm::ConstantInt::get(i64,
+                            arm.route_direction == "forward" ? 1 : 2);
+                        const auto ordinal = llvm::ConstantInt::get(i64,
+                            std::distance(cases.begin(), output));
+                        if (output->nested_payload) {
+                            if (arm.route_nested_variant.empty() || arm.route_payload)
+                                throw std::runtime_error("LLVM pipeline nested route requires checked enum literal");
+                            auto frame = nested_enum_v2::one_level_nullary(
+                                source, actor.messages_type,
+                                arm.route_variant, arm.route_nested_variant);
+                            auto* binary = builder.CreateGlobalStringPtr(
+                                std::string(reinterpret_cast<const char*>(frame.data()),
+                                            frame.size()));
+                            builder.CreateCall(pipelineEmitVariant, {direction, ordinal,
+                                binary, llvm::ConstantInt::get(i64, frame.size())});
+                        } else {
+                            if (!output->i64_payload || !arm.route_payload)
+                                throw std::runtime_error("LLVM pipeline route type contract mismatch");
+                            llvm::Value* routed = lower(*arm.route_payload, builder, i64,
+                                                        armParameters, locals, declarations);
+                            builder.CreateCall(pipelineEmit, {direction, ordinal, routed});
+                        }
                     }
                     builder.CreateBr(joined);
                 }
@@ -788,6 +806,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_write"
                             && name != "oreslang_source_actor_pipeline_connect"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
+                            && name != "oreslang_source_actor_pipeline_emit_variant"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_spawn_tagged_variants"
                             && name != "oreslang_source_actor_send_variant_checked"
