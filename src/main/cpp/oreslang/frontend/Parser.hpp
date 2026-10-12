@@ -12,7 +12,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -34,6 +34,7 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Restricted local stack-only explicit class move.
