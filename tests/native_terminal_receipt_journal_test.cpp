@@ -183,6 +183,24 @@ int main() {
               "multiple concurrent host effects claimed one terminal receipt");
     }
 
+    // A hard link is a second filesystem name for the same inode. The
+    // path-local writer lock and O_NOFOLLOW alone cannot prevent an external
+    // writer from opening that alias, so reject multi-link journals on open.
+    {
+        const std::string alias = std::string(dir) + "/receipts.alias";
+        check(::link(path.c_str(), alias.c_str()) == 0,
+              "failed to create hard-link journal fixture");
+        rejects([&] { NativeTerminalReceiptJournal bad(path); },
+                "hard-linked receipt journal was admitted by original path");
+        rejects([&] { NativeTerminalReceiptJournal bad(alias); },
+                "hard-linked receipt journal was admitted by alternate path");
+        check(::unlink(alias.c_str()) == 0,
+              "failed to remove journal alias");
+        NativeTerminalReceiptJournal recovered(path);
+        check(recovered.inspect(k).phase == DurableTerminalPhase::acknowledged,
+              "single-link journal did not reopen after alias removal");
+    }
+
     // A torn last frame and silent record mutation both fail closed.
     {
         int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
