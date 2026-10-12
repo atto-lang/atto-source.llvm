@@ -251,6 +251,7 @@ static int reentrant_publisher(void* ctx, const OresFlowTicket* ticket) {
            == ORES_FLOW_REENTRANT);
     assert(ores_flow_retire(table, ticket->flow_id)
            == ORES_FLOW_REENTRANT);
+    assert(ores_flow_table_try_destroy(table) == ORES_FLOW_REENTRANT);
     return 1;
 }
 static void slow_publisher_isolation(OresFlowTable* table) {
@@ -277,6 +278,7 @@ static void slow_publisher_isolation(OresFlowTable* table) {
     assert(ores_flow_cancel(table, other, stages[0]) == ORES_FLOW_OK);
     assert(ores_flow_retire(table, other) == ORES_FLOW_OK);
     assert(ores_flow_retire(table, test.id) == ORES_FLOW_BUSY);
+    assert(ores_flow_table_try_destroy(table) == ORES_FLOW_BUSY);
 
     assert(pthread_mutex_lock(&test.mutex) == 0);
     test.release = 1;
@@ -322,6 +324,8 @@ static int cross_table_reentry_probe(void* opaque,
            == ORES_FLOW_REENTRANT);
     assert(ores_flow_retire(probe->other, probe->other_flow)
            == ORES_FLOW_REENTRANT);
+    assert(ores_flow_table_try_destroy(probe->other)
+           == ORES_FLOW_REENTRANT);
     assert(bogus_id == 0);
     return 1;
 }
@@ -339,6 +343,7 @@ static void cross_table_callback_cycle_fenced(OresFlowTable* table) {
            == ORES_FLOW_OK);
     assert(ores_flow_reserve(other, probe.other_flow, (OresFlowActor){0,0,0},
                ORES_FLOW_ROOT, 0, &probe.other_ticket) == ORES_FLOW_OK);
+    assert(ores_flow_table_try_destroy(other) == ORES_FLOW_INCOMPLETE);
     assert(ores_flow_publish(table, &source_ticket, cross_table_reentry_probe,
                &probe) == ORES_FLOW_OK);
     assert(probe.callbacks == 1);
@@ -394,6 +399,10 @@ static void reject_restarted_duplicate_stage(OresFlowTable* table) {
 int main(void) {
     OresFlowTable* table = ores_flow_table_create();
     assert(table);
+    assert(ores_flow_table_try_destroy(NULL) == ORES_FLOW_BAD_ARGUMENT);
+    OresFlowTable* empty = ores_flow_table_create();
+    assert(empty);
+    assert(ores_flow_table_try_destroy(empty) == ORES_FLOW_OK);
     basic_and_adversarial(table);
     reject_restarted_duplicate_stage(table);
     slow_publisher_isolation(table);
@@ -422,6 +431,6 @@ int main(void) {
      * legitimate message after A's callback returned. */
     assert(atomic_load(&delivered) == 5 + 8 * 10 * 5 + race_admitted + 1);
     ores_flow_table_destroy(table);
-    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1 slow_publish=1 reentry=1 cross_table_cycle=1");
+    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1 slow_publish=1 reentry=1 cross_table_cycle=1 guarded_destroy=1");
     return 0;
 }
