@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace oreslang::dop {
@@ -75,6 +76,15 @@ struct ClaimedGpuBinding {
     GpuBinding binding;
     gpu::BufferFence::PairTickets tickets;
 };
+
+// After the two fences become IN_FLIGHT, building the return value must not
+// allocate or throw. Keep these guarantees checked if the IR types evolve.
+static_assert(std::is_nothrow_move_constructible_v<GpuBinding>,
+              "GPU IR return must not throw after atomic fence admission");
+static_assert(std::is_nothrow_move_constructible_v<gpu::BufferFence::PairTickets>,
+              "GPU ticket return must not throw after atomic fence admission");
+static_assert(std::is_nothrow_move_constructible_v<ClaimedGpuBinding>,
+              "typed GPU claim return must not throw after atomic fence admission");
 
 // A typed preflight is only advisory until this transaction claims BOTH
 // allocation fences. The provider remains responsible for real device
