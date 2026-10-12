@@ -91,12 +91,34 @@ inline PlaceState& place(State& state, const std::string& key) {
     return found->second;
 }
 
+// Flat CFG entries do not encode the alias relationship between a whole
+// object and a simultaneously tracked projection of that same object.
+// In particular, checking a loan on "p" does not protect "p.field" in
+// apply(), and vice versa. Until this verifier has a proven projection tree,
+// reject those mixed layouts instead of allowing a loan to be bypassed.
+// Siblings (p.a and p.b) remain independent places.
+inline void validate_disjoint_place_layout(const State& state) {
+    for (const auto& item : state) {
+        const std::string& key = item.first;
+        if (key.empty() || key.front() == '.' || key.back() == '.' ||
+                key.find("..") != std::string::npos)
+            violation(key, "invalid CFG place path");
+        for (std::size_t dot = key.find('.'); dot != std::string::npos;
+                dot = key.find('.', dot + 1)) {
+            if (state.count(key.substr(0, dot)))
+                violation(key, "whole-object and projected-field places overlap without alias proof");
+        }
+    }
+}
+
 inline void require_owned(const std::string& key, const PlaceState& value) {
     if (value.possible != kOwned)
         violation(key, "not definitely initialized on every CFG predecessor");
 }
 
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
+    // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
+    validate_disjoint_place_layout(state);
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -251,6 +273,7 @@ inline Analysis verify(const Graph& graph) {
     // processed. Unknown bits and contradictory live-loan provenance
     // must not silently enter the fixed-point lattice.
     State entry = graph.entry;
+    validate_disjoint_place_layout(entry);
     for (auto& [name, place] : entry) {
         if (!place.possible || (place.possible &
                 static_cast<ValueMask>(~(kOwned | kMoved | kUninitialized | kDropped))))
