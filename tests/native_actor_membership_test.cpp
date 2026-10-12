@@ -2,6 +2,7 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 
 #include <atomic>
+#include <limits>
 #include <chrono>
 #include <stdexcept>
 #include <thread>
@@ -21,6 +22,24 @@ static bool rejected(Fn fn) {
 }
 
 int main() {
+    {
+        // Regression: the registry-origin fence is not permitted to wrap
+        // back to a previously issued identifier after reaching UINT64_MAX.
+        std::atomic<std::uint64_t> ids{
+                std::numeric_limits<std::uint64_t>::max() - 1};
+        check(oreslang::runtime::detail::take_nonwrapping_registry_id(ids)
+                  == std::numeric_limits<std::uint64_t>::max() - 1,
+              "failed to issue final safe registry incarnation ID");
+        bool exhausted = false;
+        try {
+            (void)oreslang::runtime::detail::take_nonwrapping_registry_id(ids);
+        } catch (const std::overflow_error&) {
+            exhausted = true;
+        }
+        check(exhausted, "registry incarnation identifiers wrapped at exhaustion");
+        check(ids.load() == std::numeric_limits<std::uint64_t>::max(),
+              "exhausted registry ID source mutated or wrapped");
+    }
     {
         NativeActorMembershipRegistry m(10, 8, 2);
         auto a = m.create_group(1, 3);
@@ -130,5 +149,57 @@ int main() {
             check(m.retire_actor(5, 1), "race actor retire");
             check(m.member_count(2) == 0, "retirement left group members");
         }
+    }
+    {
+        // Rotation, join, and duplicate admission share one serialization
+        // point. Even if the old permit won an earlier join, its replay after
+        // rotation must fail rather than silently return "already joined".
+        for (int round = 0; round < 128; ++round) {
+            NativeActorMembershipRegistry m(50, 2, 2);
+            auto stale = m.create_group(1, 2);
+            check(m.register_actor(100, 9), "race registration failed");
+            std::atomic<bool> go{false};
+            std::atomic<int> admitted{0};
+            std::atomic<int> revoked{0};
+            std::atomic<int> unexpected{0};
+            std::thread joiner([&] {
+                while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+                try {
+                    if (m.join(stale, 100, 9)) ++admitted;
+                } catch (const std::logic_error&) {
+                    ++revoked;
+                } catch (...) {
+                    ++unexpected;
+                }
+            });
+            go.store(true, std::memory_order_release);
+            auto fresh = m.rotate_join(stale);
+            joiner.join();
+            check(unexpected == 0 && admitted + revoked == 1,
+                  "rotation/join was not linearizable");
+            check(rejected([&] { (void)m.join(stale, 100, 9); }),
+                  "stale capability replay succeeded after rotation");
+            check(m.join(fresh, 100, 9) == (admitted == 0),
+                  "fresh admission inconsistent with earlier race winner");
+            check(!m.join(fresh, 100, 9),
+                  "fresh duplicate admission charged membership twice");
+            check(m.member_count(1) == 1 && m.membership_count(100, 9) == 1,
+                  "rotation race corrupted forward or reverse membership");
+            check(m.retire_actor(100, 9), "rotation race actor retirement failed");
+        }
+    }
+    {
+        // Numeric runtime IDs are not capability origins. Two registries for
+        // the same trusted runtime ID must still reject one another's permits.
+        NativeActorMembershipRegistry first(60, 1, 1);
+        NativeActorMembershipRegistry second(60, 1, 1);
+        auto permit = first.create_group(1, 1);
+        auto local = second.create_group(1, 1);
+        check(second.register_actor(55, 2), "second registry actor registration");
+        bool foreign_rejected = false;
+        try { (void)second.join(permit, 55, 2); }
+        catch (const std::invalid_argument&) { foreign_rejected = true; }
+        check(foreign_rejected, "same-runtime-ID foreign registry permit was accepted");
+        check(second.join(local, 55, 2), "local permit rejected after foreign probe");
     }
 }

@@ -642,6 +642,12 @@ private:
             expr->integer = integer_literal();
             return expr;
         }
+        // Opaque ActorGroup and join permits are runtime-affine capabilities.
+        // Never silently admit a native scalar name or emit partial IR.
+        if (token_.text == "ActorGroup" ||
+            token_.text == "ActorGroupJoinCapability")
+            fail("native ActorGroup source lowering unsupported: "
+                 "typed membership capabilities and lifecycle authority required");
         if (token_.kind != Kind::Identifier || reserved(token_.text)) {
             fail("expected int expression");
         }
@@ -675,6 +681,10 @@ private:
     }
 
     std::string identifier() {
+        if (token_.text == "ActorGroup" ||
+            token_.text == "ActorGroupJoinCapability")
+            fail("native ActorGroup source lowering unsupported: "
+                 "typed membership capabilities and lifecycle authority required");
         if (token_.kind != Kind::Identifier || reserved(token_.text)) {
             fail("expected non-keyword identifier");
         }

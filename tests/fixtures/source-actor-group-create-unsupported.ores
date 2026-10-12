@@ -1,0 +1,6 @@
+// Valid Java/Graal source-level group API, fail closed in LLVM until lowered.
+pub fnc main(): int {
+  const room = ActorGroup.new();
+  room.close();
+  return 0;
+}
