@@ -20,6 +20,11 @@ make `-` part of ordinary identifiers.
 | `critical-write` | `critical` | Callable declaration modifier |
 | `critical` | unchanged | Exclusive callable modifier |
 
+A compound keyword has no whitespace around the hyphen. Unicode en/em
+ dashes are not equivalent to U+002D and must not be silently normalized.
+A source format pass must never convert subtraction into a compound keyword.
+A compiler may tokenize `nb-select` as distinct adjacent `NB SELECT`
+tokens only if the syntax stays source-position-safe.
 A compound keyword has no whitespace around the hyphen. It must match
 *exactly* and in a supported grammar position: `critical - read` is not
 `critical-read`; `critical-readonly` is not a keyword. Do not greedily
@@ -32,7 +37,7 @@ A token-based implementation may recognize adjacent
 `IDENT/KEYWORD MINUS IDENT/KEYWORD` only in the designated parser context;
 it must not change arithmetic tokenization.
 
-## Surface examples
+## Surface examples (proposed; not all currently executable)
 
 ```ores
 define transform-pipe actor Foo as
@@ -51,14 +56,27 @@ pub fnc critical update_balance_compat(value: int): void {
     balance = value;
 }
 
-// Equivalent to nb select { ... } or nb select from cases:
-nb-select { on readch(events) as event { handle(event); } }
+// Equivalent to nb select { ... }:
+fnc consume(Channel<int> events): void {
+    nb-select {
+        when readch events: const event {
+            handle(event);
+        }
+        default: {}
+    }
+}
 ```
 
-The exact placement `pub fnc critical-read name(...)` is supported as well
-as `pub critical-read fnc name(...)`, matching the existing callable
-modifier-permutation policy. Instance method forms (bare name, `method`,
-legacy `fnc`) receive the same mode when supported.
+Future compiler-enabled forms must accept both
+`pub fnc critical-read name(...)` and `pub critical-read fnc name(...)`,
+matching the callable modifier-permutation policy. Instance method forms
+(bare name, `method`, legacy `fnc`) need the same semantic mode.
+
+**Current admission:** Java accepts the `nb-select` shorthand only;
+`critical-read`, `critical-write`, and `transform-pipe` are reserved
+and rejected until checked runtime lowering exists. LLVM reserves the
+compound spellings but rejects unsupported native guest-source lowering.
+Do not interpret parsing or negative tests as runtime support.
 
 ## Reader/writer scope
 
