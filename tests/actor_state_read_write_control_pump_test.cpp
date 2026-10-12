@@ -53,6 +53,48 @@ int main() {
     CHECK(control[0].status == Status::Cancelled);
     CHECK(registry.pending_notifications().empty());
 
+    // A trusted callback may accidentally reenter the pump. It must
+    // fail promptly, not deadlock the only actor scheduler carrier.
+    Registry recursive;
+    Pump recursive_pump(recursive);
+    CHECK(recursive.request(recursive.incarnation(), 1, Mode::Read).status == Status::Ready);
+    CHECK(recursive.request(recursive.incarnation(), 2, Mode::Write).status == Status::Queued);
+    recursive.complete(recursive.incarnation(), 1);
+    int nested_receipts = -1;
+    auto reject_nested = [](const Registry::Notification&) noexcept -> bool {
+        return false;
+    };
+    auto reenter = [&](const Registry::Notification&) noexcept -> bool {
+        nested_receipts = static_cast<int>(recursive_pump.pump(reject_nested));
+        return false;
+    };
+    CHECK(recursive_pump.pump(reenter) == 0);
+    CHECK(nested_receipts == 0);
+    CHECK(recursive.pending_notifications().size() == 1);
+
+    // CONTROL admission can race actor retirement after the recipient
+    // queues READY. Its receipt must not authorize stale guest execution.
+    Registry retiring;
+    Pump retiring_pump(retiring);
+    CHECK(retiring.request(retiring.incarnation(), 1, Mode::Read).status == Status::Ready);
+    CHECK(retiring.request(retiring.incarnation(), 2, Mode::Write).status == Status::Queued);
+    retiring.complete(retiring.incarnation(), 1);
+    Registry::Notification queued_ready{};
+    auto race_retire = [&](const Registry::Notification& n) noexcept -> bool {
+        queued_ready = n;
+        retiring.retire();
+        return true;
+    };
+    CHECK(retiring_pump.pump(race_retire) == 1);
+    CHECK(queued_ready.status == Status::Ready);
+    CHECK(!retiring.admitted(queued_ready.incarnation,
+                             queued_ready.continuation_id, Mode::Write));
+    CHECK(retiring.pending_notifications().size() == 1);
+    CHECK(retiring.pending_notifications().front().status == Status::Cancelled);
+    auto admit_cancel = [](const Registry::Notification&) noexcept -> bool { return true; };
+    CHECK(retiring_pump.pump(admit_cancel) == 1);
+    CHECK(retiring.pending_notifications().empty());
+
     // Concurrent pumpers cannot acknowledge the same terminal event twice.
     Registry concurrency;
     Pump concurrent_pump(concurrency);
