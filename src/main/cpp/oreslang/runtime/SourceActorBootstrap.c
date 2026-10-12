@@ -974,6 +974,15 @@ void oreslang_source_actor_pipeline_connect(void* first, void* middle, void* las
     void* const stages[3] = {first, middle, last};
     oreslang_source_actor_pipeline_connect_many(stages, 3);
 }
+/* The compiler inserts this gate in the transform callback's invalid
+ * ingress/direction switch arm. Do not allow wrong-domain frames to fall
+ * through as a normal user-handler return and later time out ambiguously. */
+void oreslang_source_actor_pipeline_reject_delivery(void) {
+    SourceActor* actor = active_pipeline_actor;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC)
+        return; /* no user hook is invoked without admitted DATA authority */
+    pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
+}
 static size_t pipeline_write_positive(uint8_t* dst, uint64_t n) {
     if (n <= 127) { dst[0] = (uint8_t)n; return 1; }
     unsigned width = n <= UINT8_MAX ? 1 : n <= UINT16_MAX ? 2
