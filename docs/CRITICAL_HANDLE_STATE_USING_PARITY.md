@@ -1,3 +1,44 @@
+# Canonical pre-1.0 with / using / critical contract — migration notice
+
+**Normative syntax as of October 12, 2026.** This branch originated under
+an older experimental grammar. The archived prototype below is not a
+valid current source-code pattern and must not be merged or copied without
+integration with Java PR #760 and LLVM PR #257/#259.
+
+```oreslang
+define actor Counter as
+    state { count: int = 0; }
+
+    read(): int with state.read {
+        return using state.read(|s| -> s.count);
+    }
+
+    increment(): int with state.read, state.write {
+        return using state.write(critical |s| -> {
+            s.count = s.count + 1;
+            return s.count;
+        });
+    }
+end
+```
+
+- `with` on a signature declares an *upper bound on effects*, never a loan.
+- `using` in a body acquires a scoped, lexical state capability.
+- `critical` provides exclusive write admission; read callbacks need no
+  `critical` even on ordinary actors; serial scheduling does not grant write.
+- Read-only access cannot mutate even with `with state.write`; write requires
+  an explicit critical callback and a matching declared write effect.
+- A live state loan cannot nest, escape or suspend. The actor is single-flight
+  physically even when logical reader admission is considered.
+- Legacy signatures such as `fnc get() using state.read` and serial implicit
+  mutable callback privileges are **release-blocking incompatibilities**.
+- Older fixture source on this branch remains historical until the canonical
+  parser/effect/runtime changes are integrated and verified on the exact tree.
+
+---
+
+## Archived prototype contract (superseded; not normative)
+
 # Critical handle_state and using — shared Java/Graal and LLVM language contract
 
 Status: **static/lower-level parity in progress; NOT executable guest actor-source
