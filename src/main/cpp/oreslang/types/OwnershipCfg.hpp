@@ -221,6 +221,28 @@ inline bool join_into(State& target, const State& incoming) {
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
+    // Each lexical borrow must own a globally unique provenance token,
+    // including across mutually exclusive CFG predecessors. Otherwise two
+    // different borrows with the same count and token could spuriously join,
+    // allowing a single release to discharge the wrong branch's loan.
+    // The implicit ID is a stable encoding of the borrow's CFG site.
+    std::map<std::uint64_t, std::pair<std::size_t, std::size_t>> borrow_sites;
+    for (std::size_t block_id = 0; block_id < graph.blocks.size(); ++block_id) {
+        const auto& block = graph.blocks[block_id];
+        for (std::size_t op_id = 0; op_id < block.operations.size(); ++op_id) {
+            const auto& op = block.operations[op_id];
+            if (op.kind != Operation::Kind::BorrowShared &&
+                    op.kind != Operation::Kind::BorrowExclusive) continue;
+            if (block_id >= UINT32_MAX || op_id >= UINT32_MAX)
+                violation(op.place, "CFG too large for loan identity");
+            const auto derived = ((static_cast<std::uint64_t>(block_id) + 1) << 32) |
+                    (static_cast<std::uint64_t>(op_id) + 1);
+            const auto token = op.loan_id.value_or(derived);
+            if (!token) violation(op.place, "entry loan identity cannot be issued");
+            if (!borrow_sites.emplace(token, std::make_pair(block_id, op_id)).second)
+                violation(op.place, "duplicate lexical loan identity");
+        }
+    }
     // Reject malformed initial abstract states before any CFG edge is
     // processed. Unknown bits and contradictory live-loan provenance
     // must not silently enter the fixed-point lattice.
