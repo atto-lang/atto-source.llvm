@@ -115,6 +115,15 @@ int main() {
         check(admitted.binding.bytes_per_buffer == shape.byte_length());
         check(source.status() == oreslang::gpu::Status::InFlight);
         check(result.status() == oreslang::gpu::Status::InFlight);
+        // Other allocations may legitimately have matching numerical
+        // generation and sequence, but not this submission's private seal.
+        BufferFence foreign(Identity{"t", "gpu", 10}, shape.byte_length());
+        const auto forged = foreign.begin_command(Identity{"t", "gpu", 10});
+        check(forged.generation == admitted.tickets.input_ticket.generation
+                && forged.sequence == admitted.tickets.input_ticket.sequence);
+        expect<std::logic_error>([&] { source.complete(forged, true); });
+        expect<std::logic_error>([&] { source.cancel_pending(forged); });
+        foreign.complete(forged, true);
         expect<std::logic_error>([&] { (void)source.take(); });
         expect<std::logic_error>([&] { (void)result.take(); });
         source.complete(admitted.tickets.input_ticket, true);
