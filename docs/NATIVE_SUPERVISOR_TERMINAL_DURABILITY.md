@@ -91,6 +91,35 @@ The mirror is test-only and its 12 source Git blob hashes were checked before
 compilation. This focused gate does not certify full LLVM compiler or Java
 backend parity.
 
+## P0 recovery ACK and contract audit — 2026-10-12
+
+A source audit found that a refactor had removed the durable-mode guard from
+`reconcile_claimed_terminal_ack`. The corrected guard rejects scheduler-only
+recovery ACK when a disk journal is attached. Unlike earlier regressions that
+started from an already scheduler-ACKed normal CONTROL enqueue, the new
+lost-ACK fixture holds the native scheduler receipt in `CLAIMED` while the
+journal remains `CLAIMED`, then supplies a verifier that returns true. Both
+receipts must remain quarantined. The bridge's proof-bound recovery path still
+accepts authoritative external evidence and completes the journal before a
+lost native scheduler ACK, without invoking policy again.
+
+Formal model: `NativeDurableTerminal.tla` separately represents the recovery
+ACK (not the ordinary CONTROL enqueue ACK). A safety invariant forbids release
+before an externally verified and fsynced journal acknowledgment. The
+`LegacyRecoveryAckMutant` models the bypass, and the pinned TLC script
+requires this and five other unsafe variants to yield expected counterexamples.
+
+The TypeSpec and JSON Schema contracts now distinguish nonzero native
+supervisor, actor-generation, logical-child, and claim-nonce identities from
+fields where zero is meaningful (for example actor slot or failure code).
+Conformance includes maximum uint64 acceptance and zero-identity/forged
+authority rejection; JSON Schema cannot by itself authorize external effects.
+
+- Exact-source native and bounded formal funded run:
+  https://github.com/zed-pkg-test/java-app/actions/runs/38280178765
+- Exact-source schema/semantic conformance run:
+  https://github.com/zed-pkg-test/java-app/actions/runs/38280632143
+
 ## Unresolved release gates
 
 The current bridge records the event when the actual callback or recovered
