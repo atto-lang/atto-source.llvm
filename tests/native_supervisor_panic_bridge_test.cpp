@@ -149,6 +149,17 @@ int main() {
             } catch (...) {
                 ++s.unexpected;
             }
+            // A reservation alone is not a host-effect invocation. Reject
+            // an attempted authoritative ACK before entering the real sink.
+            try {
+                (void) s.bridge->acknowledge_finalized_stop(result);
+                ++s.unexpected;
+            } catch (const std::logic_error&) {
+                // Expected: the host has not yet claimed effect invocation.
+            }
+            // Record the exact callback-entry boundary before the physical
+            // sibling host effect. The entry is not an applied-effect proof.
+            s.bridge->claim_finalized_stop_host_invocation(result);
             // The sibling shutdown is a separate host lifecycle effect,
             // not proof that the already finalized failed child was stopped.
             if (!ores_native_actor_scheduler_stop(s.scheduler, s.sibling))
