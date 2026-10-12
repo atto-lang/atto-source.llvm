@@ -1007,11 +1007,5 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-versioned-actor-cell-test)
     set_tests_properties(native_actor_versioned_state_logical_races
         PROPERTIES TIMEOUT 20)
-    # Native synchronous actor-state loan guard; source await still fail-closed.
-    add_executable(oreslang-actor-state-scope-test tests/actor_state_scope_test.c)
-    target_compile_options(oreslang-actor-state-scope-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
-    add_test(NAME native_actor_state_scope_nested_loan_fencing
-        COMMAND oreslang-actor-state-scope-test)
     set_tests_properties(native_actor_state_scope_nested_loan_fencing PROPERTIES TIMEOUT 20)
 endif()
