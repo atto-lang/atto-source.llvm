@@ -231,6 +231,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_group_heap_loan_quiescence
         COMMAND oreslang-actor-group-heap-quiescence-test)
     set_tests_properties(native_actor_group_heap_loan_quiescence PROPERTIES TIMEOUT 15)
+    # Bind the actual native actor heap, resource registry and ActorGroup
+    # physical-done acknowledgment into one quiescence-checked host lifecycle.
+    add_executable(oreslang-native-actor-retirement-barrier-test
+        tests/native_actor_retirement_barrier_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-native-actor-retirement-barrier-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-retirement-barrier-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-retirement-barrier-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_done_resource_quiescence
+        COMMAND oreslang-native-actor-retirement-barrier-test)
+    set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
