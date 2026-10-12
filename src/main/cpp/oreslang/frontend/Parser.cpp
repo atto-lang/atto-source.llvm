@@ -1069,6 +1069,16 @@ private:
         return false;
     }
 
+    static bool reads_state_value(const Expression& e) {
+        if (e.kind == Expression::Kind::Variable
+                && e.name.rfind("@state.", 0) == 0) return true;
+        if (e.left && reads_state_value(*e.left)) return true;
+        if (e.right && reads_state_value(*e.right)) return true;
+        for (const auto& arg : e.arguments)
+            if (reads_state_value(*arg)) return true;
+        return false;
+    }
+
     static void validate(const Program& program) {
         // LLVM nominal declarations must resolve independently of source
         // order, but must NEVER inherit structural shape-first dispatch.
@@ -1498,6 +1508,27 @@ private:
                                 }
                             }
                             if (arm.state_loan) {
+                                if (method.effects_declared) {
+                                    const auto permits = [&](std::string_view effect) {
+                                        return std::find(method.declared_effects.begin(),
+                                            method.declared_effects.end(), effect)
+                                                != method.declared_effects.end();
+                                    };
+                                    if (arm.state_loan->mode == StateLoan::Mode::Read
+                                            && !permits("state.read"))
+                                        throw std::runtime_error(
+                                            "state.read loan not permitted by with effects");
+                                    if (arm.state_loan->mode == StateLoan::Mode::Write
+                                            && !permits("state.write"))
+                                        throw std::runtime_error(
+                                            "state.write loan not permitted by with effects");
+                                    bool reads = reads_state_value(*arm.state_loan->result);
+                                    for (const auto& assignment : arm.state_loan->assignments)
+                                        reads |= reads_state_value(*assignment.value);
+                                    if (reads && !permits("state.read"))
+                                        throw std::runtime_error(
+                                            "state.read operation not permitted by with effects");
+                                }
                                 if (!actor.state_declared)
                                     throw std::runtime_error("handle_state requires an actor state map");
                                 if (arm.state_loan->mode == StateLoan::Mode::Read
