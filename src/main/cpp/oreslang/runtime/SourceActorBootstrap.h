@@ -20,6 +20,12 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
 void oreslang_source_actor_stop(void* actor);
+/* A source-compiled continuation runs on the root ActorGroup CONTROL lane.
+ * Only the outer trusted-main ABI waits to return the program's i64 result;
+ * no scheduler worker blocks while the readiness Future is pending. */
+typedef int64_t (*OresSourceActorContinuation)(void* actor_ref);
+int64_t oreslang_source_actor_await_ready(
+    void* actor, OresSourceActorContinuation continuation);
 #ifdef __cplusplus
 }
 #endif

@@ -126,6 +126,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
     const auto sourceSend = module.getOrInsertFunction(
         "oreslang_source_actor_send",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr, i64}, false));
+    // Host main blocks only at its outer ABI boundary. The guest continuation
+    // itself executes on the root ActorGroup CONTROL lane after a real Future
+    // completes, never inline on the initializing worker.
+    const auto sourceAwaitReady = module.getOrInsertFunction(
+        "oreslang_source_actor_await_ready",
+        llvm::FunctionType::get(i64, {ptr, ptr}, false));
 
     // Declare all functions first, enabling forward calls and recursion.
     for (const auto& fn : source.functions) {
@@ -192,12 +198,41 @@ std::string emit_verified_llvm_ir(const Program& source) {
             locals.emplace(local.name, address);
             slots.push_back({address, local.heap_owned});
         }
-        llvm::Value* result = lower(*fn.result, builder, i64, parameters,
-                                    locals, declarations);
-        for (const auto& send : fn.actor_sends) {
-            llvm::Value* payload = lower(*send.payload, builder, i64,
-                                          parameters, locals, declarations);
-            builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
+        llvm::Value* result = nullptr;
+        if (!fn.ready_await_actor.empty()) {
+            // First compiler-generated suspend point: the program's original
+            // post-await guest work is compiled into a separate callback.
+            // The trusted top-level entrypoint waits outside the native pool;
+            // the callback is scheduled on the exclusive root actor lane.
+            auto* continuationType = llvm::FunctionType::get(i64, {ptr}, false);
+            auto* resume = llvm::Function::Create(continuationType,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".ready_continuation", module);
+            auto* resumed = llvm::BasicBlock::Create(context, "admitted", resume);
+            llvm::IRBuilder<> resumeBuilder(resumed);
+            std::unordered_map<std::string, llvm::Value*> resumedActors{
+                {fn.ready_await_actor, &*resume->arg_begin()}};
+            const std::unordered_map<std::string, llvm::Value*> noLocals;
+            const std::unordered_map<std::string, llvm::Value*> noParams;
+            for (const auto& send : fn.actor_sends) {
+                auto* payload = lower(*send.payload, resumeBuilder, i64,
+                                      noParams, noLocals, declarations);
+                resumeBuilder.CreateCall(sourceSend,
+                    {resumedActors.at(send.reference), payload});
+            }
+            auto* resumedResult = lower(*fn.result, resumeBuilder, i64,
+                                        noParams, noLocals, declarations);
+            resumeBuilder.CreateRet(resumedResult);
+            result = builder.CreateCall(sourceAwaitReady,
+                {actorRefs.at(fn.ready_await_actor), resume}, "future.await.result");
+        } else {
+            result = lower(*fn.result, builder, i64, parameters,
+                           locals, declarations);
+            for (const auto& send : fn.actor_sends) {
+                llvm::Value* payload = lower(*send.payload, builder, i64,
+                                              parameters, locals, declarations);
+                builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
+            }
         }
         for (const auto& name : fn.actor_stops) {
             builder.CreateCall(sourceStop, {actorRefs.at(name)});
@@ -353,7 +388,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_write"
                             && name != "oreslang_source_actor_spawn"
                             && name != "oreslang_source_actor_stop"
-                            && name != "oreslang_source_actor_send") {
+                            && name != "oreslang_source_actor_send"
+                            && name != "oreslang_source_actor_await_ready") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }
