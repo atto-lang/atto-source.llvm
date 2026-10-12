@@ -76,7 +76,100 @@ int main() {
         require(a.release(*fresh) && a.release(*h2), "release failed");
         require(a.live_blocks() == 0 && a.live_bytes() == 0,
                 "heap is not empty after reclamation");
-        std::cout << "PASS actor heap ownership, reclamation, ABA, bounds and concurrency\n";
+        // A retired actor's native heap must not grant fresh storage or
+        // preserve any stale generation, including if live slots remained.
+        ActorHeap<2, 16> retirement;
+        ActorHeap<2, 16> unaffected;
+        require(retirement.bind_carrier() && unaffected.bind_carrier(),
+                "retirement-test carriers not admitted");
+        auto alive = retirement.allocate(8);
+        auto separate = unaffected.allocate(8);
+        require(alive && separate, "retirement fixture allocation failed");
+        std::uint64_t sentinel = 0x12345678;
+        require(retirement.write(*alive, 0, &sentinel, sizeof sentinel),
+                "retirement fixture write failed");
+        std::atomic<bool> foreign_retire_denied{false};
+        std::thread foreign_retire([&] {
+            foreign_retire_denied.store(!retirement.retire(), std::memory_order_release);
+        });
+        foreign_retire.join();
+        require(foreign_retire_denied.load(std::memory_order_acquire),
+                "foreign carrier retired an actor heap");
+        require(retirement.retire() && retirement.retired() && retirement.retire(),
+                "actor-owned retirement failed or was not idempotent");
+        require(!retirement.allocate(8), "retired heap admitted an allocation");
+        require(!retirement.read(*alive, 0, &observed, sizeof observed) &&
+                !retirement.write(*alive, 0, &sentinel, sizeof sentinel) &&
+                !retirement.release(*alive),
+                "retired actor handle remained usable");
+        require(retirement.live_blocks() == 0 && retirement.live_bytes() == 0,
+                "retired actor heap retained live accounting");
+        require(unaffected.read(*separate, 0, &observed, sizeof observed) &&
+                unaffected.release(*separate),
+                "retiring one actor changed another actor heap");
+
+        // Deterministic state-machine stress: compare thousands of allocator
+        // transitions with an independently maintained live-slot count.
+        // ASan/UBSan should also catch stale byte accesses or invalid writes.
+        ActorHeap<8, 16> modeled;
+        require(modeled.bind_carrier(), "model heap admission failed");
+        std::array<std::optional<ActorHeap<8, 16>::Handle>, 8> handles{};
+        std::array<std::uint64_t, 8> values{};
+        std::uint32_t seed = 0xc001d00dU;
+        std::size_t count = 0;
+        for (std::size_t step = 0; step < 12000; ++step) {
+            seed = seed * 1664525U + 1013904223U;
+            const std::size_t id = static_cast<std::size_t>(seed % 8U);
+            if (handles[id]) {
+                std::uint64_t got = 0;
+                require(modeled.read(*handles[id], 0, &got, sizeof got)
+                            && got == values[id], "model read mismatch");
+                if ((seed & 3U) == 0U) {
+                    auto staleHandle = *handles[id];
+                    require(modeled.release(staleHandle), "model release rejected");
+                    handles[id].reset();
+                    --count;
+                    require(!modeled.read(staleHandle, 0, &got, sizeof got)
+                                && !modeled.release(staleHandle),
+                            "model stale handle reused");
+                } else {
+                    values[id] = static_cast<std::uint64_t>(seed) << 8;
+                    require(modeled.write(*handles[id], 0, &values[id],
+                                          sizeof values[id]), "model write rejected");
+                }
+            } else {
+                auto created = modeled.allocate(sizeof(std::uint64_t));
+                if (created) {
+                    std::uint64_t zero = 1234;
+                    require(modeled.read(*created, 0, &zero, sizeof zero)
+                                && zero == 0, "recycled slot not zeroized");
+                    handles[id] = *created;
+                    values[id] = static_cast<std::uint64_t>(seed);
+                    require(modeled.write(*created, 0, &values[id],
+                                          sizeof values[id]), "model initialize failed");
+                    ++count;
+                } else {
+                    require(count == handles.size(), "premature model exhaustion");
+                }
+            }
+            require(modeled.live_blocks() == count
+                        && modeled.live_bytes() == count * sizeof(std::uint64_t),
+                    "model accounting invariant violated");
+        }
+        require(modeled.retire(), "modeled heap retirement failed");
+        require(modeled.retire() && !modeled.allocate(sizeof(std::uint64_t)),
+                "retirement did not fence later model admission");
+        for (auto& handle : handles) {
+            if (handle) {
+                std::uint64_t got = 0;
+                require(!modeled.read(*handle, 0, &got, sizeof got),
+                        "live pre-retirement handle escaped shutdown");
+            }
+        }
+        require(modeled.live_blocks() == 0 && modeled.live_bytes() == 0,
+                "retired modeled heap retains memory usage");
+
+        std::cout << "PASS actor heap ownership, reclamation, ABA, retirement fence, model stress, bounds and concurrency\n";
     } catch (const std::exception& failure) {
         std::cerr << "FAIL actor heap: " << failure.what() << "\n";
         return 1;

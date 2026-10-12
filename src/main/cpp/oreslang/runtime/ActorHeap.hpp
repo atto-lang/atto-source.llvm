@@ -61,6 +61,7 @@ private:
     std::atomic<bool> bound_{false};
     std::size_t live_bytes_ = 0;
     std::size_t live_blocks_ = 0;
+    bool retired_ = false; // Actor-owned logical fence; caller must establish quiescence.
 
     bool owner_thread() const noexcept {
         // acquire synchronizes visibility of the immutable owner_ assignment.
@@ -69,7 +70,7 @@ private:
     }
 
     Slot* find(Handle handle) noexcept {
-        if (!owner_thread() || handle.heap != identity_ ||
+        if (!owner_thread() || retired_ || handle.heap != identity_ ||
             handle.slot >= Slots || !handle.generation)
             return nullptr;
         auto& item = slots_[handle.slot];
@@ -101,9 +102,31 @@ public:
     std::uint64_t identity() const noexcept { return identity_; }
     std::size_t live_bytes() const noexcept { return owner_thread() ? live_bytes_ : 0; }
     std::size_t live_blocks() const noexcept { return owner_thread() ? live_blocks_ : 0; }
+    bool retired() const noexcept { return owner_thread() && retired_; }
+
+    // The actor/supervisor must first fence new turns, wakeups, outstanding
+    // borrows, and FFI callbacks. This method intentionally does not infer
+    // quiescence from the executing thread. It revokes every handle and frees
+    // bounded slot storage for reuse only by destroying this heap instance.
+    // Successful retirement is idempotent; foreign carriers cannot retire it.
+    bool retire() noexcept {
+        if (!owner_thread()) return false;
+        if (retired_) return true;
+        retired_ = true;
+        for (auto& item : slots_) {
+            scrub(item);
+            item.length = 0;
+            item.live = false;
+            item.generation = item.generation == std::numeric_limits<std::uint64_t>::max()
+                    ? 0 : item.generation + 1;
+        }
+        live_bytes_ = 0;
+        live_blocks_ = 0;
+        return true;
+    }
 
     std::optional<Handle> allocate(std::size_t bytes) noexcept {
-        if (!owner_thread() || bytes == 0 || bytes > SlotBytes) return std::nullopt;
+        if (!owner_thread() || retired_ || bytes == 0 || bytes > SlotBytes) return std::nullopt;
         for (std::size_t i = 0; i < Slots; ++i) {
             auto& item = slots_[i];
             if (item.live || item.generation == 0) continue;
