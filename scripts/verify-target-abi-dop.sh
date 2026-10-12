@@ -16,7 +16,7 @@ common=(-std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror
         -fsanitize=address,undefined -fno-omit-frame-pointer
         -pthread -I src/main/cpp)
 
-for fixture in target_abi_test dop_layout_test dop_kernel_lowering_test dop_hostbuffer_concurrency_test quantum_circuit_lowering_test; do
+for fixture in target_abi_test dop_layout_test dop_kernel_lowering_test dop_hostbuffer_concurrency_test quantum_circuit_lowering_test gpu_buffer_fence_test; do
   "$compiler" "${common[@]}" "tests/${fixture}.cpp" -o "$build_dir/$fixture"
   if [[ "$fixture" == target_abi_test ]]; then
     "$build_dir/$fixture" contracts/architecture/v1/targets.tsv > "$build_dir/$fixture.log"
@@ -26,4 +26,4 @@ for fixture in target_abi_test dop_layout_test dop_kernel_lowering_test dop_host
   printf 'PASS %s (%s)\n' "$fixture" "$compiler"
 done
 
-echo "PASS: target ABI, DOP, F32 ownership, quantum circuit and shot-budget regression suites"
+echo "PASS: target ABI, DOP, F32 ownership, quantum and GPU fence security regression suites"
