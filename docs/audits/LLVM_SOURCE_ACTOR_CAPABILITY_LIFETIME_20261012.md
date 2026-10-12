@@ -77,3 +77,51 @@ reclaimed actor memory, nor prevent address-reuse ABA.
 **Conclusion:** generation-safe public-identity lookup and typed-send
 reclamation fencing passed focused exact-source native, sanitizer, guest,
 and bounded formal gates. Keep PR #239 and parent #180 draft.
+
+## Full original LLVM CMake/CTest integration audit — 2026-10-12
+
+**PASS:** [funded full CMake/CTest run #38219048140](https://github.com/zed-pkg-test/java-app/actions/runs/38219048140), with
+**159 exact Git blobs** of `CMakeLists.txt`, all `src/main/` files,
+and the complete `tests/` subtree verified against the LLVM PR head before
+building. All native CMake targets built with LLVM on Ubuntu 24.04, and **160
+of 160 CTests passed**, 0 failures, in 30.00 seconds of CTest execution.
+The test mirror is [zed-pkg-test/java-app PR #200](https://github.com/zed-pkg-test/java-app/pull/200).
+It does not use source-repository checkout credentials or cross-org secrets.
+
+This gate initially failed and directly exposed previously untested integration
+problems. All were resolved before the final green replay:
+
+1. Funded-runner setup initially specified a nonexistent `libllvm-dev`
+   package. The workflow now installs Ubuntu's supported `llvm-dev`.
+2. The original `RelWithDebInfo` test build defined `NDEBUG`, silently
+   removing assert-driven fixture setup and checks. This caused a misleading
+   native MessagePack abort and a 120-second closed-variant mailbox timeout.
+   Original CMake now applies `-UNDEBUG` whenever `BUILD_TESTING` is enabled.
+   Never count a native CTest suite as passing if its fixture asserts are
+   compiled out.
+3. Constructor-only `spawn Worker()` (no DATA handler) was rejected by
+   `source_spawn`'s overly strict exactly-one-callback invariant. The runtime
+   now permits zero or one message handler at spawn and retains fail-closed
+   delivery for handlerless actors.
+4. The optional cancellation-publication test hook previously exposed a
+   private `SourceActor*`, but the new regression harness correctly held
+   public opaque ID tokens. Passing the public actor identity to the weak
+   hook restores deterministic root and downstream publication races without
+   exposing/reinstating a dereferenceable guest actor pointer.
+5. Two structural-message fixtures incorrectly declared fixed-arity string
+   arrays as `Array[string, string, string]` and variable lists as
+   `List[bool, bool]`. The now stricter parser correctly rejected both.
+   Fixtures use `FixedArray[string, string, string]` and `List[bool]`, while
+   structural-only actor sends remain rejected until tagged-envelope lowering.
+
+The intermediate full-suite baseline went from 8/160 failing to 2/160
+failing (all runtime, concurrency, cancellation and native MessagePack cases
+passed), and finally to 0/160 failing. Source SHA integrity was enforced in
+every execution; no stale source mirror was accepted as green.
+
+**Still DRAFT:** a 160/160 original LLVM CTest pass is a real release gate,
+not general Java/GraalVM or LLVM feature parity. Typed runtime expressions,
+compound guest destructuring, `Future<T>` backpressure/cancellation,
+multiple in-flight graph flows, Java/LLVM differential runtime verification,
+and Java full Maven plus Graal native AOT/hybrid at matching current heads
+remain separate release blockers. Do not merge solely on this LLVM gate.
