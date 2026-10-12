@@ -12,7 +12,7 @@ accelerator PRs do not by themselves authorize ordinary source execution.
 
 ```oreslang
 // FUTURE SYNTAX ONLY — intentionally rejected by today's compiler.
-suspend fnc pipeline(HostBuffer input): HostSummary {
+suspends fnc pipeline(HostBuffer input): HostSummary {
     let device = await gpu {
         let device_input = await Gpu.upload(rt take input);
         launch_transform(rt take device_input);
