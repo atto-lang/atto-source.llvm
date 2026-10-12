@@ -109,8 +109,12 @@ public:
         // republished as a fresh incarnation (A -> B -> A). Remember only
         // the highest generation for each slot, not every old actor.
         require_fresh_generation(actor);
-        auto [seen_it, new_slot] = highest_generation_.try_emplace(
+        auto [seen_it, unused_new_slot] = highest_generation_.try_emplace(
             actor.actor_slot, 0);
+        (void) unused_new_slot;
+        // Record an already-created actor identity before publishing child
+        // indexes. Failure of a later allocation cannot make it reusable.
+        seen_it->second = actor.generation;
         try {
             auto [active_it, inserted] =
                 active_actors_.emplace(actor_key(actor), child.logical_child_id);
@@ -118,11 +122,10 @@ public:
             if (!inserted)
                 throw std::logic_error("actor already belongs to a logical child");
             children_.emplace(child.logical_child_id, first);
-            seen_it->second = actor.generation;
         } catch (...) {
             children_.erase(child.logical_child_id);
             active_actors_.erase(actor_key(actor));
-            if (new_slot) highest_generation_.erase(seen_it);
+            // Preserve the monotonic physical generation even on failure.
             throw;
         }
         record_transition("register", first);
