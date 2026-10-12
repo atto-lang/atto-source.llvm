@@ -1,0 +1,33 @@
+// Full source compilation of one-level nested nullary enum constructors.
+// LLVM generates the exact closed nominal MessagePack v2 frame. The native
+// actor scheduler copies, validates and dispatches it on an actor-owned lane.
+define enum Bar as
+    Start = 1
+    Done = 255
+end
+
+define enum Foo as
+    First: Bar = 1
+    Second: Bar = 2
+end
+
+define actor Worker<messages=Foo> as
+    let count: int = 0;
+
+    receive(Message m) {
+        do match m over {
+            on Foo.First { count = count + 8; }
+            on Foo.Second { count = count + 7; }
+        }
+        return count;
+    }
+end
+
+pub fnc main(): int {
+    const worker = spawn Worker();
+    worker.send(Foo.First(Bar.Start()));
+    worker.send(Foo.Second(Bar.Done()));
+    worker.send(Foo.First(Bar.Done()));
+    stop worker;
+    return 43;
+}
