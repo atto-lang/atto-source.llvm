@@ -28,6 +28,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Pre-compiler ActorStream admission and DONE-barrier transition contract.
+    # This host-only gate is NOT evidence of compiled self.forward/backward.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actorstream-route-test
+        tests/native_actorstream_route_test.cpp)
+    target_include_directories(oreslang-native-actorstream-route-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actorstream-route-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actorstream-route-test PRIVATE Threads::Threads)
+    add_test(NAME native_actorstream_bounded_route_contract
+        COMMAND oreslang-native-actorstream-route-test)
+    set_tests_properties(native_actorstream_bounded_route_contract
+        PROPERTIES TIMEOUT 30)
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
