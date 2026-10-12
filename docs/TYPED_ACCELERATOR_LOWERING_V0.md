@@ -86,7 +86,12 @@ IDLE/POISONED (quiescent) --provider-released--> CLOSED
 ```
 
 Taking a buffer owner is permitted only while IDLE, and invalidates the
-predecessor handle. Stale generations, foreign device/tenant identities and
+predecessor handle. Native BufferFence now locks the wrapper's owner handle
+before entering shared State operations, with fixed lock order
+`owner_lock_ -> State::lock`. This serializes owner transfer against command
+admission/completion and closes a shared_ptr move/use race. Native move
+assignment refuses to overwrite an unretired handle; GCC/Clang sanitizer
+and ThreadSanitizer regressions exercise competing submit/take operations. Stale generations, foreign device/tenant identities and
 duplicated command tickets are rejected. A cancelled operation cannot
 release/reuse storage until the backend confirms device event completion.
 There is no implicit recovery from POISONED, no actor-message serialization of
