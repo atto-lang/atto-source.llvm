@@ -1,6 +1,7 @@
 #include "oreslang/runtime/NativeActorStreamRoute.hpp"
 #include <atomic>
 #include <cstdint>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -132,6 +133,46 @@ int main() {
         rejected([&] { second.commit_published(a); });
         first.commit_published(a);
         second.commit_published(b);
+    }
+    // Adversarial address reuse: object-pointer identity and ticket 1 alone
+    // must not authenticate an old route against its replacement in-place.
+    {
+        alignas(Route) unsigned char backing[sizeof(Route)];
+        Route* previous = new (backing) Route(ids(3), "domain");
+        auto stale = previous->claim_root(100, "domain");
+        previous->~Route();
+        Route* replacement = new (backing) Route(ids(3), "domain");
+        auto fresh = replacement->claim_root(100, "domain");
+        rejected([&] { replacement->commit_published(stale); });
+        check(replacement->phase() == 0,
+              "stale claim advanced generation-reused route");
+        replacement->commit_published(fresh);
+        check(replacement->phase() == 1,
+              "fresh route claim blocked by stale address reuse");
+        replacement->~Route();
+    }
+    // A prepublication root rejection may be retried, but the old
+    // reservation is revoked, not transferred to the new reservation.
+    {
+        Route route(ids(3), "domain");
+        auto stale = route.claim_root(100, "domain");
+        route.reject_prepublication(stale);
+        auto fresh = route.claim_root(100, "domain");
+        rejected([&] { route.commit_published(stale); });
+        route.commit_published(fresh);
+        check(route.phase() == 1, "stale root rollback consumed new credit");
+    }
+    // Runtime failure wins against a pending outbound publication. No late
+    // publisher can resurrect an aborted route's phase or DONE state.
+    {
+        Route route(ids(3), "domain");
+        auto pending = route.claim_root(100, "domain");
+        std::thread fatal([&] { route.fail(); });
+        fatal.join();
+        rejected([&] { route.commit_published(pending); });
+        rejected([&] { route.reject_prepublication(pending); });
+        check(route.phase() == 0 && route.done() == Route::Done::Failed,
+              "terminal failure was undone by a late publication");
     }
     // One publisher owns the claim; concurrent contenders cannot obtain
     // duplicate route authority while the first claim is pending.

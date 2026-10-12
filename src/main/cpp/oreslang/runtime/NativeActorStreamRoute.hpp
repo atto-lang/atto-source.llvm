@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -35,9 +37,11 @@ public:
         Direction direction;
     private:
         const NativeActorStreamRoute* owner;
+        std::uint64_t route_generation;
         Claim(std::uint64_t ticket, std::uint64_t next, Direction way,
-              const NativeActorStreamRoute* issuer)
-            : token(ticket), destination(next), direction(way), owner(issuer) { }
+              const NativeActorStreamRoute* issuer, std::uint64_t generation)
+            : token(ticket), destination(next), direction(way),
+              owner(issuer), route_generation(generation) { }
         friend class NativeActorStreamRoute;
     };
 
@@ -175,8 +179,12 @@ private:
         claimed_ = true;
         reserved_destination_ = destination;
         reserved_direction_ = direction;
+        // Refuse wraparound even if the same uncommitted root repeatedly
+        // retries: reissuing ticket 1 would enable a stale claim replay.
+        if (next_token_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("ActorStream publication tickets exhausted");
         ++next_token_;
-        return Claim{next_token_, destination, direction, this};
+        return Claim{next_token_, destination, direction, this, route_generation_};
     }
 
     void require_ready(const std::string& domain) const {
@@ -188,13 +196,32 @@ private:
 
     void require_active_claim(const Claim& candidate) const {
         if (aborted_ || !claimed_ || candidate.owner != this ||
+            candidate.route_generation != route_generation_ ||
             candidate.token != next_token_ ||
             candidate.direction != reserved_direction_ ||
             candidate.destination != reserved_destination_)
             throw std::logic_error("ActorStream forged, stale or aborted publication claim");
     }
 
+    // Object-address checks alone are insufficient: allocator reuse can
+    // place a replacement route at precisely the same address. A monotonic
+    // route generation also fences claims retained across destruction.
+    static std::uint64_t issue_route_generation() {
+        auto current = next_route_generation_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (current == 0 ||
+                current == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("ActorStream route generations exhausted");
+            if (next_route_generation_.compare_exchange_weak(
+                    current, current + 1, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                return current;
+        }
+    }
+
+    inline static std::atomic<std::uint64_t> next_route_generation_{1};
     mutable std::mutex mutex_;
+    const std::uint64_t route_generation_ = issue_route_generation();
     const std::vector<std::uint64_t> actors_;
     const std::string domain_;
     std::vector<bool> physically_done_;
