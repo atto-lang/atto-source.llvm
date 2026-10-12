@@ -1,0 +1,73 @@
+# Native supervisor terminal durability — host protocol v1
+
+Status: opt-in trusted-host component. Not a general guest supervision release gate.
+
+## Ownership and proof separation
+
+The terminal key binds supervisor and runtime IDs, original parent scheduler
+domain/slot/generation, failed child domain/slot/generation, failure kind, code,
+correlation, logical child ID and logical incarnation (13 uint64 fields).
+
+The scheduler must authenticate the original typed PANIC callback carrier,
+including the actual parent generation and terminal envelope. A queued receipt
+or copied ActorRef is not callback authority. The read-only preflight is
+rechecked at the one-use claim, serialized against parent STOP.
+
+The journal progression is:
+recorded -> physical_done -> claimed -> effect_proven -> acknowledged.
+
+- A physical_done observation must call the native scheduler's exact-generation
+  poll_done and does not prove an external effect.
+- A claimed receipt is a durable one-use intent. It cannot be automatically
+  replayed after a process crash or a lost host acknowledgment.
+- effect_proven requires independent, authoritative host commit evidence
+  bound to the terminal key and journal nonce. A SHA-256 digest provided by
+  the caller alone is not proof.
+- acknowledged requires a prior effect_proven entry; no stage can be skipped.
+- The journal's nonce differs from the in-memory scheduler claim nonce.
+  Neither proves an external effect without its own verified evidence.
+
+## Crash/reopen decisions
+
+| Journal phase | Permitted recovery |
+| --- | --- |
+| recorded | Verify physical DONE before advancing |
+| physical_done | Re-establish supervisor authority before first claim |
+| claimed | Quarantine: determine externally whether effect committed |
+| effect_proven | Persist ACK without rerunning host policy |
+| acknowledged | Reject any new claim or ACK |
+| Torn, invalid, checksum-mismatched replay | Fail closed; do not truncate |
+
+The host journal writes canonical 176-byte little-endian frames, uses exclusive
+nonblocking flock, O_NOFOLLOW, O_CLOEXEC and private 0600 file permissions,
+fsyncs the parent directory at creation and fsyncs each appended transition.
+Its FNV-1a checksum is for accidental corruption detection, not adversarial
+tamper protection. The host must trust the directory and filesystem.
+
+## Unresolved release gates
+
+The current bridge records the event when the actual callback or recovered
+parent reconciliation runs. A crash before either host handoff can still lose
+the scheduler's original in-memory terminal evidence. Durable capture at the
+scheduler's *first terminal publication* is required for full crash recovery.
+
+The runtime still needs a persistent supervisor registry, generation authority
+and external effect ledger. The synchronous fsync can block the native CONTROL
+carrier; any production rollout needs latency/backpressure testing. Existing
+legacy host-only claim APIs remain privileged and do not acquire durable
+authority by default. This does not implement source-compiled guest RESTART,
+ESCALATE, Java backend parity, or a complete process-crash restoration path.
+
+## Conformance and tests
+
+TypeSpec: contracts/v1/supervision/terminal-receipt.tsp
+JSON Schema 2020-12: contracts/v1/supervision/terminal-receipt.schema.json
+Cross-field validation: tests/native_terminal_receipt_schema_test.py
+Crash and storage tests: tests/native_terminal_receipt_journal_test.cpp
+Real native bridge: tests/native_terminal_receipt_bridge_durable_test.cpp
+TLA+ model: formal/supervision/NativeDurableTerminal.tla
+
+The TypeSpec/JSON schema describes a versioned host wire contract, while the
+internal binary frame is a separate persistence format. Bounded TLC and native
+CTest are evidence, not machine-checked source-code refinement. Keep PR #196
+draft until the full guest/compiler release gates pass.
