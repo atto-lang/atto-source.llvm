@@ -62,10 +62,27 @@ public:
         : state_(std::make_shared<State>(std::move(identity), bytes)) {}
     BufferFence(const BufferFence&) = delete;
     BufferFence& operator=(const BufferFence&) = delete;
-    BufferFence(BufferFence&&) noexcept = default;
-    BufferFence& operator=(BufferFence&&) noexcept = default;
+    // The moved-from owner must never race with a method dereferencing
+    // state_. All wrapper operations take owner_lock_ before State::lock.
+    BufferFence(BufferFence&& other) noexcept {
+        std::lock_guard<std::mutex> owner(other.owner_lock_);
+        state_ = std::move(other.state_);
+    }
+    BufferFence& operator=(BufferFence&& other) {
+        if (this == &other) return *this;
+        std::scoped_lock owners(owner_lock_, other.owner_lock_);
+        // Assignment must not silently abandon an unretired device handle.
+        if (state_) {
+            std::lock_guard<std::mutex> state_guard(state_->lock);
+            if (state_->status != Status::Closed)
+                throw std::logic_error("cannot overwrite unretired device buffer");
+        }
+        state_ = std::move(other.state_);
+        return *this;
+    }
 
     BufferFence take() {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->status != Status::Idle)
@@ -74,6 +91,7 @@ public:
     }
 
     Ticket begin_command(const Identity& caller) {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller)) throw std::logic_error("foreign device identity");
@@ -93,6 +111,7 @@ public:
     }
 
     void complete(Ticket ticket, bool succeeded) {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         validate_inflight(ticket);
@@ -101,12 +120,14 @@ public:
         state_->active_ticket_proof.reset();
     }
     void cancel_pending(Ticket ticket) {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         validate_inflight(ticket);
         state_->status = Status::Poisoned;
     }
     void acknowledge_cancelled_device_event(Ticket ticket, const Identity& caller) {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller) || state_->status != Status::Poisoned
@@ -120,6 +141,7 @@ public:
         state_->active_ticket_proof.reset();
     }
     void retire_after_backend_release(const Identity& caller) {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller)) throw std::logic_error("foreign device identity");
@@ -128,12 +150,14 @@ public:
         state_->status = Status::Closed;
     }
     void close_after_retirement() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         if (!state_) return;
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->status != Status::Closed)
             throw std::logic_error("backend must release device buffer first");
     }
     Status status() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         return state_->status;
@@ -141,6 +165,7 @@ public:
 
 private:
     explicit BufferFence(std::shared_ptr<State> state) : state_(std::move(state)) {}
+    // Caller must already hold owner_lock_ to make the state_ access safe.
     void active() const {
         if (!state_) throw std::logic_error("device ownership moved");
         std::lock_guard<std::mutex> guard(state_->lock);
@@ -153,6 +178,9 @@ private:
             !ticket.proof_ || ticket.proof_ != state_->active_ticket_proof)
             throw std::logic_error("stale or mismatched device event");
     }
+    // Protects the *wrapper handle* (not just the shared device state).
+    // Lock order: owner_lock_ -> State::lock throughout this class.
+    mutable std::mutex owner_lock_;
     std::shared_ptr<State> state_;
 };
 
