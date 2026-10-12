@@ -1,0 +1,25 @@
+// Source ordering: finalization of First must precede Second's later sends.
+define actor First as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+define actor Second as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const first = spawn First();
+  const second = spawn Second();
+  first.send(1);
+  stop first;
+  second.send(3);
+  second.send(4);
+  stop second;
+  return 43;
+}

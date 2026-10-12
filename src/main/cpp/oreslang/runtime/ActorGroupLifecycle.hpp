@@ -115,6 +115,7 @@ private:
         std::atomic<bool> control_active{false};
         std::atomic<bool> control_reserved{false};
         std::atomic<bool> control_dropped{false};
+        std::atomic<bool> logical_turn_active{false};
     };
 
     friend class NativeActorGroup;
@@ -141,6 +142,71 @@ public:
     using StopRequest = std::function<void()>;
 
     enum class ControlTurn { idle, executed, busy, retired };
+    enum class UserTurn { executed, busy, retired };
+
+    /**
+     * Host scheduler ONLY: admit an ordinary actor user turn on the SAME
+     * single-flight logical lane used by supervisor CONTROL. Distinct actors
+     * may run concurrently on different physical carriers.
+     *
+     * The actor scheduler is responsible for requeueing busy turns; neither
+     * admission nor resumption parks an OS thread. Reserved CONTROL takes
+     * priority over new user turns. Source lowering must use this boundary.
+     */
+    UserTurn run_user_turn(const NativeActorRef& ref, std::function<void()> handler) {
+        if (!handler) throw std::invalid_argument("user turn handler required");
+        std::shared_ptr<NativeActorRef::Ticket> ticket;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            Entry* worker = find_active_locked(ref);
+            if (closed_ || !worker || worker->phase == Phase::starting)
+                return UserTurn::retired;
+            if (worker->pending_control) return UserTurn::busy;
+            ticket = worker->ref.ticket_;
+            bool expected = false;
+            if (!ticket->logical_turn_active.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                return UserTurn::busy;
+        }
+        std::exception_ptr failure;
+        try { handler(); } catch (...) { failure = std::current_exception(); }
+        ticket->logical_turn_active.store(false, std::memory_order_release);
+        if (failure) std::rethrow_exception(failure);
+        return UserTurn::executed;
+    }
+
+
+
+    /**
+     * Generation-fenced runtime retirement capability. Never holds a pointer
+     * to NativeActorGroup; safe to retain after the group has been destroyed.
+     * Trusted runtime only: call finalized() after physical quiescence.
+     */
+    class RuntimeFinalizer final {
+    public:
+        /** A physical native drop is forbidden while the manager can still
+         * dispatch any turn or has an admitted/reserved CONTROL continuation.
+         * Detachment publishes a no-new-turns fence. All fields belong to
+         * the ref's shared generation-fenced ticket and survive group close.
+         */
+        bool ready_for_resource_reclamation() const noexcept {
+            return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
+                && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
+                && !ref_.ticket_->control_active.load(std::memory_order_acquire)
+                && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
+        }
+
+        bool finalized(std::string failure = "") const {
+            return NativeActorGroup::finalized_after_close(
+                ref_, group_id_, std::move(failure));
+        }
+    private:
+        friend class NativeActorGroup;
+        RuntimeFinalizer(NativeActorRef ref, std::uint64_t group_id)
+            : ref_(std::move(ref)), group_id_(group_id) {}
+        NativeActorRef ref_;
+        std::uint64_t group_id_;
+    };
 
     /**
      * Generation-fenced runtime retirement capability. Never holds a pointer
@@ -188,8 +254,6 @@ public:
      * Pending tickets prevent finalization until the turn retires.
      */
     ControlTurn run_control_turn(const NativeActorRef& ref) {
-        std::unique_lock<std::mutex> lane(control_lane_mutex_, std::try_to_lock);
-        if (!lane.owns_lock()) return ControlTurn::busy;
         std::function<void()> handler;
         std::shared_ptr<NativeActorRef::Ticket> ticket;
         {
@@ -197,25 +261,43 @@ public:
             Entry* worker = find_active_locked(ref);
             if (closed_ || !worker) return ControlTurn::retired;
             if (!worker->pending_control) return ControlTurn::idle;
+            ticket = worker->ref.ticket_;
+            bool expected = false;
+            if (!ticket->logical_turn_active.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                return ControlTurn::busy;
             handler = std::move(worker->pending_control);
             worker->pending_control = {};
-            ticket = worker->ref.ticket_;
             ticket->control_reserved.store(false, std::memory_order_release);
             ticket->control_active.store(true, std::memory_order_release);
         }
         std::exception_ptr failure;
         try { handler(); } catch (...) { failure = std::current_exception(); }
         ticket->control_active.store(false, std::memory_order_release);
+        ticket->logical_turn_active.store(false, std::memory_order_release);
         if (failure) std::rethrow_exception(failure);
         return ControlTurn::executed;
     }
 
+    // The default root supervisor ID is a runtime-local routing label,
+    // never an authorization token or replacement for actor generation checks.
+    static constexpr std::uint64_t root_supervisor_id = 1;
+
     explicit NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
+        : NativeActorGroup(runtime_id, maximum_workers, root_supervisor_id) {}
+
+    NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers,
+                     std::uint64_t supervisor_id)
         : runtime_id_(runtime_id), maximum_workers_(maximum_workers),
+          supervisor_id_(supervisor_id),
           group_id_(next_group_id().fetch_add(1, std::memory_order_relaxed)) {
-        if (runtime_id == 0 || maximum_workers == 0)
-            throw std::invalid_argument("invalid ActorGroup runtime/capacity");
+        if (runtime_id == 0 || maximum_workers == 0 || supervisor_id == 0)
+            throw std::invalid_argument("invalid ActorGroup runtime/capacity/supervisor");
     }
+
+    std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t group_id() const noexcept { return group_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
 
     NativeActorGroup(const NativeActorGroup&) = delete;
     NativeActorGroup& operator=(const NativeActorGroup&) = delete;
@@ -303,7 +385,8 @@ public:
                 return false;
             // Do not mutate readiness or completion state if CONTROL work
             // is still active or reserved. Failed admission is side-effect-free.
-            if (ref.ticket_->control_active.load(std::memory_order_acquire)
+            if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
+                || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
             // Close may settle readiness after detaching the worker table,
@@ -490,6 +573,7 @@ private:
                 || it->second.ticket != ref.ticket_
                 || !ref.ticket_->detached_from_group.load(std::memory_order_acquire)
                 || ref.ticket_->physically_done.load(std::memory_order_acquire)
+                || ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
@@ -577,9 +661,9 @@ private:
 
     const std::uint64_t runtime_id_;
     const std::size_t maximum_workers_;
+    const std::uint64_t supervisor_id_;
     const std::uint64_t group_id_;
     mutable std::mutex mutex_;
-    std::mutex control_lane_mutex_; // runtime-only exclusive group CONTROL turns
     bool closed_ = false;
     std::unordered_map<std::uint64_t, Entry> workers_;
 };

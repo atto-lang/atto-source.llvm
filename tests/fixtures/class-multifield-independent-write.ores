@@ -1,0 +1,15 @@
+define class Box as
+  pub let int left = 1;
+  pub let int right = 2;
+  pub let int last = 3;
+end
+fnc edit(borrow mut Box b): void {
+  b.last = b.left + b.right;
+  b.left = 39;
+  return;
+}
+pub fnc main(): int {
+  let mut Box b = new Box();
+  edit(rt borrow mut b);
+  return b.left + b.last;
+}
