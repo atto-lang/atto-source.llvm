@@ -26,6 +26,11 @@ features or ABI overrides are supported yet.
 - ABI, vector ISA, cache-line size, and atomic availability must be obtained from
   verified target machine capabilities. 64-bit pointer width alone does not
   imply any SIMD instruction set or lock-free atomic width.
+- The present LLVM HostBuffer admits only 4-byte IEEE-754 F32 scalar slots
+  on little-endian hosts. Wider/narrower POD slots fail before allocation;
+  this is not a general-purpose heterogeneous scalar buffer.
+- OpenCL numeric source literals must be emitted using the C/classic locale
+  rather than inheriting the host process's decimal-separator locale.
 - No implicit CPU fallback for explicit GPU placement or unsupported target IR.
 - Changing physical layout or CPU architecture must preserve Oreslang logical
   ownership, actor confinement, observable integer semantics and safety errors.
