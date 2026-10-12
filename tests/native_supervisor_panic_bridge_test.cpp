@@ -980,18 +980,40 @@ int main() {
               "native restart proof scheduler teardown failed");
     }
 
-    // Identity-mode supervisors must NOT accept the old slot-index callback
-    // entrypoint, even if the slot and typed child identity happen to match.
-    // This prevents a retained callback from eliding the parent generation.
+    // A copied exact ActorRef plus a queued scheduler receipt is not enough
+    // to steal CONTROL delivery. The actual native worker must own the
+    // matching typed PANIC callback before the bridge may claim the receipt.
     {
+        struct CallbackContext {
+            NativeSupervisorPanicBridge* bridge = nullptr;
+            std::atomic<bool> entered{false};
+            std::atomic<bool> release{false};
+            std::atomic<bool> accepted{false};
+            std::atomic<bool> forged_rejected{false};
+            std::atomic<bool> finished{false};
+        } state;
         auto* identity_scheduler =
             ores_native_actor_scheduler_open_identity_control(
                 3, 2, 2,
                 [](void*, OresNativeActorRef, std::uint64_t) {},
                 nullptr,
-                [](void*, OresNativeActorRef,
-                   OresNativeActorTerminalFailure) {},
-                nullptr);
+                [](void* raw, OresNativeActorRef parent,
+                   OresNativeActorTerminalFailure failure) {
+                    auto& callback = *static_cast<CallbackContext*>(raw);
+                    callback.entered.store(true, std::memory_order_release);
+                    while (!callback.release.load(std::memory_order_acquire))
+                        std::this_thread::yield();
+                    auto forged = failure;
+                    forged.failure_code++;
+                    callback.forged_rejected.store(
+                        !callback.bridge->on_panic(parent, forged),
+                        std::memory_order_release);
+                    callback.accepted.store(
+                        callback.bridge->on_panic(parent, failure),
+                        std::memory_order_release);
+                    callback.finished.store(true, std::memory_order_release);
+                },
+                &state);
         check(identity_scheduler != nullptr,
               "identity-mode bridge scheduler startup failed");
         const auto parent = ores_native_actor_scheduler_spawn(
@@ -1016,6 +1038,7 @@ int main() {
             [](const SupervisorProcess::Resolution&) {});
         auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
             identity_scheduler, parent, process, children);
+        state.bridge = bridge.get();
         bridge->register_child(child);
         bridge->register_child(second_child);
         check(ores_native_actor_scheduler_stop(identity_scheduler, child)
@@ -1025,11 +1048,24 @@ int main() {
         const OresNativeActorTerminalFailure failure{
             ORES_NATIVE_CONTROL_PANIC, child, 811, 912
         };
-        // An identity-mode callback must be backed by the real scheduler's
-        // exact typed terminal envelope, not a fabricated host argument.
         check(ores_native_actor_scheduler_publish_failure(
                   identity_scheduler, parent, failure),
               "identity-mode fixture could not record terminal PANIC");
+        const auto entered_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!state.entered.load(std::memory_order_acquire)
+               && std::chrono::steady_clock::now() < entered_deadline)
+            std::this_thread::sleep_for(1ms);
+        const bool entered = state.entered.load(std::memory_order_acquire);
+        if (!entered) state.release.store(true, std::memory_order_release);
+        check(entered, "physical PANIC callback was never dispatched");
+        // Scheduler worker is intentionally blocked inside its CONTROL
+        // callback. A different host thread still cannot use its receipt.
+        OresNativeTerminalReceipt stolen{};
+        check(!ores_native_actor_scheduler_claim_delivered_terminal_receipt(
+                  identity_scheduler, parent, child, &stolen)
+                  && !bridge->on_panic(parent, failure)
+                  && bridge->registered_children() == 2,
+              "off-carrier host stole pending terminal PANIC");
         check(!bridge->on_panic(
                   static_cast<std::size_t>(parent.actor_slot), failure),
               "slot-only callback bypassed identity-mode PANIC boundary");
@@ -1037,13 +1073,18 @@ int main() {
                   parent.scheduler_domain, parent.actor_slot,
                   parent.generation + 1}, failure),
               "forged parent generation bypassed PANIC boundary");
-        check(bridge->on_panic(parent, failure),
-              "identity-mode exact parent PANIC failed to route");
+        state.release.store(true, std::memory_order_release);
+        const auto finished_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!state.finished.load(std::memory_order_acquire)
+               && std::chrono::steady_clock::now() < finished_deadline)
+            std::this_thread::sleep_for(1ms);
+        check(state.finished.load(std::memory_order_acquire)
+                  && state.forged_rejected.load(std::memory_order_acquire)
+                  && state.accepted.load(std::memory_order_acquire)
+                  && bridge->registered_children() == 1,
+              "exact PANIC carrier did not retain one-use delivery authority");
         check(!bridge->on_panic(parent, failure),
               "duplicate identity-mode PANIC replay was accepted");
-        // A retained callback with the CORRECT old parent generation must
-        // still fail if the physical parent has already STOPPED. Verify
-        // rejection BEFORE child routing is consumed for a second actor.
         check(ores_native_actor_scheduler_stop(identity_scheduler, second_child)
                   && ores_native_actor_scheduler_wait_done(
                          identity_scheduler, second_child)
@@ -1065,7 +1106,7 @@ int main() {
                   && ores_native_actor_scheduler_try_destroy(identity_scheduler),
               "identity-mode bridge scheduler teardown failed");
         std::puts("NATIVE_SUPERVISOR_IDENTITY_PANIC_FENCE_PASS"
-                  " slot_only=0 forged=0 exact=1 replay=0");
+                  " slot_only=0 forged=0 exact=1 replay=0 off_carrier=0");
     }
 
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
