@@ -20,7 +20,7 @@ enum class CriticalStateAdmission : std::uint8_t {
     ReadModeCannotWrite,
     InvalidStateCallback,
     CallbackEscape,
-    EffectExceedsUsing,
+    EffectExceedsWith,
     LoanAcrossSuspension,
     MissingContinuationFence,
     ScopeDenied
@@ -39,7 +39,7 @@ struct CriticalStateCallback {
 
 inline CriticalStateAdmission admit_critical_handle_state(
         const CriticalStateCallback& callback,
-        FunctionEffects using_effects,
+        FunctionEffects with_effects,
         bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
     // Breaking pre-1.0 contract: even a verified serial actor must specify
@@ -51,13 +51,13 @@ inline CriticalStateAdmission admit_critical_handle_state(
         return CriticalStateAdmission::InvalidStateCallback;
     }
     if (callback.escapes) return CriticalStateAdmission::CallbackEscape;
-    // A broad using row never upgrades a read-only state capability.
+    // A broad with row never upgrades a read-only state capability.
     if (callback.state_mode == CriticalStateMode::Read
             && callback.inferred.has(FunctionEffect::StateWrite)) {
         return CriticalStateAdmission::ReadModeCannotWrite;
     }
-    if (!using_effects.permits(callback.inferred)) {
-        return CriticalStateAdmission::EffectExceedsUsing;
+    if (!with_effects.permits(callback.inferred)) {
+        return CriticalStateAdmission::EffectExceedsWith;
     }
     if (callback.inferred.has(FunctionEffect::Suspend)) {
         // A state-backed loan may not cross a yielding reduction boundary.
