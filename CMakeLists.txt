@@ -326,6 +326,30 @@ if(BUILD_TESTING)
     # using state.read is an immutable scoped loan, using
     # state.write(critical ...) is an exclusive scoped state transaction.
     # A read capability must not emit any write-capable heap call.
+    # with is the function effect upper bound; using obtains a scoped
+    # capability. Neither may substitute for the other.
+    oreslang_contract_test(native_with_using_read_no_mutation
+        actor-with-using-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_with_using_write_has_mutation
+        actor-with-using-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_with_using_missing_read_effect
+        actor-with-using-missing-read-reject.ores
+        --diagnostic "with clause omits state.read effect")
+    oreslang_contract_test(reject_with_using_missing_write_effect
+        actor-with-using-missing-write-reject.ores
+        --diagnostic "with clause omits state.write effect")
+    oreslang_contract_test(reject_with_using_read_scope_mutation
+        actor-with-using-read-mutate-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_with_using_duplicate_effect
+        actor-with-using-duplicate-effect-reject.ores
+        --diagnostic "duplicate effect in with clause")
+    oreslang_contract_test(reject_with_using_unknown_effect
+        actor-with-using-unknown-effect-reject.ores
+        --diagnostic "unsupported actor effect in with clause")
+
     # IR absence checks remain live even when Python runs with -O.
     oreslang_contract_test(native_ir_using_read_no_mutation
         actor-using-read-positive.ores
