@@ -204,6 +204,54 @@ int main() {
     anonymous_release.blocks[0].operations.push_back({Kind::ReleaseShared, "x", 2});
     verify(anonymous_release);
 
+    // A legacy entry loan must not impersonate another lexical borrow.
+    // Nonzero entry tokens must remain unique across all places and
+    // distinct from both explicit and implicit compiler site tokens.
+    Graph entry_vs_lexical;
+    entry_vs_lexical.entry = {{"a", cell(kOwned)}, {"b", cell(kOwned)}};
+    entry_vs_lexical.entry.at("a").shared_loans = 1;
+    entry_vs_lexical.entry.at("a").shared_loan_ids.insert(77);
+    entry_vs_lexical.blocks = {{
+        {{Kind::BorrowShared, "b", 77},
+         {Kind::ReleaseShared, "b", 77},
+         {Kind::ReleaseShared, "a", 77}}, {}
+    }};
+    assert(rejected([&] { verify(entry_vs_lexical); }));
+
+    // A generated site ID must not alias a live parameter loan.
+    entry_vs_lexical.blocks[0].operations[0].loan_id.reset();
+    entry_vs_lexical.blocks[0].operations[1].loan_id =
+            (static_cast<std::uint64_t>(1) << 32) | 1;
+    entry_vs_lexical.entry.at("a").shared_loan_ids.clear();
+    entry_vs_lexical.entry.at("a").shared_loan_ids.insert(
+            (static_cast<std::uint64_t>(1) << 32) | 1);
+    entry_vs_lexical.blocks[0].operations[2].loan_id =
+            (static_cast<std::uint64_t>(1) << 32) | 1;
+    assert(rejected([&] { verify(entry_vs_lexical); }));
+
+    // Two borrowed parameters must not claim the same nonzero identity.
+    entry_vs_lexical.entry.at("a").shared_loan_ids.clear();
+    entry_vs_lexical.entry.at("a").shared_loan_ids.insert(89);
+    entry_vs_lexical.entry.at("b").shared_loans = 1;
+    entry_vs_lexical.entry.at("b").shared_loan_ids.insert(89);
+    entry_vs_lexical.blocks = {{{}, {}}};
+    assert(rejected([&] { verify(entry_vs_lexical); }));
+
+    // Anonymous token zero is permitted only for the legacy single entry
+    // loan, never when mixed with multiple named entry loans.
+    entry_vs_lexical.entry.at("b").shared_loans = 0;
+    entry_vs_lexical.entry.at("b").shared_loan_ids.clear();
+    entry_vs_lexical.entry.at("a").shared_loans = 2;
+    entry_vs_lexical.entry.at("a").shared_loan_ids = {0, 89};
+    assert(rejected([&] { verify(entry_vs_lexical); }));
+
+    // Direct helper calls are not CFG sites and cannot mint token zero.
+    State direct = {{"x", cell(kOwned)}};
+    assert(rejected([&] { apply(op(Kind::BorrowShared, "x"), direct); }));
+    assert(rejected([&] { apply(op(Kind::BorrowExclusive, "x"), direct); }));
+    assert(direct.at("x").shared_loans == 0 &&
+           !direct.at("x").exclusive_loan);
+
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
     Graph maybe_drop;
