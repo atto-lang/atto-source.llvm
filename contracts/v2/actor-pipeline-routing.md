@@ -287,6 +287,41 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
   cancellation during in-flight await, producer-capability teardown and
   restart/ABA invariants remain release blockers.
 
+## LLVM terminal-publication linearization audit (2026-10-11)
+
+- **Concrete race fixed:** before this change, a sender could pass a
+  `pipeline_failure == 0` test and then publish a scheduler DATA envelope
+  after cancellation had already committed its terminal status. The native
+  implementation now serializes both terminal-status publication and the
+  *final bounded scheduler DATA publication* under `group.mutex`. Expensive
+  wire snapshotting and canonical MessagePack validation happen outside the
+  lock; scheduler admission itself remains nonblocking on a carrier.
+- A source's causal-phase CAS is fenced under the same group mutex. Successful
+  forward/backward admission counters are incremented **under that lock,
+  after scheduler acceptance and before the consumer can finalize**, so
+  cancelled/rejected deliveries cannot inflate counts and final completion
+  cannot race the counter increment.
+- A **test-only** weak fault hook, compiled under
+  `ORESLANG_SOURCE_ACTOR_TESTING`, lets a second OS thread win cancellation
+  exactly after owned wire validation but before publication. It is entirely
+  absent from production runtime builds. Two source-tree CTest cases use
+  `tests/check_pipeline_cancel_publication.sh` and
+  `tests/native_pipeline_cancel_publication_race.c` to force that interleaving
+  for **trusted-main root DATA** and **actor-worker downstream forward DATA**.
+  Each asserts terminal code 7, no forbidden DATA delivery, source/target
+  turn accounting, complete stop and group teardown, and no invariant abort.
+- [Funded exact-source run #38198197355](https://github.com/zed-pkg-test/java-app/actions/runs/38198197355)
+  passed all 2-, 3-, 4- and 16-stage guest programs, recoverable failure
+  regressions, the two persisted CTest race modes, and separate ASan/UBSan
+  checks for root-publication and worker-forward cancellation. The earlier
+  [run #38197455363](https://github.com/zed-pkg-test/java-app/actions/runs/38197455363)
+  also passed the initial root-cancellation fault injection before the
+  worker-forward variant was added.
+- **Unproven:** arbitrarily concurrent guest flows, cancellation during
+  `await`, retryable Future backpressure, stale-incarnation/ABA refs and
+  implementation-to-TLA refinement. The race harness proves these two
+  deliberately controlled interleavings, not all possible schedules.
+
 ## Current admission status
 
 Java/GraalVM now admits compiler-checked `self.forward` and `self.backward`
