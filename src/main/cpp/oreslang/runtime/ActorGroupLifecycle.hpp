@@ -1,5 +1,8 @@
 #pragma once
 
+#include "oreslang/runtime/SupervisorFailureControl.hpp"
+#include "oreslang/runtime/SupervisorProcess.hpp"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +44,8 @@ public:
     std::uint64_t runtime_id() const noexcept { return runtime_id_; }
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t generation() const noexcept { return generation_; }
+    /** Managed lifecycle supervisor, distinct from spawning actor. */
+    std::uint64_t supervisor_id() const noexcept { return ticket_->supervisor_id; }
 
     // HOST-ONLY futures: guest awaits must suspend the scheduler, never block
     // a carrier using shared_future::get(). Not cancellation capabilities.
@@ -109,6 +114,11 @@ private:
         std::shared_future<void> ready_future = ready_promise.get_future().share();
         std::shared_future<void> done_future = done_promise.get_future().share();
         bool done_settled = false;
+        // Stable for this exclusive managed ownership epoch. A ref retains
+        // the identity through group closure/physical finalization.
+        std::uint64_t supervisor_id = 0;
+        std::optional<std::uint64_t> spawned_by;
+        std::shared_ptr<SupervisorFailureControl> supervisor_control;
         std::atomic<bool> stop_issued{false};
         std::atomic<bool> physically_done{false};
         // True only after the group worker table was detached by close().
@@ -251,7 +261,9 @@ public:
 
     explicit NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
         : runtime_id_(runtime_id), maximum_workers_(maximum_workers),
-          group_id_(next_group_id().fetch_add(1, std::memory_order_relaxed)) {
+          group_id_(next_group_id().fetch_add(1, std::memory_order_relaxed)),
+          supervisor_control_(std::make_shared<SupervisorFailureControl>(
+              group_id_, std::min<std::size_t>(maximum_workers, 128))) {
         if (runtime_id == 0 || maximum_workers == 0)
             throw std::invalid_argument("invalid ActorGroup runtime/capacity");
     }
@@ -260,6 +272,50 @@ public:
     NativeActorGroup& operator=(const NativeActorGroup&) = delete;
 
     ~NativeActorGroup() { close(); }
+
+    /** Host-level identity; a group does not create a supervisor actor. */
+    std::uint64_t supervisor_id() const noexcept { return group_id_; }
+
+    /**
+     * Trusted host adapter supplies an enqueue-only scheduler. The callback
+     * is never directly invoked from a child actor's finalized() carrier.
+     */
+    void install_supervisor_failure_handler(
+            SupervisorFailureControl::Handler handler,
+            SupervisorFailureControl::Enqueue enqueue) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (closed_) throw std::logic_error("closed group cannot install supervisor handler");
+        supervisor_control_->install(std::move(handler), std::move(enqueue));
+    }
+
+    std::size_t undelivered_supervisor_failures() const {
+        return supervisor_control_->undelivered();
+    }
+
+    /**
+     * Install one host supervisor PROCESS on the runtime's existing CONTROL
+     * scheduler. The process owns its own exclusive callback lease and can
+     * cooperatively suspend by returning nullopt from its policy. This is
+     * NOT compiler lowering for source-level define supervisor/on_panic.
+     */
+    std::shared_ptr<SupervisorProcess> install_supervisor_process(
+            std::size_t capacity, SupervisorProcess::Enqueue enqueue,
+            SupervisorProcess::Policy policy,
+            SupervisorProcess::DecisionSink decisions) {
+        if (!enqueue || !policy || !decisions)
+            throw std::invalid_argument("supervisor process callbacks required");
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (closed_)
+            throw std::logic_error("closed group cannot create supervisor process");
+        auto process = std::make_shared<SupervisorProcess>(
+            group_id_, runtime_id_, capacity, enqueue, std::move(policy),
+            std::move(decisions));
+        supervisor_control_->install(
+            [process](const SupervisorFailureNotice& notice) {
+                process->accept(notice);
+            }, enqueue);
+        return process;
+    }
 
     /** Root/host adoption: exactly one exclusive lifecycle manager. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
@@ -369,6 +425,12 @@ public:
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
+        if (!failure.empty() && ref.ticket_->supervisor_control) {
+            ref.ticket_->supervisor_control->publish(SupervisorFailureNotice{
+                ref.supervisor_id(), ref.runtime_id(), ref.actor_id(),
+                ref.generation(), ref.ticket_->spawned_by, failure
+            });
+        }
         return true;
     }
 
@@ -547,6 +609,9 @@ private:
         if (owners.live.find(key) != owners.live.end())
             throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
+        ticket->supervisor_id = group_id_;
+        ticket->spawned_by = spawned_by;
+        ticket->supervisor_control = supervisor_control_;
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
         workers_.emplace(actor_id, Entry{ref, std::move(stop_request),
                                          Phase::starting, {}, spawned_by});
@@ -597,6 +662,14 @@ private:
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
+        // Ticket holds the lane even after group close/destruction.
+        // A terminal failure is reported once, only after physical quiescence.
+        if (!failure.empty() && ref.ticket_->supervisor_control) {
+            ref.ticket_->supervisor_control->publish(SupervisorFailureNotice{
+                ref.supervisor_id(), ref.runtime_id(), ref.actor_id(),
+                ref.generation(), ref.ticket_->spawned_by, failure
+            });
+        }
         return true;
     }
 
@@ -668,6 +741,7 @@ private:
     const std::uint64_t runtime_id_;
     const std::size_t maximum_workers_;
     const std::uint64_t group_id_;
+    std::shared_ptr<SupervisorFailureControl> supervisor_control_;
     mutable std::mutex mutex_;
     bool closed_ = false;
     std::unordered_map<std::uint64_t, Entry> workers_;
