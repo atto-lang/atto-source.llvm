@@ -127,6 +127,16 @@ if(BUILD_TESTING)
             --run 1 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exit_negative_fails_closed exit-invalid-negative-main.ores
             --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_zero exit-zero-main.ores
+            --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_one exit-one-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_wide_64bit_overflow_fails_closed exit-wide-overflow-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_void_runs_defer exit-void-deferred-cleanup-main.ores
+            --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_no_main_is_not_linkable exit-no-main.ores
+            --no-main-link --clang "${ORE_CLANG}")
     endif()
     add_test(NAME native_explicit_wasm32_target_ir
         COMMAND "${Python3_EXECUTABLE}"
