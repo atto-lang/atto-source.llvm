@@ -388,11 +388,6 @@ public:
         if (durable_journal_)
             throw std::logic_error(
                 "durable receipts require external-proof-bound reconciliation");
-        // In durable mode a scheduler-only ACK would leave the disk receipt
-        // CLAIMED, bypassing the external-proof/ACK state machine.
-        if (durable_journal_)
-            throw std::logic_error(
-                "durable terminal effect requires journal-bound reconciliation");
         if (!verify_committed_effect
                 || original_parent.scheduler_domain != parent_.scheduler_domain
                 || original_parent.actor_slot != parent_.actor_slot
