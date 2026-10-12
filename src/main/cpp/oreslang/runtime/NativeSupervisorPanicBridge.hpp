@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -192,64 +193,61 @@ public:
     SupervisorChildRegistry::Snapshot admit_verified_replacement(
             SupervisorChildRegistry::RestartReservation permit,
             OresNativeActorRef replacement) {
-        // An open native actor lane is insufficient authority after its
-        // owning supervisor CONTROL process has closed or failed.
-        if (!process_->healthy()) {
-            child_registry_->close_restart_admission();
-            throw std::logic_error("supervisor CONTROL is closed for RESTART");
-        }
         if (replacement.scheduler_domain != parent_.scheduler_domain)
             throw std::logic_error("foreign replacement scheduler domain");
-        // A genuine scheduler-issued, thread-affine lease, not a Boolean
-        // readiness observation. STOP/retire cannot physically invalidate
-        // this candidate until the exact host transaction releases the gate.
-        // The replacement must have been spawned *unpublished*.
-        OresNativeRestartLease scheduler_lease{};
-        if (!ores_native_actor_scheduler_acquire_restart_lease(
-                scheduler_, replacement, &scheduler_lease))
-            throw std::logic_error("replacement has no unpublished scheduler admission");
-        struct LeaseScope {
-            OresNativeActorScheduler* scheduler;
-            OresNativeRestartLease lease;
-            ~LeaseScope() {
-                if (!ores_native_actor_scheduler_release_restart_lease(
-                        scheduler, lease)) std::terminate();
-            }
-        } lease_scope{scheduler_, scheduler_lease};
 
-        child_registry_->stage_replacement(permit, replacement);
-        child_registry_->acknowledge_replacement_admission(
-            permit, replacement, [&] {
-                return ores_native_actor_scheduler_poll_ready(scheduler_, replacement);
-            });
-        // The bridge lock also excludes terminal CONTROL routing until both
-        // indices publish. No scheduler-internal mutex is held here.
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (!process_->healthy()) {
-            child_registry_->close_restart_admission();
-            throw std::logic_error("supervisor CONTROL closed before RESTART publication");
-        }
-        const Key key{replacement.actor_slot, replacement.generation};
-        const SupervisorChildRegistry::Snapshot candidate{
-            permit.child, replacement, permit.incarnation + 1,
-            SupervisorChildRegistry::Phase::active};
-        auto [it, inserted] = registered_.emplace(key, candidate);
-        if (!inserted) throw std::logic_error("replacement already supervised");
-        try {
-            auto committed = child_registry_->replace(permit, replacement);
-            it->second = committed; // trivial identity value, no allocation
-            // The scheduler guard makes physical admission non-revocable
-            // between registry commit and enabling normal message routing.
-            // With this exact lease, publication is an infallible scheduler
-            // state flip. If that contract is broken, fail closed rather than
-            // return a logically active but unroutable child.
-            if (!ores_native_actor_scheduler_publish_restart_lease(
-                    scheduler_, scheduler_lease)) std::terminate();
-            return committed;
-        } catch (...) {
-            registered_.erase(it);
-            throw;
-        }
+        // Acquire supervisor CONTROL ownership *before* the scheduler gate.
+        // The CONTROL decision fence is also taken by close()/finish().
+        // Acquiring these in the opposite order deadlocks when a decision
+        // thread is stopping a physical actor while a restart publishes.
+        return process_->with_healthy_restart_transaction([&]()
+                -> SupervisorChildRegistry::Snapshot {
+            OresNativeRestartLease scheduler_lease{};
+            if (!ores_native_actor_scheduler_acquire_restart_lease(
+                    scheduler_, replacement, &scheduler_lease))
+                throw std::logic_error(
+                    "replacement has no unpublished scheduler admission");
+            struct LeaseScope {
+                OresNativeActorScheduler* scheduler;
+                OresNativeRestartLease lease;
+                ~LeaseScope() {
+                    if (!ores_native_actor_scheduler_release_restart_lease(
+                            scheduler, lease)) std::terminate();
+                }
+            } lease_scope{scheduler_, scheduler_lease};
+
+            child_registry_->stage_replacement(permit, replacement);
+            child_registry_->acknowledge_replacement_admission(
+                permit, replacement, [&] {
+                    return ores_native_actor_scheduler_poll_ready(
+                        scheduler_, replacement);
+                });
+            // The bridge lock excludes terminal CONTROL routing until both
+            // identity indices publish. The process mutex serializes the
+            // entire transaction with CONTROL close/failure classification.
+            // The scheduler's internal mutex is never held over these maps.
+            std::lock_guard<std::mutex> guard(mutex_);
+            const Key key{replacement.actor_slot, replacement.generation};
+            const SupervisorChildRegistry::Snapshot candidate{
+                permit.child, replacement, permit.incarnation + 1,
+                SupervisorChildRegistry::Phase::active};
+            auto [it, inserted] = registered_.emplace(key, candidate);
+            if (!inserted)
+                throw std::logic_error("replacement already supervised");
+            try {
+                auto committed = child_registry_->replace(permit, replacement);
+                it->second = committed; // immutable identity, no allocation
+                // The physical actor is pinned until routing is published.
+                // Under the exact scheduler lease this is an infallible
+                // internal flip; fail closed on any invariant violation.
+                if (!ores_native_actor_scheduler_publish_restart_lease(
+                        scheduler_, scheduler_lease)) std::terminate();
+                return committed;
+            } catch (...) {
+                registered_.erase(it);
+                throw;
+            }
+        });
     }
 
     /**
