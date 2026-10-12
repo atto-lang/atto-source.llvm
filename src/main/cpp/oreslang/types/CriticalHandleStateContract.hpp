@@ -28,6 +28,9 @@ enum class CriticalStateAdmission : std::uint8_t {
 
 struct CriticalStateCallback {
     bool intrinsic_critical = true;  // sealed runtime intrinsic
+    // Source spelling, independently checked against lowered state_mode:
+    // an unmarked callback can never acquire WRITE admission.
+    bool callback_critical = false;
     CriticalStateMode state_mode = CriticalStateMode::None;
     bool lexical = true;
     bool one_state_parameter = false;
@@ -46,8 +49,13 @@ inline CriticalStateAdmission admit_critical_handle_state(
     // loan. 'critical' (Write) grants exclusive write authority. A verified
     // serial actor never upgrades an unmarked callback to mutable.
     (void)verified_serial_actor;
-    const auto mode = callback.state_mode == CriticalStateMode::None
-            ? CriticalStateMode::Read : callback.state_mode;
+    const auto mode = callback.state_mode;
+    // None is missing lowering metadata, NOT a synonym for READ. The
+    // frontend must explicitly lower plain lambdas to Read.
+    if (mode == CriticalStateMode::None
+            || (mode == CriticalStateMode::Write && !callback.callback_critical)) {
+        return CriticalStateAdmission::MissingCallbackCritical;
+    }
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
