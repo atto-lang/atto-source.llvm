@@ -147,8 +147,14 @@ int main() {
             return SupervisorProcess::Directive::restart;
         },
         [&](const auto&) { wrongDelivery.fetch_add(1); });
-    rejected->accept(oreslang::runtime::SupervisorFailureNotice{
-        712, 712, 1, 1, std::nullopt, "terminal"});
+    bool admission_rejected = false;
+    try {
+        rejected->accept(oreslang::runtime::SupervisorFailureNotice{
+            712, 712, 1, 1, std::nullopt, "terminal"});
+    } catch (const std::logic_error&) {
+        admission_rejected = true;
+    }
+    check(admission_rejected, "closed CONTROL dispatcher did not report failed admission");
     check(!rejected->healthy() && rejected->undelivered() == 1
           && rejected->resolved() == 0,
           "closed scheduler silently accepted CONTROL");
