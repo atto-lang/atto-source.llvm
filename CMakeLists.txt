@@ -316,7 +316,7 @@ if(BUILD_TESTING)
         --diagnostic "expected int expression")
     oreslang_contract_test(reject_actor_state_loan_escape
         actor-state-loan-escape-reject.ores
-        --diagnostic "expected int expression")
+        --diagnostic "actor state reference cannot escape handle_state callback")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
