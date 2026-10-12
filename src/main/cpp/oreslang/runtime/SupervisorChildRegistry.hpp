@@ -75,8 +75,9 @@ public:
     Snapshot register_child(OresNativeActorRef actor) {
         std::lock_guard<std::mutex> guard(mutex_);
         validate_actor(actor);
-        if (active_actors_.count(actor_key(actor)))
-            throw std::logic_error("native actor already bound to a logical child");
+        if (active_actors_.count(actor_key(actor))
+            || staged_slots_.count(actor.actor_slot))
+            throw std::logic_error("native actor already bound or staged");
         ChildRef child{supervisor_id_, runtime_id_, fresh_child_id()};
         Snapshot first{child, actor, 1, Phase::active};
         // A previously retired native actor slot+generation cannot be
@@ -171,12 +172,22 @@ public:
                 || active_actors_.count(actor_key(actor)))
             throw std::logic_error("replacement is not fresh");
         require_fresh_generation(actor);
-        const auto [it, added] = replacements_.emplace(
-            permit.child.logical_child_id,
-            ReplacementState{actor, permit.incarnation + 1,
-                             ReplacementPhase::spawned});
-        (void) it;
-        if (!added) throw std::logic_error("replacement already staged");
+        if (staged_slots_.count(actor.actor_slot))
+            throw std::logic_error("native slot already staged by another child");
+        auto [slot_it, slot_added] = staged_slots_.emplace(
+            actor.actor_slot, permit.child.logical_child_id);
+        if (!slot_added) throw std::logic_error("native slot already staged");
+        try {
+            const auto [it, added] = replacements_.emplace(
+                permit.child.logical_child_id,
+                ReplacementState{actor, permit.incarnation + 1,
+                                 ReplacementPhase::spawned});
+            (void) it;
+            if (!added) throw std::logic_error("replacement already staged");
+        } catch (...) {
+            staged_slots_.erase(slot_it);
+            throw;
+        }
     }
 
     ReplacementState require_candidate(RestartReservation permit,
@@ -264,6 +275,7 @@ public:
         stored.incarnation = permit.incarnation + 1;
         stored.phase = Phase::active;
         seen_it->second = replacement.generation;
+        staged_slots_.erase(replacement.actor_slot);
         replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
         return stored;
@@ -279,6 +291,8 @@ public:
             throw std::logic_error("replacement physical cleanup required before abort");
         auto& stored = children_.at(permit.child.logical_child_id);
         stored.phase = Phase::finalized;
+        if (candidate != replacements_.end())
+            staged_slots_.erase(candidate->second.actor.actor_slot);
         replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
         return stored;
@@ -549,6 +563,7 @@ private:
     inline static std::atomic<std::uint64_t> next_restart_nonce_{0};
     bool restart_closed_ = false;
     std::unordered_map<std::uint64_t, ReplacementState> replacements_;
+    std::unordered_map<std::uint64_t, std::uint64_t> staged_slots_;
     std::unordered_map<std::uint64_t, std::uint64_t> pending_restarts_;
     std::unordered_map<std::uint64_t, std::uint64_t> pending_stops_;
     std::unordered_map<std::uint64_t, StopReceipt> stop_receipts_;
