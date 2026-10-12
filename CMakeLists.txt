@@ -659,6 +659,8 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-source-nominal-guard-v2-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-source-nominal-guard-v2-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-source-nominal-guard-v2-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING)
     add_test(NAME native_source_actor_pinned_nominal_enum_identity
         COMMAND oreslang-source-nominal-guard-v2-test)
 
