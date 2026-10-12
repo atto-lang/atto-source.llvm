@@ -61,6 +61,10 @@ int ores_native_actor_scheduler_stop(
  */
 int ores_native_actor_scheduler_poll_ready(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Unlike physical readiness, this also requires externally routable admission.
+ * A staged but unpublished restart candidate must fail this probe. */
+int ores_native_actor_scheduler_poll_published(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 int ores_native_actor_scheduler_poll_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Trusted normal-exit claim. Atomically verify physical finalization and
