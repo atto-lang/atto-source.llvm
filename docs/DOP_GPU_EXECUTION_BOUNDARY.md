@@ -73,3 +73,25 @@ zero-row host kernel does not authorize an empty device launch.
 - Run exact-source Java and native C++ targeted tests plus shared vectors,
   sanitizer/concurrency tests and real GPU execution; a metadata-only
   preflight is not device execution verification.
+
+## Native ownership race audit (follow-on)
+
+Native `gpu::BufferFence` and `dop::HostBuffer` now use a wrapper-level
+mutex in addition to the underlying state lock. This prevents a concurrent
+`take()`/C++ move from changing `state_` after another operation has checked
+it but before that operation dereferences it. Cross-wrapper move assignment
+rejects overwriting a still-live allocation. Host `layout()` returns the
+small checked DOP plan by **value**, not by a potentially dangling reference.
+
+Regression coverage: GPU snapshot-versus-take and DOP read-loan-versus-take,
+plus active-owner move assignment. The affected exact GitHub blobs and all
+three modified C++ regression test blobs were independently recreated by
+Git object SHA and compiled with Clang 17 `-std=c++17 -Werror` under
+AddressSanitizer/UndefinedBehaviorSanitizer. Tests passed locally. This is
+**targeted native verification**, not full LLVM, Graal, ThreadSanitizer,
+real OpenCL device, or complete integration CI verification. CI jobs in the
+private source organization remain unable to execute steps.
+
+The preflight is still only a snapshot. A trusted provider must atomically
+claim both physical device allocations and their fences before dispatch;
+it cannot treat the returned descriptor as a security capability.
