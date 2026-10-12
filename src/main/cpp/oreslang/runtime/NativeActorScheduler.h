@@ -171,6 +171,44 @@ int ores_native_actor_scheduler_publish_control(
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
     OresNativeActorTerminalFailure failure);
+/* Host-owned, scheduler-local terminal evidence. Recorded atomically at the
+ * first authenticated PANIC publication ATTEMPT, even if parent CONTROL is
+ * full or physically STOPPED. No malloc, guest callback or external effect.
+ * Identity binds the original physical parent and failed child generations.
+ *
+ * state: RECORDED = never host-admitted; CLAIMED = exactly one host
+ * reconciliation owner, outcome potentially uncertain; ACKNOWLEDGED = host
+ * attested successful enqueue. A CLAIMED receipt MUST NOT be retried after
+ * an ambiguous host error without separate authoritative effect evidence.
+ * Receipts live until scheduler destruction; no process-crash durability. */
+enum {
+    ORES_NATIVE_TERMINAL_RECEIPT_NONE = 0,
+    ORES_NATIVE_TERMINAL_RECEIPT_RECORDED = 1,
+    ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED = 2,
+    ORES_NATIVE_TERMINAL_RECEIPT_ACKNOWLEDGED = 3
+};
+typedef struct {
+    OresNativeActorRef original_parent;
+    OresNativeActorTerminalFailure failure;
+    uint64_t nonce; /* one-use, host-owned claim token */
+    uint64_t status;
+    uint64_t was_published_to_control;
+} OresNativeTerminalReceipt;
+/* Exact generation-bound observation. Stale/foreign refs never alias
+ * a recycled incarnation; payload is copied under the scheduler mutex. */
+int ores_native_actor_scheduler_terminal_receipt(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
+    OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
+/* Claim before entering any host CONTROL effect, even if the original
+ * physical parent has already STOPPED. Requires exact physical child DONE.
+ * One successful claimant; no retry for CLAIMED/ACKNOWLEDGED. */
+int ores_native_actor_scheduler_claim_terminal_receipt(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
+    OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
+/* Acknowledge only for the exact nonce returned by a previous claim,
+ * AFTER independently confirmed host CONTROL enqueue. No guest authority. */
+int ores_native_actor_scheduler_ack_terminal_receipt(
+    OresNativeActorScheduler* scheduler, OresNativeTerminalReceipt receipt);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
