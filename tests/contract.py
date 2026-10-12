@@ -48,6 +48,106 @@ def verify_three_actor_pipeline_stderr(stderr):
 
 
 
+
+def verify_three_actor_pipeline_trace(stderr):
+    """Read only runtime-emitted, bounded post-shutdown native evidence.
+
+    This independent source CTest gate is not a model-checking refinement proof
+    or a cryptographic attestation. The funded CI additionally checks the exact
+    same captured JSON with the shared TypeSpec/JSON Schema verifier.
+    """
+    import json
+    prefix = "SOURCE_PIPELINE_TRACE_JSON "
+    if not isinstance(stderr, str) or len(stderr) > 131072:
+        raise ValueError("invalid/oversized native trace")
+    lines = [line[len(prefix):] for line in stderr.splitlines()
+             if line.startswith(prefix)]
+    if len(lines) != 1 or len(lines[0]) > 16384:
+        raise ValueError("missing, duplicated or oversized native trace")
+    try:
+        value = json.loads(lines[0], parse_constant=lambda x: (_ for _ in ()).throw(
+            ValueError("noncanonical trace constant")))
+    except (ValueError, TypeError) as e:
+        raise ValueError("malformed native trace JSON") from e
+    if not isinstance(value, dict) or set(value) != {
+        "schemaVersion", "kind", "backend", "sourceGitBlobSha1", "events"
+    }:
+        raise ValueError("noncanonical top-level trace")
+    if (value["schemaVersion"] != 1
+            or value["kind"] != "compiled-actor-pipeline-trace-v1"
+            or value["backend"] != "llvm-native"
+            or value["sourceGitBlobSha1"] !=
+                "46579a917516899612fcd8c65c70b24b995c2c5a"):
+        raise ValueError("native trace identity not trusted")
+    events = value["events"]
+    if not isinstance(events, list) or len(events) != 22:
+        raise ValueError("incomplete/oversized three-actor trace")
+    phases = {}
+    tickets = {}
+    finished = False
+    stopped = False
+    stage = ("source", "transform", "sink", "transform", "source")
+    for i, event in enumerate(events):
+        if not isinstance(event, dict) or set(event) != {
+            "seq", "op", "epoch", "request", "hop",
+            "ticket", "stage", "variant", "value"
+        }:
+            raise ValueError("noncanonical event")
+        if type(event["seq"]) is not int or event["seq"] != i:
+            raise ValueError("duplicate/gapped trace sequence")
+        if type(event["epoch"]) is not int or event["epoch"] != 1:
+            raise ValueError("stale or forged generation")
+        op = event["op"]
+        if op in {"reserve", "publish", "deliver", "finalize"}:
+            hop = event["hop"]
+            if type(hop) is not int or hop not in range(5):
+                raise ValueError("unexpected hop")
+            if (finished or stopped or event["stage"] != stage[hop]
+                    or event["variant"] != ("Signal.Data" if hop < 3
+                                             else "Signal.Result")
+                    or event["value"] is not None
+                    or event["request"] != "r1"):
+                raise ValueError("wrong route, type, or terminal phase")
+            ticket = event["ticket"]
+            if not isinstance(ticket, str) or not ticket.startswith("t") or (
+                    not ticket[1:].isdigit() or int(ticket[1:]) <= 0):
+                raise ValueError("unknown runtime admission identity")
+            if op == "reserve":
+                if hop in phases or (hop > 0 and phases.get(hop-1) not in
+                                     {"delivered", "finalized"}):
+                    raise ValueError("reordered reservation")
+                if ticket in tickets:
+                    raise ValueError("duplicate active ticket")
+                tickets[ticket] = hop
+                phases[hop] = "reserved"
+            else:
+                prior = {"publish": "reserved", "deliver": "published",
+                         "finalize": "delivered"}[op]
+                if tickets.get(ticket) != hop or phases.get(hop) != prior:
+                    raise ValueError("unowned or duplicated admission event")
+                phases[hop] = {"publish": "published", "deliver": "delivered",
+                               "finalize": "finalized"}[op]
+        elif op == "complete":
+            if (finished or stopped or event["request"] != "r1"
+                    or event["hop"] is not None or event["ticket"] is not None
+                    or event["stage"] is not None or event["variant"] is not None
+                    or type(event["value"]) is not int or event["value"] != 19
+                    or len(phases) != 5 or
+                    any(phases.get(j) != "finalized" for j in range(5))):
+                raise ValueError("premature or duplicate terminal completion")
+            finished = True
+        elif op == "stop":
+            if (not finished or stopped or i != len(events)-1
+                    or any(event[k] is not None for k in (
+                        "request", "hop", "ticket", "stage", "variant", "value"))):
+                raise ValueError("missing or forged physical stop barrier")
+            stopped = True
+        else:
+            raise ValueError("unsupported transition in single-flow native slice")
+    if not (finished and stopped):
+        raise ValueError("missing required terminal barriers")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -151,6 +251,7 @@ def main():
                 if result.stdout:
                     raise ValueError("unexpected compiled actor guest stdout")
                 verify_three_actor_pipeline_stderr(result.stderr)
+                verify_three_actor_pipeline_trace(result.stderr)
 
 
 if __name__ == "__main__":
