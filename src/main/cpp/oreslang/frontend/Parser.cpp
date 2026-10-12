@@ -696,6 +696,31 @@ private:
         if (token_.text == "-") {
             const auto offset = token_.offset;
             advance();
+            /* The magnitude 2^63 does not fit a positive signed i64,
+             * although -2^63 is a valid guest integer and MessagePack I.
+             * Consume this one literal atomically without overflow or an
+             * implementation-defined signed cast. Larger magnitudes still
+             * fail in primary(), before emitting any IR. */
+            if (token_.kind == Kind::Integer) {
+                std::string digits(token_.text);
+                if (!digits.empty() && digits.front() != '_'
+                        && digits.back() != '_'
+                        && digits.find("__") == std::string::npos) {
+                    digits.erase(std::remove(digits.begin(), digits.end(), '_'),
+                                 digits.end());
+                    std::uint64_t magnitude = 0;
+                    const auto parsed = std::from_chars(
+                        digits.data(), digits.data() + digits.size(), magnitude);
+                    if (parsed.ec == std::errc{}
+                            && parsed.ptr == digits.data() + digits.size()
+                            && magnitude == (UINT64_C(1) << 63)) {
+                        auto result = make_expression(Expression::Kind::Integer, offset);
+                        result->integer = INT64_MIN;
+                        advance();
+                        return result;
+                    }
+                }
+            }
             auto expr = make_expression(Expression::Kind::Negate, offset);
             expr->left = unary();
             return expr;
