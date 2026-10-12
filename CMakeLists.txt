@@ -165,6 +165,26 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_pipeline_actor_wrong_route_direction
         source-actor-pipeline-wrong-direction.ores
         --diagnostic "pipeline route direction is not authorized for actor role")
+    oreslang_contract_test(native_ir_two_actor_bidirectional_pipeline
+        source-actor-pipeline-two-stage.ores --ir "oreslang_source_actor_pipeline_connect_many")
+    oreslang_contract_test(native_ir_four_actor_bidirectional_pipeline
+        source-actor-pipeline-four-stage.ores --ir "oreslang_source_actor_pipeline_connect_many")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_two_actor_bidirectional_pipeline
+            source-actor-pipeline-two-stage.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=2 typed=1 forward=1 backward=1 result=24")
+        oreslang_contract_test(native_exec_four_actor_bidirectional_pipeline
+            source-actor-pipeline-four-stage.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=4 typed=1 forward=3 backward=3 result=29")
+    endif()
     oreslang_contract_test(native_ir_three_actor_bidirectional_pipeline
         source-actor-pipeline-bidirectional.ores
         --ir "oreslang_source_actor_pipeline_emit_i64")
