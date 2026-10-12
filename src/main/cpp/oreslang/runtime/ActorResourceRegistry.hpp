@@ -122,7 +122,9 @@ public:
         }
         if (result.failures == 0) {
             for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
-                if (it->kind == Kind::native_allocation) invoke(*it);
+                if (it->kind != Kind::native_allocation) continue;
+                if (result.failures == 0) invoke(*it);
+                else ++result.skipped;  // do not free dependent arenas after failure
             }
         } else {
             // Unknown revocation outcome. Quarantine allocation ownership
