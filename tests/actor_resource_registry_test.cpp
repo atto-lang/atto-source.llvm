@@ -112,6 +112,48 @@ int main() {
     assert(boundedErrors.try_reclaim().failures == 1);
     assert(successfulClosers == 2);  // terminal failure must never re-close
 
+    // Arena protection takes priority over naive reverse registration:
+    // even an allocation registered after an FFI revoker is freed last.
+    ActorResourceRegistry ordered(29, 1);
+    std::vector<int> order;
+    ordered.register_resource(Kind::ffi_callback, [&] { order.push_back(1); });
+    ordered.register_resource(Kind::native_allocation, [&] { order.push_back(2); });
+    ordered.retire();
+    auto orderedResult = ordered.try_reclaim();
+    assert(orderedResult.status == Reclaim::complete);
+    assert((order == std::vector<int>{1, 2}));
+
+    ActorResourceRegistry quarantine(30, 1);
+    int allocationDrops = 0;
+    quarantine.register_resource(Kind::ffi_callback, [] {
+        throw std::runtime_error("callback revocation failed");
+    });
+    quarantine.register_resource(Kind::native_allocation, [&] { ++allocationDrops; });
+    quarantine.retire();
+    auto quarantineResult = quarantine.try_reclaim();
+    assert(quarantineResult.status == Reclaim::failed);
+    assert(quarantineResult.failures == 1);
+    assert(quarantineResult.closed == 0);
+    assert(quarantineResult.attempted == 1);
+    assert(quarantineResult.skipped == 1);
+    assert(allocationDrops == 0);
+    assert(quarantine.try_reclaim().status == Reclaim::failed);
+    assert(allocationDrops == 0);
+
+    // An arena destructor that itself fails must fence all remaining arenas.
+    ActorResourceRegistry failedDrop(32, 1);
+    int dependentDrops = 0;
+    failedDrop.register_resource(Kind::native_allocation, [&] { ++dependentDrops; });
+    failedDrop.register_resource(Kind::native_allocation, [] {
+        throw std::runtime_error("native drop failed");
+    });
+    failedDrop.retire();
+    auto failedDropResult = failedDrop.try_reclaim();
+    assert(failedDropResult.status == Reclaim::failed);
+    assert(failedDropResult.attempted == 1);
+    assert(failedDropResult.skipped == 1);
+    assert(dependentDrops == 0);
+
     ActorResourceRegistry concurrent(16, 1, 2);
     std::atomic<int> finishes{0};
     concurrent.register_resource(Kind::native_allocation, [&] { ++finishes; });
