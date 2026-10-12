@@ -87,6 +87,15 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_typed_cpu_opencl_ownership COMMAND oreslang-dop-kernel-test)
+    add_executable(oreslang-dop-read-loan-thread-test tests/dop_hostbuffer_concurrency_test.cpp)
+    target_include_directories(oreslang-dop-read-loan-thread-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-dop-read-loan-thread-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-dop-read-loan-thread-test PRIVATE Threads::Threads)
+    add_test(NAME dop_hostbuffer_multithread_read_loan_quiescence
+        COMMAND oreslang-dop-read-loan-thread-test)
+    set_tests_properties(dop_hostbuffer_multithread_read_loan_quiescence PROPERTIES TIMEOUT 25)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
