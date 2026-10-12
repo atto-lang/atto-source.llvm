@@ -132,6 +132,32 @@ int main() {
     };
     assert(rejected([&] { verify(foreign_loan_join); }));
 
+    // A forged lexical token reused by two different borrow sites must
+    // be rejected even when only one branch executes. Equal sets at the
+    // join cannot prove identical borrowed identities in that case.
+    Graph forged_same_id = foreign_loan_join;
+    forged_same_id.blocks[1].operations[0].loan_id = 77;
+    forged_same_id.blocks[2].operations[0].loan_id = 77;
+    assert(rejected([&] { verify(forged_same_id); }));
+    // Borrow IDs must not collide even when the loans target distinct places.
+    Graph different_places;
+    different_places.entry = {{"a", cell(kOwned)}, {"b", cell(kOwned)}};
+    different_places.blocks = {{
+        {{Kind::BorrowShared, "a", 90}, {Kind::BorrowExclusive, "b", 90}},
+        {}
+    }};
+    assert(rejected([&] { verify(different_places); }));
+
+    // Explicit IDs must not impersonate implicitly derived site IDs.
+    Graph impersonated_site;
+    impersonated_site.entry = {{"a", cell(kOwned)}, {"b", cell(kOwned)}};
+    impersonated_site.blocks = {{
+        {{Kind::BorrowShared, "a"},
+         {Kind::BorrowShared, "b", (static_cast<std::uint64_t>(1) << 32) | 1}},
+        {}
+    }};
+    assert(rejected([&] { verify(impersonated_site); }));
+
     // By contrast, a single common lexical loan can flow through two
     // branches and be released at their join without false conflicts.
     Graph common_loan_join;
