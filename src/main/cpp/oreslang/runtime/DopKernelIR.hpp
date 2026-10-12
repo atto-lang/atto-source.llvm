@@ -117,8 +117,15 @@ public:
     explicit HostBuffer(Plan layout) : state_(std::make_shared<State>(layout)) {}
     HostBuffer(const HostBuffer&) = delete;
     HostBuffer& operator=(const HostBuffer&) = delete;
-    HostBuffer(HostBuffer&& other) noexcept {
+    HostBuffer(HostBuffer&& other) {
         std::lock_guard<std::mutex> owner(other.owner_lock_);
+        // Direct std::move must obey take(): a live loan cannot be
+        // transferred behind its borrow owner's back.
+        if (other.state_) {
+            std::lock_guard<std::mutex> guard(other.state_->lock);
+            if (other.state_->closed || other.state_->loans != 0)
+                throw std::logic_error("cannot move closed or borrowed host buffer");
+        }
         state_ = std::move(other.state_);
     }
     HostBuffer& operator=(HostBuffer&& other) {
@@ -129,6 +136,13 @@ public:
             std::lock_guard<std::mutex> state_guard(state_->lock);
             if (!state_->closed || state_->loans != 0)
                 throw std::logic_error("cannot overwrite live owned host buffer");
+        }
+        // Reject transfer of a borrowed or closed source, not just an
+        // unretired destination, while both owner locks are held.
+        if (other.state_) {
+            std::lock_guard<std::mutex> guard(other.state_->lock);
+            if (other.state_->closed || other.state_->loans != 0)
+                throw std::logic_error("cannot move closed or borrowed host buffer");
         }
         state_ = std::move(other.state_);
         return *this;
