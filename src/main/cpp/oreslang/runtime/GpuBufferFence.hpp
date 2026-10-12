@@ -23,9 +23,23 @@ struct Identity {
             && allocation_generation == other.allocation_generation;
     }
 };
-struct Ticket {
-    std::uint64_t generation;
-    std::uint64_t sequence;
+class BufferFence;
+class Ticket {
+public:
+    std::uint64_t generation() const noexcept { return generation_; }
+    std::uint64_t sequence() const noexcept { return sequence_; }
+
+private:
+    Ticket(std::uint64_t generation, std::uint64_t sequence,
+           std::shared_ptr<const std::uint8_t> proof) noexcept
+        : generation_(generation), sequence_(sequence), proof_(std::move(proof)) {}
+
+    std::uint64_t generation_;
+    std::uint64_t sequence_;
+    // A unique, unexposed per-submission identity. Kept alive by the ticket;
+    // numeric generation + sequence alone must never authorize completion.
+    std::shared_ptr<const std::uint8_t> proof_;
+    friend class BufferFence;
 };
 
 class BufferFence {
@@ -33,6 +47,7 @@ class BufferFence {
         Identity identity;
         std::uint64_t bytes;
         std::uint64_t sequence = 0;
+        std::shared_ptr<const std::uint8_t> active_ticket_proof;
         Status status = Status::Idle;
         bool backend_quiescent = true;
         mutable std::mutex lock;
@@ -65,9 +80,16 @@ public:
         if (state_->status != Status::Idle) throw std::logic_error("buffer not idle");
         if (state_->sequence == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("device ticket sequence exhausted");
+        // Allocate the identity before changing state so allocation failure
+        // cannot leave a submitted command without a usable ticket.
+        auto proof = std::make_shared<const std::uint8_t>(0);
+        const auto next = state_->sequence + 1;
+        Ticket ticket{state_->identity.allocation_generation, next, proof};
+        state_->active_ticket_proof = std::move(proof);
+        state_->sequence = next;
         state_->backend_quiescent = false;
         state_->status = Status::InFlight;
-        return Ticket{state_->identity.allocation_generation, ++state_->sequence};
+        return ticket;
     }
 
     void complete(Ticket ticket, bool succeeded) {
@@ -76,6 +98,7 @@ public:
         validate_inflight(ticket);
         state_->status = succeeded ? Status::Idle : Status::Poisoned;
         state_->backend_quiescent = true;
+        state_->active_ticket_proof.reset();
     }
     void cancel_pending(Ticket ticket) {
         active();
@@ -88,10 +111,13 @@ public:
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller) || state_->status != Status::Poisoned
             || state_->backend_quiescent
-            || ticket.generation != state_->identity.allocation_generation
-            || ticket.sequence != state_->sequence)
+            || ticket.generation_ != state_->identity.allocation_generation
+            || ticket.sequence_ != state_->sequence
+            || !ticket.proof_
+            || ticket.proof_ != state_->active_ticket_proof)
             throw std::logic_error("stale cancelled device fence acknowledgement");
         state_->backend_quiescent = true;
+        state_->active_ticket_proof.reset();
     }
     void retire_after_backend_release(const Identity& caller) {
         active();
@@ -122,8 +148,9 @@ private:
     }
     void validate_inflight(Ticket ticket) const {
         if (state_->status != Status::InFlight ||
-            ticket.generation != state_->identity.allocation_generation ||
-            ticket.sequence != state_->sequence)
+            ticket.generation_ != state_->identity.allocation_generation ||
+            ticket.sequence_ != state_->sequence ||
+            !ticket.proof_ || ticket.proof_ != state_->active_ticket_proof)
             throw std::logic_error("stale or mismatched device event");
     }
     std::shared_ptr<State> state_;
