@@ -39,9 +39,11 @@ backend. Known cross-target names in the TSV fail closed until native
 TargetMachine/DataLayout and ABI linkage are implemented. `--cpu=...`
 also fails closed.
 
-The target descriptor regression suites run on x86-64 and ARM64 runner types,
-but are **not** full native 32-bit conformance, actor runtime or end-to-end
-cross-architecture performance certification.
+The target descriptor regression suites are configured for x86-64 and ARM64
+runner types. Successful ARM64 execution is **not established** while Actions
+jobs fail before running steps. A local x86-64 standalone compile/test is not
+full native 32-bit conformance, actor runtime or cross-architecture performance
+certification.
 
 Next: verify host ABI from LLVM TargetMachine, bind target profiles to all
 native allocators/FFI boundaries, integrate Java DOP PRs, run full native
