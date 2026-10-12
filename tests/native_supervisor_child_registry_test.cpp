@@ -577,6 +577,38 @@ int main() {
               "native journal missed close/cleanup/abort transaction");
     }
 
+
+    // Host callback entry must be a one-use, exact-turn claim distinct
+    // from its eventual effect outcome or externally verified receipt.
+    {
+        SupervisorChildRegistry runtime{9917, 42};
+        const OresNativeActorRef failed{42, 231, 1};
+        const auto child = runtime.register_child(failed);
+        runtime.finalized(child.child, failed, 1);
+        runtime.begin_stop(child.child, failed, 1, 81);
+        must_reject([&] {
+            runtime.claim_host_stop_invocation(child.child, failed, 1, 82);
+        });
+        runtime.claim_host_stop_invocation(child.child, failed, 1, 81);
+        must_reject([&] {
+            runtime.claim_host_stop_invocation(child.child, failed, 1, 81);
+        });
+        auto receipt = runtime.stop_receipt(child.child);
+        check(receipt.host_invoked && receipt.turn_generation == 81,
+              "host STOP effect entry was not bound to original turn");
+        runtime.record_stop_uncertain(child.child, failed, 1, 81);
+        must_reject([&] {
+            runtime.claim_host_stop_invocation(child.child, failed, 1, 81);
+        });
+        const auto events = runtime.committed_transitions();
+        check(events.size() == 5
+              && std::string(events[2].operation) == "stop.reserve"
+              && std::string(events[3].operation) == "stop.invoke-asserted"
+              && events[3].stop_turn == 81
+              && std::string(events[4].operation) == "stop.uncertain",
+              "host invocation ledger lost exactly-once STOP claim");
+    }
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
