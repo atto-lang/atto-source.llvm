@@ -64,8 +64,14 @@ public:
     BufferFence& operator=(const BufferFence&) = delete;
     // The moved-from owner must never race with a method dereferencing
     // state_. All wrapper operations take owner_lock_ before State::lock.
-    BufferFence(BufferFence&& other) noexcept {
+    BufferFence(BufferFence&& other) {
         std::lock_guard<std::mutex> owner(other.owner_lock_);
+        // A direct std::move must not bypass take()'s in-flight fence.
+        if (other.state_) {
+            std::lock_guard<std::mutex> guard(other.state_->lock);
+            if (other.state_->status != Status::Idle)
+                throw std::logic_error("cannot move device buffer with pending fence");
+        }
         state_ = std::move(other.state_);
     }
     BufferFence& operator=(BufferFence&& other) {
@@ -76,6 +82,13 @@ public:
             std::lock_guard<std::mutex> state_guard(state_->lock);
             if (state_->status != Status::Closed)
                 throw std::logic_error("cannot overwrite unretired device buffer");
+        }
+        // Move assignment is an alternative ownership-transfer entrypoint;
+        // validate the source too, before mutating either wrapper.
+        if (other.state_) {
+            std::lock_guard<std::mutex> guard(other.state_->lock);
+            if (other.state_->status != Status::Idle)
+                throw std::logic_error("cannot move device buffer with pending fence");
         }
         state_ = std::move(other.state_);
         return *this;
