@@ -57,6 +57,16 @@ OresNativeActorRef ores_native_actor_scheduler_spawn_unpublished(
  */
 OresNativeActorRef ores_native_actor_scheduler_recycle_unpublished_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef finalized_candidate);
+/* Opt-in generation-aware callback mode permits reuse of a previously
+ * PUBLISHED actor ONLY after physical DONE and successful normal-exit
+ * classification. PANIC-attempted/published generations stay permanently
+ * fenced until a separate supervisor terminal-receipt protocol exists.
+ * A failed/unsealed actor is NOT eligible. The next generation is
+ * UNPUBLISHED; no ordinary message is admitted until its new host lease
+ * and logical supervisor registration are committed. Legacy callback-mode
+ * schedulers cannot call this API. This does not establish guest RESTART. */
+OresNativeActorRef ores_native_actor_scheduler_recycle_normal_done(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef finalized_actor);
 /* Serializes RESTART publication with physical stop/global retirement without
  * holding the scheduler's internal lock over registry operations. A successful
  * lease must be released exactly once on its acquiring host thread; stop and
@@ -112,6 +122,25 @@ int ores_native_actor_scheduler_wait_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
+/* New callback ABI: the scheduler captures this exact physical actor
+ * identity under its mutex at dequeue, before releasing the worker lock.
+ * Hosts must fence delayed continuations and any retained callback-owned
+ * data using that same ActorRef. No slot-only callback is invoked for
+ * an identity-mode scheduler. */
+typedef void (*OresNativeActorIdentityTaskFn)(
+    void* ctx, OresNativeActorRef actor, uint64_t payload);
+typedef void (*OresNativeActorIdentityPanicFn)(
+    void* ctx, OresNativeActorRef parent,
+    OresNativeActorTerminalFailure failure);
+/* Explicit opt-in: all callbacks (DATA, CONTROL, typed PANIC) use
+ * generation-bearing identity, never the legacy slot-only ABI.
+ * Future and PANIC callbacks may be NULL if the corresponding channel
+ * is unused. No guest access is granted by selecting this mode. */
+OresNativeActorScheduler* ores_native_actor_scheduler_open_identity_control(
+    size_t actor_count, size_t per_actor_capacity, size_t workers,
+    OresNativeActorIdentityTaskFn on_message,
+    OresNativeActorIdentityTaskFn on_future,
+    OresNativeActorIdentityPanicFn on_panic, void* ctx);
 /* One reserved CONTROL message per actor, independent of normal-mail
  * capacity; only an admitted actor lane may invoke the CONTROL handler.
  * CONTROL callbacks never run on a failed child's carrier by direct call.
