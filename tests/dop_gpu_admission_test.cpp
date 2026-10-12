@@ -126,8 +126,7 @@ int main() {
         foreign.complete(forged, true);
         expect<std::logic_error>([&] { (void)source.take(); });
         expect<std::logic_error>([&] { (void)result.take(); });
-        source.complete(admitted.tickets.input_ticket, true);
-        result.complete(admitted.tickets.output_ticket, true);
+        BufferFence::complete_pair(source, result, admitted.tickets, true);
         check(source.status() == oreslang::gpu::Status::Idle);
         check(result.status() == oreslang::gpu::Status::Idle);
     }
@@ -147,11 +146,9 @@ int main() {
         auto moved = busy.take();
         expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, busy, 64); });
         auto claimed = BufferFence::claim_pair(available, moved, 64);
-        available.cancel_pending(claimed.input_ticket);
-        moved.cancel_pending(claimed.output_ticket);
+        BufferFence::cancel_pair(available, moved, claimed);
         expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, moved, 64); });
-        available.acknowledge_cancelled_device_event(claimed.input_ticket, claimed.input);
-        moved.acknowledge_cancelled_device_event(claimed.output_ticket, claimed.output);
+        BufferFence::acknowledge_cancelled_pair(available, moved, claimed);
         available.retire_after_backend_release(claimed.input);
         moved.retire_after_backend_release(claimed.output);
     }
@@ -183,8 +180,7 @@ int main() {
         const auto& winner = results[0].has_value() ? *results[0] : *results[1];
         BufferFence& src = results[0].has_value() ? left : right;
         BufferFence& dst = results[0].has_value() ? right : left;
-        src.complete(winner.input_ticket, true);
-        dst.complete(winner.output_ticket, true);
+        BufferFence::complete_pair(src, dst, winner, true);
     }
 
     for (int i = 0; i < 50; ++i) {
@@ -203,8 +199,7 @@ int main() {
         claimant.join(); mover.join();
         check(tickets.has_value() != moved.has_value());
         if (tickets) {
-            left.complete(tickets->input_ticket, true);
-            right.complete(tickets->output_ticket, true);
+            BufferFence::complete_pair(left, right, *tickets, true);
         } else check(left.status() == oreslang::gpu::Status::Idle);
     }
 
@@ -260,13 +255,11 @@ int main() {
         BufferFence a(Identity{"tenant", "gpu", 701}, 64);
         BufferFence b(Identity{"tenant", "gpu", 702}, 64);
         auto tickets = BufferFence::claim_pair(a, b, 64);
-        a.complete(tickets.input_ticket, true);
-        expect<std::logic_error>([&] {
-            BufferFence::complete_pair(a, b, tickets, true);
-        });
-        check(a.status() == oreslang::gpu::Status::Idle);
+        expect<std::logic_error>([&] { a.complete(tickets.input_ticket, true); });
+        expect<std::logic_error>([&] { b.cancel_pending(tickets.output_ticket); });
+        check(a.status() == oreslang::gpu::Status::InFlight);
         check(b.status() == oreslang::gpu::Status::InFlight);
-        b.complete(tickets.output_ticket, true);
+        BufferFence::complete_pair(a, b, tickets, true);
     }
     std::cout << "typed DOP GPU placement admission tests passed\n";
 }
