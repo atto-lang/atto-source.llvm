@@ -89,7 +89,8 @@ struct Function {
     std::vector<LocalBinding> locals;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
-    std::vector<std::string> pipeline_actors; // exactly source, transform, sink
+    std::vector<std::string> pipeline_actors; // compiler-owned 2..16 ordered refs
+    std::string pipeline_cancel_actor;  // trusted main, before any send
     std::string pipeline_expect_actor;
     std::int64_t pipeline_expect_value = 0;
     // Restricted initial compiler continuation: await ref.get_ready()
