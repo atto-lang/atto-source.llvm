@@ -16,9 +16,13 @@ int main() {
     c.inferred = row(READ);
     const auto using_rw = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
-            == CriticalStateAdmission::MissingCallbackCritical);
+            == CriticalStateAdmission::Accept); // unmarked callback is immutable read
     CHECK(admit_critical_handle_state(c, using_rw, true)
-            == CriticalStateAdmission::MissingCallbackCritical); // serial is not permission
+            == CriticalStateAdmission::Accept); // serial does not upgrade to write
+    c.inferred = row(READ | WRITE);
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::ReadModeCannotWrite);
+    c.inferred = row(READ);
 
     c.state_mode = CriticalStateMode::Read;
     CHECK(admit_critical_handle_state(c, row(READ))
@@ -66,15 +70,15 @@ int main() {
 
     c.inferred = row(READ | SUSPEND);
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::MissingContinuationFence);
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.continuation_generation_fenced = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::Accept);
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = false;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::Accept);
+            == CriticalStateAdmission::LoanAcrossSuspension);
     return 0;
 }
