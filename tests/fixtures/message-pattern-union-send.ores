@@ -1,7 +1,7 @@
 declare type match Patterns as
     (bool, string)
     string
-    Array[string, string, string]
+    FixedArray[string, string, string]
     List[bool]
 end
 define actor Foo<messages=Patterns> as
