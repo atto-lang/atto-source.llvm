@@ -114,11 +114,13 @@ void* oreslang_source_actor_spawn_tagged_variants(
     const OresMp2Contract* contracts,
     const OresSourceNominalCase* identities, size_t contract_count);
 
-/* Compiler-only bounded linear pipeline; trusted zero-arg main configures
- * exactly three live nominal-compatible actors before any DATA ingress.
- * Route emission requires a scheduler-issued active actor DATA callback.
- * No guest can forge a pointer, router port or source reply authority.
- * This milestone supports a single in-flight round trip per pipeline. */
+/* Compiler-only bounded linear pipeline, 2..16 distinct nominally
+ * compatible live actors. The stack reference array is borrowed ONLY
+ * during registration, never retained by the native runtime. All
+ * directional sends require a scheduler-issued DATA ingress context.
+ * Current subset permits one in-flight flow per ordered chain. */
+void oreslang_source_actor_pipeline_connect_many(void* const* stages, uint64_t count);
+/* Legacy C embedding ABI; guest LLVM lowering always uses connect_many. */
 void oreslang_source_actor_pipeline_connect(void* source, void* transform, void* sink);
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                                uint64_t variant, int64_t value);
