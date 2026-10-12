@@ -43,7 +43,7 @@ bool reserved(std::string_view name) {
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
-        "for", "of", "loop", "block", "break", "continue", "yield",
+        "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
@@ -523,6 +523,13 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            // The scalar native subset cannot preserve arbitrary LLVM stacks
+            // across an actor quantum. Explicitly reject loop syntax until
+            // guest-source CFG cycles lower into verified heap continuations.
+            if (token_.text == "while" || token_.text == "loop" ||
+                    token_.text == "for") {
+                fail("native realtime source loop requires verified LLVM continuation lowering");
+            }
             if (token_.text == "try") {
                 if (terminal_try_finally || return_guards_started)
                     fail("native terminal try/finally must be a single return-only scope");
@@ -754,6 +761,9 @@ private:
             const auto offset = token_.offset;
             advance();
             const auto operation = token_.text;
+            if (operation == "cooperate") {
+                fail("native rt cooperate requires verified heap-owned continuation lowering");
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
