@@ -164,6 +164,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
         }
     }
+    // Native C entrypoints return i32; Oreslang int remains an internal i64.
+    // Qualified module.main retains its exported guest symbol and gains a wrapper.
+    // Browser Wasm is deliberately excluded: it has a separate host entry ABI.
+    constexpr const char* guest_main_symbol = "__oreslang_guest_main";
+    const auto main_it = std::find_if(source.functions.begin(), source.functions.end(),
+        [](const Function& fn) { return fn.name == "main"; });
+    const bool native_main = !wasm32_target && main_it != source.functions.end();
+    if (native_main) {
+        if (!main_it->parameters.empty())
+            throw std::runtime_error("native main() must have zero arguments");
+        if (source.module.empty() && std::any_of(source.functions.begin(), source.functions.end(),
+                [](const Function& fn) { return fn.name == "__oreslang_guest_main"; }))
+            throw std::runtime_error("reserved native entrypoint symbol collision");
+    }
     llvm::Module module("oreslang-source", context);
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
@@ -256,8 +270,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
     for (const auto& fn : source.functions) {
-        const std::string symbol = source.module.empty()
-            ? fn.name : source.module + "." + fn.name;
+        const std::string symbol = native_main && source.module.empty() && fn.name == "main"
+            ? guest_main_symbol
+            : (source.module.empty() ? fn.name : source.module + "." + fn.name);
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
@@ -691,6 +706,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         for (auto* field : globals) finish.CreateStore(zero, field);
         finish.CreateStore(two, lifecycle);
         finish.CreateRetVoid();
+    }
+    if (native_main) {
+        // OS/process ABI boundary: never expose i64/void Oreslang main as C main.
+        // Reject invalid statuses without Unix low-byte truncation (256 -> 0).
+        llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+        auto* host_main = llvm::Function::Create(
+            llvm::FunctionType::get(i32, false),
+            llvm::Function::ExternalLinkage, "main", module);
+        auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
+        llvm::IRBuilder<> builder(entry);
+        llvm::Function* guest = declarations.at("main");
+        llvm::Value* result = builder.CreateCall(guest);
+        if (main_it->returns_void) {
+            builder.CreateRet(llvm::ConstantInt::get(i32, 0));
+        } else {
+            llvm::Value* valid = builder.CreateICmpULE(
+                result, llvm::ConstantInt::get(i64, 255), "valid.exit.status");
+            llvm::Value* narrowed = builder.CreateTrunc(result, i32);
+            builder.CreateRet(builder.CreateSelect(valid, narrowed,
+                llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
+        }
     }
 
     std::string diagnostics;
