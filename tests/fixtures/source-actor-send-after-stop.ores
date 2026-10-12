@@ -1,0 +1,14 @@
+// Reject a send after the same ActorRef has been consumed by stop.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  worker.send(1);
+  return 43;
+}

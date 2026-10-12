@@ -27,6 +27,9 @@ cases = {
     'reserved operation': source.replace('fnc list_items', 'fnc suspends'),
     'unsupported wire type': source.replace('String page_size', 'int page_size'),
     'missing result type': source.replace('=> String;', '=> ;'),
+    'empty contract': 'pub define contract Empty as end',
+    'duplicate contract': source + source,
+    'unverified target header': '// ores: target=host\n' + source,
     'unterminated contract': source.rsplit('end', 1)[0],
 }
 for label, invalid in cases.items():
