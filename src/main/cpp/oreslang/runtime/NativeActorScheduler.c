@@ -45,6 +45,8 @@ struct OresNativeActorScheduler {
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
+static _Thread_local OresNativeActorRef executing_actor;
+static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
@@ -129,10 +131,15 @@ static void* carrier(void* raw) {
         lane->active = 1;
         unlock(s);
 
+        // Actor identity is authorized only by the physical execution claim.
+        executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
+        executing_claim = execution_claim;
         executing = s;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
+        executing_actor = (OresNativeActorRef){0, 0, 0};
+        executing_claim = (OresExecutionClaim){0};
         executing = NULL;
 
         lock(s);
@@ -486,6 +493,20 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
 }
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
+}
+/* Actor-specific authority, not merely membership in the same worker pool. */
+int ores_native_actor_scheduler_is_current_actor(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s || executing != s
+            || !actor.scheduler_domain
+            || actor.scheduler_domain != executing_actor.scheduler_domain
+            || actor.actor_slot != executing_actor.actor_slot
+            || actor.generation != executing_actor.generation
+            || !executing_claim.carrier)
+        return 0;
+    // An active callback pins its scheduler/lane; only the authority mutex
+    // is acquired here, never while an actor callback itself is invoked.
+    return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
 }
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     if (!s) return 0;

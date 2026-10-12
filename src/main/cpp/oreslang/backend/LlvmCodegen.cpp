@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -9,6 +10,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
@@ -167,8 +169,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.
     if (wasm32_target) {
-        module.setTargetTriple("wasm32-unknown-unknown");
+        const auto profile = TargetAbi::parse("wasm32-unknown-unknown");
+        if (!profile.experimental_wasm32_ir())
+            throw std::runtime_error("wasm32 target profile is not enabled");
+        module.setTargetTriple(std::string(profile.triple()));
         module.setDataLayout("e-m:e-p:32:32-i64:64-n32:64-S128");
+        const auto& actual = module.getDataLayout();
+        if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
+                || actual.isLittleEndian() != (profile.endian() == "little"))
+            throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();

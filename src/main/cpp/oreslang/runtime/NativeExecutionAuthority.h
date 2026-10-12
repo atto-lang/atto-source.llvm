@@ -31,6 +31,10 @@ typedef struct {
     uint64_t generation;
     uint64_t sequence;
     uint64_t owner;
+    /* The token/sequence identify the turn; only its physical OS thread
+     * may query or relinquish the authority. A copied claim alone is not
+     * sufficient to authorize a foreign-thread release. */
+    pthread_t owner_thread;
     OresExecutionPhase phase;
 } OresNativeExecutionAuthority;
 
@@ -42,8 +46,15 @@ static inline int ores_execution_init(OresNativeExecutionAuthority* a) {
     a->phase = ORES_EXEC_READY;
     return 1;
 }
+/* A mutex is unlocked during guest execution. pthread_mutex_destroy()
+ * alone therefore does not detect a live owner or suspended continuation.
+ * The embedding host must still fence concurrent callers before destruction. */
 static inline int ores_execution_destroy(OresNativeExecutionAuthority* a) {
-    return a && pthread_mutex_destroy(&a->mutex) == 0;
+    if (!a || pthread_mutex_lock(&a->mutex) != 0) return 0;
+    int quiescent = !a->owner
+        && (a->phase == ORES_EXEC_READY || a->phase == ORES_EXEC_TERMINATED);
+    if (pthread_mutex_unlock(&a->mutex) != 0) return 0;
+    return quiescent && pthread_mutex_destroy(&a->mutex) == 0;
 }
 static inline void ores_execution_lock(OresNativeExecutionAuthority* a) {
     if (pthread_mutex_lock(&a->mutex) != 0) __builtin_trap();
@@ -65,6 +76,7 @@ static inline int ores_execution_enter(OresNativeExecutionAuthority* a,
             || (a->phase == ORES_EXEC_STOPPING && already_admitted));
     if (ok) {
         a->owner = carrier;
+        a->owner_thread = pthread_self();
         ++a->sequence;
         if (a->phase != ORES_EXEC_STOPPING) a->phase = ORES_EXEC_RUNNING;
         *out = (OresExecutionClaim){generation, a->sequence, carrier};
@@ -78,7 +90,8 @@ static inline int ores_execution_owns(OresNativeExecutionAuthority* a,
     ores_execution_lock(a);
     int ok = claim.carrier && a->owner == claim.carrier
         && claim.generation == a->generation
-        && claim.sequence == a->sequence;
+        && claim.sequence == a->sequence
+        && pthread_equal(a->owner_thread, pthread_self());
     ores_execution_unlock(a);
     return ok;
 }
@@ -91,7 +104,8 @@ static inline int ores_execution_leave(OresNativeExecutionAuthority* a,
     int ok = claim.carrier && claim.carrier == a->owner
         && claim.generation == a->generation
         && claim.sequence == a->sequence
-        && (a->phase == ORES_EXEC_RUNNING || a->phase == ORES_EXEC_STOPPING);
+        && (a->phase == ORES_EXEC_RUNNING || a->phase == ORES_EXEC_STOPPING)
+        && pthread_equal(a->owner_thread, pthread_self());
     if (ok) {
         a->owner = 0;
         if (a->phase != ORES_EXEC_STOPPING)
