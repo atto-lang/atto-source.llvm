@@ -71,6 +71,23 @@ public:
      * producers have been disabled, so LeakSanitizer can verify the success
      * and failure test paths without mistaking safety quarantine for leaks.
      */
+    /** Explicitly discharge a registry that could not enter a saturated
+     * quarantine, but ONLY after the supervisor has independently verified
+     * that its entire isolation domain is down. This is intentionally not a
+     * retry: no resource closer is ever run a second time. */
+    void release_overflow_after_verified_isolate_shutdown(
+            const std::shared_ptr<ActorResourceRegistry>& registry) {
+        if (!registry || registry->phase() != ActorResourceRegistry::Phase::failed)
+            throw std::invalid_argument("only terminal failed registries can be discharged");
+        {
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            if (!state_->discharged) {
+                throw std::logic_error("quarantine must be discharged after verified isolation first");
+            }
+        }
+        registry->discharge_after_verified_isolate_shutdown();
+    }
+
     void release_after_verified_isolate_shutdown() {
         std::vector<std::shared_ptr<ActorResourceRegistry>> retired;
         {
