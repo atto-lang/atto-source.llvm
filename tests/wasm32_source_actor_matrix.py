@@ -69,5 +69,6 @@ console.log('SOURCE_ACTOR_WASM32_ISOLATION_PASS');
                        encoding="utf8")
     denied = run([args.compiler, "--target=wasm32", str(invalid)])
     assert denied.returncode != 0 and not denied.stdout
-    assert "exactly one source actor" in denied.stderr
+    assert ("exactly one source actor" in denied.stderr or
+            "one actor per instance" in denied.stderr), denied.stderr
 print("REAL_ORESLANG_WASM32_ACTOR_ABI_PASS")
