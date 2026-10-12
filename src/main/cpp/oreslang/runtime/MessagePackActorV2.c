@@ -116,11 +116,109 @@ static int signed_integer(Reader* r) {
     if (t == 0xd2) return number < INT16_MIN;
     return number < INT32_MIN;
 }
+/* Closed nominal descriptors are trusted compiler declarations, never
+ * selected from wire bytes. Parse E(<owner length>:<owner>)[<tag>:<name length>:
+ * <case>=<payload-or-N>;...] with strict ASCII identifiers and monotone tags.
+ * Parsing and matching are bounded independently of packet size.
+ */
+static int valid_shape(const char** s, unsigned depth);
+static int typed_value(Reader* r, const char** shape, unsigned depth);
+
+static int descriptor_uint(const char** p, uint32_t cap, uint32_t* out) {
+    uint32_t number = 0; unsigned digits = 0;
+    while (**p >= '0' && **p <= '9') {
+        if (++digits > 10 || number > (cap - (uint32_t)(**p - '0')) / 10)
+            return 0;
+        number = number * 10 + (uint32_t)(**p - '0');
+        ++*p;
+    }
+    if (!digits || (digits > 1 && (*p)[-digits] == '0')) return 0;
+    *out = number;
+    return 1;
+}
+static int descriptor_identifier(const char** p, uint32_t n,
+                                 const char** start) {
+    if (!n || n > 256) return 0;
+    *start = *p;
+    for (uint32_t i = 0; i < n; ++i) {
+        unsigned char c = (unsigned char)**p;
+        int upper = c >= 'A' && c <= 'Z';
+        int lower = c >= 'a' && c <= 'z';
+        if (!(upper || lower || c == '_' || (i && c >= '0' && c <= '9')))
+            return 0;
+        ++*p;
+    }
+    return 1;
+}
+static int nominal_tag(Reader* r, uint32_t* out) {
+    uint8_t kind; uint64_t value = 0;
+    if (!octet(r, &kind)) return 0;
+    if (kind >= 1 && kind <= 127) value = kind;
+    else if (kind == 0xcc) {
+        if (!uint_be(r, 1, &value) || value <= 127) return 0;
+    } else if (kind == 0xcd) {
+        if (!uint_be(r, 2, &value) || value <= 255) return 0;
+    } else if (kind == 0xce) {
+        if (!uint_be(r, 4, &value) || value <= 65535) return 0;
+    } else return 0;
+    if (!value || value > INT32_MAX) return 0;
+    *out = (uint32_t)value;
+    return 1;
+}
+static int nominal_shape(const char** p, Reader* packet, unsigned depth) {
+    if (depth > ORES_MP2_MAX_DEPTH || strncmp(*p, "E(", 2)) return 0;
+    *p += 2;
+    uint32_t owner_len = 0;
+    const char* owner = NULL;
+    if (!descriptor_uint(p, 256, &owner_len) || *(*p)++ != ':'
+            || !descriptor_identifier(p, owner_len, &owner)
+            || *(*p)++ != ')' || *(*p)++ != '[') return 0;
+
+    uint32_t observed_tag = 0;
+    size_t wire_arity = 0;
+    if (packet) {
+        const uint8_t* received_owner = NULL; size_t received_len = 0;
+        if (!array_header(packet, &wire_arity)
+                || (wire_arity != 2 && wire_arity != 3)
+                || !string(packet, &received_owner, &received_len)
+                || received_len != owner_len
+                || memcmp(owner, received_owner, owner_len) != 0
+                || !nominal_tag(packet, &observed_tag)) return 0;
+    }
+    uint32_t previous = 0, count = 0;
+    int selected = 0;
+    while (**p && **p != ']') {
+        uint32_t tag, case_len;
+        const char* case_name = NULL;
+        if (++count > 4096 || !descriptor_uint(p, INT32_MAX, &tag)
+                || !tag || tag <= previous || *(*p)++ != ':'
+                || !descriptor_uint(p, 256, &case_len)
+                || *(*p)++ != ':'
+                || !descriptor_identifier(p, case_len, &case_name)
+                || *(*p)++ != '=') return 0;
+        previous = tag;
+        (void)case_name; /* Names bind identity through the full shape hash. */
+        const int matched = packet && observed_tag == tag;
+        const int nullary = **p == 'N';
+        if (nullary) ++*p;
+        else if (matched) {
+            if (wire_arity != 3 || !typed_value(packet, p, depth + 1)) return 0;
+        } else if (!valid_shape(p, depth + 1)) return 0;
+        if (matched) {
+            if ((nullary && wire_arity != 2) || selected) return 0;
+            selected = 1;
+        }
+        if (*(*p)++ != ';') return 0;
+    }
+    if (!count || *(*p)++ != ']') return 0;
+    return !packet || selected;
+}
 /* Only compiler-generated canonical descriptors are admissible. Parser is
  * bounded separately from the MessagePack value to avoid recursion attacks. */
 static int valid_shape(const char** s, unsigned depth) {
     if (depth > ORES_MP2_MAX_DEPTH) return 0;
     char t = **s;
+    if (t == 'E') return nominal_shape(s, NULL, depth);
     if (t == 'B' || t == 'I' || t == 'S' ||
         (t == 'F' && !(!strncmp(*s, "FA[", 3) || !strncmp(*s, "FL[", 3)))) {
         ++*s; return 1;
@@ -145,6 +243,7 @@ static int typed_value(Reader* r, const char** shape, unsigned depth) {
     if (depth > ORES_MP2_MAX_DEPTH || ++r->nodes > ORES_MP2_MAX_NODES)
         return 0;
     char t = **shape;
+    if (t == 'E') return nominal_shape(shape, r, depth);
     if (t == 'B') {
         uint8_t b; ++*shape;
         return octet(r, &b) && (b == 0xc2 || b == 0xc3);
@@ -224,12 +323,12 @@ static const uint32_t SHA256_K[64] = {
 static int canonical_shape_sha256(const char* shape, size_t n,
                                   uint8_t digest[32]) {
     static const char domain[] = "oreslang.actor.shape.v2/";
-    enum { SHA_BUFFER_CAP = 4608 };
-    if (!shape || n > 4096) return 0;
+    if (!shape || n > ORES_MP2_MAX_BYTES) return 0;
     size_t len = sizeof(domain) - 1 + n;
     size_t padded = (len + 9 + 63) & ~(size_t)63;
-    if (padded > SHA_BUFFER_CAP) return 0;
-    uint8_t buf[SHA_BUFFER_CAP] = {0};
+    if (padded > ORES_MP2_MAX_BYTES + 128) return 0;
+    uint8_t* buf = calloc(padded, 1);
+    if (!buf) return 0;
     memcpy(buf, domain, sizeof(domain) - 1);
     memcpy(buf + sizeof(domain) - 1, shape, n);
     buf[len] = 0x80;
@@ -273,6 +372,7 @@ static int canonical_shape_sha256(const char* shape, size_t n,
         digest[4*i+2]=(uint8_t)(state[i]>>8);
         digest[4*i+3]=(uint8_t)(state[i]);
     }
+    free(buf);
     return 1;
 }
 int ores_mp2_contract_valid(const OresMp2Contract* c) {
@@ -285,8 +385,8 @@ int ores_mp2_contract_valid(const OresMp2Contract* c) {
         if (ch < 33 || ch > 126) return 0;
     }
     size_t shape_len = 0;
-    while (shape_len <= 4096 && c->shape[shape_len]) ++shape_len;
-    if (!shape_len || shape_len > 4096) return 0;
+    while (shape_len <= ORES_MP2_MAX_BYTES && c->shape[shape_len]) ++shape_len;
+    if (!shape_len || shape_len > ORES_MP2_MAX_BYTES) return 0;
     const char* parsed = c->shape;
     if (!valid_shape(&parsed, 0) || *parsed != '\0') return 0;
     uint8_t digest[32];
