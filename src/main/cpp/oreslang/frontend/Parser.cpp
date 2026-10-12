@@ -971,9 +971,24 @@ private:
             cycleState[name] = 2;
         };
         for (const auto& item : program.enums) visit(item.name);
-        if (!nestedCase.empty())
-            throw std::runtime_error("nested enum payload " + nestedCase
-                + " requires a portable nested enum wire codec (not yet implemented)");
+        // A nominal enum can contain a value of another enum locally.
+        // Wire admission is a separate gate on the actor's CLOSED domain,
+        // not a blanket ban on the enum declaration itself.
+        std::unordered_set<std::string> unencodedCases;
+        for (const auto& item : program.enums) {
+            for (const auto& member : item.cases) {
+                if (!member.has_payload) continue;
+                std::function<bool(const MessageShape&)> containsEnum;
+                containsEnum = [&](const MessageShape& shape) {
+                    if (shape.kind == MessageShape::Kind::EnumRef) return true;
+                    for (const auto& child : shape.elements)
+                        if (containsEnum(child)) return true;
+                    return false;
+                };
+                if (containsEnum(member.payload))
+                    unencodedCases.insert(item.name + "." + member.name);
+            }
+        }
 
         std::unordered_set<std::string> typedDomains;
         for (const auto& pattern : program.tagged_patterns) {
@@ -1006,6 +1021,27 @@ private:
             if (!declaredNames.insert(item.name).second)
                 throw std::runtime_error("duplicate structural/tagged message contract");
         }
+        // Fail closed at actor admission: locally valid enum nesting has no
+        // portable nested MessagePack codec on this LLVM backend yet. Check
+        // exactly the cases in the actor's expanded mailbox domain.
+        for (const auto& actor : program.actors) {
+            std::vector<std::string> cases;
+            if (const auto owner = enumNames.find(actor.messages_type);
+                    owner != enumNames.end()) {
+                for (const auto& member : owner->second->cases)
+                    cases.push_back(owner->first + "." + member.name);
+            }
+            for (const auto& domain : program.tagged_patterns)
+                if (domain.name == actor.messages_type)
+                    cases.insert(cases.end(), domain.alternatives.begin(),
+                                 domain.alternatives.end());
+            for (const auto& qualified : cases) {
+                if (unencodedCases.count(qualified))
+                    throw std::runtime_error("nested enum payload " + qualified
+                        + " requires a portable nested enum wire codec (not yet implemented)");
+            }
+        }
+
         std::unordered_set<std::string> declaredActors;
         for (const auto& actor : program.actors) declaredActors.insert(actor.name);
         // A route intrinsic is admitted only inside a source-defined actor
