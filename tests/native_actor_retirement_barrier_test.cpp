@@ -126,6 +126,41 @@ static void quarantine_saturation_does_not_settle_done() {
     quarantine.release_after_verified_isolate_shutdown();
 }
 
+static void physical_reclamation_waits_for_admitted_actor_turn() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(305, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(12, 1);
+    std::atomic<int> freed{0};
+    registry->register_resource(Kind::native_allocation, [&] { ++freed; });
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(305, 12, 1, [&] { barrier->retire(); });
+    NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref), quarantine);
+    barrier = &owned;
+    require(group.mark_ready(ref), "ready");
+    std::promise<void> entered, leave;
+    auto arrived = entered.get_future();
+    auto released = leave.get_future();
+    std::thread guest([&] {
+        auto admitted = group.run_user_turn(ref, [&] {
+            entered.set_value();
+            released.wait();  // deliberate host test barrier, NOT guest runtime behavior
+        });
+        require(admitted == NativeActorGroup::UserTurn::executed, "actor turn");
+    });
+    arrived.wait();
+    group.close(); // logical stop may occur while admitted guest turn is active
+    require(owned.poll() == Poll::not_admitted,
+            "physical drop admitted before active actor turn released its lease");
+    require(freed == 0, "native arena freed while guest still executing");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0))
+                    == std::future_status::timeout, "done was fabricated");
+    leave.set_value();
+    guest.join();
+    require(owned.poll() == Poll::completed, "done did not follow guest exit");
+    require(freed == 1, "resource drop did not occur exactly once");
+    ref.get_done().get();
+}
+
 static void done_waits_for_group_detachment() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(304, 1);
@@ -151,4 +186,5 @@ int main() {
     failed_ffi_revocation_is_quarantined();
     quarantine_saturation_does_not_settle_done();
     done_waits_for_group_detachment();
+    physical_reclamation_waits_for_admitted_actor_turn();
 }
