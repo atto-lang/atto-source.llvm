@@ -153,6 +153,86 @@ public:
         return permit;
     }
 
+    void close_restart_admission() {
+        std::lock_guard<std::mutex> guard(mutex_);
+        restart_closed_ = true;
+    }
+
+    /**
+     * Trusted owner stages the real physical actor immediately after spawn.
+     * A fresh actor reference alone is not proof of scheduler admission.
+     */
+    void stage_replacement(RestartReservation permit, OresNativeActorRef actor) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        check_reservation(permit);
+        if (restart_closed_) throw std::logic_error("supervisor is closed");
+        validate_actor(actor);
+        if (same_actor(actor, permit.failed_actor)
+                || active_actors_.count(actor_key(actor)))
+            throw std::logic_error("replacement is not fresh");
+        require_fresh_generation(actor);
+        const auto [it, added] = replacements_.emplace(
+            permit.child.logical_child_id,
+            ReplacementState{actor, permit.incarnation + 1,
+                             ReplacementPhase::spawned});
+        (void) it;
+        if (!added) throw std::logic_error("replacement already staged");
+    }
+
+    ReplacementState require_candidate(RestartReservation permit,
+                                        OresNativeActorRef actor) const {
+        check_reservation(permit);
+        auto found = replacements_.find(permit.child.logical_child_id);
+        if (found == replacements_.end()
+            || !same_actor(found->second.actor, actor)
+            || found->second.next_incarnation != permit.incarnation + 1)
+            throw std::logic_error("missing or foreign replacement generation");
+        return found->second;
+    }
+
+    void acknowledge_replacement_admission(
+            RestartReservation permit, OresNativeActorRef actor,
+            const std::function<bool()>& verify_admitted) {
+        if (!verify_admitted)
+            throw std::invalid_argument("missing trusted scheduler admission proof");
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            if (restart_closed_ || require_candidate(permit, actor).phase
+                    != ReplacementPhase::spawned)
+                throw std::logic_error("cannot admit this replacement");
+        }
+        // External probe must not run holding registry's mutex.
+        if (!verify_admitted()) throw std::logic_error("replacement not physically admitted");
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (restart_closed_ || require_candidate(permit, actor).phase
+                != ReplacementPhase::spawned)
+            throw std::logic_error("replacement admission became stale");
+        replacements_.at(permit.child.logical_child_id).phase
+            = ReplacementPhase::admitted;
+    }
+
+    void acknowledge_replacement_cleanup(
+            RestartReservation permit, OresNativeActorRef actor,
+            const std::function<bool()>& verify_cleaned) {
+        if (!verify_cleaned)
+            throw std::invalid_argument("missing trusted physical cleanup proof");
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            auto status = require_candidate(permit, actor).phase;
+            if (status != ReplacementPhase::spawned
+                    && status != ReplacementPhase::admitted)
+                throw std::logic_error("replacement no longer live");
+        }
+        if (!verify_cleaned()) throw std::logic_error("replacement still physically live");
+        std::lock_guard<std::mutex> guard(mutex_);
+        auto status = require_candidate(permit, actor).phase;
+        if (status != ReplacementPhase::spawned
+                && status != ReplacementPhase::admitted)
+            throw std::logic_error("replacement cleanup became stale");
+        replacements_.at(permit.child.logical_child_id).phase
+            = ReplacementPhase::cleaned;
+    }
+
     /** Identity commit only; caller must have admitted a fresh actor. */
     Snapshot replace(RestartReservation permit, OresNativeActorRef replacement) {
         std::lock_guard<std::mutex> guard(mutex_);
