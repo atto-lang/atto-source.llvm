@@ -252,6 +252,82 @@ private:
 
 public:
     /**
+     * Recover a terminal PANIC rejected because the OLD parent stopped.
+     * The original bridge and SupervisorProcess must remain owned by the
+     * host; the recovered parent is a newer, scheduler-published generation
+     * at the SAME physical supervisor slot, running identity-mode callbacks.
+     *
+     * The original scheduler receipt, not caller-provided failure payload,
+     * is the sole authority. The first claim is irreversible: if process
+     * enqueue fails ambiguously, the receipt remains CLAIMED and must NOT be
+     * replayed. Only a successful enqueue may be ACKNOWLEDGED.
+     *
+     * Host-only, in-memory reconciliation. NOT process-crash durability or
+     * source-language RESTART. Physical PANIC actor recycling stays fenced.
+     */
+    bool reconcile_quarantined_terminal(
+            OresNativeActorRef recovered_parent,
+            OresNativeActorRef failed_child) {
+        if (!valid(recovered_parent)
+                || recovered_parent.scheduler_domain != parent_.scheduler_domain
+                || recovered_parent.actor_slot != parent_.actor_slot
+                || recovered_parent.generation <= parent_.generation
+                || !ores_native_actor_scheduler_uses_identity_callbacks(scheduler_)
+                || ores_native_actor_scheduler_poll_published(scheduler_, parent_)
+                || !ores_native_actor_scheduler_poll_published(
+                       scheduler_, recovered_parent)
+                || !process_->healthy())
+            throw std::logic_error("no authorized recovered supervisor CONTROL owner");
+        OresNativeTerminalReceipt receipt{};
+        if (!ores_native_actor_scheduler_terminal_receipt(
+                scheduler_, parent_, failed_child, &receipt)
+                || receipt.failure.kind != ORES_NATIVE_CONTROL_PANIC)
+            throw std::logic_error("no original scheduler PANIC evidence");
+        SupervisorChildRegistry::Snapshot admitted;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const Key key{failed_child.actor_slot, failed_child.generation};
+            const auto found = registered_.find(key);
+            if (found == registered_.end())
+                throw std::logic_error("terminal failure already consumed");
+            if (!ores_native_actor_scheduler_poll_done(scheduler_, failed_child))
+                throw std::logic_error("failed child is not physically DONE");
+            admitted = found->second;
+            const auto current = child_registry_->snapshot(admitted.child);
+            if (current.phase != SupervisorChildRegistry::Phase::active
+                    || current.incarnation != admitted.incarnation
+                    || current.actor.scheduler_domain != failed_child.scheduler_domain
+                    || current.actor.actor_slot != failed_child.actor_slot
+                    || current.actor.generation != failed_child.generation)
+                throw std::logic_error("stale logical child PANIC authority");
+            if (!ores_native_actor_scheduler_claim_terminal_receipt(
+                    scheduler_, parent_, failed_child, &receipt))
+                throw std::logic_error("terminal host effect already claimed");
+            child_registry_->finalized(
+                admitted.child, failed_child, admitted.incarnation);
+            registered_.erase(found);
+        }
+        const auto& failure = receipt.failure;
+        SupervisorFailureNotice copied{
+            process_->supervisor_id(), process_->runtime_id(),
+            failure.child.actor_slot, failure.child.generation,
+            recovered_parent.actor_slot, "reconciled native terminal failure",
+            failure.kind, failure.failure_code, failure.correlation,
+            admitted.child.logical_child_id, admitted.incarnation
+        };
+        process_->accept(copied); // ambiguous exception => CLAIMED, never replay
+        if (!ores_native_actor_scheduler_ack_terminal_receipt(
+                scheduler_, receipt))
+            throw std::logic_error("reconciled effect accepted but not acknowledged");
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++accepted_;
+        }
+        return true;
+    }
+
+public:
+    /**
      * Trusted host wiring for the verified source installer. A source STOP
      * policy must share this exact registry with its scheduler panic bridge:
      * another registry for the same owner cannot validate its child IDs.
