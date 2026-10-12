@@ -1,0 +1,27 @@
+name: Formal actor carrier exclusivity
+on:
+  pull_request:
+    paths:
+      - 'docs/formal/ReentrantActorExclusiveCarrier.*'
+      - 'docs/formal/ACTOR_EXCLUSIVE_CARRIER_PROOF.md'
+      - 'scripts/verify_actor_carrier_exclusivity.py'
+      - '.github/workflows/formal-actor-carrier-exclusivity.yml'
+  push:
+    paths:
+      - 'docs/formal/ReentrantActorExclusiveCarrier.*'
+      - 'scripts/verify_actor_carrier_exclusivity.py'
+      - '.github/workflows/formal-actor-carrier-exclusivity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-model:
+    name: Exhaustive actor carrier state exploration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run safe model and unsafe mutation counterexample
+        run: python3 scripts/verify_actor_carrier_exclusivity.py
