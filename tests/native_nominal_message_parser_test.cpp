@@ -185,7 +185,7 @@ int main() {
     rejects(R"(
         define enum Foo as Message1 = 1 end
         define enum Foo as Message1: Foo end
-    )", "duplicate enum/pattern declaration");
+    )", "duplicate enum declaration");
 
     rejects("define enum Bad as A: string = 2 B: string = 1 end",
             "enum wire tags must increase monotonically");
