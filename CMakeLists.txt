@@ -206,6 +206,15 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(native_pipeline_cancel_publication_linearization
             PROPERTIES TIMEOUT 45)
+        add_test(NAME native_pipeline_cancel_worker_forward_linearization
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_pipeline_cancel_publication.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}"
+                forward)
+        set_tests_properties(native_pipeline_cancel_worker_forward_linearization
+            PROPERTIES TIMEOUT 45)
     endif()
     oreslang_contract_test(native_ir_sixteen_actor_bidirectional_pipeline
         source-actor-pipeline-sixteen-stage.ores
