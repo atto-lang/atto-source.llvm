@@ -205,6 +205,17 @@ int ores_native_actor_scheduler_terminal_receipt(
 int ores_native_actor_scheduler_claim_terminal_receipt(
     OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
     OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
+/* Original parent CONTROL callback only: atomically check that the exact
+ * parent generation is still live/published AND that its terminal envelope
+ * was actually published, then claim the one-use receipt under the same
+ * scheduler mutex as STOP. A STOP that wins before this claim must leave
+ * RECORDED evidence for later trusted recovery, not authorize an old callback.
+ * A successful claim linearizes before a later STOP; host admission remains
+ * a separately acknowledged, possibly in-flight effect. Do NOT use for a
+ * recovered-parent reconciliation after original parent STOP. */
+int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
+    OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
 /* Acknowledge only for the exact nonce returned by a previous claim,
  * AFTER independently confirmed host CONTROL enqueue. No guest authority. */
 int ores_native_actor_scheduler_ack_terminal_receipt(
