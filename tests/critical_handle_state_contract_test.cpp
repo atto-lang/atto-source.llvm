@@ -24,7 +24,7 @@ int main() {
     CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);
     CHECK(admit_critical_handle_state(c, row(WRITE))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
 
     c.inferred = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
@@ -36,7 +36,7 @@ int main() {
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::Accept);
     CHECK(admit_critical_handle_state(c, row(WRITE))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     c.inferred = row(WRITE); // pure overwrite is not an implicit read
     CHECK(admit_critical_handle_state(c, row(WRITE))
             == CriticalStateAdmission::Accept);
@@ -60,7 +60,7 @@ int main() {
 
     c.inferred = row(READ | IO);
     CHECK(admit_critical_handle_state(c, row(READ))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     CHECK(admit_critical_handle_state(c, row(READ | IO))
             == CriticalStateAdmission::Accept);
 
