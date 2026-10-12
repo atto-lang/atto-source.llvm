@@ -1568,7 +1568,22 @@ private:
                     }
                     validate_expression(*assignment.value, available, functions);
                 }
-                validate_expression(*method.result, available, functions);
+                // A copied scalar may be returned from a tagged match
+                // only when every arm defines the same callback result.
+                // This is a definite-assignment check, not a state loan
+                // escaping its critical callback.
+                auto returnAvailable = available;
+                if (!method.tagged_arms.empty()) {
+                    const auto& firstLoan = method.tagged_arms.front().state_loan;
+                    if (firstLoan && std::all_of(method.tagged_arms.begin(),
+                            method.tagged_arms.end(), [&](const TaggedReceiveArm& arm) {
+                                return arm.state_loan
+                                    && arm.state_loan->result_binding
+                                        == firstLoan->result_binding;
+                            }))
+                        returnAvailable.insert(firstLoan->result_binding);
+                }
+                validate_expression(*method.result, returnAvailable, functions);
             }
             // Static variant coverage alone cannot authorize execution:
             // per-case MessagePack DATA and typed continuation lowering
