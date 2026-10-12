@@ -114,20 +114,22 @@ rejection gates, method-only actor acceptance, and prior directional domain
 rejections. This is not yet full-tree native suite validation. See
 `docs/ACTOR_STATE_INVARIANT.md` for the exact restriction and release limits.
 
-## Additional scoped capability hardening
+## Canonical handle_state capability hardening
 
-The restricted compiled tagged-actor profile now admits both
-`using state.read(|state| -> {...})` and
-`using state.write(critical |state| -> {...})`, in addition to the
-legacy write-capability spelling `self.handle_state(critical ...)`.
+Oreslang's canonical actor-state API is `self.handle_state`. Without
+`critical`, the callback is read-only; with `critical`, the callback
+may mutate actor-owned fixed-key state. Both forms produce copied
+scalar results and prohibit escapes, suspension, nesting, and arbitrary
+guest callbacks. LLVM IR confirms that the read-only form has no
+actor-heap field-write calls.
 
-The read mode statically disallows mutation and its generated LLVM IR
-contains no actor heap-field write call. Write requires `critical`.
-Both scopes reject suspension, reentrancy through arbitrary guest calls,
-nesting and state-reference escape. **Actor turns remain single-flight**,
-so read-only scopes do not imply concurrent reader scheduling.
+Prototype `using state.read/write` forms remain executable as
+restricted aliases but are **not** the preferred language syntax. The
+actor scheduler remains single-flight: the read mode does **not**
+enable parallel actor execution.
 
-[Latest funded 45/45 CTests](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38313725825)
-include real 15-actor read/write examples and ASan/UBSan. See
-`docs/ACTOR_STATE_USING_CAPABILITIES.md`. This remains a focused
-restricted-profile proof, not full LLVM repository regression parity.
+[Latest funded GitHub Actions #38314809579](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314809579)
+passed **57/57 focused CTests**, including canonical read/write 15-actor
+roundtrips and Clang ASan/UBSan. See
+`docs/ACTOR_STATE_USING_CAPABILITIES.md` for normative source syntax.
+The full historical suite and Java runtime parity remain unverified.
