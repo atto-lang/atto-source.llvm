@@ -418,7 +418,9 @@ int main(void) {
         for (unsigned j = 0; j < 10; ++j)
             assert(ores_flow_retire(table, workers[t].ids[j]) == ORES_FLOW_OK);
     }
-    assert(atomic_load(&delivered) == 5 + 8 * 10 * 5 + race_admitted);
+    /* Foreign-table callback reentry was rejected, then B admitted one
+     * legitimate message after A's callback returned. */
+    assert(atomic_load(&delivered) == 5 + 8 * 10 * 5 + race_admitted + 1);
     ores_flow_table_destroy(table);
     puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1 slow_publish=1 reentry=1 cross_table_cycle=1");
     return 0;
