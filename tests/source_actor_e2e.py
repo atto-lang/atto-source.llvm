@@ -92,6 +92,7 @@ def main():
                 args.clang, *flags, "-x", "ir", str(ll),
                 "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
                 str(runtime / "NativeActorScheduler.c"),
+                str(runtime / "NativeOresVM.c"),
                 str(runtime / "SourceActorBootstrap.c"),
                 "-std=c11", "-pthread", "-I", str(source_dirs),
                 "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
@@ -100,6 +101,11 @@ def main():
             assert linked.returncode == 0, (name, linked.stderr)
             executed = run([str(exe)])
             assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
+            vm_lines = [line for line in executed.stderr.splitlines()
+                        if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
+            assert len(vm_lines) == 1 and (
+                "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
+                name, vm_lines)
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
