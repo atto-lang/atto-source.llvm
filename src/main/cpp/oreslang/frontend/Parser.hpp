@@ -144,6 +144,10 @@ struct TaggedPattern {
 struct Actor {
     std::string name;
     std::string messages_type;
+    // Explicit two-direction actor role. Ordinary actors retain messages_type.
+    bool transform_pipe = false;
+    std::string forward_messages_type;
+    std::string backward_messages_type;
     std::vector<LocalBinding> fields;
     std::vector<Function> methods;
     std::size_t offset = 0;
