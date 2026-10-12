@@ -1021,6 +1021,15 @@ private:
         return text + "]";
     }
 
+    static bool contains_call(const Expression& e) {
+        if (e.kind == Expression::Kind::Call) return true;
+        if (e.left && contains_call(*e.left)) return true;
+        if (e.right && contains_call(*e.right)) return true;
+        for (const auto& arg : e.arguments)
+            if (contains_call(*arg)) return true;
+        return false;
+    }
+
     static bool contains_boolean(const Expression& e) {
         if (e.kind == Expression::Kind::Boolean) return true;
         if (e.left && contains_boolean(*e.left)) return true;
@@ -1481,8 +1490,14 @@ private:
                                     if (!mutableFields.count(assignment.field))
                                         throw std::runtime_error(
                                             "state callback writes unknown or immutable key");
+                                    if (contains_call(*assignment.value))
+                                        throw std::runtime_error(
+                                            "state read/write loan cannot invoke arbitrary functions");
                                     validate_expression(*assignment.value, loanAvailable, functions);
                                 }
+                                if (contains_call(*arm.state_loan->result))
+                                    throw std::runtime_error(
+                                        "state read/write loan cannot invoke arbitrary functions");
                                 validate_expression(*arm.state_loan->result,
                                                     loanAvailable, functions);
                                 if (fields.count(arm.state_loan->result_binding)
