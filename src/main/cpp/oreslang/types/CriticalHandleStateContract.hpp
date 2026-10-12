@@ -42,33 +42,30 @@ inline CriticalStateAdmission admit_critical_handle_state(
         FunctionEffects with_effects,
         bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    // Breaking pre-1.0 contract: even a verified serial actor must specify
-    // an explicit read/write capability. Serial affects scheduling, not state authority.
+    // Canonical contract: the absence of 'critical' is an immutable read
+    // loan. 'critical' (Write) grants exclusive write authority. A verified
+    // serial actor never upgrades an unmarked callback to mutable.
     (void)verified_serial_actor;
-    if (callback.state_mode == CriticalStateMode::None)
-        return CriticalStateAdmission::MissingCallbackCritical;
+    const auto mode = callback.state_mode == CriticalStateMode::None
+            ? CriticalStateMode::Read : callback.state_mode;
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
     if (callback.escapes) return CriticalStateAdmission::CallbackEscape;
     // A broad with row never upgrades a read-only state capability.
-    if (callback.state_mode == CriticalStateMode::Read
+    if (mode == CriticalStateMode::Read
             && callback.inferred.has(FunctionEffect::StateWrite)) {
         return CriticalStateAdmission::ReadModeCannotWrite;
     }
     if (!with_effects.permits(callback.inferred)) {
         return CriticalStateAdmission::EffectExceedsWith;
     }
-    if (callback.inferred.has(FunctionEffect::Suspend)) {
-        // A state-backed loan may not cross a yielding reduction boundary.
-        // The callback resumes only on a generation-fenced re-admitted turn.
-        if (callback.state_loan_live_across_suspend) {
-            return CriticalStateAdmission::LoanAcrossSuspension;
-        }
-        if (!callback.continuation_generation_fenced) {
-            return CriticalStateAdmission::MissingContinuationFence;
-        }
-    }
+    // A callback still holds its lexical state loan. It cannot suspend
+    // even if some outer continuation generation is fenced; there is no
+    // legal handoff of a live state reference to another actor turn.
+    if (callback.inferred.has(FunctionEffect::Suspend)
+            || callback.state_loan_live_across_suspend)
+        return CriticalStateAdmission::LoanAcrossSuspension;
     return CriticalStateAdmission::Accept;
 }
 
