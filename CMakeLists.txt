@@ -28,7 +28,6 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
-    find_package(Threads REQUIRED)
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
@@ -413,6 +412,7 @@ if(BUILD_TESTING)
     # an async I/O reactor or source-level await implementation.
     add_executable(oreslang-async-io-operation-test tests/async_io_operation_test.cpp)
     target_include_directories(oreslang-async-io-operation-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    find_package(Threads REQUIRED)
     target_link_libraries(oreslang-async-io-operation-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-async-io-operation-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_async_io_completion_generation_races COMMAND oreslang-async-io-operation-test)
@@ -690,6 +690,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_fifo_mailbox_admission
         COMMAND oreslang-native-actor-mailbox-test)
     set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
+
+    # Zero-thread central CONTROL wake coordinator on the four-domain VM.
+    add_executable(oreslang-native-vm-control-plane-test
+        tests/native_vm_control_plane_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-control-plane-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-control-plane-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-control-plane-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_master_control_wake_coalescing
+        COMMAND oreslang-native-vm-control-plane-test)
+    set_tests_properties(native_vm_master_control_wake_coalescing PROPERTIES TIMEOUT 25)
 
     # VM-level ownership: four independent scheduler domains, five carriers
     # by default; cross-domain ActorRefs cannot be admitted by another pool.
