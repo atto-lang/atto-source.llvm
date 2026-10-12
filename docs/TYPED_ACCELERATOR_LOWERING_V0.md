@@ -60,7 +60,20 @@ correctness are not yet measured.
 not the device allocation itself. A real provider must construct/use the
 ledger alongside its opaque allocation and authenticate runtime capabilities.
 Strings/identity labels in this prototype are comparison guards, *not*
-cryptographically unforgeable authorization.
+cryptographically unforgeable authorization. In native C++, a Ticket now
+holds a private, unique per-submission capability retained by the owning
+BufferFence while in flight; matching numeric generation and sequence alone
+can no longer complete or cancel another buffer's work. Stale completion
+and cancelled-event acknowledgments invalidate that capability. The Java
+backend uses opaque per-submission Ticket object identity and keeps provider
+transitions package-private.
+
+These tickets are **bearer capabilities, not proof of physical GPU completion**.
+Only a trusted backend should call `complete`, `acknowledge_cancelled_device_event`
+or `retire_after_backend_release` after independently authenticating the
+device event and release. The C++ API still exposes these functions to native
+callers, so trusted-module/FFI confinement remains an unimplemented release
+gate; ticket possession alone is not sufficient security.
 
 Lifecycle:
 
