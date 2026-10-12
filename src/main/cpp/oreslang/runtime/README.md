@@ -1,13 +1,69 @@
 # Future LLVM native runtime
 
 Track execution-domain/actor ABI work in [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
-This directory intentionally contains no executable actor or memory allocator.
+This directory now contains experimental executable actor-carrier primitives and
+a fixed-capacity actor-owned graph heap, but it still lacks source-lowered
+Oreslang actor classes and a general-purpose native object allocator.
 
 Java reference classes: `ActorRuntime`, `OresScheduler`, `OresFuture`, `RuntimeGarbageCollector`.
 Native phases: structured cancellation, generational wake IDs, pinned/relocatable async frames,
 actor mailbox lease, supervisor trees, independent physical heap regions and bounded arenas.
 
 No RT scheduler policy, zero-GC or actor isolation is currently implemented.
+
+## Experimental actor-owned cyclic graph storage (not source-lowered)
+
+`ActorOwnedGraphHeap.hpp` provides a **real fixed-capacity native storage
+prototype** owned by one authenticated actor execution identity. Nodes store
+inline bytes (no per-node `malloc` or JVM garbage collector), and non-owning
+generation-checked handles form self/mutual cycles without reference counting.
+Retirement now requires a non-forgeable `CarrierRetirementProof` minted only
+after `HungryCarrier::join()` drains its actor and broker threads and the
+producer ingress. The `ActorHeapBorrowGate` independently leases suspended
+frames, FFI uses and borrowed memory. Retirement seals new lease admissions
+atomically and refuses to release native storage while any lease remains.
+The compiler/scheduler MUST instrument every outstanding borrow/FFI resource
+with a lease; this runtime gate cannot detect untracked raw native pointers.
+Completed retirement zeroes storage and invalidates every stale handle.
+Deleting a node purges incoming edges and advances its generation before
+reusing its slot. Separate actors have separate fixed arrays and reject
+foreign handles.
+
+The `quiesced` argument is a *precondition*, **not** proof that async
+frames, borrows, FFI resources or hot-reload continuations have drained.
+Do not wire `retire` into real actor cancellation until the scheduler
+provides that proof and prevents concurrent/reentrant accesses.
+`NodeBytes` are POD byte payloads; arbitrary Oreslang class layout,
+destructor glue, inter-actor transport, the source borrow checker and
+actor-specific native memory quotas are still not lowered by LLVM.
+
+The fixed-capacity arena now also exposes
+`emplace_owned<T>(actor, ctorArgs...)` for no-throw native actor-owned
+objects. It registers one type-erased `noexcept` destructor callback in the
+node slot. `remove` invalidates the node generation before invoking the
+destructor; `retire` revokes all node handles before running every remaining
+object destructor exactly once, independent of graph cycles. Object slots
+reject raw byte-copy and overwrite operations to prevent bypassing native
+object lifetime rules. The C++ test checks explicit drop, reuse after drop,
+exact-once retirement, and ASan/UBSan memory safety.
+
+**Scope:** this is executable native object lifetime/drop glue, not compiler
+lowering of arbitrary Oreslang class fields or async borrow lifetimes.
+The compiler must still generate typed placement constructors and destructor
+glue and forbid destructor reentry/cross-actor pointers. Constructors and
+destructors are intentionally restricted to `noexcept` and default-aligned
+objects; larger/overaligned object layout needs a different arena.
+
+The native `ActorOwnedGraphHeap` test covers cycles, deterministic
+logical reclamation, ABA generation reuse, cross-owner exclusion,
+capacity, and refusal to retire before quiescence. Native CTest:
+`native_actor_owned_cyclic_graph_heap`.
+
+This is the `ACTOR_ARENA` substrate. It does **not** require one
+GraalVM isolate per actor. `VM_ISOLATE` is a separate execution policy:
+one isolated Engine can house multiple independently owned actor arenas,
+but those actors share that Engine's JIT and VM-level GC. A separate
+`PROCESS_ISOLATE` is reserved for stricter security boundaries.
 
 ## Dedicated hungry actor idle/I/O semantics — design only
 
