@@ -89,3 +89,25 @@ GPU/quantum diagnostic prefixes are preserved for compatibility.
 When implementation begins, lift the front-end gate **only** for AST nodes
 that have complete typed effect checks, ownership admission, and verified
 backend lowering. No broad lexer rollback to identifiers.
+
+## Data-oriented programming integration (follow-on, still fail-closed)
+
+The nested-domain contract is now connected to the **typed DOP GPU
+preflight**: AoS, SoA and AoSoA kernels bind to device buffers only when their
+full layout metadata (kind, rows, fields, scalar width, alignment and lanes)
+matches. Equal padded byte lengths alone are insufficient. Each launch plan
+requires distinct device ownership generations, same tenant and device,
+idle fences, nonzero GPU work and checked signed-64-bit memory reservations.
+
+- Java DOP implementation: [PR #703](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/703),
+  stacked on Java DOP kernel [PR #579](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/579).
+- Native DOP implementation: [LLVM PR #229](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/229),
+  using `DopLayout.hpp`, `DopKernelIR.hpp`, `GpuBufferFence.hpp` and
+  `DopGpuAdmission.hpp`.
+
+See `docs/DOP_GPU_EXECUTION_BOUNDARY.md` in those DOP hardening branches.
+These are runtime **preflight data contracts**, not a compiler-approved
+`cpu {}`/`gpu {}` AST, host/device transfer implementation, or GPU driver.
+A trusted provider must atomically claim buffers, authenticate device
+allocation provenance, enforce no host/device aliasing and wait for real
+device fences; preflight snapshots alone do not authorize launching work.
