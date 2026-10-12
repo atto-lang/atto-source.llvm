@@ -56,6 +56,39 @@ if(BUILD_TESTING)
         COMMAND oreslang-owned-i64-token-concurrent-regions-test)
     set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_package(OpenSSL QUIET COMPONENTS Crypto)
+    if(OpenSSL_FOUND)
+        add_executable(oreslang-messagepack-wire-v2-test
+            tests/messagepack_wire_v2_test.cpp)
+        target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-messagepack-wire-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-messagepack-wire-v2-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_messagepack_wire_v2_java_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/messagepack_wire_v2_matrix.py"
+                --binary "$<TARGET_FILE:oreslang-messagepack-wire-v2-test>"
+                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/messagepack_collection_vectors.json")
+        set_tests_properties(native_messagepack_wire_v2_java_parity PROPERTIES TIMEOUT 30)
+        add_executable(oreslang-tagged-message-wire-v2-test
+            tests/tagged_message_wire_v2_test.cpp)
+        target_include_directories(oreslang-tagged-message-wire-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-tagged-message-wire-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-tagged-message-wire-v2-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_tagged_enum_message_java_wire_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/tagged_message_wire_v2_matrix.py"
+                --binary "$<TARGET_FILE:oreslang-tagged-message-wire-v2-test>"
+                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/tagged_message_vectors.json")
+        set_tests_properties(native_tagged_enum_message_java_wire_parity PROPERTIES TIMEOUT 30)
+    else()
+        message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
+    endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)
     if(ORE_CLANG AND ORE_NODE)
