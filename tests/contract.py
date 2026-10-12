@@ -9,31 +9,44 @@ import tempfile
 
 
 def verify_three_actor_pipeline_stderr(stderr):
-    """Require observed 3-actor guest state, finalizers and physical group close.
+    """Validate bounded *observed* native result and physical STOP evidence.
 
-    An aggregate marker is NOT a replayable event trace. A trusted CI runner
-    must still build and execute this exact source with its actual native ABI.
+    Do not use Python `assert` for an evidence security gate: -O disables
+    assertions. This is still an aggregate witness, not a transition trace,
+    runtime attestation, or compiler/runtime refinement proof.
     """
+    if not isinstance(stderr, str) or len(stderr) > 131072:
+        raise ValueError("invalid or oversized native evidence")
     lines = stderr.splitlines()
     marker = "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19"
-    assert lines.count(marker) == 1, "missing or duplicated compiled roundtrip"
-    assert not any(line.startswith((
+    if lines.count(marker) != 1:
+        raise ValueError("missing or duplicated compiled roundtrip")
+    if any(token in stderr for token in (
         "SOURCE_PIPELINE_FAILURE", "SOURCE_PIPELINE_TERMINAL_STATUS",
         "SOURCE_ACTOR_INVARIANT_FAILURE"
-    )) for line in lines), "guest pipeline reported terminal failure"
-
+    )):
+        raise ValueError("guest pipeline reported terminal failure")
     stop_prefix = "SOURCE_ACTOR_SPAWN_STOP_VERIFIED "
-    stops = [line for line in lines if line.startswith(stop_prefix)]
     expected = [
         stop_prefix + "constructor_on_worker=1 released=1 processed=1 last=13",
         stop_prefix + "constructor_on_worker=1 released=1 processed=2 last=14",
         stop_prefix + "constructor_on_worker=1 released=1 processed=2 last=19",
     ]
-    assert stops == expected, "physical actor finalizers/state mismatch"
-    groups = [line for line in lines if line.startswith("SOURCE_ACTOR_GROUP_VERIFIED ")]
-    assert groups == ["SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=3 peak=3 carriers=4"], (
-        "final physical ActorGroup barrier missing or duplicated"
-    )
+    indexed = [(i, line) for i, line in enumerate(lines)]
+    stops = [(i, line) for i, line in indexed if line.startswith(stop_prefix)]
+    if [line for _, line in stops] != expected:
+        raise ValueError("physical actor finalizers/state mismatch")
+    group = "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=3 peak=3 carriers=4"
+    groups = [(i, line) for i, line in indexed
+              if line.startswith("SOURCE_ACTOR_GROUP_VERIFIED")]
+    if len(groups) != 1 or groups[0][1] != group:
+        raise ValueError("final physical ActorGroup barrier missing or duplicated")
+    marker_index = lines.index(marker)
+    if not (marker_index < stops[0][0] < stops[1][0] < stops[2][0]
+            < groups[0][0]):
+        raise ValueError("completion and physical teardown event order invalid")
+
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -54,6 +67,11 @@ def main():
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
+    if args.pipeline_three_actor_summary:
+        if (args.diagnostic or args.run != 43 or not args.clang
+                or not args.source_actor_runtime
+                or pathlib.Path(args.fixture).name != "source-actor-pipeline-bidirectional.ores"):
+            raise ValueError("three-actor gate requires canonical compiled guest execution")
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
     )
@@ -128,18 +146,14 @@ def main():
                     f"trial {trial}: {result.stderr}"
                 )
             if args.pipeline_three_actor_summary:
-                assert pathlib.Path(args.fixture).name == "source-actor-pipeline-bidirectional.ores", (
-                    "three-actor summary gate requires the canonical compiled fixture"
-                )
-                assert args.run == 43 and args.source_actor_runtime, (
-                    "three-actor summary gate requires native compiled actor execution"
-                )
+                if result.stdout:
+                    raise ValueError("unexpected compiled actor guest stdout")
                 verify_three_actor_pipeline_stderr(result.stderr)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
+    except (AssertionError, ValueError, OSError, subprocess.TimeoutExpired) as error:
         print(f"contract test failed: {error}", file=sys.stderr)
         sys.exit(1)
