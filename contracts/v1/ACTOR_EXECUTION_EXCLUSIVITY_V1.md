@@ -91,3 +91,15 @@ proof that an unverified native callback is safe.
 Do not claim a machine-checked Java/LLVM implementation proof until TLC
 has run and all concrete entrypoints have a checked correspondence to the
 formal transition system.
+
+
+### Host-only optimistic state helpers do not bypass actor execution
+
+A `VersionedActorCell` may be used by trusted host concurrency tests and
+runtime internals to detect stale scalar snapshots. Its thread-safe CAS API
+**does not authorize** producer/FFI threads to run actor code, read ordinary
+actor-owned fields, or mutate guest-visible actor state outside the admitted
+actor execution lane. A compiler lowering to an actual actor field must only
+attempt the revision-fenced commit inside a currently admitted actor turn,
+following a wakeup delivered through that actor's continuation mailbox.
+Atomicity of a host helper is not proof of actor execution authority.
