@@ -251,6 +251,14 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_identity_control(
     return open_scheduler(actors, capacity, workers, NULL, NULL, NULL,
         callback, control_callback, panic_callback, ctx);
 }
+int ores_native_actor_scheduler_uses_identity_callbacks(
+    OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    const int identity = s->identity_callbacks != 0;
+    unlock(s);
+    return identity;
+}
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
