@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
 
 
 TWO = {"equal", "not_equal", "same", "equal_throws", "not_equal_throws", "same_throws"}
@@ -132,7 +133,19 @@ def main():
     if args.typespec_schema is not None:
         generated = json.loads(args.typespec_schema.read_text())
         Draft202012Validator.check_schema(generated)
-        validators.append(Draft202012Validator(generated))
+        # TypeSpec emits relative $refs in sibling JSON files such as
+        # AssertCase.json and Operand.json. Resolve only those checked-in
+        # compiler-output siblings: never fetch arbitrary remote schemas.
+        emitted = sorted(args.typespec_schema.parent.glob("*.json"))
+        resources = []
+        for emitted_file in emitted:
+            document = json.loads(emitted_file.read_text())
+            Draft202012Validator.check_schema(document)
+            resources.append((emitted_file.name, Resource.from_contents(document)))
+        if not resources:
+            raise ValueError("TypeSpec generated no schemas")
+        registry = Registry().with_resources(resources)
+        validators.append(Draft202012Validator(generated, registry=registry))
         validators[-1].validate(suite)
     for index, altered in enumerate(mutations(suite)):
         results = [not list(validator.iter_errors(altered)) for validator in validators]
