@@ -34,6 +34,12 @@ public:
         std::vector<bool> filled_classical(static_cast<std::size_t>(classical_bits), false);
         bool terminal = false;
         for (const auto& gate : gates_) {
+            // Enum values can enter from FFI/casts. Unlike Java's enum,
+            // arbitrary native tags exist and must not become silent NOPs
+            // in the simulator or disappear from OpenQASM output.
+            if (gate.op != Op::X && gate.op != Op::H
+                && gate.op != Op::CX && gate.op != Op::Measure)
+                throw std::invalid_argument("unsupported quantum gate opcode");
             if (gate.target < 0 || gate.target >= qubits)
                 throw std::invalid_argument("invalid qubit index");
             if (gate.op == Op::Measure) {
