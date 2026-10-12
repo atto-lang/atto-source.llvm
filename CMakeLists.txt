@@ -109,6 +109,23 @@ if(BUILD_TESTING)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
+    # Native OS ABI is i32 even though Oreslang int is represented as i64.
+    oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
+        --diagnostic "native main() must have zero arguments")
+    oreslang_contract_test(native_exit_reject_reserved_symbol exit-reserved-native-symbol.ores
+        --diagnostic "reserved native entrypoint symbol collision")
+    oreslang_contract_test(native_exit_void_main_ir exit-void-main.ores
+        --ir "define i32 @main()")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exit_void_fallthrough exit-void-main.ores
+            --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_max_valid exit-max-main.ores
+            --run 255 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_overflow_fails_closed exit-invalid-positive-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_negative_fails_closed exit-invalid-negative-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+    endif()
     add_test(NAME native_explicit_wasm32_target_ir
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_target_ir_test.py"
