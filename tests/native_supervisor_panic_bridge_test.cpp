@@ -816,13 +816,13 @@ int main() {
             check(ores_native_actor_scheduler_stop(runtime, replacement)
                     && ores_native_actor_scheduler_wait_done(runtime, replacement),
                   "abandoned physical candidate was not fully stopped");
-            auto rolled_back = bridge->abort_cleaned_replacement(
+            // The bridge must establish the exact registry cleanup/abort
+            // barrier BEFORE recycling the candidate's physical slot.
+            auto reused = bridge->abort_cleaned_and_recycle_unpublished(
                 ticket, replacement);
-            check(rolled_back.phase ==
+            check(children->snapshot(child.child).phase ==
                       oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
                   "failed candidate abort did not restore old finalized child");
-            auto reused = ores_native_actor_scheduler_recycle_unpublished_done(
-                runtime, replacement);
             check(reused.scheduler_domain == replacement.scheduler_domain
                       && reused.actor_slot == replacement.actor_slot
                       && reused.generation == replacement.generation + 1,
