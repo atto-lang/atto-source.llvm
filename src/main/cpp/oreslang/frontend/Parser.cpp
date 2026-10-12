@@ -277,9 +277,9 @@ private:
         if (depth > 64) fail("message shape exceeds maximum type nesting depth");
         if (++*shape_nodes > 100000)
             fail("message shape exceeds total descriptor node budget");
-        if (accept("bool")) return {MessageShape::Kind::Boolean, {}};
-        if (accept("int")) return {MessageShape::Kind::Integer, {}};
-        if (accept("string")) return {MessageShape::Kind::String, {}};
+        if (accept("bool")) return {MessageShape::Kind::Boolean, {}, {}};
+        if (accept("int")) return {MessageShape::Kind::Integer, {}, {}};
+        if (accept("string")) return {MessageShape::Kind::String, {}, {}};
         MessageShape shape;
         std::string_view close;
         if (accept("(")) {
