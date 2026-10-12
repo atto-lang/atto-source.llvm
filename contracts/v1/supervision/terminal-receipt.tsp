@@ -7,25 +7,31 @@ namespace Oreslang.SupervisorReceipts;
 @pattern("^(0|[1-9][0-9]{0,19})$")
 scalar UInt64Decimal extends string;
 
+@pattern("^[1-9][0-9]{0,19}$")
+scalar NonZeroUInt64Decimal extends string;
+
+@pattern("^[a-z][a-z0-9._:-]{0,127}$")
+scalar EffectAuthorityName extends string;
+
 @pattern("^[0-9a-f]{64}$")
 scalar Sha256Hex extends string;
 
 model ActorGeneration {
-  scheduler_domain: UInt64Decimal;
+  scheduler_domain: NonZeroUInt64Decimal;
   actor_slot: UInt64Decimal;
-  generation: UInt64Decimal;
+  generation: NonZeroUInt64Decimal;
 }
 
 model TerminalIdentity {
-  supervisor_id: UInt64Decimal;
-  runtime_id: UInt64Decimal;
+  supervisor_id: NonZeroUInt64Decimal;
+  runtime_id: NonZeroUInt64Decimal;
   original_parent: ActorGeneration;
   failed_child: ActorGeneration;
   failure_kind: "1" | "2" | "3";
   failure_code: UInt64Decimal;
   correlation: UInt64Decimal;
-  logical_child_id: UInt64Decimal;
-  logical_incarnation: UInt64Decimal;
+  logical_child_id: NonZeroUInt64Decimal;
+  logical_incarnation: NonZeroUInt64Decimal;
 }
 
 model PhysicalDoneProof {
@@ -36,9 +42,9 @@ model PhysicalDoneProof {
 }
 
 model ExternalEffectProof {
-  claim_nonce: UInt64Decimal;
+  claim_nonce: NonZeroUInt64Decimal;
   evidence_sha256: Sha256Hex;
-  authority: string;
+  authority: EffectAuthorityName;
   // Nonempty authority names an independently queried commit ledger.
   // A digest alone is NOT a valid assertion of external-effect success.
 }
