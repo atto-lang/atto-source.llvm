@@ -79,6 +79,41 @@ static void suspend_stop_restart(void) {
     REQUIRE(ores_execution_retired(&a, 2));
     REQUIRE(ores_execution_destroy(&a));
 }
+/* A copied capability cannot release another worker's physical actor
+ * lease, even if the caller knows the correct generation, sequence and
+ * carrier token. The rightful owner must remain active after the attempt. */
+typedef struct {
+    OresNativeExecutionAuthority* authority;
+    OresExecutionClaim stolen;
+    int foreign_owns;
+    int foreign_released;
+} ForeignClaimAttempt;
+static void* attempt_foreign_release(void* raw) {
+    ForeignClaimAttempt* attempt = (ForeignClaimAttempt*)raw;
+    attempt->foreign_owns = ores_execution_owns(attempt->authority, attempt->stolen);
+    attempt->foreign_released =
+        ores_execution_leave(attempt->authority, attempt->stolen, 0);
+    return NULL;
+}
+static void foreign_claim_release_is_forbidden(void) {
+    OresNativeExecutionAuthority authority;
+    REQUIRE(ores_execution_init(&authority));
+    OresExecutionClaim rightful = {0};
+    REQUIRE(ores_execution_enter(&authority, 1, 17, 0, &rightful));
+    ForeignClaimAttempt attempt = {&authority, rightful, 0, 0};
+    pthread_t other;
+    REQUIRE(pthread_create(&other, NULL, attempt_foreign_release, &attempt) == 0);
+    REQUIRE(pthread_join(other, NULL) == 0);
+    REQUIRE(!attempt.foreign_owns && !attempt.foreign_released);
+    REQUIRE(ores_execution_owns(&authority, rightful));
+    OresExecutionClaim blocked = {0};
+    REQUIRE(!ores_execution_enter(&authority, 1, 18, 0, &blocked));
+    REQUIRE(ores_execution_leave(&authority, rightful, 0));
+    REQUIRE(ores_execution_stop(&authority, 1));
+    REQUIRE(ores_execution_retired(&authority, 1));
+    REQUIRE(ores_execution_destroy(&authority));
+}
+
 static void preadmitted_drain_and_exhaustion(void) {
     OresNativeExecutionAuthority a;
     REQUIRE(ores_execution_init(&a));
@@ -103,6 +138,7 @@ int main(void) {
     concurrent_carriers();
     suspend_stop_restart();
     preadmitted_drain_and_exhaustion();
+    foreign_claim_release_is_forbidden();
     puts("ORES_NATIVE_SUPERVISOR_EXECUTION_AUTHORITY_PASS");
     return 0;
 }
