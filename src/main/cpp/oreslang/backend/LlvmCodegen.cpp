@@ -304,6 +304,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
         "oreslang_source_actor_pipeline_connect_many",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                 {ptr, i64}, false));
+    const auto pipelineCancel = module.getOrInsertFunction(
+        "oreslang_source_actor_pipeline_cancel",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
     const auto pipelineEmit = module.getOrInsertFunction(
         "oreslang_source_actor_pipeline_emit_i64",
         llvm::FunctionType::get(llvm::Type::getVoidTy(context),
@@ -386,6 +389,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
             }
             builder.CreateCall(pipelineConnect,
                 {ordered, llvm::ConstantInt::get(i64, count)});
+            if (!fn.pipeline_cancel_actor.empty()) {
+                // Only a trusted-main pre-ingress cancellation is admitted
+                // by the bounded parser; actor DATA handlers cannot call it.
+                builder.CreateCall(pipelineCancel,
+                    {actorRefs.at(fn.pipeline_cancel_actor)});
+            }
         }
         // Scalar locals are either stack owned ('int') or explicitly backed
         // by a bounded native lexical heap region ('owned int'). The latter
@@ -790,6 +799,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_source_actor_pipeline_emit_i64"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_pipeline_expect_status"
+                            && name != "oreslang_source_actor_pipeline_cancel"
                             && name != "oreslang_source_actor_spawn_tagged_variants"
                             && name != "oreslang_source_actor_send_variant_checked"
                             && name != "oreslang_source_actor_tagged_i64"
