@@ -387,6 +387,41 @@ int main() {
           "cleanup-backed restart rollback did not restore FINALIZED");
     must_reject([&] { gated.begin_restart(target.child, failed, 1); });
 
+    // Shared 11-action model-refinement trace. Actual scheduler readiness
+    // is checked separately in native_supervisor_panic_bridge_test.cpp.
+    {
+        SupervisorChildRegistry trace_registry{3317, 42};
+        const OresNativeActorRef old{42, 130, 1};
+        const auto child = trace_registry.register_child(old);
+        const auto first = [&] {
+            trace_registry.finalized(child.child, old, 1);
+            return trace_registry.begin_restart(child.child, old, 1);
+        }();
+        const OresNativeActorRef new_actor{42, 131, 1};
+        trace_registry.stage_replacement(first, new_actor);
+        must_reject([&] { trace_registry.replace(first, new_actor); });
+        trace_registry.acknowledge_replacement_admission(
+            first, new_actor, [] { return true; });
+        const auto activated = trace_registry.replace(first, new_actor);
+        check(activated.incarnation == 2
+                  && activated.child == child.child,
+              "shared trace failed to preserve logical identity");
+        trace_registry.finalized(activated.child, new_actor, 2);
+        const auto retry = trace_registry.begin_restart(activated.child, new_actor, 2);
+        const OresNativeActorRef candidate{42, 132, 1};
+        trace_registry.stage_replacement(retry, candidate);
+        must_reject([&] { trace_registry.abort_restart(retry); });
+        trace_registry.acknowledge_replacement_cleanup(
+            retry, candidate, [] { return true; });
+        check(trace_registry.abort_restart(retry).phase
+                  == SupervisorChildRegistry::Phase::finalized,
+              "shared trace failed to restore original generation");
+        std::cout
+            << "SUPERVISOR_RESTART_TRACE_V1="
+            << "ACTIVE>FINALIZED>RESTARTING>SPAWNED>ADMITTED>"
+               "ACTIVE>FINALIZED>RESTARTING>SPAWNED>CLEANED>FINALIZED\n";
+    }
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
