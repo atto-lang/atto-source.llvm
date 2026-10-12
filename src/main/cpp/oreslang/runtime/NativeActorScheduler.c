@@ -647,7 +647,7 @@ int ores_native_actor_scheduler_terminal_receipt(
 static int claim_terminal_receipt_internal(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
     OresNativeActorRef child, OresNativeTerminalReceipt* out,
-    int require_live_parent) {
+    int require_live_parent, OresNativeActorRef recovered_parent) {
     if (!s || !out) return 0;
     lock(s);
     int ok = terminal_receipt_locked(s, parent, child, NULL);
@@ -656,6 +656,15 @@ static int claim_terminal_receipt_internal(
             && s->actors[parent.actor_slot].published
             && !s->actors[parent.actor_slot].retired
             && s->actors[child.actor_slot].terminal_was_published;
+    }
+    if (ok && recovered_parent.generation != 0) {
+        ok = !s->retired && s->identity_callbacks
+            && recovered_parent.scheduler_domain == parent.scheduler_domain
+            && recovered_parent.actor_slot == parent.actor_slot
+            && recovered_parent.generation > parent.generation
+            && matching(s, recovered_parent)
+            && s->actors[recovered_parent.actor_slot].published
+            && !s->actors[recovered_parent.actor_slot].retired;
     }
     if (ok) {
         ActorLane* lane = &s->actors[child.actor_slot];
@@ -681,12 +690,22 @@ int ores_native_actor_scheduler_claim_terminal_receipt(
     OresNativeActorRef child, OresNativeTerminalReceipt* out) {
     /* Trusted recovered-parent claim, including a parent that stopped
      * before its CONTROL callback could be accepted. */
-    return claim_terminal_receipt_internal(s, parent, child, out, 0);
+    return claim_terminal_receipt_internal(s, parent, child, out, 0,
+                                           (OresNativeActorRef){0});
 }
 int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
     OresNativeActorRef child, OresNativeTerminalReceipt* out) {
-    return claim_terminal_receipt_internal(s, parent, child, out, 1);
+    return claim_terminal_receipt_internal(s, parent, child, out, 1,
+                                           (OresNativeActorRef){0});
+}
+int ores_native_actor_scheduler_claim_recovered_parent_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeActorRef original_parent,
+    OresNativeActorRef recovered_parent, OresNativeActorRef child,
+    OresNativeTerminalReceipt* out) {
+    if (!recovered_parent.generation) return 0;
+    return claim_terminal_receipt_internal(
+        s, original_parent, child, out, 0, recovered_parent);
 }
 int ores_native_actor_scheduler_ack_terminal_receipt(
     OresNativeActorScheduler* s, OresNativeTerminalReceipt receipt) {
