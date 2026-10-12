@@ -51,7 +51,7 @@ public:
         } guard{pumping_};
         // Snapshot does not consume; registry metadata locks are not held
         // during CONTROL queue admission.
-        const auto notifications = registry_.pending_notifications();
+        const auto notifications = registry_.pending_notifications(budget);
         std::size_t receipts = 0;
         for (const auto& notification : notifications) {
             if (receipts == budget || !try_admit(notification)) break;
