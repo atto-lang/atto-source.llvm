@@ -56,6 +56,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-master-test)
     set_tests_properties(native_oresvm_master_blocking_pool_wakeups
         PROPERTIES TIMEOUT 20)
+    # Host-only cyclic FAIR selector. Source-level readch/select still fail
+    # closed until LLVM generation-safe channel registration is implemented.
+    add_executable(oreslang-native-select-fair-test
+        tests/native_select_round_robin_test.c)
+    set_target_properties(oreslang-native-select-fair-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+    target_include_directories(oreslang-native-select-fair-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-select-fair-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_select_cyclic_fair_bitmap
+        COMMAND oreslang-native-select-fair-test)
+    set_tests_properties(native_select_cyclic_fair_bitmap PROPERTIES TIMEOUT 15)
     # Host-only quantum policy. Executable native guest await/cooperate must
     # prove its own continuation lowering before claiming cross-backend parity.
     add_executable(oreslang-native-cooperation-quantum-test
