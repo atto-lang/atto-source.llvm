@@ -313,3 +313,24 @@ Exact-source private GCC C++17 and Clang ASan/UBSan regression CI passed:
 https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38321829124.
 The run is a focused frontend/sanitizer test, NOT a full LLVM build, codegen
 suite or cross-backend compiled actor conformance.
+
+
+## Cross-backend sealed-state declaration boundary audit (2026-10-12)
+
+The native restricted frontend now enforces the same declaration separator
+contract as Java: a semicolon or a **physical source newline** is required
+between two sealed-state fields; a closing brace may terminate the last
+field. The parser retains the source offsets of the last consumed token and
+checks for a newline before the next declaration. It rejects ambiguous
+same-line concatenation instead of treating whitespace as a declaration
+boundary.
+
+Legacy native scalar actors can no longer define a field literally named
+`state`: that name belongs exclusively to runtime-owned sealed actor
+storage, including prior to positive source-level lowering. This does not
+change ordinary class fields named `state`.
+
+Private exact-source [native CI #38323024237](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38323024237)
+passed strict GCC C++17 and Clang ASan/UBSan frontend tests including
+both newly rejected forms. This is a frontend security/grammar regression,
+not executable `handle_state` or complete LLVM compiler integration.
