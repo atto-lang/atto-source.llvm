@@ -40,6 +40,21 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_slot_security
         COMMAND oreslang-owned-i64-region-security-test)
     set_tests_properties(native_owned_region_slot_security PROPERTIES TIMEOUT 25)
+    # The global token allocator must not repeat handles under parallel
+    # allocations in separate, single-owner regions. This does NOT admit
+    # concurrent access to one region or remove close-quiescence requirements.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-owned-i64-token-concurrent-regions-test
+        tests/native_owned_region_token_concurrency_test.c
+        src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+    target_include_directories(oreslang-owned-i64-token-concurrent-regions-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-owned-i64-token-concurrent-regions-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-owned-i64-token-concurrent-regions-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_region_unique_parallel_tokens
+        COMMAND oreslang-owned-i64-token-concurrent-regions-test)
+    set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)
