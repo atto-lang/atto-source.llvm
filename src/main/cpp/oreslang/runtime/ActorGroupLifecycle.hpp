@@ -208,6 +208,7 @@ public:
         std::uint64_t group_id_;
     };
 
+
     /** Enqueue-only reserved CONTROL slot. A GPU callback posts here but
      * cannot execute actor/user handlers on its carrier thread. */
     bool enqueue_control(const NativeActorRef& ref, std::function<void()> handler) {
