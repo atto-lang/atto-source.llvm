@@ -713,6 +713,33 @@ int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
     return claim_terminal_receipt_internal(s, parent, child, out, 1,
                                            (OresNativeActorRef){0});
 }
+int ores_native_actor_scheduler_probe_delivered_terminal_receipt(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeTerminalReceipt* out) {
+    if (!s || !out || executing != s || !executing_typed_panic
+        || !same_terminal_actor(executing_panic_parent, parent)
+        || !same_terminal_actor(executing_panic_failure.child, child))
+        return 0;
+    lock(s);
+    const int live_parent = !s->retired && s->identity_callbacks
+        && matching(s, parent) && s->actors[parent.actor_slot].published
+        && !s->actors[parent.actor_slot].retired;
+    int ok = live_parent && terminal_receipt_locked(s, parent, child, out);
+    if (ok) {
+        const ActorLane* lane = &s->actors[child.actor_slot];
+        ok = lane->terminal_receipt_state == ORES_NATIVE_TERMINAL_RECEIPT_RECORDED
+            && lane->terminal_was_published
+            && lane->retired && !lane->active && !lane->queued
+            && !lane->has_control
+            && lane->terminal_failure.kind == executing_panic_failure.kind
+            && lane->terminal_failure.failure_code ==
+                   executing_panic_failure.failure_code
+            && lane->terminal_failure.correlation ==
+                   executing_panic_failure.correlation;
+    }
+    unlock(s);
+    return ok;
+}
 int ores_native_actor_scheduler_claim_delivered_terminal_receipt(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
     OresNativeActorRef child, OresNativeTerminalReceipt* out) {
