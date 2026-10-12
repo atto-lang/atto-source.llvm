@@ -88,6 +88,49 @@ After these changes, exact Git-source tests passed GCC 14 C++17 Release
 Clang 17 Release `-Werror`. The full LLVM repository CMake/CTest and native
 actor runtime integration have **not** executed.
 
+## ActorGroup `get_done()` quiescence bridge (October 12)
+
+`NativeActorRetirementBarrier.hpp` now connects a *trusted* per-incarnation
+`ActorResourceRegistry` to `NativeActorGroup::RuntimeFinalizer`.
+It does **not** enable source-level `async tear_down()`. Its host `poll()`
+does not run guest callbacks or block a physical carrier.
+
+Before calling *any* resource destructor, `poll()` requires the finalizer's
+generation-owned ticket to report both **group detached** and **no active or
+reserved user/CONTROL turn**. Registry reclamation separately requires zero
+outstanding registry turn, callback and loan tokens. Returning `busy` or
+`not_admitted` must never settle `get_done()`.
+
+Successful reclamation is followed by exactly one generation-checked finalizer
+acknowledgment. A closer failure is instead delivered as exceptional DONE
+only after the exact failed registry is retained by
+`NativeActorResourceQuarantine`. If that bounded store is full, DONE remains
+pending; no callback capture can be silently released. If the supervisor
+itself is destroyed without having independently verified isolate shutdown,
+the quarantine deliberately retains its state until process termination,
+rather than invoking unsafe native RAII destructors.
+
+Trusted supervisors may call
+`release_after_verified_isolate_shutdown()` **only** after independent
+proof that the entire native isolation domain and all FFI producers are
+permanently stopped. Timeouts, stop requests or an exceptional DONE are not
+such proof. The host needs explicit alerting and policy for persistent
+quarantine exhaustion and isolate restart.
+
+`tests/native_actor_retirement_barrier_test.cpp` integrates the actual
+`ActorOwnedI64Heap.c` with a cross-turn heap loan and ActorGroup DONE
+observation. It also covers an admitted guest turn racing group close,
+failed FFI revocation, quarantine retention/capacity, and the rule that
+group detachment precedes physical reclamation. CMake registers this as
+`native_actor_done_resource_quiescence`.
+
+**Important boundary:** The registry still requires trusted scheduler and
+resource adapters to mint/release a registry activity ticket for every
+actual native loan, callback and turn. A caller that bypasses that tracking
+can defeat quiescence. The actor compiler and all concrete native resource
+paths are not yet wired to this host bridge. Full CMake/CTest and native
+sanitizers on the combined PR tree remain required before any merge.
+
 ## Required before integration or merge
 
 1. The supervisor or owning actor runtime must keep the registry alive,
