@@ -1089,6 +1089,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-state-wake-scheduler-test)
     set_tests_properties(native_actor_rw_wake_supervisor_priority_exclusive
         PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-rw-scheduler-bridge-test
+        tests/actor_state_read_write_scheduler_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-rw-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-rw-scheduler-bridge-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-rw-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_rw_scheduler_claim_and_replay
+        COMMAND oreslang-native-rw-scheduler-bridge-test)
+    set_tests_properties(native_actor_rw_scheduler_claim_and_replay PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-native-actor-exclusive-control-test
         tests/native_actor_exclusive_control_test.c
