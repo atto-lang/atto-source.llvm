@@ -484,10 +484,51 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_scalar_state_critical_lifetimes
         COMMAND oreslang-native-scalar-state-test)
+    # Bounded independent supervisor CONTROL transport (runtime substrate only).
+    add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
+    target_include_directories(oreslang-supervisor-hierarchy-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-supervisor-hierarchy-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-supervisor-hierarchy-test PRIVATE Threads::Threads)
+    add_test(NAME native_supervisor_hierarchy_control COMMAND oreslang-supervisor-hierarchy-test)
+    add_executable(oreslang-supervisor-control-turn-test tests/supervisor_control_turn_test.cpp)
+    target_include_directories(oreslang-supervisor-control-turn-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-supervisor-control-turn-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-supervisor-control-turn-test PRIVATE Threads::Threads)
+    add_test(NAME native_supervisor_priority_control COMMAND oreslang-supervisor-control-turn-test)
+    add_executable(oreslang-effect-unwind-test tests/effect_unwind_test.cpp)
+    target_include_directories(oreslang-effect-unwind-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-effect-unwind-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_typed_exception_unwind COMMAND oreslang-effect-unwind-test)
+    # Actor-local uncaught routing never admits PANIC into guest callbacks.
+    add_executable(oreslang-actor-local-failure-test tests/actor_local_failure_policy_test.cpp)
+    target_include_directories(oreslang-actor-local-failure-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-local-failure-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_local_unhandled_panic_bypass COMMAND oreslang-actor-local-failure-test)
+    # Authenticated data-only HTTP/SSR response framing, NOT socket I/O.
+    add_executable(oreslang-http-response-guard-test tests/http_response_frame_guard_test.cpp)
+    target_include_directories(oreslang-http-response-guard-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-http-response-guard-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_http_response_supervisor_guard COMMAND oreslang-http-response-guard-test)
+    # Typed host-runtime bridge; native guest actor compiler lowering is still gated.
+    add_executable(oreslang-effect-supervision-bridge-test tests/effect_supervision_bridge_test.cpp)
+    target_include_directories(oreslang-effect-supervision-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-effect-supervision-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-effect-supervision-bridge-test PRIVATE Threads::Threads)
+    add_test(NAME native_effect_unwind_supervisor_control_bridge
+        COMMAND oreslang-effect-supervision-bridge-test)
+    add_executable(oreslang-supervisor-failure-lane-test tests/supervisor_failure_lane_test.cpp)
+    target_include_directories(oreslang-supervisor-failure-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-supervisor-failure-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_failure_lane COMMAND oreslang-supervisor-failure-lane-test)
+    oreslang_contract_test(reject_throw_effect unsupported-throw-effect.ores --diagnostic "native exceptional-control boundary unsupported")
+    oreslang_contract_test(reject_raise_effect unsupported-raise-effect.ores --diagnostic "native exceptional-control boundary unsupported")
+    oreslang_contract_test(reject_panic_effect unsupported-panic-effect.ores --diagnostic "native exceptional-control boundary unsupported")
+    oreslang_contract_test(reject_recover_effect unsupported-recover-effect.ores --diagnostic "native exceptional-control boundary unsupported")
 
     add_executable(oreslang-critical-gate-test tests/critical_gate_test.cpp)
     target_include_directories(oreslang-critical-gate-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-supervisor-failure-lane-test PRIVATE Threads::Threads)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
@@ -842,6 +883,19 @@ if(BUILD_TESTING)
         add_test(NAME hungry_carrier_async_bounded_cancel
                  COMMAND oreslang-hungry-carrier-test)
         set_tests_properties(hungry_carrier_async_bounded_cancel PROPERTIES TIMEOUT 30)
+
+        add_executable(oreslang-carrier-supervisor-test
+            tests/native_carrier_supervisor_integration.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-carrier-supervisor-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-carrier-supervisor-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-carrier-supervisor-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_carrier_urgent_supervisor_turn
+                 COMMAND oreslang-carrier-supervisor-test)
+        set_tests_properties(native_carrier_urgent_supervisor_turn PROPERTIES TIMEOUT 15)
 
         # Real native carrier admissions and handler observations are used to
         # produce an executable trace (not fabricated actor-model fixtures).
