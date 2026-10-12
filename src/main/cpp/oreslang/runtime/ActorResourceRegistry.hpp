@@ -254,18 +254,25 @@ private:
 };
 
 inline ActorResourceRegistry::~ActorResourceRegistry() noexcept {
-    // Do not turn a bounded quarantine overflow into a use-after-free:
-    // destroying the last shared_ptr to a FAILED registry is never
-    // authorization to destroy its captured native arena. Permanently retain
-    // the callbacks until process exit. An allocation failure is fatal rather
-    // than permitting an unsafe destructor to proceed.
-    if (phase_ == Phase::failed && !quarantined_.empty()) {
-        auto* retained = new (std::nothrow) std::vector<Entry>();
+    // Losing the final registry owner is NOT proof of native quiescence. A
+    // LIVE/RETIRING registry could still hold FFI callbacks or arenas, just as
+    // a FAILED one could after bounded quarantine overflow. Only a verified
+    // RECLAIMED registry, or a FAILED registry explicitly discharged after
+    // isolate shutdown, may destroy such captures automatically.
+    if (phase_ != Phase::reclaimed &&
+            (!entries_.empty() || !quarantined_.empty())) {
+        struct EmergencyRetention {
+            std::vector<Entry> outstanding;
+            std::vector<Entry> failed;
+        };
+        auto* retained = new (std::nothrow) EmergencyRetention();
         if (retained == nullptr) std::terminate();
-        retained->swap(quarantined_);
-        // Intentionally leaked in the terminal-failure path. The trusted
-        // quarantine normally calls discharge_after_verified_isolate_shutdown
-        // following actual isolation; tests should discharge mock failures.
+        retained->outstanding.swap(entries_);
+        retained->failed.swap(quarantined_);
+        // Intentionally retained until process termination. Allocation
+        // failure is fatal instead of attempting unsafe RAII destruction.
+        // Supervisors must still own and retire registries normally; this
+        // defensive fallback is not a replacement for bounded quarantine.
     }
 }
 
