@@ -14,6 +14,13 @@
 
 namespace oreslang::nested_enum_v2 {
 
+inline constexpr std::size_t kMaxDescriptorBytes = 1048576;
+inline void require_descriptor_budget(const std::string& descriptor) {
+    if (descriptor.size() > kMaxDescriptorBytes)
+        throw std::runtime_error("nested enum shape descriptor exceeds byte quota");
+}
+
+
 /** Compile-time emitter for the first finite, one-level nested-enum literal.
  * This is a reusable wire-lowering building block, NOT yet a guest runtime
  * path or a general encoder for arbitrary nested payloads.
@@ -62,6 +69,7 @@ inline const EnumCase& variant(const EnumDeclaration& e,const std::string& name)
 inline void shape(std::string& out,const Program& p,const MessageShape& src,
                   std::vector<std::string>& active,unsigned depth=0) {
     if(depth>64) throw std::runtime_error("nested enum shape depth exceeds 64");
+    require_descriptor_budget(out);
     switch(src.kind) {
         case MessageShape::Kind::Boolean: out+="B";return;
         case MessageShape::Kind::Integer: out+="I";return;
@@ -83,6 +91,7 @@ inline void shape(std::string& out,const Program& p,const MessageShape& src,
                 if(c.has_payload) shape(out,p,c.payload,active,depth+1);
                 else out+="N";
                 out+=";";
+                require_descriptor_budget(out);
             }
             out+="]";
             active.pop_back();
@@ -173,6 +182,7 @@ inline std::vector<std::uint8_t> one_level_nullary(
     std::vector<std::string> active;
     shape(shapeText,program,oc.payload,active);
     shapeText+="]";
+    require_descriptor_budget(shapeText);
     const auto digest=sha(shapeText);
 
     std::vector<std::uint8_t> output{0x94,0x02};
