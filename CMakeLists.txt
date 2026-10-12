@@ -260,6 +260,32 @@ if(BUILD_TESTING)
         set_tests_properties(native_pipeline_cancel_worker_forward_linearization
             PROPERTIES TIMEOUT 45)
     endif()
+    # Transform-pipe actors have two nominal ingress domains and two
+    # mandatory, void directional hooks. Malformed roles fail before IR.
+    oreslang_contract_test(reject_transform_pipe_missing_backward
+        transform-pipe-missing-backward-reject.ores
+        --diagnostic "requires exactly one receive_forward and receive_backward")
+    oreslang_contract_test(reject_transform_pipe_missing_forward
+        transform-pipe-missing-forward-reject.ores
+        --diagnostic "requires exactly one receive_forward and receive_backward")
+    oreslang_contract_test(reject_transform_pipe_wrong_forward_domain
+        transform-pipe-wrong-forward-domain-reject.ores
+        --diagnostic "receive_forward parameter type must match declared message domain")
+    oreslang_contract_test(reject_transform_pipe_scalar_return
+        transform-pipe-return-value-reject.ores
+        --diagnostic "expected ';'")
+    oreslang_contract_test(reject_transform_pipe_unknown_domain
+        transform-pipe-unknown-domain-reject.ores
+        --diagnostic "unknown transform pipe message domain")
+    oreslang_contract_test(reject_transform_pipe_plain_actor_hooks
+        transform-pipe-ordinary-actor-hook-reject.ores
+        --diagnostic "transform pipe actor requires directional receive handlers")
+    oreslang_contract_test(reject_transform_pipe_duplicate_direction
+        transform-pipe-duplicate-domain-reject.ores
+        --diagnostic "duplicate forward_messages domain")
+    oreslang_contract_test(native_ir_transform_pipe_directional_handlers
+        source-actor-pipeline-fifteen-dot.ores
+        --ir "oreslang_source_actor_pipeline_ingress")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
