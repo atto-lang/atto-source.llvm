@@ -10,7 +10,7 @@ CONSTANTS Actor0, Actor1, Worker0, Worker1,
 Actors == {Actor0, Actor1}
 Workers == {Worker0, Worker1}
 Jobs == {Job0, Job1, Job2}
-JobActor == [Job0 |-> Actor0, Job1 |-> Actor0, Job2 |-> Actor1]
+JobActor == [j \in Jobs |-> IF j = Job0 \/ j = Job1 THEN Actor0 ELSE Actor1]
 
 ASSUME /\ Cardinality(Actors) = 2
        /\ Cardinality(Workers) = 2
