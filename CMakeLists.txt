@@ -712,6 +712,47 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # Host/supervisor execution lease transitions: linearizable carrier claim,
+    # stop/retirement quiescence, stale resume and generation exhaustion.
+    add_executable(oreslang-native-execution-authority-test
+        tests/native_execution_authority_test.c)
+    target_include_directories(oreslang-native-execution-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-execution-authority-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-execution-authority-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_supervisor_execution_authority
+        COMMAND oreslang-native-execution-authority-test)
+    set_tests_properties(native_actor_supervisor_execution_authority PROPERTIES TIMEOUT 30)
+
+    # Across all actor-owned entrypoints (DATA and supervisor CONTROL), no
+    # actor can have two physical guest executors, even on separate workers.
+    # A typed supervisor panic is actor-owned CONTROL work and must obey
+    # the same exclusive carrier admission as normal DATA for that parent.
+    add_executable(oreslang-native-actor-typed-control-exclusive-test
+        tests/native_actor_typed_control_exclusive_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-typed-control-exclusive-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-typed-control-exclusive-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-typed-control-exclusive-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_typed_panic_exclusive_carrier
+        COMMAND oreslang-native-actor-typed-control-exclusive-test)
+    set_tests_properties(native_actor_typed_panic_exclusive_carrier PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-actor-exclusive-control-test
+        tests/native_actor_exclusive_control_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-exclusive-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-exclusive-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-exclusive-control-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_exclusive_data_and_control
+        COMMAND oreslang-native-actor-exclusive-control-test)
+    set_tests_properties(native_actor_exclusive_data_and_control PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-actor-ready-queue-test
         tests/native_actor_scheduler_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
@@ -801,4 +842,17 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_typed_panic_event
         COMMAND oreslang-native-supervisor-panic-test)
     set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
+    # Optimistic CAS for logical continuations: state must not be overwritten
+    # after stale, foreign, retired, or exhausted version evidence.
+    add_executable(oreslang-native-versioned-actor-cell-test
+        tests/versioned_actor_cell_test.cpp)
+    target_include_directories(oreslang-native-versioned-actor-cell-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-versioned-actor-cell-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-versioned-actor-cell-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_versioned_state_logical_races
+        COMMAND oreslang-native-versioned-actor-cell-test)
+    set_tests_properties(native_actor_versioned_state_logical_races
+        PROPERTIES TIMEOUT 20)
 endif()
