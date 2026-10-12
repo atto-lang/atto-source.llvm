@@ -11,8 +11,8 @@ echo "${EXPECTED_SHA256}  ${TMP}/tla2tools.jar" | sha256sum --check --status
 cd "${HERE}"
 java -Xmx1200m -cp "${TMP}/tla2tools.jar" tlc2.TLC -workers 2 -deadlock -config LoanIdentity.cfg -metadir "${TMP}/safe" LoanIdentity.tla 2>&1 | tee "${TMP}/safe.log"
 grep -Eq 'Model checking completed|Model checking finished|Finished computing' "${TMP}/safe.log"
-for variant in Collision Release; do
-  case "${variant}" in Collision) inv="NoAliasedAccepted";; Release) inv="CorrectRelease";; esac
+for variant in Collision Entry Release; do
+  case "${variant}" in Collision) inv="NoAliasedAccepted";; Entry) inv="NoEntryAliasedAccepted";; Release) inv="CorrectRelease";; esac
   if java -Xmx1200m -cp "${TMP}/tla2tools.jar" tlc2.TLC -workers 2 -deadlock -config "LoanIdentity${variant}Mutant.cfg" -metadir "${TMP}/${variant}" LoanIdentity.tla > "${TMP}/${variant}.log" 2>&1; then
     cat "${TMP}/${variant}.log"; echo "Unsafe mutant passed" >&2; exit 1
   fi
