@@ -143,6 +143,10 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_identity_control(
     OresNativeActorIdentityTaskFn on_message,
     OresNativeActorIdentityTaskFn on_future,
     OresNativeActorIdentityPanicFn on_panic, void* ctx);
+/* Host observer only. A slot-only PANIC bridge entrypoint must reject
+ * identity-mode callbacks rather than bypass exact parent generation. */
+int ores_native_actor_scheduler_uses_identity_callbacks(
+    OresNativeActorScheduler* scheduler);
 /* One reserved CONTROL message per actor, independent of normal-mail
  * capacity; only an admitted actor lane may invoke the CONTROL handler.
  * CONTROL callbacks never run on a failed child's carrier by direct call.
