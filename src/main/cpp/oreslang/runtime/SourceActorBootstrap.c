@@ -115,6 +115,27 @@ static SourceActorGroup group = {
 /* The active context is issued only while a scheduler-owned DATA callback
  * is executing. A source program cannot forge it through message bytes. */
 
+
+static _Thread_local SourceActor* active_pipeline_actor;
+static _Thread_local uint8_t active_pipeline_ingress;
+/* Optional test-only scheduler fault point. Production builds neither
+ * export nor invoke a testing callback. Never call under group.mutex. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+__attribute__((weak))
+void oreslang_source_actor_test_before_pipeline_publish(void* actor,
+                                                         unsigned direction);
+#endif
+static _Atomic uint64_t next_actor_id = 4100;
+static void check_invariant(int condition, const char* predicate, int line) {
+    if (!condition) {
+        fprintf(stderr, "SOURCE_ACTOR_INVARIANT_FAILURE line=%d check=%s\n",
+                line, predicate);
+        abort();
+    }
+}
+#define ensure(expr) check_invariant((expr), #expr, __LINE__)
+static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
+static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
 /* Bounded native event evidence for the supported three-actor guest ONLY.
  * No dynamic allocation or I/O on actor carriers. Append operations
  * serialize on the existing group admission mutex. The "ticket" is a
@@ -187,26 +208,6 @@ static void trace_dump(void) {
 }
 #endif
 
-static _Thread_local SourceActor* active_pipeline_actor;
-static _Thread_local uint8_t active_pipeline_ingress;
-/* Optional test-only scheduler fault point. Production builds neither
- * export nor invoke a testing callback. Never call under group.mutex. */
-#ifdef ORESLANG_SOURCE_ACTOR_TESTING
-__attribute__((weak))
-void oreslang_source_actor_test_before_pipeline_publish(void* actor,
-                                                         unsigned direction);
-#endif
-static _Atomic uint64_t next_actor_id = 4100;
-static void check_invariant(int condition, const char* predicate, int line) {
-    if (!condition) {
-        fprintf(stderr, "SOURCE_ACTOR_INVARIANT_FAILURE line=%d check=%s\n",
-                line, predicate);
-        abort();
-    }
-}
-#define ensure(expr) check_invariant((expr), #expr, __LINE__)
-static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
-static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
 /* Actor workers may signal failure, but never synchronously tear down peers
  * or terminate the process. Only the host-main waiter performs teardown. */
 static void pipeline_fail(int code) {
