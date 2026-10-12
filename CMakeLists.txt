@@ -356,6 +356,11 @@ if(BUILD_TESTING)
                 --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
         endforeach()
     endif()
+    foreach(mode read write)
+        oreslang_contract_test(reject_actor_using_${mode}_call
+            actor-using-${mode}-call-reject.ores
+            --diagnostic "state read/write loan cannot invoke arbitrary functions")
+    endforeach()
     oreslang_contract_test(reject_actor_using_read_mut
         actor-using-read-mut-reject.ores
         --diagnostic "using state.read cannot mutate state")
