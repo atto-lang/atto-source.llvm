@@ -7,7 +7,11 @@
 #include <type_traits>
 
 using namespace oreslang;
-static void check(bool ok) { if (!ok) throw std::runtime_error("scalar state check failed"); }
+static void check_impl(bool ok, const char* expression, int line) {
+    if (!ok) throw std::runtime_error(std::string("scalar state check failed at ")
+            + std::to_string(line) + ": " + expression);
+}
+#define check(condition) check_impl((condition), #condition, __LINE__)
 
 template <class Fn> static void rejects(Fn&& fn) {
     bool failed = false;
@@ -63,8 +67,10 @@ int main() {
         access.write("count", std::int64_t{1});
         return access.read("count");
     })) == 1);
+    auto forged_write = checked;
+    forged_write.callback_critical = false;
     rejects([&] {
-        (void) state.critical(actor, 300, plain, allowed,
+        (void) state.critical(actor, 300, forged_write, allowed,
                 [](State::Access&) -> State::Value { return std::int64_t{0}; });
     });
     for (int i = 0; i < 100; ++i) {
