@@ -846,6 +846,13 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            // The native subset has no method-call or imported-symbol ABI.
+            // Do not misdiagnose a qualified Assert invocation as a scalar
+            // field read or silently lower it to an untyped host function.
+            if (token_.text == "(" && field->left->name == "Assert") {
+                fail("native module imports are unsupported: qualified Assert "
+                     "calls require linked stdlib and Any/bool/trap lowering");
+            }
             expr = std::move(field);
         }
         return expr;
