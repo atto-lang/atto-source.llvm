@@ -63,6 +63,20 @@ static void timer_slow_path() {
     require(FakeClock::reads.load() == 3);
 }
 
+static void independent_watchdog_requests_next_safe_boundary() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 0; i < 63; ++i)
+        require(!q.completedBackedgeNeedsCheck());
+    require(q.completedBackedgeNeedsCheck());
+    require(FakeClock::reads.load() == 2);
+    require(q.shouldCooperateAtCheck(true));
+    require(FakeClock::reads.load() == 2); // watcher request needs no clock read
+    require(!q.shouldCooperateAtCheck(false));
+    require(FakeClock::reads.load() == 3);
+}
+
 static void await_is_not_cooperate() {
     reset_clock();
     Quantum q;
@@ -95,6 +109,7 @@ static void repeated_dispatches_keep_task_context() {
 int main() {
     reduction_fast_path();
     timer_slow_path();
+    independent_watchdog_requests_next_safe_boundary();
     await_is_not_cooperate();
     repeated_dispatches_keep_task_context();
     std::cout << "native quantum 64/512/2ms: PASS (host-only, no guest await parity)\n";
