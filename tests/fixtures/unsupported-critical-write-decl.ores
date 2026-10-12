@@ -1,0 +1,1 @@
+pub fnc critical-write write(): int { return 2; }
