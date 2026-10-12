@@ -743,6 +743,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_source_supervisor_bridge_verified_stop_e2e
         PROPERTIES TIMEOUT 30)
 
+    # Independent host physical DONE evidence is checked against the live
+    # C scheduler, even when a trusted registry falsely claims FINALIZED.
+    add_executable(oreslang-native-physical-stop-evidence-test
+        tests/native_physical_stop_evidence_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-physical-stop-evidence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-physical-stop-evidence-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-physical-stop-evidence-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-physical-stop-evidence-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_physical_stop_evidence
+        COMMAND oreslang-native-physical-stop-evidence-test)
+    set_tests_properties(native_physical_stop_evidence PROPERTIES TIMEOUT 30)
+
     # Register the runtime-wide host CONTROL saturation/safe-shutdown proof
     # in the same native test graph as the source compiler. This does not
     # represent guest on_panic lowering or implicit source supervisor syntax.
