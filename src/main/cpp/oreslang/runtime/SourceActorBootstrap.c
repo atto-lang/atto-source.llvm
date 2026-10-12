@@ -492,7 +492,7 @@ void* oreslang_source_actor_spawn_tagged_variants(
 }
 int64_t oreslang_source_actor_await_ready(
     void* opaque, OresSourceActorContinuation continuation) {
-    ensure(continuation);
+    ensure(continuation != NULL);
     group_lock();
     SourceActor* actor = source_resolve_locked(opaque);
     ensure(actor && group.scheduler && !group.pending_ready);
@@ -1027,7 +1027,7 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
 void oreslang_source_actor_stop(void* opaque) {
     group_lock();
     SourceActor* instance = source_resolve_locked(opaque);
-    ensure(instance);
+    ensure(instance != NULL);
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.scheduler && slot < group.next_slot && group.actors[slot] == instance);
     /* Once this bit is set no new sender lease can enter. Producers that
