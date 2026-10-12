@@ -490,21 +490,41 @@ static void source_leave_producer(SourceActor* actor) {
         &actor->producer_gate, 1, memory_order_acq_rel);
     ensure((prior & SOURCE_PRODUCER_COUNT) != 0);
 }
+/* Expected variant is part of the compiler-issued route authority.
+ * It must be checked on the SAME owned snapshot used for schema validation
+ * and DATA admission, never on a prior read of mutable producer memory.
+ * SIZE_MAX is reserved for existing non-directional sends. */
 static int source_send_binary_unlocked(SourceActor* actor,
                                        const uint8_t* wire, size_t size,
-                                       uint8_t direction);
-static int source_send_binary(SourceActor* actor,
+                                       uint8_t direction, size_t expected_variant);
+static int source_send_binary_expected(SourceActor* actor,
                               const uint8_t* wire, size_t size,
-                              uint8_t direction) {
+                              uint8_t direction, size_t expected_variant) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !source_enter_producer(actor))
         return 0;
-    int result = source_send_binary_unlocked(actor, wire, size, direction);
+    int result = source_send_binary_unlocked(
+        actor, wire, size, direction, expected_variant);
     source_leave_producer(actor);
     return result;
 }
-static int source_send_binary_unlocked(SourceActor* actor,
+static int source_send_binary(SourceActor* actor,
                               const uint8_t* wire, size_t size,
                               uint8_t direction) {
+    return source_send_binary_expected(actor, wire, size, direction, SIZE_MAX);
+}
+/* Test-only witness for snapshot-bound variant authority. Do NOT
+ * export this API in production builds: only the compiled pipeline ABI
+ * may bind an expected route case at an active scheduler DATA turn. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+int oreslang_source_actor_send_expected_variant_test(
+    void* actor, const uint8_t* wire, size_t size, size_t expected_variant) {
+    return source_send_binary_expected((SourceActor*)actor, wire,
+                                       size, 0, expected_variant);
+}
+#endif
+static int source_send_binary_unlocked(SourceActor* actor,
+                              const uint8_t* wire, size_t size,
+                              uint8_t direction, size_t expected_variant) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
             || (!actor->on_wire && !actor->on_variant) || !wire
             || size > ORES_MP2_MAX_BYTES) return 0;
@@ -544,6 +564,7 @@ static int source_send_binary_unlocked(SourceActor* actor,
     memcpy(accepted->packet.bytes, wire, size);
     size_t index = 0;
     if (!source_select_variant(actor, accepted->packet.bytes, size, &index)
+            || (expected_variant != SIZE_MAX && index != expected_variant)
             || !ores_mp2_validate_owned(&actor->variants[index].value,
                                          &accepted->packet)
             || (actor->variants[index].owned_enum_name
@@ -707,6 +728,43 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                   memory_order_acq_rel);
     }
     ensure(source_send_binary(target, wire, at, (uint8_t)direction));
+}
+/*
+ * Closed, source-compiled directional transport for a nested enum value.
+ * LLVM emits immutable, fully qualified MessagePack bytes. The runtime
+ * authenticates the requested output variant against the actor's sealed
+ * domain before recipient-owned snapshot and typed validation; never
+ * forward a borrowed guest object or select a schema from caller input.
+ */
+void oreslang_source_actor_pipeline_emit_variant(
+    uint64_t direction, uint64_t variant, const uint8_t* wire, uint64_t length) {
+    SourceActor* actor = active_pipeline_actor;
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC
+        && (direction == 1 || direction == 2)
+        && variant < actor->variant_count && wire
+        && length >= 40 && length <= ORES_MP2_MAX_BYTES);
+    SourceActor* target = direction == 1 ? actor->downstream : actor->upstream;
+    ensure(target && target->magic == SOURCE_ACTOR_MAGIC
+        && variant < target->variant_count);
+    const SourceVariantContract* from = &actor->variants[variant];
+    const SourceVariantContract* to = &target->variants[variant];
+    ensure(from->owned_enum_name && to->owned_enum_name
+        && strcmp(from->owned_enum_name, to->owned_enum_name) == 0
+        && from->declared_tag == to->declared_tag
+        && strcmp(from->value.schema_id, to->value.schema_id) == 0
+        && strcmp(from->value.shape, to->value.shape) == 0);
+    /* Reserve first, copy once, select + validate the compiler-authorized
+     * variant on the SAME immutable recipient-owned snapshot. A caller
+     * changing schema bytes between checks can never switch the admitted
+     * case (nor borrow a different actor's authority). */
+    ensure(source_send_binary_expected(target, wire, (size_t)length,
+                                       (uint8_t)direction, (size_t)variant));
+    if (direction == 1)
+        atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
+                                  memory_order_acq_rel);
+    else
+        atomic_fetch_add_explicit(&group.pipeline_backward_count, 1,
+                                  memory_order_acq_rel);
 }
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
     SourceActor* actor = source;

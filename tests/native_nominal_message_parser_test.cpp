@@ -199,7 +199,74 @@ int main() {
                 return count;
             }
         end
+    )", "nested variant binder requires LLVM enum projection lowering");
+    auto compiledNested = parse_program(R"(
+        define enum Bar as Start = 1 Done = 2 end
+        define enum Foo as First: Bar Second: Bar end
+        define actor Worker<messages=Foo> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over {
+                    on Foo.First { count = count + 1; }
+                    on Foo.Second { count = count + 1; }
+                }
+                return count;
+            }
+        end
+        pub fnc main(): int {
+            const worker = spawn Worker();
+            worker.send(Foo.First(Bar.Start()));
+            worker.send(Foo.Second(Bar.Done()));
+            stop worker;
+            return 43;
+        }
+    )");
+    assert(compiledNested.functions.at(0).actor_sends.size() == 2);
+    assert(compiledNested.functions.at(0).actor_sends.at(0).nested_tagged_variant ==
+           "Bar.Start");
+    rejects(R"(
+        define enum Bar as Start = 1 end
+        define enum Wrong as Other = 1 end
+        define enum Foo as First: Bar end
+        define actor Worker<messages=Foo> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over { on Foo.First { count = count + 1; } }
+                return count;
+            }
+        end
+        pub fnc main(): int {
+            const worker = spawn Worker();
+            worker.send(Foo.First(Wrong.Other()));
+            stop worker;
+            return 43;
+        }
+    )", "nested enum owner does not match declared payload");
+    // Box is still a compiler-only indirection, even when it contains int
+    // rather than an enum. The actor wire code must never infer a codec.
+    rejects(R"(
+        define enum Payload as Boxed: Box<int> end
+        define actor Worker<messages=Payload> as
+            receive(Message m) {
+                do match m over {
+                    on Payload.Boxed as data { }
+                }
+                return 0;
+            }
+        end
     )", "requires a portable nested enum wire codec");
+    rejects(R"(
+        define enum Payload as Wrapped: Tuple[int, Box<int>] end
+        define actor Worker<messages=Payload> as
+            receive(Message m) {
+                do match m over {
+                    on Payload.Wrapped as data { }
+                }
+                return 0;
+            }
+        end
+    )", "requires a portable nested enum wire codec");
+
     rejects("define enum Foo as Message1: Missing end",
             "unknown enum payload type: Missing");
     // Bounded model check: all 2^9 directed 3-enum dependency graphs.
@@ -290,7 +357,7 @@ int main() {
         define actor Worker<messages=P> as
             receive(Message m) { }
         end
-    )", "LLVM tagged source subset requires payloadless or int cases");
+    )", "LLVM tagged source subset requires payloadless, int or nested enum cases");
 
     // Static compiler admission proves exact coverage, source-order
     // alternatives and binders before intentionally rejecting execution.
@@ -312,7 +379,7 @@ int main() {
         end
     )";
     rejects(taggedActor,
-        "LLVM tagged source subset requires payloadless or int cases");
+        "LLVM tagged source subset requires payloadless, int or nested enum cases");
     const auto arm = std::string("on E.Compute as (text, n) {}");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Stop {}"),
             std::string("on E.Stop {}").size(), ""),
@@ -336,7 +403,7 @@ int main() {
     // shape without introducing duplicate bindings or shadowing.
     rejects(std::string(taggedActor).replace(taggedActor.find(arm), arm.size(),
             "on E.Compute as (_, _) {}"),
-            "LLVM tagged source subset requires payloadless or int cases");
+            "LLVM tagged source subset requires payloadless, int or nested enum cases");
     rejects(std::string(taggedActor).replace(taggedActor.find("on E.Ping as label {}"),
             std::string("on E.Ping as label {}").size(), "on E.Ping as m {}"),
             "tagged payload binder shadows field, local or Message parameter");
