@@ -109,6 +109,14 @@ and a `finally` or `defer` panic outranks an earlier ordinary cast error.
 Unknown host/internal failures are not ordinary merely because cleanup
 encounters them.
 
+A suspended expression has a **single terminal completion** even when an
+await, cancellation, or actor wake races with another terminal event. Once
+the result has been handed to its continuation, a failure from that
+continuation belongs to the consumer: it must not be reclassified as an
+expression failure and dispatched to the same continuation a second time.
+Nested asynchronous blocks must likewise run their defer stack and
+resource-release finalization once, including exceptional exits.
+
 ## Ownership, execution, and fail-closed rollout
 
 `Option<Guard>` is still affine when `Guard` is affine. Converting a
