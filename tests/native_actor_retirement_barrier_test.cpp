@@ -120,10 +120,24 @@ static void quarantine_saturation_does_not_settle_done() {
     require(r2.get_done().wait_for(std::chrono::milliseconds(0))
                     == std::future_status::timeout,
             "quarantine full fabricated physical done");
-    // Mock FFI producers are stopped; host has verified this test's isolation
-    // boundary and can explicitly drop quarantined captures. The second
-    // registry remains owned by the live barrier until the test exits.
+    // A bounded quarantine must not release captures simply because its
+    // owner cannot admit another failed registry. Only verified isolation is
+    // permission to discharge BOTH registered and overflowed failures.
+    require(second->quarantined_resources() == 1,
+            "overflowed failure lost its callback capture");
+    bool prematureDischargeRejected = false;
+    try {
+        quarantine.release_overflow_after_verified_isolate_shutdown(second);
+    } catch (const std::logic_error&) {
+        prematureDischargeRejected = true;
+    }
+    require(prematureDischargeRejected, "overflow discharge bypassed isolate fence");
+    // Mock FFI producers have now been stopped; the test supervisor verifies
+    // their isolation and explicitly releases captured ownership.
     quarantine.release_after_verified_isolate_shutdown();
+    quarantine.release_overflow_after_verified_isolate_shutdown(second);
+    require(second->quarantined_resources() == 0,
+            "verified overflow discharge retained native callbacks");
 }
 
 static void physical_reclamation_waits_for_admitted_actor_turn() {
