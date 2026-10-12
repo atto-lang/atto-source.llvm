@@ -30,12 +30,11 @@ int main() {
                 || parsed.functions.size() != 1) {
             throw std::runtime_error("canonical std/assert import metadata missing");
         }
-        auto nested = oreslang::parse_program(
+        expect_rejected(
             "define module Entry as "
             "import module Assert from \"std/assert\"; "
-            "pub fnc main(): int { return 42; } end");
-        if (nested.module != "Entry" || nested.imports.size() != 1)
-            throw std::runtime_error("wrapped canonical import metadata missing");
+            "pub fnc main(): int { return 42; } end",
+            "native module imports must precede declarations");
 
         auto prelude = oreslang::parse_program(
             "import module Assert from \"std/assert\"; "
@@ -73,7 +72,7 @@ int main() {
             "import module Assert from \"std/assert\"; "
             "pub fnc main(): int { return 0; } "
             "import module Assert from \"std/assert\";",
-            "duplicate native module imports");
+            "native module imports must precede declarations");
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {
