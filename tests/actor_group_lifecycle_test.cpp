@@ -38,8 +38,14 @@ int main() {
                 return oreslang::runtime::SupervisorProcess::Directive::stop;
             },
             [&](const auto&) { ++callbacks; });
-        process->accept(oreslang::runtime::SupervisorFailureNotice{
-            2704, 2704, 1, 1, std::nullopt, "terminal"});
+        bool dispatch_rejected = false;
+        try {
+            process->accept(oreslang::runtime::SupervisorFailureNotice{
+                2704, 2704, 1, 1, std::nullopt, "terminal"});
+        } catch (const std::logic_error&) {
+            dispatch_rejected = true;
+        }
+        check(dispatch_rejected, "inline CONTROL adapter did not report failed admission");
         check(callbacks == 0 && !process->healthy() && process->undelivered() >= 1,
               "inline supervisor process adapter ran guest policy");
     }
