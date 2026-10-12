@@ -573,6 +573,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+    add_executable(oreslang-actor-state-rw-gate-test tests/actor_state_read_write_gate_test.cpp)
+    target_include_directories(oreslang-actor-state-rw-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-state-rw-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-state-rw-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_state_rw_fifo_admission COMMAND oreslang-actor-state-rw-gate-test)
+    set_tests_properties(native_actor_state_rw_fifo_admission PROPERTIES TIMEOUT 20)
     add_executable(oreslang-function-effects-test tests/function_effects_test.cpp)
     target_include_directories(oreslang-function-effects-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
