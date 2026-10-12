@@ -45,3 +45,18 @@ into actor references. General untrusted cross-context capabilities need
 runtime-minted authority and context binding, not merely guess-resistant IDs.
 This model does not prove C11 memory-order refinement, general `Future<T>`
 continuations or multi-flow routing.
+
+## Bounded single-flow root credit
+
+`SourceRootAdmissionCredit.tla` models the first root message's single-use
+credit with rejected frames, successful DATA publication, and cancellation.
+A rejected frame must not consume the credit; the one-use token commits with
+the first successful publication. `SourceRootAdmissionCreditMutant.cfg`
+permits the historical pre-validation root credit claim, which TLC must
+reject via `NoBurnedRootCredit`.
+
+[Exact-source funded verification #38267399924](https://github.com/zed-pkg-test/java-app/actions/runs/38267399924):
+12 distinct states, no safe-model invariant violations, preclaim mutation
+counterexample, and all 161 CTests passed. TLC uses `-deadlock` because this
+bounded abstraction has intentional terminal states. This does not prove
+a C memory model implementation refinement or general multiple-flow liveness.
