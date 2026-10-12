@@ -23,16 +23,15 @@ struct EffectStatus {
     std::uint32_t code = 0;
 };
 
-constexpr unsigned effect_rank(EffectKind kind) noexcept {
-    switch (kind) {
-        case EffectKind::Return: return 0;
-        case EffectKind::Throw: return 1;
-        case EffectKind::Raise: return 2;
-        case EffectKind::Panic: return 3;
-        case EffectKind::Cancel: return 4;
-        case EffectKind::Fatal: return 5;
-    }
-    return 5;
+// Only recoverable ordinary source throws may be captured by trap. Control
+// signals and terminal failures must propagate even through deferred cleanup.
+constexpr bool native_trap_admits(EffectKind kind) noexcept {
+    return kind == EffectKind::Throw;
+}
+
+constexpr bool effect_is_terminal(EffectKind kind) noexcept {
+    return kind == EffectKind::Raise || kind == EffectKind::Panic
+        || kind == EffectKind::Cancel || kind == EffectKind::Fatal;
 }
 
 /**
@@ -57,9 +56,11 @@ public:
         return true;
     }
 
-    // Completes once. Each defer/finally runs once in strict LIFO order even
-    // when another cleanup fails. Higher-priority control effects cannot be
-    // downgraded by ordinary cleanup throws.
+    // Completes once. Each defer/finally runs once in strict LIFO order.
+    // The first terminal effect is authoritative (not the numerically largest
+    // kind). A later ordinary cleanup throw supersedes an earlier ordinary
+    // throw, preserving the earlier one as secondary diagnostics. This mirrors
+    // the Java/GraalVM cleanup and trap contracts.
     Summary finish(EffectStatus current = {}) noexcept {
         Summary result{};
         result.primary = current;
@@ -72,11 +73,15 @@ public:
             Entry cleanup = stack_[--count_];
             const EffectStatus next = cleanup.callback(cleanup.context);
             if (next.kind == EffectKind::Return) continue;
-            if (effect_rank(next.kind) > effect_rank(result.primary.kind)) {
+            if (effect_is_terminal(result.primary.kind)) {
+                // A later panic/cancellation/fatal cleanup is diagnostic when
+                // an earlier terminal control effect already owns the exit.
+                append_secondary(result, next);
+            } else {
+                // Normal return yields to cleanup. For an ordinary throw the
+                // later cleanup failure becomes primary, as on Java/GraalVM.
                 append_secondary(result, result.primary);
                 result.primary = next;
-            } else {
-                append_secondary(result, next);
             }
         }
         return result;
