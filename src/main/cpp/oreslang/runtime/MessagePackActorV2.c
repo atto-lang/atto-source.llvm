@@ -148,6 +148,10 @@ static int descriptor_identifier(const char** p, uint32_t n,
     *start = *p;
     for (uint32_t i = 0; i < n; ++i) {
         unsigned char c = (unsigned char)**p;
+        // A malicious compiler-contract description can claim a name
+        // longer than its actual NUL-terminated allocation. Fail at the
+        // terminator, never advance into adjacent memory.
+        if (c == 0) return 0;
         int upper = c >= 'A' && c <= 'Z';
         int lower = c >= 'a' && c <= 'z';
         if (!(upper || lower || c == '_' || (i && c >= '0' && c <= '9')))
@@ -171,14 +175,19 @@ static int nominal_tag(Reader* r, uint32_t* out) {
     *out = (uint32_t)value;
     return 1;
 }
+static int descriptor_delimiter(const char** p, char required) {
+    if (**p != required) return 0;
+    ++*p;
+    return 1;
+}
 static int nominal_shape(const char** p, Reader* packet, unsigned depth) {
     if (depth > ORES_MP2_MAX_DEPTH || strncmp(*p, "E(", 2)) return 0;
     *p += 2;
     uint32_t owner_len = 0;
     const char* owner = NULL;
-    if (!descriptor_uint(p, 256, &owner_len) || *(*p)++ != ':'
+    if (!descriptor_uint(p, 256, &owner_len) || !descriptor_delimiter(p, ':')
             || !descriptor_identifier(p, owner_len, &owner)
-            || *(*p)++ != ')' || *(*p)++ != '[') return 0;
+            || !descriptor_delimiter(p, ')') || !descriptor_delimiter(p, '[')) return 0;
 
     uint32_t observed_tag = 0;
     size_t wire_arity = 0;
@@ -197,11 +206,11 @@ static int nominal_shape(const char** p, Reader* packet, unsigned depth) {
         uint32_t tag, case_len;
         const char* case_name = NULL;
         if (++count > 4096 || !descriptor_uint(p, INT32_MAX, &tag)
-                || !tag || tag <= previous || *(*p)++ != ':'
+                || !tag || tag <= previous || !descriptor_delimiter(p, ':')
                 || !descriptor_uint(p, 256, &case_len)
-                || *(*p)++ != ':'
+                || !descriptor_delimiter(p, ':')
                 || !descriptor_identifier(p, case_len, &case_name)
-                || *(*p)++ != '=') return 0;
+                || !descriptor_delimiter(p, '=')) return 0;
         previous = tag;
         (void)case_name; /* Names bind identity through the full shape hash. */
         const int matched = packet && observed_tag == tag;
@@ -214,9 +223,9 @@ static int nominal_shape(const char** p, Reader* packet, unsigned depth) {
             if ((nullary && wire_arity != 2) || selected) return 0;
             selected = 1;
         }
-        if (*(*p)++ != ';') return 0;
+        if (!descriptor_delimiter(p, ';')) return 0;
     }
-    if (!count || *(*p)++ != ']') return 0;
+    if (!count || !descriptor_delimiter(p, ']')) return 0;
     return !packet || selected;
 }
 /* Only compiler-generated canonical descriptors are admissible. Parser is
@@ -302,8 +311,8 @@ static int typed_value(Reader* r, const char** shape, unsigned depth) {
  * Independent SHA-256 over the same canonical shape descriptor that Java's
  * MessagePackCollectionCodec.shapeDigest hashes. Neither a wire-supplied hash
  * nor a host-supplied digest can redefine the shape of a contract.
- * Input is bounded to 4096 ASCII grammar bytes, and all arithmetic is
- * bounded before forming the padded SHA-256 message.
+ * Input is bounded to ORES_MP2_MAX_BYTES ASCII grammar bytes. Its
+ * allocation and padded SHA-256 arithmetic are independently bounded.
  */
 static uint32_t rotr32(uint32_t x, unsigned n) {
     return (x >> n) | (x << (32 - n));

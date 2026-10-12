@@ -490,21 +490,41 @@ static void source_leave_producer(SourceActor* actor) {
         &actor->producer_gate, 1, memory_order_acq_rel);
     ensure((prior & SOURCE_PRODUCER_COUNT) != 0);
 }
+/* Expected variant is part of the compiler-issued route authority.
+ * It must be checked on the SAME owned snapshot used for schema validation
+ * and DATA admission, never on a prior read of mutable producer memory.
+ * SIZE_MAX is reserved for existing non-directional sends. */
 static int source_send_binary_unlocked(SourceActor* actor,
                                        const uint8_t* wire, size_t size,
-                                       uint8_t direction);
-static int source_send_binary(SourceActor* actor,
+                                       uint8_t direction, size_t expected_variant);
+static int source_send_binary_expected(SourceActor* actor,
                               const uint8_t* wire, size_t size,
-                              uint8_t direction) {
+                              uint8_t direction, size_t expected_variant) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !source_enter_producer(actor))
         return 0;
-    int result = source_send_binary_unlocked(actor, wire, size, direction);
+    int result = source_send_binary_unlocked(
+        actor, wire, size, direction, expected_variant);
     source_leave_producer(actor);
     return result;
 }
-static int source_send_binary_unlocked(SourceActor* actor,
+static int source_send_binary(SourceActor* actor,
                               const uint8_t* wire, size_t size,
                               uint8_t direction) {
+    return source_send_binary_expected(actor, wire, size, direction, SIZE_MAX);
+}
+/* Test-only witness for snapshot-bound variant authority. Do NOT
+ * export this API in production builds: only the compiled pipeline ABI
+ * may bind an expected route case at an active scheduler DATA turn. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+int oreslang_source_actor_send_expected_variant_test(
+    void* actor, const uint8_t* wire, size_t size, size_t expected_variant) {
+    return source_send_binary_expected((SourceActor*)actor, wire,
+                                       size, 0, expected_variant);
+}
+#endif
+static int source_send_binary_unlocked(SourceActor* actor,
+                              const uint8_t* wire, size_t size,
+                              uint8_t direction, size_t expected_variant) {
     if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
             || (!actor->on_wire && !actor->on_variant) || !wire
             || size > ORES_MP2_MAX_BYTES) return 0;
@@ -544,6 +564,7 @@ static int source_send_binary_unlocked(SourceActor* actor,
     memcpy(accepted->packet.bytes, wire, size);
     size_t index = 0;
     if (!source_select_variant(actor, accepted->packet.bytes, size, &index)
+            || (expected_variant != SIZE_MAX && index != expected_variant)
             || !ores_mp2_validate_owned(&actor->variants[index].value,
                                          &accepted->packet)
             || (actor->variants[index].owned_enum_name
@@ -732,12 +753,12 @@ void oreslang_source_actor_pipeline_emit_variant(
         && from->declared_tag == to->declared_tag
         && strcmp(from->value.schema_id, to->value.schema_id) == 0
         && strcmp(from->value.shape, to->value.shape) == 0);
-    size_t selected = 0;
-    ensure(source_select_variant(actor, wire, (size_t)length, &selected)
-        && selected == (size_t)variant);
-    /* source_send_binary reserves, copies, validates and enqueues. No
-     * actor memory is ever shared across the directional edge. */
-    ensure(source_send_binary(target, wire, (size_t)length, (uint8_t)direction));
+    /* Reserve first, copy once, select + validate the compiler-authorized
+     * variant on the SAME immutable recipient-owned snapshot. A caller
+     * changing schema bytes between checks can never switch the admitted
+     * case (nor borrow a different actor's authority). */
+    ensure(source_send_binary_expected(target, wire, (size_t)length,
+                                       (uint8_t)direction, (size_t)variant));
     if (direction == 1)
         atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
                                   memory_order_acq_rel);
