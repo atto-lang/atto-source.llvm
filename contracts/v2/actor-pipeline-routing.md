@@ -147,10 +147,20 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
   sink backward, transform backward, then authorized source completion.
   Duplicate source ingress, direct middle-stage sends, stale/unbound route
   use and out-of-order or wrong-direction transitions fail closed.
+- The Java binder's `closedDomainIdentity` now hashes the complete compiler-
+  owned contract: qualified case names, numeric tags, and canonical v2 payload
+  shape digests. Two implementations with the same names but conflicting tags
+  or shapes are rejected before a route is bound. This changes **only route
+  admission identity**, not canonical MessagePack schema IDs or existing
+  Java/LLVM golden wire vectors.
+- A failed root ingress poisons its single-flow phase reservation rather than
+  leaving it apparently successful; directional sends after actor end/stop
+  requests are fenced. This subset does not provide rollback/retry semantics
+  or prove multi-flow admission linearizability.
 - The typed guest source reaches final state **19** and ends all three actor
-  lifecycles. The focused tests and entire **1,464-test JVM suite** (0 failures,
+  lifecycles. The focused tests and entire **1,465-test JVM suite** (0 failures,
   0 errors, 0 skips) passed on GraalVM 25 in the exact-source funded run
-  [#38189356102](https://github.com/zed-pkg-test/java-app/actions/runs/38189356102).
+  [#38191532323](https://github.com/zed-pkg-test/java-app/actions/runs/38191532323).
   The funded mirror checked 74 exact production Git source blobs.
 - This **does not** establish Native Image AOT/hybrid execution; the Java
   route binder is a fixed single-flow, synchronous admission-only subset
