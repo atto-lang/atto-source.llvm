@@ -597,6 +597,16 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_state_rw_continuation_delivery
         COMMAND oreslang-actor-state-rw-continuations-test)
     set_tests_properties(native_actor_state_rw_continuation_delivery PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-actor-state-rw-control-pump-test
+        tests/actor_state_read_write_control_pump_test.cpp)
+    target_include_directories(oreslang-actor-state-rw-control-pump-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-state-rw-control-pump-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-state-rw-control-pump-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_state_rw_control_retry
+        COMMAND oreslang-actor-state-rw-control-pump-test)
+    set_tests_properties(native_actor_state_rw_control_retry PROPERTIES TIMEOUT 20)
     add_executable(oreslang-function-effects-test tests/function_effects_test.cpp)
     target_include_directories(oreslang-function-effects-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
