@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <memory>
 // Release CTest builds set NDEBUG; contract assertions must still execute.
 #ifdef NDEBUG
 #undef NDEBUG
@@ -46,6 +47,7 @@ int main() {
     assert(registry.phase() == Phase::failed);
     assert(result.closed == 2);
     assert(result.attempted == 3);
+    assert(registry.quarantined_resources() == 3);
     assert(result.errors.size() == 1);
     assert(result.failures == 1);
     assert(result.errors[0] == "close failure");
@@ -121,14 +123,19 @@ int main() {
     ordered.retire();
     auto orderedResult = ordered.try_reclaim();
     assert(orderedResult.status == Reclaim::complete);
+    assert(ordered.quarantined_resources() == 0);
     assert((order == std::vector<int>{1, 2}));
 
     ActorResourceRegistry quarantine(30, 1);
     int allocationDrops = 0;
+    auto nativeOwnership = std::make_shared<int>(42);
+    std::weak_ptr<int> ownerProbe = nativeOwnership;
     quarantine.register_resource(Kind::ffi_callback, [] {
         throw std::runtime_error("callback revocation failed");
     });
-    quarantine.register_resource(Kind::native_allocation, [&] { ++allocationDrops; });
+    quarantine.register_resource(Kind::native_allocation,
+                                 [&, owner = nativeOwnership] { ++allocationDrops; });
+    nativeOwnership.reset();
     quarantine.retire();
     auto quarantineResult = quarantine.try_reclaim();
     assert(quarantineResult.status == Reclaim::failed);
@@ -136,6 +143,9 @@ int main() {
     assert(quarantineResult.closed == 0);
     assert(quarantineResult.attempted == 1);
     assert(quarantineResult.skipped == 1);
+    assert(quarantine.quarantined_resources() == 2);
+    assert(!ownerProbe.expired(),
+           "quarantine must retain captured arena ownership until supervisor release");
     assert(allocationDrops == 0);
     assert(quarantine.try_reclaim().status == Reclaim::failed);
     assert(allocationDrops == 0);
@@ -152,6 +162,7 @@ int main() {
     assert(failedDropResult.status == Reclaim::failed);
     assert(failedDropResult.attempted == 1);
     assert(failedDropResult.skipped == 1);
+    assert(failedDrop.quarantined_resources() == 2);
     assert(dependentDrops == 0);
 
     ActorResourceRegistry concurrent(16, 1, 2);
