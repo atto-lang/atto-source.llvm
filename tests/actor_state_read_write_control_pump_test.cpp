@@ -12,12 +12,38 @@ using Status = Registry::Status;
 using Mode = Registry::Mode;
 #define CHECK(x) do { if (!(x)) throw std::runtime_error("failed: " #x); } while (false)
 
+// Simulate an accepted bounded CONTROL receipt for the initial grant.
+static Registry::Request request_with_control(Registry& registry,
+                                               std::uint64_t id, Mode mode) {
+    const auto grant = registry.request(registry.incarnation(), id, mode);
+    if (grant.status == Status::Ready) {
+        CHECK(!registry.admitted(registry.incarnation(), id, mode));
+        CHECK(registry.acknowledge({registry.incarnation(), id, Status::Ready}));
+    }
+    return grant;
+}
+
 int main() {
+    // No contended or uncontended ticket may authorize a guest operation
+    // without a real CONTROL admission callback accepting its notification.
+    Registry initial;
+    Pump initial_pump(initial);
+    CHECK(initial.request(initial.incarnation(), 1, Mode::Read).status == Status::Ready);
+    CHECK(!initial.admitted(initial.incarnation(), 1, Mode::Read));
+    CHECK(initial.pending_notifications().size() == 1);
+    auto first_control_receipt =
+            [](const Registry::Notification&) noexcept -> bool { return true; };
+    CHECK(initial_pump.pump(first_control_receipt, 0) == 0);
+    CHECK(!initial.admitted(initial.incarnation(), 1, Mode::Read));
+    CHECK(initial_pump.pump(first_control_receipt) == 1);
+    CHECK(initial.admitted(initial.incarnation(), 1, Mode::Read));
+    initial.complete(initial.incarnation(), 1);
+
     Registry registry;
     Pump pump(registry);
-    CHECK(registry.request(registry.incarnation(), 1, Mode::Read).status == Status::Ready);
-    CHECK(registry.request(registry.incarnation(), 2, Mode::Write).status == Status::Queued);
-    CHECK(registry.request(registry.incarnation(), 3, Mode::Read).status == Status::Queued);
+    CHECK(request_with_control(registry, 1, Mode::Read).status == Status::Ready);
+    CHECK(request_with_control(registry, 2, Mode::Write).status == Status::Queued);
+    CHECK(request_with_control(registry, 3, Mode::Read).status == Status::Queued);
     registry.complete(registry.incarnation(), 1);
 
     std::array<Registry::Notification, 1> control{};
@@ -57,8 +83,8 @@ int main() {
     // fail promptly, not deadlock the only actor scheduler carrier.
     Registry recursive;
     Pump recursive_pump(recursive);
-    CHECK(recursive.request(recursive.incarnation(), 1, Mode::Read).status == Status::Ready);
-    CHECK(recursive.request(recursive.incarnation(), 2, Mode::Write).status == Status::Queued);
+    CHECK(request_with_control(recursive, 1, Mode::Read).status == Status::Ready);
+    CHECK(request_with_control(recursive, 2, Mode::Write).status == Status::Queued);
     recursive.complete(recursive.incarnation(), 1);
     int nested_receipts = -1;
     auto reject_nested = [](const Registry::Notification&) noexcept -> bool {
@@ -76,8 +102,8 @@ int main() {
     // queues READY. Its receipt must not authorize stale guest execution.
     Registry retiring;
     Pump retiring_pump(retiring);
-    CHECK(retiring.request(retiring.incarnation(), 1, Mode::Read).status == Status::Ready);
-    CHECK(retiring.request(retiring.incarnation(), 2, Mode::Write).status == Status::Queued);
+    CHECK(request_with_control(retiring, 1, Mode::Read).status == Status::Ready);
+    CHECK(request_with_control(retiring, 2, Mode::Write).status == Status::Queued);
     retiring.complete(retiring.incarnation(), 1);
     Registry::Notification queued_ready{};
     auto race_retire = [&](const Registry::Notification& n) noexcept -> bool {
@@ -98,9 +124,9 @@ int main() {
     // Concurrent pumpers cannot acknowledge the same terminal event twice.
     Registry concurrency;
     Pump concurrent_pump(concurrency);
-    CHECK(concurrency.request(concurrency.incarnation(), 10, Mode::Read).status == Status::Ready);
-    CHECK(concurrency.request(concurrency.incarnation(), 11, Mode::Write).status == Status::Queued);
-    CHECK(concurrency.request(concurrency.incarnation(), 12, Mode::Read).status == Status::Queued);
+    CHECK(request_with_control(concurrency, 10, Mode::Read).status == Status::Ready);
+    CHECK(request_with_control(concurrency, 11, Mode::Write).status == Status::Queued);
+    CHECK(request_with_control(concurrency, 12, Mode::Read).status == Status::Queued);
     concurrency.retire();
     std::array<Registry::Notification, 1> one_slot{};
     std::size_t occupied = 0;
