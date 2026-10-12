@@ -87,5 +87,22 @@ int main() {
     c.state_loan_live_across_suspend = false;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
+
+    // Neither out-of-range enum modes nor future/unknown effect bits can
+    // authorize a state loan through an older native runtime.
+    c.inferred = row(READ);
+    c.state_mode = static_cast<CriticalStateMode>(255);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::InvalidStateCallback);
+    c.state_mode = CriticalStateMode::Read;
+    constexpr std::uint32_t UNKNOWN = 1u << 30;
+    CHECK(!row(UNKNOWN).valid());
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+            == CriticalStateAdmission::InvalidEffectMetadata);
+    c.inferred = row(READ | UNKNOWN);
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+            == CriticalStateAdmission::InvalidEffectMetadata);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::InvalidEffectMetadata);
     return 0;
 }
