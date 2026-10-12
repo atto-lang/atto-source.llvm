@@ -189,6 +189,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_critical_read_declaration_fails_closed
+        unsupported-critical-read-decl.ores
+        --diagnostic "native critical-read/write declarations require effect-checked state and scheduler lowering")
+    oreslang_contract_test(native_critical_write_declaration_fails_closed
+        unsupported-critical-write-decl.ores
+        --diagnostic "native critical-read/write declarations require effect-checked state and scheduler lowering")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
 
