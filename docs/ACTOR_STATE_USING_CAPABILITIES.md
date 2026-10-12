@@ -8,7 +8,7 @@
 > are retained for audit history but are superseded where they disagree.
 
 
-Status: **restricted LLVM compiled execution verified; Java compiler fail-closed**.
+Status: **restricted LLVM compiled execution verified; full Java/LLVM guest-method parity pending**.
 Updated October 12, 2026.
 
 ## Normative source syntax
@@ -21,7 +21,7 @@ define actor Counter as
     state { value: int = 0; }
 
     // Callback is implicitly read-only if no "critical" modifier.
-    read_value(): int {
+    read_value(): int with state.read {
         const value = self.handle_state(|state| -> {
             return state.value;
         });
@@ -29,7 +29,7 @@ define actor Counter as
     }
 
     // The "critical" modifier grants exclusive write authority.
-    increment(): int {
+    increment(): int with state.read, state.write {
         const next = self.handle_state(critical |state| -> {
             state.value = state.value + 1;
             return state.value;
@@ -43,8 +43,7 @@ The source above specifies **the intended language API**. The current
 restricted LLVM compiler supports the two callback spellings in exhaustive
 tagged receive arms, **not yet in ordinary actor methods**. Do not label
 the complete class-method example runnable until general method-state
-lowering is implemented and tested. The current Java compiler deliberately
-rejects either spelling before guest execution.
+lowering is implemented and tested. Java/GraalVM PR #760 has source parser, effect/ownership, and focused scalar guest-execution coverage, but full Java/LLVM general actor-method parity remains a release gate.
 
 For this API, the name is `self.handle_state` (dot access), not
 `self_handle_state` as a standalone global function.
@@ -74,17 +73,30 @@ read snapshots would require a separate scheduler and isolation design.
 
 ## `using` and `critical`
 
-The **canonical user-facing actor-state API is `self.handle_state`**.
-The presence of `critical` selects the mutable write capability; its
-absence means read-only. The earlier prototype's
-`using state.read(|state| -> {...})` and
-`using state.write(critical |state| -> {...})` currently continue to
-compile in the restricted LLVM profile as implementation-era aliases,
-**not** as the preferred language design. The `using` keyword should
-continue to denote lifetime/resource management where appropriate;
-it need not be part of ordinary actor state access. Removing these
-prototype aliases can be decided separately before the 1.0 syntax
-freeze.
+Both `self.handle_state` and `using state.read/write` are **first-class,
+canonical** actor-state source forms. They are not deprecated aliases.
+`with` in the enclosing actor method declares an upper bound on effects;
+it does not acquire a loan. `using` acquires a lexical state capability;
+it is never an effect declaration in a function signature.
+
+```ores
+read_value_using(): int with state.read {
+    return using state.read(|state| -> state.value);
+}
+increment_using(): int with state.read, state.write {
+    return using state.write(critical |state| -> {
+        state.value = state.value + 1;
+        return state.value;
+    });
+}
+```
+
+Read is the default state callback. A bare `critical |state|` callback
+selects exclusive write; `critical read` and `critical write` are
+explicit mode spellings. Both high-level spellings lower to the same sealed
+compiler-owned intrinsic with the same no-escape, effect-bound, and
+no-live-loan-suspension rules. For the complete normative contract, see
+[WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md).
 
 ## Verified implementation boundary
 
