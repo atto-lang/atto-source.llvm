@@ -201,6 +201,27 @@ int main() {
               "single-link journal did not reopen after alias removal");
     }
 
+    // Creating an alias AFTER opening the journal must quarantine further
+    // transitions; the constructor check alone cannot enforce this boundary.
+    {
+        NativeTerminalReceiptJournal journal(path);
+        const std::string alias = std::string(dir) + "/receipts.late-alias";
+        check(::link(path.c_str(), alias.c_str()) == 0,
+              "failed to create late hard-link alias");
+        rejects([&] { journal.record(key(75)); },
+                "already-open journal accepted new hard-link alias");
+        check(::unlink(alias.c_str()) == 0,
+              "failed to remove late journal alias");
+        rejects([&] { journal.record(key(76)); },
+                "quarantined journal resumed after alias removal");
+    }
+    {
+        NativeTerminalReceiptJournal reopened(path);
+        check(reopened.inspect(k).phase == DurableTerminalPhase::acknowledged,
+              "late-alias guard corrupted previously committed receipts");
+        reopened.record(key(77));
+    }
+
     // A torn last frame and silent record mutation both fail closed.
     {
         int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
