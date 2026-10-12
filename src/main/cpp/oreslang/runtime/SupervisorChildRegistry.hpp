@@ -454,7 +454,8 @@ public:
         auto& receipt = require_stop_receipt(child, actor, incarnation, turn_generation);
         if (receipt.status == StopReceiptStatus::applied
                 || receipt.status == StopReceiptStatus::acknowledged)
-            return receipt;
+            throw std::logic_error(
+                "cannot downgrade confirmed STOP host effect to uncertain");
         if (receipt.status == StopReceiptStatus::uncertain) return receipt;
         receipt.status = StopReceiptStatus::uncertain;
         record_transition("stop.uncertain", children_.at(child.logical_child_id),
