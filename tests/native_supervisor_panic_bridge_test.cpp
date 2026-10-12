@@ -986,6 +986,10 @@ int main() {
     {
         struct CallbackContext {
             NativeSupervisorPanicBridge* bridge = nullptr;
+            OresNativeActorScheduler* scheduler = nullptr;
+            OresNativeActorRef parent{}, child{};
+            std::atomic<bool> wrong_carrier_rejected{false};
+            std::atomic<bool> wrong_carrier_done{false};
             std::atomic<bool> entered{false};
             std::atomic<bool> release{false};
             std::atomic<bool> accepted{false};
@@ -995,7 +999,16 @@ int main() {
         auto* identity_scheduler =
             ores_native_actor_scheduler_open_identity_control(
                 3, 2, 2,
-                [](void*, OresNativeActorRef, std::uint64_t) {},
+                [](void* raw, OresNativeActorRef, std::uint64_t payload) {
+                    auto& state = *static_cast<CallbackContext*>(raw);
+                    if (payload != 901) return;
+                    OresNativeTerminalReceipt stolen{};
+                    state.wrong_carrier_rejected.store(
+                        !ores_native_actor_scheduler_claim_delivered_terminal_receipt(
+                            state.scheduler, state.parent, state.child, &stolen),
+                        std::memory_order_release);
+                    state.wrong_carrier_done.store(true, std::memory_order_release);
+                },
                 nullptr,
                 [](void* raw, OresNativeActorRef parent,
                    OresNativeActorTerminalFailure failure) {
@@ -1039,6 +1052,9 @@ int main() {
         auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
             identity_scheduler, parent, process, children);
         state.bridge = bridge.get();
+        state.scheduler = identity_scheduler;
+        state.parent = parent;
+        state.child = child;
         bridge->register_child(child);
         bridge->register_child(second_child);
         check(ores_native_actor_scheduler_stop(identity_scheduler, child)
@@ -1066,6 +1082,20 @@ int main() {
                   && !bridge->on_panic(parent, failure)
                   && bridge->registered_children() == 2,
               "off-carrier host stole pending terminal PANIC");
+        // A DATA callback in another actor of the SAME scheduler is not the
+        // parent CONTROL callback; sharing a scheduler worker pool is never
+        // a substitute for exact callback-event authority.
+        check(ores_native_actor_scheduler_send(
+                  identity_scheduler, second_child, 901),
+              "competing scheduler DATA actor was not admitted");
+        const auto other_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!state.wrong_carrier_done.load(std::memory_order_acquire)
+               && std::chrono::steady_clock::now() < other_deadline)
+            std::this_thread::sleep_for(1ms);
+        check(state.wrong_carrier_done.load(std::memory_order_acquire)
+                  && state.wrong_carrier_rejected.load(std::memory_order_acquire)
+                  && bridge->registered_children() == 2,
+              "same-scheduler unrelated DATA carrier borrowed PANIC authority");
         check(!bridge->on_panic(
                   static_cast<std::size_t>(parent.actor_slot), failure),
               "slot-only callback bypassed identity-mode PANIC boundary");
@@ -1106,7 +1136,7 @@ int main() {
                   && ores_native_actor_scheduler_try_destroy(identity_scheduler),
               "identity-mode bridge scheduler teardown failed");
         std::puts("NATIVE_SUPERVISOR_IDENTITY_PANIC_FENCE_PASS"
-                  " slot_only=0 forged=0 exact=1 replay=0 off_carrier=0");
+                  " slot_only=0 forged=0 exact=1 replay=0 off_carrier=0 other_carrier=0");
     }
 
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
