@@ -197,3 +197,46 @@ gates include source-level reentrant actor admission across `await`, full
 LLVM compiler/CMake integration, browser/Wasm/FFI ingress refinement, and
 independent security review. Do not treat snapshots/CAS as a capability for
 producer threads to run actor-owned code.
+
+
+## 2026-10-12 final integration audit — funded complete project verification
+
+**Java/GraalVM:** Mainline OresVM self-close and structured-cancellation
+hardening was merged into the Java actor-exclusivity branch without conflicts.
+The verified branch's `src/` + Maven manifest contains **266/266 exact Git
+blobs**. The funded
+[full Java verification run #38265067414](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38265067414)
+passed both focused actor-execution regressions and the complete Maven suite.
+
+**LLVM/native:** The funded
+[full CMake and CTest run #38266195840](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38266195840)
+verified **256/256 source, CMake and test blobs** from LLVM PR #224,
+configured/built every original native target, and completed **206/206 CTests,
+zero failures**. This includes native typed-PANIC CONTROL, actor DATA/CONTROL
+exclusion, lazy carrier failure fencing, actor group tests, logical-race
+regressions, and the compiled native sanitizer tests.
+The private full-project mirror used these exact compiler/runtime/test Git
+blobs; documentation/workflow paths in that mirror were not all pinned, so
+do not describe it as a byte-identical copy of every repository document.
+
+**Machine-checked bounded specification:** Official TLC
+[run #38219137482](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38219137482)
+completed both TLA+ configurations, finding zero safety violations in
+372 distinct physical-carrier states and 88 dispatch-ticket states.
+
+**Explicit outstanding language semantics:** Physical executor exclusivity
+does not itself prove *reentrant source actor* interleaving across `await`.
+The Java `suspendCurrentSourceReceive` pathway still maintains a single
+`sourceReceiveSuspended` and `activeMail` actor-wide state. Actual
+multiple-logical-handler interleaving, version-fenced state commits, and
+cross-backend compiler-lowered continuation admission must satisfy the
+separate acceptance gates in
+[Java issue #726](https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/726).
+No logical interleaving or production-wide FFI/browser refinement should
+be inferred solely from these bounded proofs and passing focused runtime
+tests.
+
+**Merge policy:** Physical-lane hardening can be reviewed as a foundation,
+but must not be presented as completed guest-language reentrancy. Source
+branches remain draft until independent review and their own release policy
+permits merging.
