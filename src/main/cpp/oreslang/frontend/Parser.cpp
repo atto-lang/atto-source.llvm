@@ -98,6 +98,10 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        if (ch == ':' && at_ + 1 < source_.size() && source_[at_ + 1] == ':') {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         if (std::string_view("()[]{},:;+-*=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
@@ -358,6 +362,23 @@ private:
         return value;
     }
 
+    // Inline spawns are admitted into the same owned reference list as named
+    // spawns, so all mailbox, route and teardown validation remains shared.
+    std::string pipeline_stage(Function& fn) {
+        if (!accept("spawn")) return identifier();
+        ActorSpawnBinding ref;
+        ref.offset = token_.offset;
+        ref.name = "$pipe" + std::to_string(fn.actor_spawns.size());
+        ref.actor_type = identifier();
+        ref.declared_type.kind = SourceType::Kind::ActorRef;
+        ref.declared_type.argument = ref.actor_type;
+        require("("); require(")");
+        std::string name = ref.name;
+        fn.actor_spawns.push_back(std::move(ref));
+        fn.actor_stops.insert(fn.actor_stops.begin(), name);
+        return name;
+    }
+
     Function function(bool actor_method = false) {
         Function value;
         value.offset = token_.offset;
@@ -448,9 +469,38 @@ private:
             }
         }
         if (!actor_method) {
-            if (accept("pipeline")) {
+            bool pipe_call = accept("pipeline");
+            if (!pipe_call && token_.text == "ActorUtils") {
+                Lexer probe = lexer_;
+                const auto delimiter = probe.next().text;
+                if ((delimiter == "." || delimiter == "::") && probe.next().text == "pipe") {
+                    if (delimiter == "." && std::any_of(value.actor_spawns.begin(),
+                            value.actor_spawns.end(), [](const ActorSpawnBinding& ref) {
+                                return ref.name == "ActorUtils";
+                            })) fail("ambiguous ActorUtils.pipe; use ActorUtils::pipe");
+                    advance();
+                    if (!accept(".")) require("::");
+                    require("pipe");
+                    pipe_call = true;
+                }
+            }
+            bool pipe_operator = token_.text == "spawn";
+            if (!pipe_call && token_.kind == Kind::Identifier) {
+                Lexer probe = lexer_;
+                pipe_operator = pipe_operator || probe.next().text == "pipe";
+            }
+            if (!pipe_call && pipe_operator) {
+                value.pipeline_actors.push_back(pipeline_stage(value));
+                require("pipe");
+                do { value.pipeline_actors.push_back(pipeline_stage(value)); }
+                while (accept("pipe"));
+                require(";");
+                if (value.pipeline_actors.size() < 2 || value.pipeline_actors.size() > 16)
+                    fail("pipeline requires between 2 and 16 ordered actors");
+            }
+            if (pipe_call) {
                 require("(");
-                do { value.pipeline_actors.push_back(identifier()); }
+                do { value.pipeline_actors.push_back(pipeline_stage(value)); }
                 while (accept(","));
                 require(")");
                 require(";");

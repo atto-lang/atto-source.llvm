@@ -260,6 +260,41 @@ if(BUILD_TESTING)
         set_tests_properties(native_pipeline_cancel_worker_forward_linearization
             PROPERTIES TIMEOUT 45)
     endif()
+    oreslang_contract_test(reject_actor_utils_shadow_dot
+        source-actor-utils-shadow-dot-reject.ores
+        --diagnostic "ambiguous ActorUtils.pipe")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_actor_utils_shadow_colon
+            source-actor-utils-shadow-colon.ores --run 43 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+    endif()
+    foreach(pipe_style dot colon)
+        foreach(pipe_count one seventeen)
+            oreslang_contract_test(reject_actor_utils_${pipe_count}_${pipe_style}
+                source-actor-utils-${pipe_count}-${pipe_style}-reject.ores
+                --diagnostic "pipeline requires between 2 and 16 ordered actors")
+        endforeach()
+        oreslang_contract_test(reject_actor_utils_repeat_${pipe_style}
+            source-actor-utils-repeat-${pipe_style}-reject.ores
+            --diagnostic "pipeline actor ref missing or repeated")
+    endforeach()
+    foreach(pipe_style dot colon operator)
+        foreach(pipe_size fifteen inline)
+            oreslang_contract_test(native_ir_actor_utils_${pipe_size}_${pipe_style}
+                source-actor-pipeline-${pipe_size}-${pipe_style}.ores
+                --ir "oreslang_source_actor_pipeline_connect_many")
+            if(ORE_CLANG)
+                oreslang_contract_test(native_exec_actor_utils_${pipe_size}_${pipe_style}
+                    source-actor-pipeline-${pipe_size}-${pipe_style}.ores
+                    --run 43 --clang "${ORE_CLANG}" --runs 5
+                    --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                    --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                    --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+            endif()
+        endforeach()
+    endforeach()
     oreslang_contract_test(native_ir_sixteen_actor_bidirectional_pipeline
         source-actor-pipeline-sixteen-stage.ores
         --ir "oreslang_source_actor_pipeline_connect_many")
