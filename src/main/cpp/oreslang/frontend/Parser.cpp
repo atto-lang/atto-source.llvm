@@ -1271,6 +1271,7 @@ private:
                 + (program.module.empty() ? "" : program.module + "_")
                 + actor.name + "_";
             reserveGenerated(prefix + "init");
+            if (actor.transform_pipe) reserveGenerated(prefix + "receive");
             std::unordered_set<std::string> fields;
             std::unordered_set<std::string> mutableFields;
             // Deliberately restrict initializers to closed arithmetic:
