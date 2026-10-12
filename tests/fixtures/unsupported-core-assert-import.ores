@@ -1,0 +1,5 @@
+import module Assert from "std/assert";
+pub fnc main(): int {
+  Assert.equal_throws(1, 2);
+  return 0;
+}

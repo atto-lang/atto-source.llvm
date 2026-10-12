@@ -60,3 +60,5 @@ Native I/O API naming: blocking I/O operations will require the `_blocking` suff
 
 See [source parity contract](docs/SOURCE_PARITY.md), [LLVM roadmap](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1),
 and the distinct [Java cyclic graph work](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/474).
+
+Core assertions: see [Assert API and trap behavior](docs/ASSERT.md).

@@ -184,6 +184,10 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
+    # Core assertion source is staged; imports must not silently compile.
+    oreslang_contract_test(reject_unadmitted_core_assert_import
+        unsupported-core-assert-import.ores --diagnostic "expected fnc or routine at byte 0")
+
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
