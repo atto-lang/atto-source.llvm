@@ -42,3 +42,46 @@ With TLA+ TLC installed (the TLC jar is not vendored here):
     java -cp /path/to/tla2tools.jar tlc2.TLC -config docs/formal/ReentrantActorExclusiveCarrier.cfg docs/formal/ReentrantActorExclusiveCarrier.tla
 
 The Python bounded checker was executed locally and passed. TLC has **not** been executed in this session; do not claim TLC verification until an actual run succeeds.
+
+
+## Audit/hardening follow-up: every actor-owned code path
+
+"Guest" means the Oreslang code invoked on behalf of an actor. The invariant
+has **no exception for reentrant actors**. It covers actor initialization,
+messages, methods, source continuations, local failure hooks, actor teardown,
+cleanup, and supervisor CONTROL. It is **not** a promise of stable thread
+affinity; the same actor may execute its next turn on a different worker.
+
+Concrete defensive runtime checks added to the two companion draft branches:
+
+- **Java/GraalVM:** `ActorRuntime.ActorCell` now stores a temporary
+  `carrierOwnerThread` under `lifecycleLock`. `beginTurn` requires the
+  owner thread, active physical carrier, and scheduled claim; `endTurn`
+  requires the same owner. `runBatch` refuses duplicate carrier claims and
+  checks that the owner has quiesced before releasing it. A duplicate
+  incorrectly invoked batch cannot clear another carrier's scheduling bit.
+  `TurnExecutor` must invoke actor work synchronously on its calling worker.
+- **Native LLVM:** the scheduler sets `ActorLane.carrier_owner` while
+  the lane is active and validates `pthread_equal` at completion for DATA
+  and supervisor CONTROL alike. A TLS `executing_actor` identity allows
+  trusted source/native bridge code to reject foreign actor context use.
+- **Tests:** the Java actor mailbox boundary test verifies owner authority
+  in initialization, receive, async continuation and final cleanup. It
+  checks peak actor execution <= 1 without requiring a permanent thread.
+  The native DATA/CONTROL test publishes CONTROL for the running actor and
+  a separate actor: only the independent actor's CONTROL may overlap
+  the original DATA handler. Native CTest registration is included.
+- **Review:** actor-group Mailmen, unsafe native callbacks, browser Workers,
+  FFI threads and separate process transports still require source-to-model
+  refinement tests before this can be called an end-to-end proof.
+
+### Validation status
+
+The standalone bounded Python model was reproduced locally in this audit:
+372 reachable safe states; when exclusive claim was deliberately disabled,
+the model found simultaneous execution on two workers after 65 states.
+The new Java and C production runtime changes have **not** been validated
+by executable project CI in this audit: the upstream GitHub Actions jobs
+failed without recorded runner steps (logs unavailable). TLC, full Java
+Maven/JUnit, real native CTest and sanitizers remain required. Keep the
+two PRs draft. No claim of complete source-code refinement is made.
