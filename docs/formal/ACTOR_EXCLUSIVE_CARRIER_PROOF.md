@@ -159,3 +159,41 @@ TLC, full LLVM/GraalVM pipelines and source/FFI bridge refinement remain
 explicit merge blockers. The optimistic scalar state helper is host-only:
 atomic CAS alone never grants a foreign thread authority to execute or
 mutate guest-visible actor state outside the actor's admitted lane.
+
+
+## 2026-10-12 funded exact-source verification (supersedes earlier CI-pending status)
+
+**Machine-checked abstract invariants: PASS.** [TLC run 38219137482](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38219137482)
+ran the exact `ReentrantActorExclusiveCarrier` and `ActorDispatchIdentity`
+TLA+/CFG Git blobs from LLVM PR #224 on a private funded runner. Official
+TLA+ v1.7.4 (`tla2tools.jar`) SHA-256:
+`936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`.
+TLC explored **372 distinct** carrier states (1823 generated) and
+**88 distinct** dispatch-ticket states (249 generated), reporting zero invariant
+violations. Independent Python model/mutation checks passed.
+
+**Native executable evidence: PASS.** [Funded run 38217714973](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38217714973)
+verified ten Git blobs matching LLVM PR #224, then compiled and ran actual
+`NativeActorScheduler.c` with strict GCC C11 Release and Clang ASan+UBSan:
+actor scheduler stress, DATA/CONTROL same-actor exclusion, typed supervisor
+PANIC exclusion, and injected carrier creation failure. C++17
+`VersionedActorCell` concurrency also passed. These are linked runtime
+regressions, **not** a complete native LLVM CMake/CTest project build.
+
+**Java executable evidence: PASS.** [Funded run 38219419532](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38219419532)
+verified **266/266** tracked Java source/test/Maven Git blobs against
+Java PR #695, then completed focused actor tests and the full GraalVM Maven
+suite: **1,471 passed, 0 failed, 0 errors, 0 skipped**.
+The negative `TurnExecutor` tests explicitly enqueue initial work because
+actor mailboxes are lazy. The older
+`ActorCarrierIdentityCleanupTest` was reconciled with the stronger contract:
+foreign-worker actor callbacks must fail *before* guest execution and must
+not leave a TLS identity on either thread.
+
+**Proof scope remains bounded.** Successful TLC and targeted native/Java
+runtime testing establish concrete confidence, but do not yet amount to a
+formally verified whole-program Java/LLVM scheduler implementation. Remaining
+gates include source-level reentrant actor admission across `await`, full
+LLVM compiler/CMake integration, browser/Wasm/FFI ingress refinement, and
+independent security review. Do not treat snapshots/CAS as a capability for
+producer threads to run actor-owned code.
