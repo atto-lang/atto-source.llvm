@@ -76,7 +76,39 @@ int main() {
         require(a.release(*fresh) && a.release(*h2), "release failed");
         require(a.live_blocks() == 0 && a.live_bytes() == 0,
                 "heap is not empty after reclamation");
-        std::cout << "PASS actor heap ownership, reclamation, ABA, bounds and concurrency\n";
+        // A retired actor's native heap must not grant fresh storage or
+        // preserve any stale generation, including if live slots remained.
+        ActorHeap<2, 16> retirement;
+        ActorHeap<2, 16> unaffected;
+        require(retirement.bind_carrier() && unaffected.bind_carrier(),
+                "retirement-test carriers not admitted");
+        auto alive = retirement.allocate(8);
+        auto separate = unaffected.allocate(8);
+        require(alive && separate, "retirement fixture allocation failed");
+        std::uint64_t sentinel = 0x12345678;
+        require(retirement.write(*alive, 0, &sentinel, sizeof sentinel),
+                "retirement fixture write failed");
+        std::atomic<bool> foreign_retire_denied{false};
+        std::thread foreign_retire([&] {
+            foreign_retire_denied.store(!retirement.retire(), std::memory_order_release);
+        });
+        foreign_retire.join();
+        require(foreign_retire_denied.load(std::memory_order_acquire),
+                "foreign carrier retired an actor heap");
+        require(retirement.retire() && retirement.retired() && retirement.retire(),
+                "actor-owned retirement failed or was not idempotent");
+        require(!retirement.allocate(8), "retired heap admitted an allocation");
+        require(!retirement.read(*alive, 0, &observed, sizeof observed) &&
+                !retirement.write(*alive, 0, &sentinel, sizeof sentinel) &&
+                !retirement.release(*alive),
+                "retired actor handle remained usable");
+        require(retirement.live_blocks() == 0 && retirement.live_bytes() == 0,
+                "retired actor heap retained live accounting");
+        require(unaffected.read(*separate, 0, &observed, sizeof observed) &&
+                unaffected.release(*separate),
+                "retiring one actor changed another actor heap");
+
+        std::cout << "PASS actor heap ownership, reclamation, ABA, retirement fence, bounds and concurrency\n";
     } catch (const std::exception& failure) {
         std::cerr << "FAIL actor heap: " << failure.what() << "\n";
         return 1;
