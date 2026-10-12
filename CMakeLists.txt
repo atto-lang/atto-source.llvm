@@ -350,6 +350,16 @@ if(BUILD_TESTING)
         actor-with-using-unknown-effect-reject.ores
         --diagnostic "unsupported actor effect in with clause")
 
+    oreslang_contract_test(native_with_using_write_only
+        actor-with-using-write-only-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_with_direct_handle_read_missing_effect
+        actor-with-using-read-outside-bound-reject.ores
+        --diagnostic "with clause omits state.read effect")
+    oreslang_contract_test(reject_duplicate_with_clause
+        actor-with-using-duplicate-with-reject.ores
+        --diagnostic "expected '{'")
+
     # IR absence checks remain live even when Python runs with -O.
     oreslang_contract_test(native_ir_using_read_no_mutation
         actor-using-read-positive.ores
