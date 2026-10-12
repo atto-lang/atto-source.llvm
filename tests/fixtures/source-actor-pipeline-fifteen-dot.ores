@@ -27,7 +27,7 @@ define actor Stage0<messages=PipeMessages> as
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
             }
         }
-        return 0;
+        return next;
     }
 end
 define transform pipe actor Stage1<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
@@ -316,7 +316,7 @@ define actor Stage14<messages=PipeMessages> as
                 self.backward(Signal.Result(next));
             }
         }
-        return 0;
+        return next;
     }
 end
 pub fnc main(): int {
