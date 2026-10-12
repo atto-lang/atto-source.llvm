@@ -13,7 +13,7 @@ define actor Counter as
     state { value: int = 0; }
 
     // Callback is implicitly read-only if no "critical" modifier.
-    pub fnc read_value(): int {
+    read_value(): int {
         const value = self.handle_state(|state| -> {
             return state.value;
         });
@@ -21,7 +21,7 @@ define actor Counter as
     }
 
     // The "critical" modifier grants exclusive write authority.
-    pub fnc increment(): int {
+    increment(): int {
         const next = self.handle_state(critical |state| -> {
             state.value = state.value + 1;
             return state.value;
