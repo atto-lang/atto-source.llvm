@@ -82,7 +82,11 @@ int main() {
         expect<std::logic_error>([&] { original.write(0, 0, 1); });
         expect<std::logic_error>([&] { original.close(); });
     }
+    // Snapshot must survive owner move, closure, and state reclamation.
+    const auto geometry = original.layout();
     auto moved = original.take();
+    check(geometry.byte_length() == p.byte_length());
+    expect<std::logic_error>([&] { (void)original.layout(); });
     expect<std::logic_error>([&] { (void)original.read(0, 0); });
     expect<std::invalid_argument>([&] { execute_cpu(k, moved, moved); });
     expect<std::invalid_argument>([&] { (void)lower_opencl(k, {64, 1, 10, true}); });
@@ -92,6 +96,8 @@ int main() {
     auto tinySource = lower_opencl(tiny, {64, 4096, 100, true}).device_source;
     check(tinySource.find("e-45f") != std::string::npos);
     moved.close();
+    expect<std::logic_error>([&] { (void)moved.layout(); });
     expect<std::logic_error>([&] { (void)moved.read(0, 0); });
+    check(geometry.byte_length() == p.byte_length());
     std::cout << "native CPU/DOP and emitted GPU kernel IR tests passed\n";
 }
