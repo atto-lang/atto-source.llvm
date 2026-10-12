@@ -511,6 +511,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unqualified_borrow_call unsupported-borrow-function.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_suspends unsupported-suspends.ores --diagnostic "native suspends declaration requires")
     oreslang_contract_test(reject_critical unsupported-critical.ores --diagnostic "native critical declaration requires")
+    oreslang_contract_test(reject_hyphenated_critical_read unsupported-hyphenated-critical-read.ores --diagnostic "native reader/writer critical declaration requires")
+    oreslang_contract_test(reject_hyphenated_critical_write unsupported-hyphenated-critical-write.ores --diagnostic "native reader/writer critical declaration requires")
+    oreslang_contract_test(reject_hyphenated_transform_pipe unsupported-hyphenated-transform-pipe.ores --diagnostic "native transform-pipe actor requires")
     oreslang_contract_test(reject_suspend_critical unsupported-suspend-critical.ores --diagnostic "native suspends declaration requires")
     # Native parity substrate for the Graal per-incarnation i64/bool
     # StateAccess lifetime. LLVM guest-source lowering is a separate gate.
