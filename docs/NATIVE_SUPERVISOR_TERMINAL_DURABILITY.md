@@ -60,13 +60,22 @@ ACK was lost, the method acknowledges the original one-use scheduler claim
 **after** the durable ACK. A duplicate completed ACK returns false; no
 reconciliation call dispatches the supervisor policy again.
 
-The lower-level `reconcile_durable_external_effect` and
-`acknowledge_proven_durable_effect` remain trusted-host journal operations.
-They do **not** automatically finalize the native scheduler receipt. A host
-that has lost its process-local scheduler after a crash must reconstruct
-authority externally and may acknowledge an already fsynced
-`effect_proven` record directly through the journal; it must never infer an
-external effect from `CLAIMED` alone. FNV checksums are not effect signatures.
+The lower-level `NativeTerminalReceiptJournal::prove_external_effect`
+and `NativeTerminalReceiptJournal::acknowledge` remain trusted-host storage
+operations; they **do not** finalize the native scheduler receipt. A host that
+has lost its process-local scheduler after a crash must reconstruct authority
+externally and may acknowledge an already fsynced `effect_proven` record
+directly through the journal. It must never infer an external effect from
+`CLAIMED` alone. FNV checksums are not effect signatures.
+
+**2026-10-12 audit:** The legacy scheduler-only
+`reconcile_claimed_terminal_ack` must reject whenever a durable journal is
+installed, even when the native scheduler has a live `CLAIMED` receipt.
+The regression fixture specifically arranges a live scheduler claim and a
+`CLAIMED` journal record, supplies a verifier that returns true, and checks
+that neither ACK advances. A normal scheduler enqueue acknowledgment remains
+distinct from a host external-effect commitment. Raw C ABI scheduler receipt
+APIs are trusted-host capabilities, not guest-accessible durable authority.
 
 The exact-source integration gate runs the native bridge and journal tests
 three times each under both strict GCC and Clang ASan/UBSan:
