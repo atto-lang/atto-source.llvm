@@ -1,5 +1,7 @@
 #include "oreslang/runtime/SourcePipelineFlows.h"
 #include <limits.h>
+#include <errno.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,11 +23,47 @@ typedef struct {
 } Flow;
 
 struct OresFlowTable {
+    /* Only indexes, active slot assignment, and global-ID allocation.
+     * A slow publisher cannot hold this lock while admitting DATA. */
     pthread_mutex_t mutex;
-    uint64_t next_flow;
-    uint64_t next_message;
+    pthread_mutex_t flow_locks[ORES_FLOW_MAX_ACTIVE];
     Flow flows[ORES_FLOW_MAX_ACTIVE];
 };
+/* Never recycle source identities when tables are destroyed/recreated.
+ * Every increment is protected by table.mutex for its critical-section
+ * ordering, but IDs are atomic across multiple independent tables. */
+static _Atomic uint64_t next_flow_id = 1;
+static _Atomic uint64_t next_message_id = 1;
+/* Reject synchronous callback reentry with an error, not self-deadlock.
+ * Cross-thread callbacks must still be strictly nonblocking. */
+static _Thread_local const OresFlowTable* callback_table;
+static Flow* find_flow(OresFlowTable* table, uint64_t id);
+static uint64_t allocate_identity(_Atomic uint64_t* counter) {
+    uint64_t current = atomic_load_explicit(counter, memory_order_relaxed);
+    while (current != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(counter, &current,
+                current + 1, memory_order_relaxed, memory_order_relaxed))
+            return current;
+    }
+    return 0;
+}
+static void release_flow(OresFlowTable* table, Flow* flow) {
+    pthread_mutex_unlock(&table->flow_locks[flow - table->flows]);
+}
+/* Acquire the flow's own mutex without holding table.mutex while waiting.
+ * Retire/reuse checks the exact ID again under this lock. */
+static Flow* acquire_flow(OresFlowTable* table, uint64_t id) {
+    pthread_mutex_lock(&table->mutex);
+    Flow* flow = find_flow(table, id);
+    pthread_mutex_unlock(&table->mutex);
+    if (!flow) return NULL;
+    pthread_mutex_lock(&table->flow_locks[flow - table->flows]);
+    if (flow->id != id) {
+        release_flow(table, flow);
+        return NULL;
+    }
+    return flow;
+}
 
 static int actor_equal(OresFlowActor a, OresFlowActor b) {
     return a.actor_id == b.actor_id &&
@@ -57,14 +95,22 @@ OresFlowTable* ores_flow_table_create(void) {
         free(table);
         return NULL;
     }
-    table->next_flow = 1;
-    table->next_message = 1;
+    for (size_t i = 0; i < ORES_FLOW_MAX_ACTIVE; ++i) {
+        if (pthread_mutex_init(&table->flow_locks[i], NULL) != 0) {
+            while (i > 0) pthread_mutex_destroy(&table->flow_locks[--i]);
+            pthread_mutex_destroy(&table->mutex);
+            free(table);
+            return NULL;
+        }
+    }
     return table;
 }
 void ores_flow_table_destroy(OresFlowTable* table) {
     if (!table) return;
     /* The trusted scheduler owner must fence/join all callers first.
      * Never silently destroy a mutex while another producer owns it. */
+    for (size_t i = 0; i < ORES_FLOW_MAX_ACTIVE; ++i)
+        if (pthread_mutex_destroy(&table->flow_locks[i]) != 0) abort();
     if (pthread_mutex_destroy(&table->mutex) != 0) abort();
     free(table);
 }
@@ -74,21 +120,21 @@ OresFlowError ores_flow_open(OresFlowTable* table, uint64_t pipeline_id,
     if (!table || !pipeline_id || !route_generation || !stages || !flow_id ||
         stage_count < 2 || stage_count > ORES_FLOW_MAX_STAGES)
         return ORES_FLOW_BAD_ARGUMENT;
+    if (callback_table == table) return ORES_FLOW_REENTRANT;
     for (uint8_t i = 0; i < stage_count; ++i) {
         if (!valid_actor(stages[i])) return ORES_FLOW_BAD_ARGUMENT;
         for (uint8_t j = 0; j < i; ++j)
-            if (actor_equal(stages[i], stages[j]))
+            if (stages[i].actor_id == stages[j].actor_id)
                 return ORES_FLOW_BAD_ARGUMENT;
     }
     pthread_mutex_lock(&table->mutex);
-    if (table->next_flow == UINT64_MAX) {
-        pthread_mutex_unlock(&table->mutex);
-        return ORES_FLOW_CAPACITY; /* never wrap/reuse flow identity */
-    }
     Flow* slot = NULL;
+    size_t index = 0;
     for (size_t i = 0; i < ORES_FLOW_MAX_ACTIVE; ++i) {
-        if (!table->flows[i].id) {
+        if (!table->flows[i].id &&
+            pthread_mutex_trylock(&table->flow_locks[i]) == 0) {
             slot = &table->flows[i];
+            index = i;
             break;
         }
     }
@@ -96,14 +142,21 @@ OresFlowError ores_flow_open(OresFlowTable* table, uint64_t pipeline_id,
         pthread_mutex_unlock(&table->mutex);
         return ORES_FLOW_CAPACITY;
     }
+    const uint64_t identity = allocate_identity(&next_flow_id);
+    if (!identity) {
+        pthread_mutex_unlock(&table->flow_locks[index]);
+        pthread_mutex_unlock(&table->mutex);
+        return ORES_FLOW_CAPACITY;
+    }
     memset(slot, 0, sizeof(*slot));
-    slot->id = table->next_flow++;
+    slot->id = identity;
     slot->pipeline_id = pipeline_id;
     slot->route_generation = route_generation;
     slot->stage_count = stage_count;
     memcpy(slot->stages, stages, stage_count * sizeof(stages[0]));
     slot->state = ORES_FLOW_ACTIVE;
     *flow_id = slot->id;
+    pthread_mutex_unlock(&table->flow_locks[index]);
     pthread_mutex_unlock(&table->mutex);
     return ORES_FLOW_OK;
 }
@@ -111,8 +164,8 @@ OresFlowError ores_flow_reserve(OresFlowTable* table, uint64_t flow_id,
     OresFlowActor sender, OresFlowDirection direction, uint64_t causal_parent,
     OresFlowTicket* out) {
     if (!table || !flow_id || !out) return ORES_FLOW_BAD_ARGUMENT;
-    pthread_mutex_lock(&table->mutex);
-    Flow* f = find_flow(table, flow_id);
+    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    Flow* f = acquire_flow(table, flow_id);
     OresFlowError error = ORES_FLOW_OK;
     if (!f) error = ORES_FLOW_NOT_FOUND;
     else if (f->state != ORES_FLOW_ACTIVE) error = ORES_FLOW_TERMINAL;
@@ -142,15 +195,16 @@ OresFlowError ores_flow_reserve(OresFlowTable* table, uint64_t flow_id,
         if (!actor_equal(sender, expected_sender) ||
             direction != expected_direction)
             error = ORES_FLOW_WRONG_SENDER;
-        else if (table->next_message == UINT64_MAX)
-            error = ORES_FLOW_CAPACITY; /* no message-ID wrap */
         else {
             OresFlowTicket t = {0};
             t.flow_id = f->id;
             t.correlation_id = f->id;
             t.pipeline_id = f->pipeline_id;
             t.route_generation = f->route_generation;
-            t.message_id = table->next_message++;
+            t.message_id = allocate_identity(&next_message_id);
+            if (!t.message_id) {
+                error = ORES_FLOW_CAPACITY;
+            } else {
             t.parent_message_id = f->last_message;
             t.sender = sender;
             t.destination = f->stages[destination];
@@ -159,26 +213,33 @@ OresFlowError ores_flow_reserve(OresFlowTable* table, uint64_t flow_id,
             f->ticket = t;
             f->reserved = 1;
             *out = t;
+            }
         }
     }
-    pthread_mutex_unlock(&table->mutex);
+    if (f) release_flow(table, f);
     return error;
 }
 OresFlowError ores_flow_publish(OresFlowTable* table,
     const OresFlowTicket* ticket, OresFlowTryPublish try_publish, void* ctx) {
     if (!table || !ticket || !try_publish) return ORES_FLOW_BAD_ARGUMENT;
-    pthread_mutex_lock(&table->mutex);
-    Flow* f = find_flow(table, ticket->flow_id);
+    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    Flow* f = acquire_flow(table, ticket->flow_id);
     OresFlowError error = ORES_FLOW_OK;
     if (!f) error = ORES_FLOW_NOT_FOUND;
     else if (f->state != ORES_FLOW_ACTIVE) error = ORES_FLOW_TERMINAL;
     else if (!f->reserved || !ticket_equal(ticket, &f->ticket))
         error = ORES_FLOW_BAD_TICKET;
     else {
-        /* Linearization point: terminal cancel and nonblocking scheduler
-         * publication share this mutex. try_publish MUST NOT wait. */
-        if (try_publish(ctx, ticket) == 1) {
-            f->last_message = ticket->message_id;
+        /* Linearization point: flow cancellation and nonblocking scheduler
+         * publication share this flow-specific mutex. try_publish MUST NOT wait. */
+        /* Copy the checked reservation: caller-provided ticket storage
+         * cannot change mid-callback (nor be reused for another flow). */
+        const OresFlowTicket pinned = f->ticket;
+        callback_table = table;
+        const int admitted = try_publish(ctx, &pinned);
+        callback_table = NULL;
+        if (admitted == 1) {
+            f->last_message = pinned.message_id;
             ++f->phase;
         } else {
             f->state = ORES_FLOW_REJECTED;
@@ -187,14 +248,14 @@ OresFlowError ores_flow_publish(OresFlowTable* table,
         f->reserved = 0;
         memset(&f->ticket, 0, sizeof(f->ticket));
     }
-    pthread_mutex_unlock(&table->mutex);
+    if (f) release_flow(table, f);
     return error;
 }
 OresFlowError ores_flow_cancel(OresFlowTable* table, uint64_t flow_id,
     OresFlowActor source) {
     if (!table || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
-    pthread_mutex_lock(&table->mutex);
-    Flow* f = find_flow(table, flow_id);
+    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    Flow* f = acquire_flow(table, flow_id);
     OresFlowError error;
     if (!f) error = ORES_FLOW_NOT_FOUND;
     else if (!actor_equal(source, f->stages[0]))
@@ -207,14 +268,14 @@ OresFlowError ores_flow_cancel(OresFlowTable* table, uint64_t flow_id,
         memset(&f->ticket, 0, sizeof(f->ticket));
         error = ORES_FLOW_OK;
     }
-    pthread_mutex_unlock(&table->mutex);
+    if (f) release_flow(table, f);
     return error;
 }
 OresFlowError ores_flow_finish(OresFlowTable* table, uint64_t flow_id,
     OresFlowActor source, uint64_t causal_parent) {
     if (!table || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
-    pthread_mutex_lock(&table->mutex);
-    Flow* f = find_flow(table, flow_id);
+    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    Flow* f = acquire_flow(table, flow_id);
     OresFlowError error;
     if (!f) error = ORES_FLOW_NOT_FOUND;
     else if (!actor_equal(source, f->stages[0])) error = ORES_FLOW_WRONG_SENDER;
@@ -228,39 +289,49 @@ OresFlowError ores_flow_finish(OresFlowTable* table, uint64_t flow_id,
         f->state = ORES_FLOW_COMPLETED;
         error = ORES_FLOW_OK;
     }
-    pthread_mutex_unlock(&table->mutex);
+    if (f) release_flow(table, f);
     return error;
 }
 OresFlowError ores_flow_snapshot(OresFlowTable* table, uint64_t flow_id,
     OresFlowSnapshot* out) {
     if (!table || !out || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
-    pthread_mutex_lock(&table->mutex);
-    Flow* f = find_flow(table, flow_id);
-    if (!f) {
-        pthread_mutex_unlock(&table->mutex);
-        return ORES_FLOW_NOT_FOUND;
-    }
+    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    Flow* f = acquire_flow(table, flow_id);
+    if (!f) return ORES_FLOW_NOT_FOUND;
     out->state = f->state;
     out->last_message_id = f->last_message;
     out->correlation_id = f->id;
     out->committed_hops = f->phase;
     out->expected_hops = 2u * f->stage_count - 1u;
     out->reserved = (uint8_t)f->reserved;
-    pthread_mutex_unlock(&table->mutex);
+    release_flow(table, f);
     return ORES_FLOW_OK;
 }
 OresFlowError ores_flow_retire(OresFlowTable* table, uint64_t flow_id) {
     if (!table || !flow_id) return ORES_FLOW_BAD_ARGUMENT;
+    if (callback_table == table) return ORES_FLOW_REENTRANT;
+    /* Never wait under the directory mutex for a slow in-flight callback.
+     * A busy flow is retried by trusted teardown AFTER fencing producers. */
     pthread_mutex_lock(&table->mutex);
     Flow* f = find_flow(table, flow_id);
+    if (!f) {
+        pthread_mutex_unlock(&table->mutex);
+        return ORES_FLOW_NOT_FOUND;
+    }
+    const size_t index = (size_t)(f - table->flows);
+    if (pthread_mutex_trylock(&table->flow_locks[index]) != 0) {
+        pthread_mutex_unlock(&table->mutex);
+        return ORES_FLOW_BUSY;
+    }
     OresFlowError error;
-    if (!f) error = ORES_FLOW_NOT_FOUND;
+    if (f->id != flow_id) error = ORES_FLOW_NOT_FOUND;
     else if (f->state == ORES_FLOW_ACTIVE || f->reserved)
         error = ORES_FLOW_INCOMPLETE;
     else {
         memset(f, 0, sizeof(*f));
         error = ORES_FLOW_OK;
     }
+    pthread_mutex_unlock(&table->flow_locks[index]);
     pthread_mutex_unlock(&table->mutex);
     return error;
 }
