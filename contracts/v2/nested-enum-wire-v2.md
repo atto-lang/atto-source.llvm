@@ -45,6 +45,17 @@ nominal shape grammar (syntactic ASCII; only compiler-declared names):
 
 `E(<owner length>:<owner>)[<numeric tag>:<case length>:<case name>=<case shape or N>;...]`
 
+Nominal identifiers in a nested v2 closed actor domain (domain name,
+outer enum owner and variant, and every nested enum owner and variant)
+are **ASCII identifiers**, matching `[A-Za-z_][A-Za-z0-9_]*`,
+with at most 256 bytes each. Names outside this grammar may remain
+valid *local* identifiers but cannot enter this wire ABI. Reject rather
+than silently replacing non-ASCII characters when hashing a shape.
+The canonical expanded ASCII shape descriptor has a separate
+**1,048,576-byte limit**; check it at compiler admission as well as
+at encoding/decoding. The rule applies even if the selected case is small,
+because the closed nested enum shape includes every declared case.
+
 The case order is the declaration's strictly monotone tag order; `N`
 means nullary. For Foo.Message1, the complete outer tuple shape is
 `T[S,I,E(3:Bar)[1:8:Message1=N;]]`.
