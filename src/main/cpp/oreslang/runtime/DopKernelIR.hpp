@@ -137,6 +137,8 @@ public:
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->closed) throw std::logic_error("closed buffer");
+        if (state_->loans == std::numeric_limits<std::size_t>::max())
+            throw std::overflow_error("read loan counter exhausted");
         ++state_->loans;
         return ReadLoan(state_);
     }
