@@ -49,7 +49,8 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure"
+        "gpu", "quantum", "over", "structural", "int", "pure",
+        "using", "requires", "serial"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -135,6 +136,10 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("serial")) {
+                require("actor");
+                fail("native serial actor requires shared HTTP/message lane lowering");
+            }
             if (accept("module")) {
                 program.module = identifier();
                 accept("as");
@@ -148,6 +153,10 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("serial")) {
+                    require("actor");
+                    fail("native serial actor requires shared HTTP/message lane lowering");
+                }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'class' or 'actor'");

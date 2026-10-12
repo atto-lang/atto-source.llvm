@@ -31,11 +31,11 @@ pure fnc add(int a, int b): int {
 }
 
 fnc get_count(): int using state.read {
-    return self.handle_state(|s| s.count);
+    return self.handle_state(critical |s| s.count);
 }
 
 fnc increment(): int using state.read, state.write {
-    return self.handle_state(|s| {
+    return self.handle_state(critical |s| {
         s.count += 1;
         return s.count;
     });
@@ -58,7 +58,7 @@ critical fnc update(): int
     using state.read, state.write
     requires bounded, no_alloc, no_block
 {
-    return self.handle_state(|s| {
+    return self.handle_state(critical |s| {
         s.count += 1;
         return s.count;
     });
@@ -146,7 +146,7 @@ fnc tick(): int
     using state.read, state.write
     requires bounded, no_alloc, no_block
 {
-    return self.handle_state(|s| { s.count += 1; return s.count; });
+    return self.handle_state(critical |s| { s.count += 1; return s.count; });
 }
 ```
 
@@ -195,3 +195,15 @@ entries, unknown effect names (unless bound row variables), and
 
 **Release gate:** Documentation and native host tests do not imply that
 new signatures or suspendable actor state compile.
+
+
+## Critical callback syntax amendment — October 11, 2026
+
+The sealed `handle_state` intrinsic is intrinsically `critical`; every
+inline state callback must be written `critical |s| -> ...`, not an ordinary
+lambda. The callback effects are constrained by the enclosing `using` row.
+Java's state/effects parser branch now reserves `critical` and `using` and
+checks the callback AST and conservative effects. LLVM reserves the words and
+has native semantic admission tests, but still rejects executable guest actor
+state lowering. See `CRITICAL_HANDLE_STATE_USING_PARITY.md` for the canonical
+cross-backend contract and its exact shared fixture.

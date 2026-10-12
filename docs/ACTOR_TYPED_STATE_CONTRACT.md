@@ -3,7 +3,7 @@
 Actor state belongs to an actor *instance*. Its schema belongs to the actor type.
 Guest code cannot read `self.state`, override `handle_state`, or receive a raw
 native pointer. All access is through the sealed `critical handle_state` method, invoked as
-`await self.handle_state(|access| { ... })` when the callback suspends.
+`await self.handle_state(critical |access| { ... })` when the callback suspends.
 
 ## Finite typed keys (preferred)
 
@@ -14,7 +14,7 @@ actor Counter {
         enabled: bool = true;
     }
     pub fnc increment(): int {
-        return self.handle_state(|s| {
+        return self.handle_state(critical |s| {
             s.count += 1;
             return s.count;
         });
@@ -36,7 +36,7 @@ pointer may escape the callback.
 actor Cache {
     state: Map[string, int];
     pub fnc put(key: string, value: int) {
-        self.handle_state(|s| { s.set(key, value); });
+        self.handle_state(critical |s| { s.set(key, value); });
     }
 }
 ```
@@ -85,18 +85,18 @@ define actor Counter from Countable as
     }
 
     pub get_count(): int using state.read {
-        return self.handle_state(|s| -> s.count);
+        return self.handle_state(critical |s| -> s.count);
     }
 
     pub increment(): int using state.read, state.write {
-        return self.handle_state(|s| -> {
+        return self.handle_state(critical |s| -> {
             s.count = s.count + 1;
             return s.count;
         });
     }
 
     critical pub audit(): void using state.read {
-        self.handle_state(|s| -> { stdio.println(s.count); });
+        self.handle_state(critical |s| -> { stdio.println(s.count); });
         return;
     }
 end
@@ -161,3 +161,14 @@ Compound `+=` assignment remains unsupported by the inspected Java
 source parser; examples use `s.count = s.count + 1`. Lowering either
 spelling must guarantee no reentrancy between the read and commit of an
 actor-local primitive read-modify-write.
+
+
+## Mandatory critical callback amendment — October 11, 2026
+
+Every state callback in this document now uses `critical |s| -> ...`.
+The sealed `self.handle_state` intrinsic itself is always critical; the
+containing actor method need not be marked critical to invoke it. The caller's
+`using` effects bound the transitive callback effects, while the critical
+execution ticket belongs to the actor scheduler. Neither backend yet has
+end-to-end suspendable state-loan source runtime parity. See
+`CRITICAL_HANDLE_STATE_USING_PARITY.md`.
