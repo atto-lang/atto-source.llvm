@@ -11,6 +11,7 @@ int main() {
             | static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
     CriticalStateCallback callback{};
     callback.state_mode = CriticalStateMode::Write;
+    callback.callback_critical = true;
     callback.one_state_parameter = true;
     callback.inferred = declared;
 
@@ -53,11 +54,18 @@ int main() {
     CHECK(resumed.end() == ORES_ACTOR_STATE_OK);
 
     // Fail closed on invalid source contracts, before state-loan allocation.
+    auto forged_write = callback;
+    forged_write.callback_critical = false;
+    CriticalStateLoan forged;
+    CHECK(forged.begin(state, 123, 901, forged_write, declared)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    CHECK(!forged.active());
+
     auto missing = callback;
     missing.state_mode = CriticalStateMode::None;
     CriticalStateLoan invalid;
     CHECK(invalid.begin(state, 123, 901, missing, declared)
-            == CriticalStateAdmission::ReadModeCannotWrite);
+            == CriticalStateAdmission::MissingCallbackCritical);
     CHECK(!invalid.active());
 
     // An exception must revoke the ephemeral loan through stack unwinding.
