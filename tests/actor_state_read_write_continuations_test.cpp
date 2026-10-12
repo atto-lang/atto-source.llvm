@@ -107,6 +107,38 @@ int main() {
     bounded.retire();
     CHECK(bounded.pending_notifications().size() == 2);
 
+    // Retirement/reincarnation ABA: the old CONTROL receipt must not
+    // admit a continuation with the same numerical ID in a replacement actor.
+    Bridge previous;
+    CHECK(previous.request(previous.incarnation(), 1, Mode::Read).status == Status::Ready);
+    CHECK(previous.request(previous.incarnation(), 2, Mode::Write).status == Status::Queued);
+    previous.complete(previous.incarnation(), 1);
+    const auto stale_ready = previous.pending_notifications().front();
+
+    Bridge replacement;
+    CHECK(previous.incarnation() != replacement.incarnation());
+    CHECK(replacement.request(replacement.incarnation(), 1, Mode::Read).status == Status::Ready);
+    CHECK(replacement.request(replacement.incarnation(), 2, Mode::Write).status == Status::Queued);
+    replacement.complete(replacement.incarnation(), 1);
+    const auto current_ready = replacement.pending_notifications().front();
+    CHECK(stale_ready.continuation_id == current_ready.continuation_id);
+    CHECK(stale_ready.status == current_ready.status);
+    CHECK(stale_ready.incarnation != current_ready.incarnation);
+    CHECK(!replacement.acknowledge(stale_ready));
+    CHECK(!replacement.admitted(previous.incarnation(), 2, Mode::Write));
+    CHECK(!replacement.admitted(replacement.incarnation(), 2, Mode::Write));
+    bool stale_identity_rejected = false;
+    try { replacement.complete(previous.incarnation(), 2); }
+    catch (const std::invalid_argument&) { stale_identity_rejected = true; }
+    CHECK(stale_identity_rejected);
+    stale_identity_rejected = false;
+    try { replacement.request(previous.incarnation(), 3, Mode::Read); }
+    catch (const std::invalid_argument&) { stale_identity_rejected = true; }
+    CHECK(stale_identity_rejected);
+    CHECK(replacement.acknowledge(current_ready));
+    CHECK(replacement.admitted(replacement.incarnation(), 2, Mode::Write));
+    replacement.complete(replacement.incarnation(), 2);
+
     // Publication observation is retryable and side-effect free.
     Bridge retryable;
     CHECK(retryable.request(retryable.incarnation(), 1, Mode::Read).status == Status::Ready);
