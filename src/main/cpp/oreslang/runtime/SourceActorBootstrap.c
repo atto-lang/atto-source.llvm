@@ -112,6 +112,13 @@ static SourceActorGroup group = {
  * is executing. A source program cannot forge it through message bytes. */
 static _Thread_local SourceActor* active_pipeline_actor;
 static _Thread_local uint8_t active_pipeline_ingress;
+/* Optional test-only scheduler fault point. Production builds neither
+ * export nor invoke a testing callback. Never call under group.mutex. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+__attribute__((weak))
+void oreslang_source_actor_test_before_pipeline_publish(void* actor,
+                                                         unsigned direction);
+#endif
 static _Atomic uint64_t next_actor_id = 4100;
 static void check_invariant(int condition, const char* predicate, int line) {
     if (!condition) {
@@ -649,6 +656,12 @@ static int source_send_binary_unlocked(SourceActor* actor,
      * with final DATA publication. Validate and allocate outside the lock,
      * but never publish after cancellation won the group mutex. */
     const int pipeline_route = actor->upstream || actor->downstream;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Allows a race test to force cancellation after validating owned wire
+     * bytes but BEFORE the nonblocking scheduler admission commit. */
+    if (pipeline_route && oreslang_source_actor_test_before_pipeline_publish)
+        oreslang_source_actor_test_before_pipeline_publish(actor, direction);
+#endif
     if (pipeline_route) group_lock();
     int admitted = (!pipeline_route
             || atomic_load_explicit(&group.pipeline_failure,
