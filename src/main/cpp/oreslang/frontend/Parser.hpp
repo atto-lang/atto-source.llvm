@@ -77,6 +77,8 @@ struct TaggedReceiveArm {
     // into a scheduler-admitted message, never a synchronous actor call.
     std::string route_direction;
     std::string route_variant;
+    // Owned one-level nested nullary constructor for directional sends.
+    std::string route_nested_variant;
     std::unique_ptr<Expression> route_payload;
     std::vector<std::string> binders;
     bool binds_payload = false;
