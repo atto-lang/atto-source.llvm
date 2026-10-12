@@ -11,10 +11,13 @@ namespace oreslang {
  * LLVM has no full guest actor-state codegen yet. This is a shared semantic
  * contract, not a claim that actor-state guest source compiles to LLVM.
  */
+enum class CriticalStateMode : std::uint8_t { None, Read, Write };
+
 enum class CriticalStateAdmission : std::uint8_t {
     Accept,
     MissingIntrinsicCritical,
     MissingCallbackCritical,
+    ReadModeCannotWrite,
     InvalidStateCallback,
     CallbackEscape,
     EffectExceedsUsing,
@@ -25,7 +28,7 @@ enum class CriticalStateAdmission : std::uint8_t {
 
 struct CriticalStateCallback {
     bool intrinsic_critical = true;  // sealed runtime intrinsic
-    bool callback_critical = false;
+    CriticalStateMode state_mode = CriticalStateMode::None;
     bool lexical = true;
     bool one_state_parameter = false;
     bool escapes = false;
@@ -39,14 +42,20 @@ inline CriticalStateAdmission admit_critical_handle_state(
         FunctionEffects using_effects,
         bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    // The serial privilege comes from a trusted actor declaration + scheduler,
-    // never from callback metadata supplied by guest code.
-    if (!callback.callback_critical && !verified_serial_actor)
+    // Breaking pre-1.0 contract: even a verified serial actor must specify
+    // an explicit read/write capability. Serial affects scheduling, not state authority.
+    (void)verified_serial_actor;
+    if (callback.state_mode == CriticalStateMode::None)
         return CriticalStateAdmission::MissingCallbackCritical;
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
     if (callback.escapes) return CriticalStateAdmission::CallbackEscape;
+    // A broad using row never upgrades a read-only state capability.
+    if (callback.state_mode == CriticalStateMode::Read
+            && callback.inferred.has(FunctionEffect::StateWrite)) {
+        return CriticalStateAdmission::ReadModeCannotWrite;
+    }
     if (!using_effects.permits(callback.inferred)) {
         return CriticalStateAdmission::EffectExceedsUsing;
     }
