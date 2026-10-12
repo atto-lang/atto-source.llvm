@@ -86,6 +86,14 @@ public:
         return phase_;
     }
 
+    // Terminal failures retain captured native ownership in the registry.
+    // The supervisor MUST keep the failed registry alive in its quarantine
+    // until resource-specific safety/revocation can be established.
+    std::size_t quarantined_resources() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return quarantined_.size();
+    }
+
     // Physical reclamation must only follow scheduler/FFI quiescence.
     // Never invoke a resource closer with the registry mutex held.
     Result try_reclaim() {
@@ -145,6 +153,12 @@ public:
             // a second close attempt and leave failure visible to supervisor.
             const bool safely_reclaimed = result.failures == 0;
             last_result_ = std::move(result);
+            if (!safely_reclaimed) {
+                // Preserve callback captures, including RAII ownership of
+                // skipped allocations. Letting pending destruct here could
+                // otherwise free supposedly quarantined native state.
+                quarantined_.swap(pending);
+            }
             phase_ = safely_reclaimed ? Phase::reclaimed : Phase::failed;
             return last_result_;
         }
@@ -201,6 +215,7 @@ private:
     Phase phase_ = Phase::live;
     std::uint64_t next_token_ = 0;
     std::vector<Entry> entries_;
+    std::vector<Entry> quarantined_;
     std::unordered_set<std::uint64_t> turns_, loans_, callbacks_;
     Result last_result_{Reclaim::not_retired, 0, {}};
 };
