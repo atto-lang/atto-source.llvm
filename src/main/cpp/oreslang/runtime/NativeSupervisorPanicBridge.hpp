@@ -333,11 +333,18 @@ public:
                     || current.actor.actor_slot != failed_child.actor_slot
                     || current.actor.generation != failed_child.generation)
                 throw std::logic_error("stale logical child PANIC authority");
+            std::optional<DurableTerminalKey> durable_key;
+            if (durable_journal_) {
+                durable_key = durable_identity(receipt.failure, admitted);
+                prepare_durable_terminal(*durable_key, failed_child);
+            }
             if (!ores_native_actor_scheduler_claim_recovered_parent_terminal_receipt(
                     scheduler_, parent_, recovered_parent, failed_child,
                     &receipt))
                 throw std::logic_error(
                     "recovered parent stopped or terminal host effect already claimed");
+            if (durable_key)
+                (void)durable_journal_->claim(*durable_key);
             child_registry_->finalized(
                 admitted.child, failed_child, admitted.incarnation);
             registered_.erase(found);
