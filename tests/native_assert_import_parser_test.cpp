@@ -73,6 +73,35 @@ int main() {
             "pub fnc main(): int { return 0; } "
             "import module Assert from \"std/assert\";",
             "native module imports must precede declarations");
+        // No attacker-controlled aliases, path variants, or control bytes
+        // may be mistaken for the sealed, source-owned standard library.
+        expect_rejected(
+            "import module Assert from \"std/assert/\"; "
+            "pub fnc main(): int { return 0; }",
+            "only sealed Assert");
+        expect_rejected(
+            "import module Assert from \"std//assert\"; "
+            "pub fnc main(): int { return 0; }",
+            "only sealed Assert");
+        expect_rejected(
+            "import module Assert from \"STD/assert\"; "
+            "pub fnc main(): int { return 0; }",
+            "only sealed Assert");
+        expect_rejected(
+            "import module Assert from \"std/assert/../assert\"; "
+            "pub fnc main(): int { return 0; }",
+            "only sealed Assert");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "define module Entry as "
+            "pub fnc main(): int { return 0; } "
+            "import module Assert from \"std/assert\"; end",
+            "native module imports must precede declarations");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "import module Assert from \"std/assert\"; "
+            "define module Entry as pub fnc main(): int { return 0; } end",
+            "duplicate native module imports");
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {
