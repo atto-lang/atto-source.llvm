@@ -190,8 +190,11 @@ public:
         }
     }
 
-    ReplacementState require_candidate(RestartReservation permit,
-                                        OresNativeActorRef actor) const {
+private:
+    // Lock-required implementation detail. Never expose mutable registry
+    // indexes through a callable public method without acquiring mutex_.
+    ReplacementState require_candidate_locked(RestartReservation permit,
+                                              OresNativeActorRef actor) const {
         check_reservation(permit);
         auto found = replacements_.find(permit.child.logical_child_id);
         if (found == replacements_.end()
@@ -201,6 +204,7 @@ public:
         return found->second;
     }
 
+public:
     void acknowledge_replacement_admission(
             RestartReservation permit, OresNativeActorRef actor,
             const std::function<bool()>& verify_admitted) {
@@ -208,14 +212,14 @@ public:
             throw std::invalid_argument("missing trusted scheduler admission proof");
         {
             std::lock_guard<std::mutex> guard(mutex_);
-            if (restart_closed_ || require_candidate(permit, actor).phase
+            if (restart_closed_ || require_candidate_locked(permit, actor).phase
                     != ReplacementPhase::spawned)
                 throw std::logic_error("cannot admit this replacement");
         }
         // External probe must not run holding registry's mutex.
         if (!verify_admitted()) throw std::logic_error("replacement not physically admitted");
         std::lock_guard<std::mutex> guard(mutex_);
-        if (restart_closed_ || require_candidate(permit, actor).phase
+        if (restart_closed_ || require_candidate_locked(permit, actor).phase
                 != ReplacementPhase::spawned)
             throw std::logic_error("replacement admission became stale");
         replacements_.at(permit.child.logical_child_id).phase
@@ -229,14 +233,14 @@ public:
             throw std::invalid_argument("missing trusted physical cleanup proof");
         {
             std::lock_guard<std::mutex> guard(mutex_);
-            auto status = require_candidate(permit, actor).phase;
+            auto status = require_candidate_locked(permit, actor).phase;
             if (status != ReplacementPhase::spawned
                     && status != ReplacementPhase::admitted)
                 throw std::logic_error("replacement no longer live");
         }
         if (!verify_cleaned()) throw std::logic_error("replacement still physically live");
         std::lock_guard<std::mutex> guard(mutex_);
-        auto status = require_candidate(permit, actor).phase;
+        auto status = require_candidate_locked(permit, actor).phase;
         if (status != ReplacementPhase::spawned
                 && status != ReplacementPhase::admitted)
             throw std::logic_error("replacement cleanup became stale");
@@ -247,7 +251,7 @@ public:
     /** Identity commit only; caller must have admitted a fresh actor. */
     Snapshot replace(RestartReservation permit, OresNativeActorRef replacement) {
         std::lock_guard<std::mutex> guard(mutex_);
-        const auto candidate = require_candidate(permit, replacement);
+        const auto candidate = require_candidate_locked(permit, replacement);
         if (restart_closed_ || candidate.phase != ReplacementPhase::admitted)
             throw std::logic_error("replacement lacks physical admission or supervisor closed");
         validate_actor(replacement);
