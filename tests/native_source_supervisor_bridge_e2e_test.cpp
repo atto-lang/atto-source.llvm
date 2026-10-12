@@ -162,8 +162,38 @@ static void exercise(bool ambiguous) {
             "host STOP receipt did not preserve applied versus ambiguous outcome");
     require(receipt.turn_generation != 0
                 && receipt.failed_actor.actor_slot == f.child.actor_slot
-                && receipt.incarnation == 1,
-            "STOP receipt was not bound to the exact physical incarnation");
+                && receipt.incarnation == 1 && receipt.host_invoked,
+            "STOP host invocation not bound to the exact physical incarnation");
+
+    // These journal entries come from the native scheduler -> PANIC bridge ->
+    // compiled supervisor CONTROL -> actual host sink path. Do not fabricate
+    // an applied STOP after the sink threw or assume it was applied.
+    const auto observed = f.registry->committed_transitions();
+    unsigned invokes = 0, reserves = 0, uncertain = 0, acknowledgments = 0;
+    std::uint64_t reserved_turn = 0;
+    for (const auto& event : observed) {
+        const std::string action(event.operation);
+        if (action == "stop.reserve") {
+            ++reserves;
+            reserved_turn = event.stop_turn;
+        } else if (action == "stop.invoke-asserted") {
+            ++invokes;
+            require(event.stop_turn == reserved_turn && reserved_turn != 0,
+                    "host entry was not linked to the original STOP turn");
+        } else if (action == "stop.uncertain") {
+            ++uncertain;
+        } else if (action == "stop.ack-applied") {
+            ++acknowledgments;
+        }
+    }
+    require(reserves == 1 && invokes == 1
+                && uncertain == (ambiguous ? 1U : 0U)
+                && acknowledgments == (ambiguous ? 0U : 1U),
+            "real CONTROL host STOP was duplicated or falsely acknowledged");
+    std::printf("NATIVE_SUPERVISOR_STOP_OBSERVED_V1=%s reserved=1 invoked=1 "
+                "uncertain=%u acknowledged=%u\n",
+                ambiguous ? "uncertain" : "successful",
+                uncertain, acknowledgments);
     require(f.process->resolved() == (ambiguous ? 0U : 1U)
                 && f.process->undelivered() == (ambiguous ? 1U : 0U),
             "CONTROL misaccounted acknowledged or ambiguous STOP");
