@@ -248,12 +248,25 @@ public:
         return ControlTurn::executed;
     }
 
+    // The default root supervisor ID is a runtime-local routing label,
+    // never an authorization token or replacement for actor generation checks.
+    static constexpr std::uint64_t root_supervisor_id = 1;
+
     explicit NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers)
+        : NativeActorGroup(runtime_id, maximum_workers, root_supervisor_id) {}
+
+    NativeActorGroup(std::uint64_t runtime_id, std::size_t maximum_workers,
+                     std::uint64_t supervisor_id)
         : runtime_id_(runtime_id), maximum_workers_(maximum_workers),
+          supervisor_id_(supervisor_id),
           group_id_(next_group_id().fetch_add(1, std::memory_order_relaxed)) {
-        if (runtime_id == 0 || maximum_workers == 0)
-            throw std::invalid_argument("invalid ActorGroup runtime/capacity");
+        if (runtime_id == 0 || maximum_workers == 0 || supervisor_id == 0)
+            throw std::invalid_argument("invalid ActorGroup runtime/capacity/supervisor");
     }
+
+    std::uint64_t supervisor_id() const noexcept { return supervisor_id_; }
+    std::uint64_t group_id() const noexcept { return group_id_; }
+    std::uint64_t runtime_id() const noexcept { return runtime_id_; }
 
     NativeActorGroup(const NativeActorGroup&) = delete;
     NativeActorGroup& operator=(const NativeActorGroup&) = delete;
@@ -617,6 +630,7 @@ private:
 
     const std::uint64_t runtime_id_;
     const std::size_t maximum_workers_;
+    const std::uint64_t supervisor_id_;
     const std::uint64_t group_id_;
     mutable std::mutex mutex_;
     bool closed_ = false;
