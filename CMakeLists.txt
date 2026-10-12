@@ -684,6 +684,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-mailbox-test)
     set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
 
+    # Zero-thread central CONTROL wake coordinator on the four-domain VM.
+    add_executable(oreslang-native-vm-control-plane-test
+        tests/native_vm_control_plane_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-control-plane-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-control-plane-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-control-plane-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_master_control_wake_coalescing
+        COMMAND oreslang-native-vm-control-plane-test)
+    set_tests_properties(native_vm_master_control_wake_coalescing PROPERTIES TIMEOUT 25)
+
     # VM-level ownership: four independent scheduler domains, five carriers
     # by default; cross-domain ActorRefs cannot be admitted by another pool.
     add_executable(oreslang-native-ores-vm-test
