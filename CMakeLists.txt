@@ -688,6 +688,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-reincarnation-test)
     set_tests_properties(native_actor_reincarnation PROPERTIES TIMEOUT 30)
 
+    # Only opt-in identity-bearing callbacks permit physical slot reuse
+    # after previously published user activity and normal-exit sealing.
+    add_executable(oreslang-native-active-generation-test
+        tests/native_active_actor_generation_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-active-generation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-active-generation-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-active-generation-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-active-generation-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_active_actor_generation
+        COMMAND oreslang-native-active-generation-test)
+    set_tests_properties(native_active_actor_generation PROPERTIES TIMEOUT 40)
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # GNU link-wrapper fault injection: no uninitialized mutex destroy
         # and no publication-gate leak on partial pthread startup.
