@@ -1,3 +1,11 @@
+> **Superseded syntax notice (2026-10-12):** This document records the
+> earlier actor-state experiment. The canonical pre-1.0 form now uses
+> signature `with state.read, state.write` for effect bounds and expression
+> `using state.read(...)` / `using state.write(critical ...)` for scoped
+> authority. See [WITH_USING_ACTOR_STATE_V1.md](WITH_USING_ACTOR_STATE_V1.md).
+> The old direct-`handle_state` and signature-`using` examples below are
+> historical until migrated; do not use them as the new language API.
+
 # Actor state access: canonical `self.handle_state` contract
 
 Status: **restricted LLVM compiled execution verified; Java compiler fail-closed**.
