@@ -22,7 +22,16 @@ public:
     enum class Reclaim { not_retired, busy, closing, complete, failed };
     enum class Activity { turn, loan, callback };
 
-    struct Ticket {
+    class Ticket final {
+    public:
+        Ticket(const Ticket&) = default;
+        Ticket& operator=(const Ticket&) = default;
+    private:
+        friend class ActorResourceRegistry;
+        Ticket(std::uint64_t actor, std::uint64_t generation,
+               std::uint64_t sequence, Activity role)
+            : actor_id(actor), incarnation(generation), nonce(sequence),
+              activity(role) {}
         std::uint64_t actor_id;
         std::uint64_t incarnation;
         std::uint64_t nonce;
