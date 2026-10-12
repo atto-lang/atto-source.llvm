@@ -153,7 +153,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             value.exclusive_loan = true;
             value.exclusive_loan_id = op.loan_id.value_or(site_id);
             return;
-        case Operation::Kind::ReleaseShared:
+        case Operation::Kind::ReleaseShared: {
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
             if (!op.loan_id && value.shared_loan_ids.size() != 1)
                 violation(op.place, "shared loan release requires unambiguous provenance");
@@ -162,6 +162,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
                 violation(op.place, "shared loan release has foreign provenance");
             --value.shared_loans;
             return;
+        }
         case Operation::Kind::ReleaseExclusive:
             if (!value.exclusive_loan) violation(op.place, "unmatched exclusive loan release");
             if (op.loan_id && op.loan_id != value.exclusive_loan_id)
