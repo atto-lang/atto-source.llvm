@@ -648,6 +648,79 @@ int main() {
               "abandoned CONTROL scheduler teardown failed");
     }
 
+    // True scheduler-backed RESTART admission and shutdown fencing. The
+    // replacement must be physically READY, not just a fresh actor number.
+    for (int mode = 0; mode < 2; ++mode) {
+        auto* runtime = ores_native_actor_scheduler_open_typed_control(
+            3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
+        check(runtime != nullptr, "restart proof scheduler startup failed");
+        const auto supervisor = ores_native_actor_scheduler_spawn(runtime, 0);
+        const auto dying = ores_native_actor_scheduler_spawn(runtime, 1);
+        const auto replacement = ores_native_actor_scheduler_spawn(runtime, 2);
+        check(supervisor.scheduler_domain && dying.scheduler_domain
+                  && replacement.scheduler_domain, "restart fixture spawn failed");
+        auto control = std::make_shared<SupervisorControlScheduler>(2, 16);
+        auto children = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
+            9107, supervisor.scheduler_domain);
+        auto process = std::make_shared<SupervisorProcess>(
+            9107, supervisor.scheduler_domain, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return std::nullopt;
+            },
+            [](const SupervisorProcess::Resolution&) {});
+        auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
+            runtime, supervisor, process, children);
+        const auto child = children->register_child(dying);
+        check(ores_native_actor_scheduler_stop(runtime, dying)
+                  && ores_native_actor_scheduler_wait_done(runtime, dying),
+              "old actor did not physically finalize before restart");
+        children->finalized(child.child, dying, 1);
+        const auto ticket = children->begin_restart(child.child, dying, 1);
+        bool rejected = false;
+        try {
+            (void) bridge->admit_verified_replacement(
+                ticket, OresNativeActorRef{
+                    supervisor.scheduler_domain, replacement.actor_slot,
+                    replacement.generation + 1});
+        } catch (const std::exception&) { rejected = true; }
+        check(rejected, "bridge accepted forged scheduler generation as READY");
+        if (mode == 0) {
+            const auto committed = bridge->admit_verified_replacement(
+                ticket, replacement);
+            check(committed.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::active
+                      && committed.incarnation == 2,
+                  "native scheduler-backed RESTART failed to publish next incarnation");
+            bridge->fence_restart_publication();
+        } else {
+            children->stage_replacement(ticket, replacement);
+            rejected = false;
+            try { (void) children->abort_restart(ticket); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected, "live actor restart was aborted without cleanup");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "replacement did not physically terminate");
+            const auto restored = bridge->abort_cleaned_replacement(ticket, replacement);
+            check(restored.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "native restart cleanup did not restore finalized old child");
+            bridge->fence_restart_publication();
+            rejected = false;
+            try { (void) children->begin_restart(child.child, dying, 1); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected, "closed bridge reopened restart admission");
+        }
+        bridge.reset();
+        process->close();
+        control->close();
+        ores_native_actor_scheduler_retire(runtime);
+        check(ores_native_actor_scheduler_drain(runtime)
+                  && ores_native_actor_scheduler_try_destroy(runtime),
+              "native restart proof scheduler teardown failed");
+    }
+
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
               " await=1 replay=0 native_stop=1 throwing_self_close=1"
               " terminal_cleanup=1 suspended_close=1");
