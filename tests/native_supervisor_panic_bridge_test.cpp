@@ -787,7 +787,7 @@ int main() {
             // generation after its parent supervisor is already closed.
             bool post_close_recycle_rejected = false;
             try {
-                (void) bridge->abort_cleaned_and_recycle_unpublished(
+                (void) bridge->abort_recycle_and_admit_verified(
                     ticket, replacement);
             } catch (const std::logic_error&) {
                 post_close_recycle_rejected = true;
