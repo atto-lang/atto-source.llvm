@@ -79,8 +79,11 @@ public:
                             Direction direction, const std::string& domain) {
         std::lock_guard<std::mutex> lock(mutex_);
         require_ready(domain);
-        if (direction == Direction::Root)
-            throw std::invalid_argument("Root direction requires claim_root");
+        // Do not treat an out-of-range enum representation as Backward.
+        // Native/FFI callers must not be able to smuggle an invalid opcode.
+        if (direction != Direction::Forward &&
+            direction != Direction::Backward)
+            throw std::invalid_argument("invalid ActorStream routing direction");
         const auto found = std::find(actors_.begin(), actors_.end(), caller);
         if (found == actors_.end())
             throw std::logic_error("actor is not a member of the route");
@@ -164,7 +167,10 @@ public:
     bool fenced(std::uint64_t actor) const {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto found = std::find(actors_.begin(), actors_.end(), actor);
-        if (found == actors_.end()) return false;
+        // Fail closed: an unknown actor is not an unfenced pipeline member.
+        // Admission callers must not mistake absence for permission.
+        if (found == actors_.end())
+            throw std::invalid_argument("unknown ActorStream stage identity");
         return !physically_done_[static_cast<std::size_t>(found - actors_.begin())];
     }
 
@@ -176,13 +182,15 @@ public:
 private:
     Claim claim(std::uint64_t destination, Direction direction) {
         if (claimed_) throw std::logic_error("ActorStream concurrent publication claim");
+        // Ticket exhaustion is terminal and must not leave an apparently
+        // pending claim that can never be settled. Never reuse a ticket.
+        if (next_token_ == std::numeric_limits<std::uint64_t>::max()) {
+            aborted_ = true;
+            throw std::overflow_error("ActorStream publication tickets exhausted");
+        }
         claimed_ = true;
         reserved_destination_ = destination;
         reserved_direction_ = direction;
-        // Refuse wraparound even if the same uncommitted root repeatedly
-        // retries: reissuing ticket 1 would enable a stale claim replay.
-        if (next_token_ == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("ActorStream publication tickets exhausted");
         ++next_token_;
         return Claim{next_token_, destination, direction, this, route_generation_};
     }

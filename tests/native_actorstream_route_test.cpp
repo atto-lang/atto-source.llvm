@@ -151,6 +151,25 @@ int main() {
               "fresh route claim blocked by stale address reuse");
         replacement->~Route();
     }
+    // A forged enum representation must not silently be interpreted as
+    // Backward, including at a phase where backward delivery would be legal.
+    {
+        const auto a = ids(3);
+        Route route(a, "domain");
+        route.commit_published(route.claim_root(a[0], "domain"));
+        route.commit_published(route.claim_directional(a[0], 0,
+            Route::Direction::Forward, "domain"));
+        route.commit_published(route.claim_directional(a[1], a[0],
+            Route::Direction::Forward, "domain"));
+        rejected([&] { route.claim_directional(a[2], a[1],
+            static_cast<Route::Direction>(99), "domain"); });
+        check(route.phase() == 3, "invalid direction changed phase");
+        rejected([&] { route.fenced(9999); });
+        auto valid = route.claim_directional(a[2], a[1],
+            Route::Direction::Backward, "domain");
+        route.commit_published(valid);
+        check(route.phase() == 4, "invalid opcode damaged valid routing");
+    }
     // A prepublication root rejection may be retried, but the old
     // reservation is revoked, not transferred to the new reservation.
     {
