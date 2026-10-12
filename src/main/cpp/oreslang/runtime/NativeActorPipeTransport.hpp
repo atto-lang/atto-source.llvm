@@ -87,7 +87,12 @@ public:
             auto payload = std::move(link.messages.front());
             link.messages.pop_front();
             receiver->set_value(std::move(payload));
-            if (!link.writers.empty()) {
+            // close() publishes cancellation before visiting every edge. An
+            // overlapping read may still drain already-admitted data, but
+            // must never promote a *pending* writer after that publication.
+            // close() will settle the unpromoted writer with an exception.
+            if (!closed_.load(std::memory_order_acquire)
+                    && !link.closed && !link.writers.empty()) {
                 auto waiting = std::move(link.writers.front());
                 link.writers.pop_front();
                 link.messages.push_back(std::move(waiting->payload));
