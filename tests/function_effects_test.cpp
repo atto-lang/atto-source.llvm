@@ -1,5 +1,6 @@
 #include "oreslang/types/FunctionEffects.hpp"
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 using namespace oreslang;
