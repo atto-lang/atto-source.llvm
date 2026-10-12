@@ -39,7 +39,7 @@ int main() {
         "expected '='");
     must_reject(
         "define actor Counter as state { first: int = 1 second: int = 2 } end",
-        "semicolons or newline");
+        "semicolon or newline");
     must_reject(
         "define actor Counter as let state: int = 2; "
         "pub on_message(int n): int { return n; } end",
