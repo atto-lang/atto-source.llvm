@@ -215,7 +215,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores
         --ir "oreslang_source_actor_spawn")
     oreslang_contract_test(native_contextual_method_identifier contextual-method-identifier.ores
-        --ir "define i64 @main")
+        --ir "ret i64")
     oreslang_contract_test(native_actor_bare_method source-actor-bare-method.ores
         --ir "oreslang_source_actor_spawn")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
