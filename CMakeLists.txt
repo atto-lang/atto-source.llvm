@@ -33,11 +33,28 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
     target_include_directories(oreslang-owned-i64-region-security-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-owned-i64-region-security-test PRIVATE
+        ORESLANG_NATIVE_TEST_TOKEN_EXHAUSTION=1)
     target_compile_options(oreslang-owned-i64-region-security-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_owned_region_slot_security
         COMMAND oreslang-owned-i64-region-security-test)
     set_tests_properties(native_owned_region_slot_security PROPERTIES TIMEOUT 25)
+    # The global token allocator must not repeat handles under parallel
+    # allocations in separate, single-owner regions. This does NOT admit
+    # concurrent access to one region or remove close-quiescence requirements.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-owned-i64-token-concurrent-regions-test
+        tests/native_owned_region_token_concurrency_test.c
+        src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
+    target_include_directories(oreslang-owned-i64-token-concurrent-regions-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-owned-i64-token-concurrent-regions-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-owned-i64-token-concurrent-regions-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_region_unique_parallel_tokens
+        COMMAND oreslang-owned-i64-token-concurrent-regions-test)
+    set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)
@@ -210,9 +227,26 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
+    # Optional instance method marker: fnc, method, and no marker all lower
+    # to the same native supported on_message(int) handler.
+    oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores
+        --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(native_contextual_method_identifier contextual-method-identifier.ores
+        --ir "ret i64")
+    oreslang_contract_test(native_actor_bare_method source-actor-bare-method.ores
+        --ir "oreslang_source_actor_spawn")
+    oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
+        --diagnostic "native suspends actor method requires continuation lowering")
+    oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
+        --diagnostic "native final actor fields require typed field initialization and ownership lowering")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
     oreslang_contract_test(reject_native_actor_group_spawn unsupported-actor-group-spawn.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_native_actor_group_await_spawn unsupported-actor-group-await-spawn.ores --diagnostic "native async/channel/select boundary unsupported")
+    # LLVM source ActorGroups remain unsupported until typed handle/permit lowering.
+    # No native IR may be emitted on these negative compiler fixtures.
+    oreslang_contract_test(reject_guest_actor_group_create source-actor-group-create-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
+    oreslang_contract_test(reject_guest_actor_group_join source-actor-group-join-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
+    oreslang_contract_test(reject_guest_actor_group_shadow source-actor-group-declaration-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
@@ -252,6 +286,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-actor-group-lifecycle-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_group_managed_worker_readiness COMMAND oreslang-actor-group-lifecycle-test)
     set_tests_properties(native_actor_group_managed_worker_readiness PROPERTIES TIMEOUT 15)
+    # Cooperation membership is many-to-many, distinct from one lifecycle owner.
+    add_executable(oreslang-native-actor-membership-test tests/native_actor_membership_test.cpp)
+    target_include_directories(oreslang-native-actor-membership-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-membership-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
+    set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
@@ -326,8 +368,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
     # Until typed descriptor ownership and atomic selection land, source
     # SelectPlan factories and persistent case writes must fail closed.
-    oreslang_contract_test(reject_select_plan_factory unsupported-select-plan-constructor.ores --diagnostic "expected ':'")
-    oreslang_contract_test(reject_reusable_case_write unsupported-select-case-write.ores --diagnostic "expected ':'")
+    oreslang_contract_test(reject_select_plan_factory unsupported-select-plan-constructor.ores --diagnostic "native SelectPlan/SelectCase ownership unsupported")
+    oreslang_contract_test(reject_reusable_case_write unsupported-select-case-write.ores --diagnostic "native SelectPlan/SelectCase ownership unsupported")
     oreslang_contract_test(reject_undefined undefined-name.ores --diagnostic "unknown parameter")
 
     # Native i64 is a Copy value: rt copy/rt share are scalar value copies,
@@ -424,6 +466,22 @@ if(BUILD_TESTING)
                 --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
                 --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" --sanitize)
         set_tests_properties(native_owned_region_conditional_drop_sanitized PROPERTIES TIMEOUT 240)
+        add_test(NAME native_single_cleanup_epilogue
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_single_cleanup_epilogue_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        add_test(NAME native_single_cleanup_epilogue_sanitized
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_single_cleanup_epilogue_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"
+                --include "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" --sanitize)
+        set_tests_properties(native_single_cleanup_epilogue
+            native_single_cleanup_epilogue_sanitized PROPERTIES TIMEOUT 240)
     endif()
     oreslang_contract_test(class_reject_byvalue_mutation class-mutation-byvalue-reject.ores --diagnostic "ownership violation")
     # This is the *exact same Git blob* as the Java/Graal conformance
@@ -626,6 +684,90 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-mailbox-test)
     set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
 
+    # Zero-thread central CONTROL wake coordinator on the four-domain VM.
+    add_executable(oreslang-native-vm-control-plane-test
+        tests/native_vm_control_plane_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-control-plane-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-control-plane-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-control-plane-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_master_control_wake_coalescing
+        COMMAND oreslang-native-vm-control-plane-test)
+    set_tests_properties(native_vm_master_control_wake_coalescing PROPERTIES TIMEOUT 25)
+
+    # VM-level ownership: four independent scheduler domains, five carriers
+    # by default; cross-domain ActorRefs cannot be admitted by another pool.
+    add_executable(oreslang-native-ores-vm-test
+        tests/native_ores_vm_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-ores-vm-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ores-vm-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ores-vm-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ores_vm_four_carrier_domains
+        COMMAND oreslang-native-ores-vm-test)
+    set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # VM-owned exact parent binding -> quiescent typed CONTROL publication.
+    # No guest supervisor compiler lowering is claimed by this host C test.
+    add_executable(oreslang-native-vm-supervisor-test
+        tests/native_vm_supervisor_owner_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-supervisor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-supervisor-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-supervisor-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_supervisor_owner_typed_quiescent_control
+        COMMAND oreslang-native-vm-supervisor-test)
+    set_tests_properties(native_vm_supervisor_owner_typed_quiescent_control
+        PROPERTIES TIMEOUT 30)
+    # Host/supervisor execution lease transitions: linearizable carrier claim,
+    # stop/retirement quiescence, stale resume and generation exhaustion.
+    add_executable(oreslang-native-execution-authority-test
+        tests/native_execution_authority_test.c)
+    target_include_directories(oreslang-native-execution-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-execution-authority-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-execution-authority-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_supervisor_execution_authority
+        COMMAND oreslang-native-execution-authority-test)
+    set_tests_properties(native_actor_supervisor_execution_authority PROPERTIES TIMEOUT 30)
+
+    # Across all actor-owned entrypoints (DATA and supervisor CONTROL), no
+    # actor can have two physical guest executors, even on separate workers.
+    # A typed supervisor panic is actor-owned CONTROL work and must obey
+    # the same exclusive carrier admission as normal DATA for that parent.
+    add_executable(oreslang-native-actor-typed-control-exclusive-test
+        tests/native_actor_typed_control_exclusive_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-typed-control-exclusive-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-typed-control-exclusive-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-typed-control-exclusive-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_typed_panic_exclusive_carrier
+        COMMAND oreslang-native-actor-typed-control-exclusive-test)
+    set_tests_properties(native_actor_typed_panic_exclusive_carrier PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-actor-exclusive-control-test
+        tests/native_actor_exclusive_control_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-exclusive-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-exclusive-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-exclusive-control-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_exclusive_data_and_control
+        COMMAND oreslang-native-actor-exclusive-control-test)
+    set_tests_properties(native_actor_exclusive_data_and_control PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-actor-ready-queue-test
         tests/native_actor_scheduler_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
@@ -636,6 +778,49 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Fault injection is compiled only into this test executable. A blocked
+    # actor must not make a different actor's unserviceable work "ACCEPTED".
+    add_executable(oreslang-native-carrier-create-failure-test
+        tests/native_actor_carrier_create_failure_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-carrier-create-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-carrier-create-failure-test PRIVATE
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1)
+    target_link_libraries(oreslang-native-carrier-create-failure-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-carrier-create-failure-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_lazy_carrier_creation_failure_fence
+        COMMAND oreslang-native-carrier-create-failure-test)
+    set_tests_properties(native_actor_lazy_carrier_creation_failure_fence PROPERTIES TIMEOUT 30)
+
+    # Send and stop contend on one linearizable actor admission authority.
+    add_executable(oreslang-native-send-stop-race-test
+        tests/native_actor_send_stop_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-send-stop-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-send-stop-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-send-stop-race-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_send_stop_linearizable_race
+        COMMAND oreslang-native-send-stop-race-test)
+    set_tests_properties(native_actor_send_stop_linearizable_race PROPERTIES TIMEOUT 30)
+
+    # ActorRef scheduler domains are capabilities: exhaustion must not wrap
+    # and concurrent opens near UINT64_MAX must never issue duplicates.
+    add_executable(oreslang-native-domain-exhaustion-test
+        tests/native_actor_domain_exhaustion_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-domain-exhaustion-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-domain-exhaustion-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-domain-exhaustion-test PRIVATE
+        ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION=1)
+    target_compile_options(oreslang-native-domain-exhaustion-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_domain_exhaustion_no_reuse
+        COMMAND oreslang-native-domain-exhaustion-test)
+    set_tests_properties(native_actor_domain_exhaustion_no_reuse PROPERTIES TIMEOUT 30)
 
     # Stop one child without waiting for an unrelated actor's busy turn.
     add_executable(oreslang-native-child-wait-test
@@ -672,6 +857,19 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_typed_panic_event
         COMMAND oreslang-native-supervisor-panic-test)
     set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
+    # Optimistic CAS for logical continuations: state must not be overwritten
+    # after stale, foreign, retired, or exhausted version evidence.
+    add_executable(oreslang-native-versioned-actor-cell-test
+        tests/versioned_actor_cell_test.cpp)
+    target_include_directories(oreslang-native-versioned-actor-cell-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-versioned-actor-cell-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-versioned-actor-cell-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_versioned_state_logical_races
+        COMMAND oreslang-native-versioned-actor-cell-test)
+    set_tests_properties(native_actor_versioned_state_logical_races
+        PROPERTIES TIMEOUT 20)
     # Native synchronous actor-state loan guard; source await still fail-closed.
     add_executable(oreslang-actor-state-scope-test tests/actor_state_scope_test.c)
     target_compile_options(oreslang-actor-state-scope-test PRIVATE

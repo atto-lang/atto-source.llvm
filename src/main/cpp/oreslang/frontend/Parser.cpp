@@ -186,12 +186,21 @@ private:
             require(";");
             actor.fields.push_back(std::move(field));
         }
+        if (token_.text == "final") {
+            fail("native final actor fields require typed field initialization and ownership lowering");
+        }
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
         if (!method.exported) fail("native actor requires pub on_message(int)");
-        require("fnc");
+        // Match the Java frontend's declaration spelling contract. The native
+        // actor subset still lowers only on_message(int) and cannot admit
+        // arbitrary methods, static fnc members or suspension frames.
+        if (token_.text == "suspend" || token_.text == "suspends") {
+            fail("native suspends actor method requires continuation lowering");
+        }
+        if (!accept("fnc")) accept("method"); // optional method marker
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
@@ -333,6 +342,9 @@ private:
                     binding.move_class = true;
                 }
             } else {
+                // A val owns mutable scalar storage; const permits only shared
+                // loans. Preserve the distinction for native ownership checks.
+                binding.owner_mutable = token_.text == "val";
                 advance();
                 binding.name = identifier();
                 // Distinguish actor capabilities from scalar data before IR.
@@ -630,6 +642,12 @@ private:
             expr->integer = integer_literal();
             return expr;
         }
+        // Opaque ActorGroup and join permits are runtime-affine capabilities.
+        // Never silently admit a native scalar name or emit partial IR.
+        if (token_.text == "ActorGroup" ||
+            token_.text == "ActorGroupJoinCapability")
+            fail("native ActorGroup source lowering unsupported: "
+                 "typed membership capabilities and lifecycle authority required");
         if (token_.kind != Kind::Identifier || reserved(token_.text)) {
             fail("expected int expression");
         }
@@ -663,6 +681,17 @@ private:
     }
 
     std::string identifier() {
+        // SelectPlan and SelectCase are source-level linear ownership
+        // capabilities, never ordinary scalar/class identifiers. Reject
+        // their native use explicitly; generic parser errors are not a
+        // trustworthy compiler admission boundary.
+        if (token_.text == "SelectPlan" || token_.text == "SelectCase")
+            fail("native SelectPlan/SelectCase ownership unsupported: "
+                 "linear case tickets, cancellation and scheduler lowering required");
+        if (token_.text == "ActorGroup" ||
+            token_.text == "ActorGroupJoinCapability")
+            fail("native ActorGroup source lowering unsupported: "
+                 "typed membership capabilities and lifecycle authority required");
         if (token_.kind != Kind::Identifier || reserved(token_.text)) {
             fail("expected non-keyword identifier");
         }

@@ -29,6 +29,23 @@ typedef void (*OresNativeActorPanicFn)(
  */
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
+/* Send succeeds only after atomic admission to a live, generation-matched
+ * actor mailbox. It does NOT promise execution or successful processing.
+ * No guest callback, blocking wait, or memory allocation occurs here.
+ * Cross-process admission cannot be inferred from an IPC write: callers must
+ * obtain a remote mailbox receipt before reporting ACCEPTED.
+ */
+typedef enum {
+    ORES_NATIVE_SEND_ACCEPTED = 0,
+    ORES_NATIVE_SEND_INVALID_REF = 1,
+    ORES_NATIVE_SEND_TERMINATED = 2,
+    ORES_NATIVE_SEND_MAILBOX_FULL = 3,
+    ORES_NATIVE_SEND_RESOURCE_EXHAUSTED = 4,
+    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5
+} OresNativeSendStatus;
+OresNativeSendStatus ores_native_actor_scheduler_try_send(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
 int ores_native_actor_scheduler_stop(
@@ -89,13 +106,30 @@ int ores_native_actor_scheduler_submit(
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* scheduler);
 /* Wait for every accepted callback to complete; may not be called from its worker. */
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
+/* Whether this OS thread is currently executing a callback from scheduler.
+ * Only intended for immediate deadlock prevention in VM teardown. */
+int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
+/* Exact live actor identity for trusted callback/FFI bridges only. */
+int ores_native_actor_scheduler_is_current_actor(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Host CONTROL-plane wake only: signals an existing scheduler condition.
+ * Does not admit actor mail, start workers, invoke guest code, or count as
+ * a supervisor delivery receipt. Returns zero once retired.
+ * Caller must fence the scheduler's lifetime. */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
 /* Requires retirement, drained tasks AND caller-owned submitter fence.
  * Returns 0 when not ready; after success the pointer is invalid.
  */
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler);
+/* Carriers created on demand, initially zero; includes workers until retirement. */
+size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* scheduler);
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
+/* Test-only deterministic worker-create failure; no production symbol. */
+void ores_native_actor_scheduler_test_fail_next_create(void);
+#endif
 #ifdef __cplusplus
 }
 #endif

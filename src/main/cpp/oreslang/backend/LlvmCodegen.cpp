@@ -33,6 +33,7 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 // to nonescaping call arguments.
 struct RegionMoveLowering {
     llvm::Value* region = nullptr;
+    llvm::FunctionCallee read;
     llvm::FunctionCallee drop;
     const std::unordered_map<std::string, llvm::Value*>* live_flags = nullptr;
 };
@@ -47,15 +48,39 @@ llvm::Value* lower(const Expression& expr,
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
-        case Expression::Kind::Variable:
-            return builder.CreateLoad(i64, storage.at(expr.name), expr.name + ".read");
+        case Expression::Kind::Variable: {
+            llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
+                expr.name + ".read");
+            if (moves && moves->live_flags &&
+                    moves->live_flags->count(expr.name))
+                return builder.CreateCall(moves->read, {moves->region, stored},
+                    expr.name + ".owned.value");
+            return stored;
+        }
         case Expression::Kind::Field:
             return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::Borrow:
-        case Expression::Kind::BorrowMut:
-            // Only addressable named parameters are admitted by OwnershipChecker.
+        case Expression::Kind::BorrowMut: {
+            // Heap owner storage is a HANDLE, never a borrowable i64 address.
+            // A shared call-scoped loan reads into a temporary scalar stack
+            // slot that cannot escape this synchronous call. Mutable loans
+            // require writeback and are conservatively rejected by checker.
+            if (moves && moves->live_flags &&
+                    moves->live_flags->count(expr.left->name)) {
+                if (expr.kind == Expression::Kind::BorrowMut)
+                    throw std::runtime_error("native owned-int mutable borrow needs handle-aware writeback");
+                llvm::Value* handle = builder.CreateLoad(i64,
+                    storage.at(expr.left->name), "borrow.owner.handle");
+                llvm::Value* snapshot = builder.CreateCall(moves->read,
+                    {moves->region, handle}, "borrow.owner.value");
+                llvm::Value* temporary = builder.CreateAlloca(i64, nullptr,
+                    "borrow.owner.snapshot");
+                builder.CreateStore(snapshot, temporary);
+                return temporary;
+            }
             return storage.at(expr.left->name);
+        }
         case Expression::Kind::Negate:
             return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
         case Expression::Kind::Copy:
@@ -71,7 +96,11 @@ llvm::Value* lower(const Expression& expr,
                 if (found != moves->live_flags->end()) {
                     llvm::Value* value = lower(*expr.left, builder, i64,
                         storage, field_storage, functions, moves);
-                    builder.CreateCall(moves->drop, {moves->region, storage.at(expr.left->name)});
+                    llvm::Value* handle = builder.CreateLoad(i64,
+                        storage.at(expr.left->name), "take.owned.handle");
+                    builder.CreateCall(moves->drop, {moves->region, handle});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0),
+                        storage.at(expr.left->name));
                     builder.CreateStore(builder.getFalse(), found->second);
                     return value;
                 }
@@ -149,14 +178,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             return std::any_of(fn.locals.begin(), fn.locals.end(),
                 [](const LocalBinding& binding) { return binding.heap_owned; });
         });
-    llvm::FunctionCallee regionOpen, regionNew, regionDrop, regionClose;
+    llvm::FunctionCallee regionOpen, regionNew, regionRead, regionDrop, regionClose;
     if (has_region_bindings) {
         regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
             llvm::FunctionType::get(native_ptr, {i64}, false));
         regionNew = module.getOrInsertFunction("oreslang_owned_i64_region_new",
-            llvm::FunctionType::get(native_ptr, {native_ptr, i64}, false));
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
+        regionRead = module.getOrInsertFunction("oreslang_owned_i64_region_read",
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
         regionDrop = module.getOrInsertFunction("oreslang_owned_i64_region_drop",
-            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, native_ptr}, false));
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr, i64}, false));
         regionClose = module.getOrInsertFunction("oreslang_owned_i64_region_close",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {native_ptr}, false));
     }
@@ -277,7 +308,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             region = builder.CreateCall(regionOpen,
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
-        const RegionMoveLowering region_moves{region, regionDrop, &owned_live_flags};
+        const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags};
         for (const auto& binding : fn.locals) {
             if (binding.new_class || binding.move_class) {
                 llvm::StructType* shape = class_types.at(binding.class_name);
@@ -307,7 +338,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
-                slot = builder.CreateCall(regionNew, {region, initial}, binding.name + ".heap.owned");
+                // Store only an opaque, generation-checked lifetime token.
+                // No raw region payload pointer crosses into guest LLVM IR.
+                llvm::Value* handle = builder.CreateCall(regionNew,
+                    {region, initial}, binding.name + ".owned.handle");
+                slot = builder.CreateAlloca(i64, nullptr, binding.name + ".owned.handle.slot");
+                builder.CreateStore(handle, slot);
                 llvm::Value* live = builder.CreateAlloca(builder.getInt1Ty(), nullptr,
                     binding.name + ".owned.live");
                 builder.CreateStore(builder.getTrue(), live);
@@ -402,31 +438,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 builder.CreateCall(sourceStop, {actorRefs.at(fn.actor_stops.at(action.index))});
             }
         }
-        // Each taken return terminates in its own reverse-order cleanup
-        // block. All bindings were initialized before the first guard, so
-        // every return owns the same lexical slots and native region.
-        // Branch-local class creation / effectful conditions fail admission.
-        auto emit_cleanup_return = [&](llvm::Value* value) {
-            // Evaluate deferred expressions at lexical exit, in reverse
-            // registration order, before releasing their borrowed owners.
-            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
-                const Statement& cleanup = **it;
-                if (cleanup.receiver.empty()) {
-                    lower(*cleanup.expression, builder, i64, storage, field_storage,
-                        declarations, &region_moves);
-                } else {
-                    // The return value was evaluated into SSA before cleanup,
-                    // so modifying the referent cannot change its snapshot.
-                    llvm::Value* updated = lower(*cleanup.expression, builder, i64,
-                        storage, field_storage, declarations, &region_moves);
-                    builder.CreateStore(updated, field_storage.at(
-                        field_key(cleanup.receiver, cleanup.field)));
-                }
-            }
+        // One cleanup authority for every guarded-return path. A function
+        // with only its final return and no registered defer has exactly one
+        // exit by construction, so preserve its direct ret IR contract.
+        // That fast path still runs the same drop and lifetime cleanup.
+        auto emit_lexical_cleanup = [&]() {
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
                 if (it->heap_owned) {
-                    // Conditional native destruction is backed by an actual
-                    // i1 live flag: moved allocations have already dropped.
                     llvm::Value* flag = owned_live_flags.at(it->name);
                     llvm::Value* live = builder.CreateLoad(builder.getInt1Ty(), flag,
                         it->name + ".drop.if.live");
@@ -436,35 +454,76 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         context, it->name + ".drop.next", function);
                     builder.CreateCondBr(live, do_drop, after_drop);
                     builder.SetInsertPoint(do_drop);
-                    builder.CreateCall(regionDrop, {region, it->address});
+                    llvm::Value* handle = builder.CreateLoad(i64,
+                        it->address, it->name + ".drop.handle");
+                    builder.CreateCall(regionDrop, {region, handle});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), it->address);
                     builder.CreateStore(builder.getFalse(), flag);
                     builder.CreateBr(after_drop);
                     builder.SetInsertPoint(after_drop);
                 } else {
+                    // llvm.lifetime.end is not a source-level destructor.
                     builder.CreateLifetimeEnd(it->address,
                         llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
                 }
             }
             if (region != nullptr) builder.CreateCall(regionClose, {region});
-            if (fn.returns_void) builder.CreateRetVoid();
-            else builder.CreateRet(value);
         };
-        for (const auto& guard : fn.early_returns) {
-            llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage, declarations, &region_moves);
-            llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage, declarations, &region_moves);
-            llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
-            llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
-            llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
-            builder.CreateCondBr(equal, taken, next);
-            builder.SetInsertPoint(taken);
-            llvm::Value* selected = lower(*guard.result, builder, i64,
-                storage, field_storage, declarations, &region_moves);
-            emit_cleanup_return(selected);
-            builder.SetInsertPoint(next);
+        if (fn.early_returns.empty() && deferred_effects.empty()) {
+            // Maintain stable native IR (ret i64 42, for example) for
+            // functions without a multi-exit cleanup obligation.
+            llvm::Value* result = fn.result
+                ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves)
+                : nullptr;
+            emit_lexical_cleanup();
+            if (fn.returns_void) builder.CreateRetVoid();
+            else builder.CreateRet(result);
+        } else {
+            llvm::Value* return_snapshot = fn.returns_void
+                ? nullptr : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot");
+            llvm::BasicBlock* cleanup = llvm::BasicBlock::Create(
+                context, "exit.cleanup", function);
+            auto branch_to_cleanup = [&](llvm::Value* value) {
+                if (!fn.returns_void) builder.CreateStore(value, return_snapshot);
+                builder.CreateBr(cleanup);
+            };
+            for (const auto& guard : fn.early_returns) {
+                llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
+                    declarations, &region_moves);
+                llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
+                    declarations, &region_moves);
+                llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
+                llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
+                llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
+                builder.CreateCondBr(equal, taken, next);
+                builder.SetInsertPoint(taken);
+                llvm::Value* selected = lower(*guard.result, builder, i64,
+                    storage, field_storage, declarations, &region_moves);
+                branch_to_cleanup(selected);
+                builder.SetInsertPoint(next);
+            }
+            llvm::Value* result = fn.result
+                ? lower(*fn.result, builder, i64, storage, field_storage,
+                    declarations, &region_moves) : nullptr;
+            branch_to_cleanup(result);
+            builder.SetInsertPoint(cleanup);
+            // Capture the return before deferred calls can mutate class fields.
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
+                const Statement& effect = **it;
+                if (effect.receiver.empty()) {
+                    lower(*effect.expression, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                } else {
+                    llvm::Value* updated = lower(*effect.expression, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    builder.CreateStore(updated, field_storage.at(
+                        field_key(effect.receiver, effect.field)));
+                }
+            }
+            emit_lexical_cleanup();
+            if (fn.returns_void) builder.CreateRetVoid();
+            else builder.CreateRet(builder.CreateLoad(i64, return_snapshot, "return.snapshot"));
         }
-        llvm::Value* result = fn.result
-            ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
-        emit_cleanup_return(result);
     }
 
 

@@ -66,7 +66,19 @@ using DropSlots = std::map<std::string, DropSlot>;
 // Dropped before dispatch so a destructor cannot observe a still-live owner.
 // Destructors must be noexcept. This is not exception/unwind lowering.
 inline void run_drop_exit(const DropExit& exit, DropSlots& slots) {
-    for (const auto& field : exit.fields) {
+    // Drop plans must cover every runtime-owned field exactly once. A
+    // partially described owner could otherwise be silently leaked, while
+    // a duplicated place could trigger inconsistent destructor sequencing.
+    if (slots.size() != exit.fields.size())
+        throw std::runtime_error("ownership violation: drop slot/layout size mismatch");
+    // An exit plan is already bounded by its tracked places. Validate it
+    // without allocating temporary hash/set nodes at teardown: memory
+    // pressure must not itself prevent execution of an otherwise valid drop.
+    for (std::size_t index = 0; index < exit.fields.size(); ++index) {
+        const auto& field = exit.fields[index];
+        if (!field.possible || (field.possible &
+                static_cast<ValueMask>(~(kOwned | kMoved | kUninitialized | kDropped))))
+            violation(field.place, "invalid abstract drop state");
         const auto it = slots.find(field.place);
         if (it == slots.end()) violation(field.place, "missing native drop slot");
         const DropSlot& slot = it->second;
@@ -75,8 +87,27 @@ inline void run_drop_exit(const DropExit& exit, DropSlots& slots) {
             violation(field.place, "ambiguous concrete drop flag");
         if (!(field.possible & slot.state))
             violation(field.place, "runtime drop flag violates CFG proof");
-        if (slot.state == kOwned && (!slot.address || !slot.destroy))
-            violation(field.place, "live resource lacks destructor capability");
+        if (slot.state == kOwned) {
+            if (!slot.address || !slot.destroy)
+                violation(field.place, "live resource lacks destructor capability");
+        } else if (slot.address || slot.destroy) {
+            // No moved/dropped/uninitialized place may retain a stale
+            // owning pointer or destructor callback.
+            violation(field.place, "inactive field retains destructor capability");
+        }
+        // Check all preceding places for duplicate identity or destructor
+        // capability aliases. The admitted class layout is bounded and
+        // this preflight uses no scratch allocations.
+        for (std::size_t prior = 0; prior < index; ++prior) {
+            const auto& previous = exit.fields[prior];
+            if (previous.place == field.place)
+                violation(field.place, "duplicate exit drop place");
+            const auto earlier = slots.find(previous.place);
+            if (slot.state == kOwned && earlier != slots.end() &&
+                    earlier->second.state == kOwned &&
+                    earlier->second.address == slot.address)
+                violation(field.place, "duplicate native destructor ownership");
+        }
     }
     for (const auto& field : exit.fields) {
         DropSlot& slot = slots.at(field.place);
