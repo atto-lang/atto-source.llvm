@@ -207,11 +207,12 @@ private:
                     return false;
                 }
                 admitted = registered_.at(key);
-                // Claim before entering any external supervisor CONTROL
-                // effect. Even if enqueue throws after committing, no second
-                // claimant can execute the host effect again.
+                // Claim original-parent liveness AND one-use host authority under
+                // the scheduler mutex that serializes with physical STOP.
+                // STOP winning first preserves RECORDED evidence for recovery;
+                // a claim winning first remains an in-flight host effect.
                 if (has_scheduler_receipt &&
-                    !ores_native_actor_scheduler_claim_terminal_receipt(
+                    !ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
                         scheduler_, parent_, failure.child, &receipt)) {
                     ++rejected_;
                     return false;
