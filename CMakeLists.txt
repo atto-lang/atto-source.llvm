@@ -165,6 +165,17 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_pipeline_actor_wrong_route_direction
         source-actor-pipeline-wrong-direction.ores
         --diagnostic "pipeline route direction is not authorized for actor role")
+    oreslang_contract_test(native_ir_missing_pipeline_backward_reply
+        source-actor-pipeline-missing-reply.ores --ir "oreslang_source_actor_pipeline_expect_status")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_missing_pipeline_backward_reply
+            source-actor-pipeline-missing-reply.ores
+            --run 74 --clang "${ORE_CLANG}" --runs 10
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=4")
+    endif()
     oreslang_contract_test(native_ir_two_actor_bidirectional_pipeline
         source-actor-pipeline-two-stage.ores --ir "oreslang_source_actor_pipeline_connect_many")
     oreslang_contract_test(native_ir_four_actor_bidirectional_pipeline
