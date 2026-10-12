@@ -3,7 +3,7 @@
 #include "oreslang/runtime/ActorStateReadWriteContinuations.hpp"
 
 #include <cstddef>
-#include <mutex>
+#include <atomic>
 #include <type_traits>
 #include <utility>
 
@@ -41,10 +41,14 @@ public:
         static_assert(std::is_nothrow_invocable_r_v<bool, TryAdmit&, const Notification&>,
                       "scheduler CONTROL admission must return bool without throwing");
         if (budget == 0) return 0;
-        // Reentrant or competing pumps must not deadlock or duplicate
-        // CONTROL receipts. The caller can retry on a future scheduler tick.
-        std::unique_lock<std::mutex> pump_lock(pump_mu_, std::try_to_lock);
-        if (!pump_lock.owns_lock()) return 0;
+        // std::mutex::try_lock is undefined for same-thread recursion.
+        // An atomic admission flag makes reentrant and concurrent pump calls
+        // return immediately, without blocking the scheduler carrier.
+        if (pumping_.test_and_set(std::memory_order_acquire)) return 0;
+        struct PumpExit {
+            std::atomic_flag& flag;
+            ~PumpExit() { flag.clear(std::memory_order_release); }
+        } guard{pumping_};
         // Snapshot does not consume; registry metadata locks are not held
         // during CONTROL queue admission.
         const auto notifications = registry_.pending_notifications();
@@ -61,7 +65,7 @@ public:
 
 private:
     Registry& registry_;
-    std::mutex pump_mu_;
+    std::atomic_flag pumping_ = ATOMIC_FLAG_INIT;
 };
 
 } // namespace oreslang::runtime
