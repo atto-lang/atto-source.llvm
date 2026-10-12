@@ -838,48 +838,94 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
     if (!source_send_binary(target, wire, at, (uint8_t)direction))
         pipeline_fail(SOURCE_PIPELINE_REJECTED_MAIL);
 }
-void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
+/* Returns a recoverable status; only trusted main may wait or tear down
+ * the pipeline. Carrier workers never wait for downstream DATA delivery.
+ * A terminal error seals subsequent admission, but final physical actor
+ * teardown is performed by main after this routine returns. */
+int32_t oreslang_source_actor_pipeline_expect_status(void* source,
+                                                    int64_t expected) {
     SourceActor* actor = source;
-    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC);
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC) return SOURCE_PIPELINE_INVALID_ROUTE;
     group_lock();
     const size_t count = group.pipeline_count;
-    ensure(group.pipeline_source == actor && count >= 2
-        && count <= SOURCE_PIPELINE_MAX_STAGES);
+    if (group.pipeline_source != actor || count < 2
+            || count > SOURCE_PIPELINE_MAX_STAGES) {
+        group_unlock();
+        return SOURCE_PIPELINE_INVALID_ROUTE;
+    }
     struct timespec deadline;
     ensure(clock_gettime(CLOCK_REALTIME, &deadline) == 0);
     deadline.tv_sec += 20;
+    int32_t status = SOURCE_PIPELINE_OK;
     for (;;) {
+        status = atomic_load_explicit(&group.pipeline_failure, memory_order_acquire);
+        if (status) break;
         bool finished = group.pipeline_done;
-        for (size_t i = 0; i < count; ++i) {
-            SourceActor* stage = group.pipeline_stages[i];
+        for (size_t index = 0; index < count; ++index) {
+            SourceActor* stage = group.pipeline_stages[index];
             ensure(stage && stage->magic == SOURCE_ACTOR_MAGIC);
-            uint64_t expected_turns = (i + 1 == count) ? 1 : 2;
+            const uint64_t expected_turns = index + 1 == count ? 1 : 2;
             if (atomic_load_explicit(&stage->processed, memory_order_acquire)
                 != expected_turns) finished = false;
             if (atomic_load_explicit(&stage->wire_reserved, memory_order_acquire)
                 != 0) finished = false;
         }
         if (finished) break;
-        int status = pthread_cond_timedwait(
+        int rc = pthread_cond_timedwait(
             &group.pipeline_completed, &group.mutex, &deadline);
-        ensure(status == 0);
+        if (rc != 0) {
+            status = SOURCE_PIPELINE_TIMEOUT;
+            int zero = SOURCE_PIPELINE_OK;
+            atomic_compare_exchange_strong_explicit(
+                &group.pipeline_failure, &zero, status,
+                memory_order_acq_rel, memory_order_acquire);
+            status = atomic_load_explicit(&group.pipeline_failure,
+                                          memory_order_acquire);
+            break;
+        }
     }
-    ensure(group.pipeline_result == expected);
-    ensure(atomic_load_explicit(&group.pipeline_phase, memory_order_acquire)
-        == (int)(2 * (count - 1) + 1));
-    ensure(atomic_load_explicit(&actor->last_result, memory_order_acquire) == expected);
-    const uint64_t forwards = atomic_load_explicit(
-        &group.pipeline_forward_count, memory_order_acquire);
-    const uint64_t backwards = atomic_load_explicit(
-        &group.pipeline_backward_count, memory_order_acquire);
-    ensure(forwards == count - 1 && backwards == count - 1);
+    if (status == SOURCE_PIPELINE_OK) {
+        if (group.pipeline_result != expected
+            || atomic_load_explicit(&actor->last_result,
+                                    memory_order_acquire) != expected) {
+            status = SOURCE_PIPELINE_WRONG_RESULT;
+        } else if (atomic_load_explicit(&group.pipeline_phase,
+                                         memory_order_acquire)
+                    != (int)(2 * (count - 1) + 1)
+            || atomic_load_explicit(&group.pipeline_forward_count,
+                                    memory_order_acquire) != count - 1
+            || atomic_load_explicit(&group.pipeline_backward_count,
+                                    memory_order_acquire) != count - 1) {
+            status = SOURCE_PIPELINE_BAD_PHASE;
+        }
+        if (status != SOURCE_PIPELINE_OK) {
+            int zero = SOURCE_PIPELINE_OK;
+            atomic_compare_exchange_strong_explicit(
+                &group.pipeline_failure, &zero, status,
+                memory_order_acq_rel, memory_order_acquire);
+        }
+    }
     group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
-    fprintf(stderr,
-        "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=%zu typed=1 forward=%llu backward=%llu result=%lld\n",
-        count, (unsigned long long)forwards, (unsigned long long)backwards,
-        (long long)expected);
+    if (status == SOURCE_PIPELINE_OK) {
+        fprintf(stderr,
+            "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=%zu typed=1 forward=%zu backward=%zu result=%lld\n",
+            count, count - 1, count - 1, (long long)expected);
+    } else {
+        fprintf(stderr, "SOURCE_PIPELINE_TERMINAL_STATUS code=%d\n", status);
+    }
 #endif
+    return status;
+}
+void oreslang_source_actor_pipeline_cancel(void* source) {
+    /* Explicit trusted-main cancellation; an in-flight actor DATA turn can
+     * finish but subsequent hops will be rejected and stops join the pool. */
+    if (source && source == group.pipeline_source)
+        pipeline_fail(SOURCE_PIPELINE_CANCELLED);
+}
+void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
+    ensure(oreslang_source_actor_pipeline_expect_status(source, expected)
+           == SOURCE_PIPELINE_OK);
 }
 
 void oreslang_source_actor_stop(void* opaque) {
