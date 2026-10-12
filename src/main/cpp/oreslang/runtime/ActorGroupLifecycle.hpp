@@ -208,24 +208,6 @@ public:
         std::uint64_t group_id_;
     };
 
-    /**
-     * Generation-fenced runtime retirement capability. Never holds a pointer
-     * to NativeActorGroup; safe to retain after the group has been destroyed.
-     * Trusted runtime only: call finalized() after physical quiescence.
-     */
-    class RuntimeFinalizer final {
-    public:
-        bool finalized(std::string failure = "") const {
-            return NativeActorGroup::finalized_after_close(
-                ref_, group_id_, std::move(failure));
-        }
-    private:
-        friend class NativeActorGroup;
-        RuntimeFinalizer(NativeActorRef ref, std::uint64_t group_id)
-            : ref_(std::move(ref)), group_id_(group_id) {}
-        NativeActorRef ref_;
-        std::uint64_t group_id_;
-    };
 
     /** Enqueue-only reserved CONTROL slot. A GPU callback posts here but
      * cannot execute actor/user handlers on its carrier thread. */
