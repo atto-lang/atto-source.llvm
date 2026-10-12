@@ -222,6 +222,38 @@ int main() {
         reopened.record(key(77));
     }
 
+    // Renaming the real journal to a different name and putting another
+    // private single-link regular file at the configured path defeats a
+    // link-count-only check. The original writer must not append to the
+    // relocated inode; the old writer stays quarantined after restoration.
+    {
+        NativeTerminalReceiptJournal journal(path);
+        const std::string moved = std::string(dir) + "/receipts.relocated";
+        check(::rename(path.c_str(), moved.c_str()) == 0,
+              "failed to relocate journal inode");
+        int replacement = ::open(path.c_str(),
+            O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+        check(replacement >= 0, "failed to create replacement journal name");
+        check(::close(replacement) == 0, "failed to close path decoy");
+        rejects([&] { journal.record(key(78)); },
+                "renamed journal wrote through stale pathname");
+        struct stat decoy{};
+        check(::stat(path.c_str(), &decoy) == 0 && decoy.st_size == 0,
+              "renamed journal changed path replacement");
+        check(::unlink(path.c_str()) == 0
+                  && ::rename(moved.c_str(), path.c_str()) == 0,
+              "failed to restore original journal path");
+        rejects([&] { journal.record(key(79)); },
+                "stale pathname writer resumed after restoration");
+    }
+    {
+        NativeTerminalReceiptJournal reopened(path);
+        check(reopened.inspect(k).phase == DurableTerminalPhase::acknowledged
+                  && !reopened.find(key(78)),
+              "rename-replace corrupted previously durable receipt");
+        reopened.record(key(80));
+    }
+
     // A torn last frame and silent record mutation both fail closed.
     {
         int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
