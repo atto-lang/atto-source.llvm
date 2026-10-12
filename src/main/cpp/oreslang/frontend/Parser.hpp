@@ -109,9 +109,12 @@ struct Function {
 // Closed structural variants, not arbitrary runtime object references.
 // Tuple/Array/List alternatives retain ordered element types and arity.
 struct MessageShape {
-    enum class Kind { Boolean, Integer, String, Tuple, Array, List, FixedArray, FixedList };
+    enum class Kind { Boolean, Integer, String, Tuple, Array, List, FixedArray, FixedList, EnumRef, Box };
     Kind kind;
     std::vector<MessageShape> elements;
+    // Compile-time nominal reference only: native and MessagePack lowering
+    // must reject this unless a nested tagged codec has been implemented.
+    std::string nominal_name;
 };
 
 struct MessagePattern {
