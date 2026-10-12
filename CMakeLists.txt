@@ -165,6 +165,24 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_pipeline_actor_wrong_route_direction
         source-actor-pipeline-wrong-direction.ores
         --diagnostic "pipeline route direction is not authorized for actor role")
+    oreslang_contract_test(native_ir_pipeline_cancelled
+        source-actor-pipeline-cancelled.ores --ir "oreslang_source_actor_pipeline_cancel")
+    oreslang_contract_test(native_ir_pipeline_wrong_result
+        source-actor-pipeline-wrong-result.ores --ir "oreslang_source_actor_pipeline_expect_status")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_pipeline_cancelled
+            source-actor-pipeline-cancelled.ores --run 77 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=7")
+        oreslang_contract_test(native_exec_pipeline_wrong_result
+            source-actor-pipeline-wrong-result.ores --run 76 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=6")
+    endif()
     oreslang_contract_test(native_ir_missing_pipeline_backward_reply
         source-actor-pipeline-missing-reply.ores --ir "oreslang_source_actor_pipeline_expect_status")
     if(ORE_CLANG)
