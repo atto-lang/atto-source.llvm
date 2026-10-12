@@ -108,6 +108,60 @@ int main() {
     assert(collection.enums.at(0).cases.at(3).payload.kind == MessageShape::Kind::FixedList);
     assert(collection.tagged_patterns.at(0).alternatives.size() == 4);
 
+    auto spread = parse_program(R"(
+        define match pattern Messages as
+            ...Status
+        end
+        define enum Status as
+            Message1: Tuple[bool, string]
+            Message2: string
+            Message3: string
+        end
+    )");
+    assert(spread.tagged_patterns.size() == 1);
+    assert(spread.tagged_patterns.at(0).alternatives ==
+           std::vector<std::string>({"Status.Message1", "Status.Message2",
+                                     "Status.Message3"}));
+    assert(spread.tagged_patterns.at(0).alternatives ==
+           sameShape.tagged_patterns.at(0).alternatives);
+
+    auto augmented = parse_program(R"(
+        define enum First as A B end
+        define enum Second as C end
+        define match pattern Messages as
+            ...First
+            Second.C
+        end
+    )");
+    assert(augmented.tagged_patterns.at(0).alternatives ==
+           std::vector<std::string>({"First.A", "First.B", "Second.C"}));
+
+    auto grown = parse_program(R"(
+        define match pattern Messages as ...Status end
+        define enum Status as Message1 Message2 Message3 Message4 end
+    )");
+    assert(grown.tagged_patterns.at(0).alternatives.size() == 4);
+    assert(grown.tagged_patterns.at(0).alternatives.back() == "Status.Message4");
+    rejects(R"(
+        define enum Status as Message1 Message2 end
+        define match pattern Bad as ...Status Status.Message1 end
+    )", "duplicate pattern alternative");
+    rejects(R"(
+        define enum Status as Message1 Message2 end
+        define match pattern Bad as ...Status ...Status end
+    )", "duplicate pattern alternative");
+    rejects("define match pattern Bad as ...Missing end",
+            "unknown enum in match pattern spread");
+    rejects(R"(
+        define enum Status as Message1 end
+        define match pattern All as ...Status end
+        define match pattern Bad as ...All end
+    )", "unknown enum in match pattern spread");
+    rejects(R"(
+        define enum Status as Message1 end
+        define match Bad as ...Status end
+    )", "expected 'pattern'");
+
     rejects("define enum Bad as A: string = 2 B: string = 1 end",
             "enum wire tags must increase monotonically");
     rejects("define enum Bad as A: string = 0 end",
