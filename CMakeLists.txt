@@ -114,6 +114,10 @@ if(BUILD_TESTING)
         --diagnostic "native main() must have zero arguments")
     oreslang_contract_test(native_exit_reject_reserved_symbol exit-reserved-native-symbol.ores
         --diagnostic "reserved native entrypoint symbol collision")
+    oreslang_contract_test(native_exit_reject_unsupported_explicit_exit exit-unsupported-process-exit.ores
+        --diagnostic "oreslang-llvmc:")
+    oreslang_contract_test(native_exit_reject_unsupported_async_root exit-unsupported-async-main.ores
+        --diagnostic "native actor/async declaration requires")
     oreslang_contract_test(native_exit_void_main_ir exit-void-main.ores
         --ir "define i32 @main()")
     if(ORE_CLANG)
