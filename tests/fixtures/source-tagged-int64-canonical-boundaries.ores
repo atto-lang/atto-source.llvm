@@ -34,6 +34,7 @@ pub fnc main(): int {
     counter.send(Numbers.Sub(4294967296));
     counter.send(Numbers.Add(-2147483649));
     counter.send(Numbers.Add(9223372036854775807));
+    counter.send(Numbers.Add(-9223372036854775808));
     stop counter;
     return 43;
 }
