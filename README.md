@@ -22,19 +22,30 @@ reject them without producing IR. See [the native select parity contract](docs/S
 - CI covers positive/negative source-to-IR contracts and Clang compilation/execution of
   standalone `main` functions, when Clang is present.
 - A narrow nonescaping **stack-only class** form: `define class Box as` with
-  `val/let int` fields initialized by literals; `let Box b = new Box()` inside
+  `let int` fields initialized by literals; `let Box b = new Box()` inside
   a function; reading `b.field` in an integer expression. Compiles to LLVM
-  stack `alloca` storage, with no tracing GC or native malloc. Returning,
-  borrowing, moving or sharing these objects remains unsupported and rejected.
+  stack `alloca` storage, with no tracing GC or native malloc. Returning class objects or unsupported moves/shares fails closed; admitted
+  call-scoped borrows are checked by the current ownership CFG.
 - `OwnedHeap.hpp` provides move-only native RAII owners, runtime borrow leases,
   accounting and deterministic destruction. `EpochArena.hpp` provides
   actor-carrier-local, bounded typed regions with reverse-order drop and
   quiescence fences. Both have CTest and sanitizers; general `.ores` objects
   are **not yet lowered into these allocators**.
 
-The `int` to `i64` mapping, wraparound arithmetic, external linkage, and calling conventions
-**are provisional** and are not a claim of Java semantic parity. In particular, this slice
-does not support `-9223372036854775808` as one literal.
+Oreslang `int` still lowers to `i64` for guest functions. For a
+zero-argument `main()` (unqualified or `module.main`), native compilation
+emits a separate `i32 @main()` C/OS wrapper that calls the Oreslang
+entrypoint. An unqualified guest main gets an internal generated symbol;
+a module-qualified main retains its own exported guest symbol. Falling off a
+`main(): void` body returns status `0`. An integer `main()` must return
+a code within `0..255`; values outside that range return failure status `1`
+rather than silently truncating to an unrelated shell status. Native source
+`std.process.exit()` and exception effects remain unsupported and fail closed.
+
+The `int` to `i64` mapping, wraparound arithmetic and other non-entrypoint
+calling conventions are still **provisional** and do not imply Java parity.
+The native slice does not support `-9223372036854775808` as one literal.
+Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
 
 ## Build and test
 
