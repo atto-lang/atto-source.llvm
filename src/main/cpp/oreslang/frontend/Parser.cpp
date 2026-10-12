@@ -489,6 +489,10 @@ private:
                 value.allowed_effects.push_back(std::move(effect));
             } while (accept(","));
         }
+        if (token_.text == "with")
+            fail("duplicate with effect clause");
+        if (token_.text == "using")
+            fail("signature using is not an effect clause; use with");
         require("{");
         bool scalar_local_seen = false;
         while (token_.text == "const" || token_.text == "val") {
