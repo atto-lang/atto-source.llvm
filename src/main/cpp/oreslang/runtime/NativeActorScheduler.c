@@ -447,6 +447,14 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
 }
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int ok = !s->retired;
+    if (ok && pthread_cond_broadcast(&s->ready) != 0) abort();
+    unlock(s);
+    return ok;
+}
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
