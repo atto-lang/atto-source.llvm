@@ -184,6 +184,39 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
 
+    # Native OS ABI is i32 even though Oreslang int is represented as i64.
+    oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
+        --diagnostic "native main() must have zero arguments")
+    oreslang_contract_test(native_exit_reject_reserved_symbol exit-reserved-native-symbol.ores
+        --diagnostic "reserved native entrypoint symbol collision")
+    oreslang_contract_test(native_exit_reject_unsupported_explicit_exit exit-unsupported-process-exit.ores
+        --diagnostic "oreslang-llvmc:")
+    oreslang_contract_test(native_exit_reject_unsupported_async_root exit-unsupported-async-main.ores
+        --diagnostic "native actor/async declaration requires")
+    oreslang_contract_test(native_exit_void_main_ir exit-void-main.ores
+        --ir "define i32 @main()")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exit_void_fallthrough exit-void-main.ores
+            --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_module_main module-main.ores
+            --run 7 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_max_valid exit-max-main.ores
+            --run 255 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_overflow_fails_closed exit-invalid-positive-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_negative_fails_closed exit-invalid-negative-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_zero exit-zero-main.ores
+            --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_one exit-one-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_wide_64bit_overflow_fails_closed exit-wide-overflow-main.ores
+            --run 1 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_void_runs_defer exit-void-deferred-cleanup-main.ores
+            --run 0 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exit_no_main_is_not_linkable exit-no-main.ores
+            --no-main-link --clang "${ORE_CLANG}")
+    endif()
     add_test(NAME native_explicit_wasm32_target_ir
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_target_ir_test.py"
