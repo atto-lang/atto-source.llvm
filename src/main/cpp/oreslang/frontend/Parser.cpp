@@ -454,8 +454,9 @@ private:
                 while (accept(","));
                 require(")");
                 require(";");
-                if (value.pipeline_actors.size() != 3)
-                    fail("pipeline requires exactly source, transform, sink");
+                if (value.pipeline_actors.size() < 2
+                    || value.pipeline_actors.size() > 16)
+                    fail("pipeline requires between 2 and 16 ordered actors");
             }
             if (accept("await")) {
                 value.ready_await_actor = identifier();
@@ -926,8 +927,9 @@ private:
             }
             if (!fn.pipeline_actors.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty()
-                    || fn.pipeline_actors.size() != 3 || !fn.ready_await_actor.empty())
-                    throw std::runtime_error("pipeline requires zero-argument main without ready await");
+                    || fn.pipeline_actors.size() < 2
+                    || fn.pipeline_actors.size() > 16 || !fn.ready_await_actor.empty())
+                    throw std::runtime_error("pipeline requires 2..16 actors in zero-argument main without ready await");
                 std::unordered_set<std::string> unique;
                 std::unordered_set<std::string> uniqueTypes;
                 std::string contract;
@@ -939,7 +941,7 @@ private:
                     if (found == program.actors.end() || !typedDomains.count(found->messages_type))
                         throw std::runtime_error("pipeline actors require nominal typed mailbox");
                     if (!uniqueTypes.insert(found->name).second)
-                        throw std::runtime_error("linear pipeline requires three distinct actor types");
+                        throw std::runtime_error("linear pipeline requires distinct actor types");
                     pipelineRoles.emplace(found->name,
                         (unsigned)(&refName - &fn.pipeline_actors.front()));
                     if (contract.empty()) contract = found->messages_type;
@@ -950,8 +952,8 @@ private:
                     throw std::runtime_error("expect_pipeline must name pipeline source");
                 if (fn.actor_sends.size() != 1
                     || fn.actor_sends.front().reference != fn.pipeline_actors.front()
-                    || fn.actor_stops.size() != 3)
-                    throw std::runtime_error("pipeline requires one source send and three stops");
+                    || fn.actor_stops.size() != fn.pipeline_actors.size())
+                    throw std::runtime_error("pipeline requires one source send and a stop for each actor");
                 for (const auto& refName : fn.pipeline_actors)
                     if (std::count(fn.actor_stops.begin(), fn.actor_stops.end(), refName) != 1)
                         throw std::runtime_error("pipeline must stop each connected actor");
@@ -1197,7 +1199,8 @@ private:
                                 if (role == pipelineRoles.end())
                                     throw std::runtime_error("pipeline actor routing requires declared pipeline topology");
                                 if ((role->second == 0 && arm.route_direction == "backward")
-                                    || (role->second == 2 && arm.route_direction == "forward"))
+                                    || (role->second == pipelineRoles.size() - 1
+                                        && arm.route_direction == "forward"))
                                     throw std::runtime_error("pipeline route direction is not authorized for actor role");
                                 if (!arm.route_payload || arm.tuple_destructure)
                                     throw std::runtime_error("pipeline route requires scalar payload expression");
