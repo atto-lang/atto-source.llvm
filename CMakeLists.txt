@@ -1060,4 +1060,5 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-versioned-actor-cell-test)
     set_tests_properties(native_actor_versioned_state_logical_races
         PROPERTIES TIMEOUT 20)
+    set_tests_properties(native_actor_state_scope_nested_loan_fencing PROPERTIES TIMEOUT 20)
 endif()
