@@ -37,6 +37,14 @@ int main() {
     impostor.complete(impostor_ticket, true);
     impostor.retire_after_backend_release(id);
     impostor.close_after_retirement();
+    // C++ implicit move must not bypass take()'s in-flight constraint.
+    expects<std::logic_error>([&] { BufferFence stolen(std::move(buffer)); });
+    check(buffer.status() == Status::InFlight);
+    BufferFence retired_target(id, 4);
+    retired_target.retire_after_backend_release(id);
+    retired_target.close_after_retirement();
+    expects<std::logic_error>([&] { retired_target = std::move(buffer); });
+    check(buffer.status() == Status::InFlight);
     buffer.complete(first, true);
     expects<std::logic_error>([&] { buffer.complete(first, true); });
     auto owner = buffer.take();
