@@ -962,6 +962,12 @@ private:
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn);
+            // Compiler-owned ABI imports must never be shadowed by a guest.
+            if (fn.name.rfind("oreslang_int_array_", 0) == 0)
+                throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (std::count_if(fn.locals.begin(), fn.locals.end(),
+                    [](const LocalBinding& local) { return local.int_array; }) > 64)
+                throw std::runtime_error("native Array<int> owner limit exceeded (64)");
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
                 throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
                                          + std::to_string(fn.offset));
