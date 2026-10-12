@@ -799,7 +799,7 @@ static int source_send_binary_unlocked(SourceActor* actor,
                 index, (long long)admitted_trace_value);
         }
         fprintf(stderr,
-            "SOURCE_PIPELINE_CONTEXT_ADMIT flow=%llu message=%llu parent=%llu target=%zu direction=%u domain=%llu generation=%llu\\n",
+            "SOURCE_PIPELINE_CONTEXT_ADMIT flow=%llu message=%llu parent=%llu target=%zu direction=%u domain=%llu generation=%llu\n",
             (unsigned long long)accepted->flow_id,
             (unsigned long long)accepted->message_id,
             (unsigned long long)accepted->parent_message_id,
