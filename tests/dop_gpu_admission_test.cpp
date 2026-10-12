@@ -51,7 +51,7 @@ int main() {
         BufferFence wrong_bytes(Identity{"t", "d", 3}, aos.byte_length() + 4);
         (void)DeviceBuffer(aos, wrong_bytes);
     });
-    for (const auto foreign : {Identity{"other", "d", 3}, Identity{"t", "other", 3},
+    for (const auto& foreign : {Identity{"other", "d", 3}, Identity{"t", "other", 3},
                                Identity{"t", "d", 1}, Identity{"t", "d", 0}}) {
         BufferFence foreign_fence(foreign, aos.byte_length());
         const DeviceBuffer candidate(aos, foreign_fence);
