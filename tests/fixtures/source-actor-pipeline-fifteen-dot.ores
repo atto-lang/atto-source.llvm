@@ -8,6 +8,12 @@ define match pattern PipeMessages as
     Signal.Data
     Signal.Result
 end
+define match pattern PipeForwardMessages as
+    Signal.Data
+end
+define match pattern PipeBackwardMessages as
+    Signal.Result
+end
 
 define actor Stage0<messages=PipeMessages> as
     let value: int = 0;
@@ -24,212 +30,277 @@ define actor Stage0<messages=PipeMessages> as
         return value;
     }
 end
-define actor Stage1<messages=PipeMessages> as
+define transform pipe actor Stage1<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage2<messages=PipeMessages> as
+define transform pipe actor Stage2<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage3<messages=PipeMessages> as
+define transform pipe actor Stage3<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage4<messages=PipeMessages> as
+define transform pipe actor Stage4<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage5<messages=PipeMessages> as
+define transform pipe actor Stage5<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage6<messages=PipeMessages> as
+define transform pipe actor Stage6<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage7<messages=PipeMessages> as
+define transform pipe actor Stage7<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage8<messages=PipeMessages> as
+define transform pipe actor Stage8<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage9<messages=PipeMessages> as
+define transform pipe actor Stage9<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage10<messages=PipeMessages> as
+define transform pipe actor Stage10<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage11<messages=PipeMessages> as
+define transform pipe actor Stage11<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage12<messages=PipeMessages> as
+define transform pipe actor Stage12<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
-define actor Stage13<messages=PipeMessages> as
+define transform pipe actor Stage13<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     let value: int = 0;
-    receive(PipeMessages m) {
+    receive_forward(PipeForwardMessages m): void {
         do match m over {
             on Signal.Data as n {
                 value = n + 1;
                 self.forward(Signal.Data(value));
             }
+        }
+        return;
+    }
+    receive_backward(PipeBackwardMessages m): void {
+        do match m over {
             on Signal.Result as n {
                 value = n + 1;
                 self.backward(Signal.Result(value));
             }
         }
-        return value;
+        return;
     }
 end
 define actor Stage14<messages=PipeMessages> as
