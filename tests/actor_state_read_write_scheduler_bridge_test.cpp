@@ -18,7 +18,7 @@ struct State {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef actor{};
     std::atomic<int> accepted{0}, rejected{0}, failures{0};
-    std::atomic<int> data_rejected{0}, cancelled{0};
+    std::atomic<int> data_rejected{0}, cancelled{0}, unwind_released{0};
 };
 extern "C" void on_data(void* raw, size_t actor, uint64_t payload) {
     auto& s = *static_cast<State*>(raw);
@@ -70,6 +70,22 @@ extern "C" void on_state(void* raw, size_t actor, OresNativeActorStateWake wake)
     };
     if (s.bridge->is_own_cancellation(false_cancellation))
         s.failures.fetch_add(1);
+    if (wake.continuation_id == 5) {
+        // A guest throw is contained by this trusted C++ callback wrapper.
+        // Even without explicit finish(), the scoped grant must be released
+        // before returning across the native C scheduler callback boundary.
+        try {
+            Bridge::ScopedWake scope(*s.bridge, wake, Mode::Read);
+            if (!scope) {
+                s.failures.fetch_add(1);
+                return;
+            }
+            throw std::runtime_error("simulated guest failure");
+        } catch (const std::runtime_error&) {
+            s.unwind_released.fetch_add(1);
+        }
+        return;
+    }
     if (!s.bridge->try_enter(wake, Mode::Read)) {
         s.rejected.fetch_add(1);
         return;
@@ -146,6 +162,20 @@ int main() {
     CHECK(ores_native_actor_scheduler_drain(state.scheduler));
     CHECK(state.cancelled.load() == 1);
     CHECK(state.accepted.load() == 3);
+    CHECK(state.failures.load() == 0);
+
+    // Native guest failure must not strand the RW grant or a queued writer.
+    CHECK(state.registry.request(incarnation, 5, Mode::Read).status == Status::Ready);
+    CHECK(bridge.pump(1) == 1);
+    CHECK(ores_native_actor_scheduler_drain(state.scheduler));
+    CHECK(state.unwind_released.load() == 1);
+    CHECK(state.registry.pending_notifications().empty());
+    CHECK(state.failures.load() == 0);
+    CHECK(state.registry.request(incarnation, 6, Mode::Write).status == Status::Ready);
+    state.registry.cancel_pending(incarnation, 6);
+    CHECK(bridge.pump(1) == 1);
+    CHECK(ores_native_actor_scheduler_drain(state.scheduler));
+    CHECK(state.cancelled.load() == 2);
     CHECK(state.failures.load() == 0);
 
     CHECK(ores_native_actor_scheduler_stop(state.scheduler, state.actor));
