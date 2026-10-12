@@ -174,6 +174,13 @@ public:
         require_fresh_generation(actor);
         if (staged_slots_.count(actor.actor_slot))
             throw std::logic_error("native slot already staged by another child");
+        // A native actor that was spawned is permanently consumed, including
+        // failed staging or cleanup-backed abort. Mark the physical slot's
+        // generation before any pending map publication to prevent ABA.
+        auto [generation_it, unused_new_slot] = highest_generation_.try_emplace(
+            actor.actor_slot, 0);
+        (void) unused_new_slot;
+        generation_it->second = actor.generation;
         auto [slot_it, slot_added] = staged_slots_.emplace(
             actor.actor_slot, permit.child.logical_child_id);
         if (!slot_added) throw std::logic_error("native slot already staged");
@@ -258,27 +265,25 @@ public:
         if (same_actor(replacement, permit.failed_actor)
             || active_actors_.count(actor_key(replacement)))
             throw std::logic_error("native replacement actor is not fresh");
-        require_fresh_generation(replacement);
-        // Stage both the slot replay fence and live actor index before
-        // changing the child state. An allocation failure preserves the
-        // reservation so the host can stop and roll back the spawned actor.
-        auto [seen_it, new_slot] = highest_generation_.try_emplace(
-            replacement.actor_slot, 0);
-        try {
-            auto [active_it, inserted] = active_actors_.emplace(
-                actor_key(replacement), permit.child.logical_child_id);
-            (void) active_it;
-            if (!inserted)
-                throw std::logic_error("replacement actor already registered");
-        } catch (...) {
-            if (new_slot) highest_generation_.erase(seen_it);
-            throw;
-        }
+        const auto consumed = highest_generation_.find(replacement.actor_slot);
+        const auto staged = staged_slots_.find(replacement.actor_slot);
+        if (consumed == highest_generation_.end()
+                || consumed->second != replacement.generation
+                || staged == staged_slots_.end()
+                || staged->second != permit.child.logical_child_id)
+            throw std::logic_error("replacement was not exclusively staged");
+        // Active index mutation is the only potentially allocating step.
+        // On allocation failure the staged reservation stays quarantined;
+        // the physical actor's generation is NEVER made reusable.
+        auto [active_it, inserted] = active_actors_.emplace(
+            actor_key(replacement), permit.child.logical_child_id);
+        (void) active_it;
+        if (!inserted)
+            throw std::logic_error("replacement actor already registered");
         auto& stored = children_.at(permit.child.logical_child_id);
         stored.actor = replacement;
         stored.incarnation = permit.incarnation + 1;
         stored.phase = Phase::active;
-        seen_it->second = replacement.generation;
         staged_slots_.erase(replacement.actor_slot);
         replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
