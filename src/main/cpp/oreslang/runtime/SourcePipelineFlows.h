@@ -19,6 +19,7 @@ typedef struct OresFlowTable OresFlowTable;
 typedef struct {
     uint64_t actor_id;         /* scheduler-issued, never recycled in domain */
     uint64_t actor_generation; /* actual destination incarnation */
+    uint64_t scheduler_domain; /* owning scheduler isolation domain */
 } OresFlowActor;
 typedef enum {
     ORES_FLOW_ROOT = 0,
