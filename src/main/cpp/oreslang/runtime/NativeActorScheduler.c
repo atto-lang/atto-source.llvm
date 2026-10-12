@@ -9,6 +9,10 @@ typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
+    /* Owned while active, under the scheduler lock. This is a temporary
+     * physical carrier lease, not permanent actor-to-thread affinity. */
+    pthread_t carrier_owner;
+    unsigned carrier_owner_valid;
     unsigned has_control;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
@@ -34,6 +38,7 @@ struct OresNativeActorScheduler {
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
+static _Thread_local OresNativeActorRef executing_actor;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
 /* Never wrap a scheduler-domain capability back to 1: a stale ActorRef
@@ -70,6 +75,9 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) 
     for (int pass = 1; pass >= 0; --pass) {
         for (size_t offset = 0; offset < s->actor_count; ++offset) {
             size_t i = (s->next_actor + offset) % s->actor_count;
+            /* The scheduler lock protects both the lane and its owner:
+             * a stale owner may never be mistaken for an available lane. */
+            if (!!s->actors[i].active != !!s->actors[i].carrier_owner_valid) abort();
             if (!s->actors[i].active
                 && (pass ? s->actors[i].has_control : s->actors[i].queued != 0)) {
                 *actor = i;
@@ -108,18 +116,28 @@ static void* carrier(void* raw) {
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
+        if (lane->active || lane->carrier_owner_valid) abort();
         lane->active = 1;
+        lane->carrier_owner = pthread_self();
+        lane->carrier_owner_valid = 1;
+        const OresNativeActorRef current_ref =
+            {s->domain, (uint64_t)i, lane->generation};
         unlock(s);
 
         executing = s;
+        executing_actor = current_ref;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
+        executing_actor = (OresNativeActorRef){0, 0, 0};
         executing = NULL;
 
         lock(s);
-        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (!lane->active || !lane->carrier_owner_valid
+            || !pthread_equal(lane->carrier_owner, pthread_self())
+            || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        lane->carrier_owner_valid = 0;
         s->outstanding--;
         s->completed++;
         /* A lane contributes at most one runnable turn regardless of how
@@ -421,6 +439,17 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
 }
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
+}
+
+/* An actor-local callback, including supervisor CONTROL, is only authorized
+ * for the exact actor incarnation admitted to this physical carrier. This
+ * does not authorize entering guest code from another thread. */
+int ores_native_actor_scheduler_is_current_actor(
+    OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    return s && executing == s
+        && actor.scheduler_domain == executing_actor.scheduler_domain
+        && actor.actor_slot == executing_actor.actor_slot
+        && actor.generation == executing_actor.generation;
 }
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
