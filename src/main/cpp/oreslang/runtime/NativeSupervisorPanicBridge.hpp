@@ -48,6 +48,12 @@ public:
             throw std::invalid_argument("supervisor parent must be live");
     }
 
+    // Teardown invalidates the restart publication fence even when a
+    // separately held registry outlives this host bridge.
+    ~NativeSupervisorPanicBridge() {
+        child_registry_->close_restart_admission();
+    }
+
     /** The host must register exactly the current generation of each child. */
     void register_child(OresNativeActorRef child) {
         if (!valid(child) || child.scheduler_domain != parent_.scheduler_domain
