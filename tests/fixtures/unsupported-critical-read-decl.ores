@@ -1,0 +1,1 @@
+pub critical-read fnc read(): int { return 1; }
