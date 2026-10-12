@@ -234,11 +234,14 @@ read->read and write->read, until reentrancy and cross-primitive lock-order
 proofs are implemented. These are future target semantics above, not
 claims of existing behavior.
 
-Isolated exact-Git-blob verification of the admission algorithm passed
-on private funded runner
-[run #38322201779](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38322201779).
-That job compiled the exact `CriticalRwGate` blob with a **test-only**
-`OresFuture`/scheduler adapter and executed admission and cancellation
-stress. It is **not** evidence for production `OresFuture` integration,
+Isolated exact-Git-blob verification of the hardened admission
+algorithm passed on a private funded runner:
+[run #38322404843](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38322404843).
+The workflow checked the current gate Git blob
+`aca6f8a24f151f0cc8b2c517740cbeee6c90b0e9`, compiled
+`CriticalRwGate` with **test-only** `OresFuture`/scheduler adapters,
+and exercised FIFO cohorts, writer exclusion, bounded shutdown,
+cancelled-writer liveness and 400 cancellation/grant races.
+It is **not** evidence for production `OresFuture` integration,
 full GraalVM or LLVM guest execution, compiler effect checking,
 supervisor generation fencing, sanitizer coverage, or ready-to-merge status.
