@@ -331,6 +331,40 @@ public:
 
 public:
     /**
+     * Complete a previously CLAIMED terminal receipt after an independently
+     * verified host effect. This is the ONLY acceptable outcome for lost
+     * acknowledgment: DO NOT reenter process_->accept or replay policy.
+     *
+     * The verifier must consult an authoritative host commit receipt
+     * bound to the exact original parent/child/failure/nonce; a timeout,
+     * healthy process or invocation attempt alone is NOT proof. It executes
+     * outside scheduler and bridge locks. False leaves the receipt CLAIMED.
+     * This process-local API does not survive loss of the scheduler ledger.
+     */
+    bool reconcile_claimed_terminal_ack(
+            OresNativeActorRef original_parent,
+            OresNativeActorRef failed_child,
+            const std::function<bool(const OresNativeTerminalReceipt&)>&
+                verify_committed_effect) {
+        if (!verify_committed_effect
+                || original_parent.scheduler_domain != parent_.scheduler_domain
+                || original_parent.actor_slot != parent_.actor_slot
+                || original_parent.generation != parent_.generation)
+            throw std::logic_error("unauthorized original PANIC receipt verifier");
+        OresNativeTerminalReceipt receipt{};
+        if (!ores_native_actor_scheduler_terminal_receipt(
+                scheduler_, original_parent, failed_child, &receipt)
+                || receipt.status != ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+                || !receipt.nonce)
+            throw std::logic_error("no unresolved claimed terminal effect");
+        if (!verify_committed_effect(receipt)) return false;
+        if (!ores_native_actor_scheduler_ack_terminal_receipt(scheduler_, receipt))
+            throw std::logic_error("terminal effect claim changed while verified");
+        return true;
+    }
+
+public:
+    /**
      * Trusted host wiring for the verified source installer. A source STOP
      * policy must share this exact registry with its scheduler panic bridge:
      * another registry for the same owner cannot validate its child IDs.
