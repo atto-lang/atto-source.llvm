@@ -673,6 +673,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-restart-admission-lease-test)
     set_tests_properties(native_restart_admission_lease PROPERTIES TIMEOUT 30)
 
+    # Safe limited reincarnation: only stopped, never-published candidates.
+    # Published user callbacks remain slot-index-only and cannot be recycled.
+    add_executable(oreslang-native-actor-reincarnation-test
+        tests/native_actor_reincarnation_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-reincarnation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-reincarnation-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-actor-reincarnation-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-actor-reincarnation-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_reincarnation
+        COMMAND oreslang-native-actor-reincarnation-test)
+    set_tests_properties(native_actor_reincarnation PROPERTIES TIMEOUT 30)
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # GNU link-wrapper fault injection: no uninitialized mutex destroy
         # and no publication-gate leak on partial pthread startup.
