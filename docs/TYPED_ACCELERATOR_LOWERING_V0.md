@@ -53,7 +53,11 @@ notation rather than fixed precision; Java constants use round-trippable F32
 notation. Clang syntax-checks the generated OpenCL C from both backends.
 
 The required `GpuTarget` profile currently only accepts 64-bit address
-computations, enabled F32, and explicit row/byte limits. Admission is necessary
+computations, enabled F32, and explicit row/byte limits. Empty host layouts
+remain valid for zero-work CPU transforms, but OpenCL lowering rejects zero
+rows, zero required bytes, or (on native) zero device quotas: emitting an
+unlaunchable zero-work NDRange must fail closed rather than imply a viable GPU
+dispatch. Admission is necessary
 but not sufficient for actual hardware: there is no OpenCL driver integration,
 hardware buffer allocation, command queue, device occupancy planner, local
 memory allocation, transfer/memory pinning, SVM or dynamic binary loading.
