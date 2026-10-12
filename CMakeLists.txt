@@ -177,6 +177,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_pipeline_actor_wrong_route_direction
         source-actor-pipeline-wrong-direction.ores
         --diagnostic "pipeline route direction is not authorized for actor role")
+    oreslang_contract_test(native_nested_enum_bidirectional_pipeline_ir
+        source-actor-nested-pipeline-bidirectional.ores
+        --ir "oreslang_source_actor_pipeline_emit_variant")
     oreslang_contract_test(native_ir_three_actor_bidirectional_pipeline
         source-actor-pipeline-bidirectional.ores
         --ir "oreslang_source_actor_pipeline_emit_i64")
@@ -184,6 +187,13 @@ if(BUILD_TESTING)
         source-tagged-int-spread-nonexhaustive.ores
         --diagnostic "nonexhaustive tagged receive match")
     if(ORE_CLANG)
+        oreslang_contract_test(native_exec_nested_enum_bidirectional_pipeline
+            source-actor-nested-pipeline-bidirectional.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19")
         oreslang_contract_test(native_exec_three_actor_bidirectional_pipeline
             source-actor-pipeline-bidirectional.ores
             --run 43 --clang "${ORE_CLANG}"
