@@ -49,6 +49,7 @@ public:
         if (!registry || registry->phase() != ActorResourceRegistry::Phase::failed)
             throw std::invalid_argument("only failed actor resource registries can be quarantined");
         std::lock_guard<std::mutex> guard(state_->mutex);
+        if (state_->discharged) return false;
         for (const auto& item : state_->entries) {
             if (item == registry) return true;
         }
@@ -74,7 +75,15 @@ public:
         std::vector<std::shared_ptr<ActorResourceRegistry>> retired;
         {
             std::lock_guard<std::mutex> guard(state_->mutex);
+            state_->discharged = true;
             retired.swap(state_->entries);
+        }
+        // A registry's destructor deliberately retains any unresolved FAILED
+        // callbacks even if its last owner disappears. A verified isolate
+        // shutdown must explicitly discharge those captures before releasing
+        // our shared_ptrs. Never run RAII destructors under the quarantine lock.
+        for (const auto& registry : retired) {
+            registry->discharge_after_verified_isolate_shutdown();
         }
         // Destruct outside the quarantine mutex: RAII destructors may enter
         // other host locks, and must never observe this mutex held.
@@ -84,6 +93,7 @@ public:
 private:
     struct State {
         mutable std::mutex mutex;
+        bool discharged = false;
         std::vector<std::shared_ptr<ActorResourceRegistry>> entries;
     };
     const std::size_t capacity_;
