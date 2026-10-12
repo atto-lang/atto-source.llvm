@@ -87,7 +87,24 @@ for phase in phases:
         doc["external_effect_proof"] = copy.deepcopy(external)
     semantic_check(doc)
 
+# The native journal's uint64 key admits the largest unsigned value
+# but never a zero supervisor or zero logical/scheduler generation.
+maximum = copy.deepcopy(base)
+maximum["key"]["supervisor_id"] = str(UINT64_MAX)
+semantic_check(maximum)
+
 invalid = []
+wrong = copy.deepcopy(base); wrong["key"]["supervisor_id"] = "0"; invalid.append(wrong)
+wrong = copy.deepcopy(base); wrong["key"]["logical_child_id"] = "0"; invalid.append(wrong)
+wrong = copy.deepcopy(base); wrong["key"]["original_parent"]["generation"] = "0"; invalid.append(wrong)
+wrong = copy.deepcopy(base); wrong["key"]["failed_child"]["generation"] = "0"; invalid.append(wrong)
+wrong = copy.deepcopy(base)
+wrong["phase"] = "claimed"; wrong["physical_done_proof"] = copy.deepcopy(physical)
+wrong["claim_nonce"] = "0"; invalid.append(wrong)
+wrong = copy.deepcopy(base)
+wrong["phase"] = "effect_proven"; wrong["physical_done_proof"] = copy.deepcopy(physical)
+wrong["claim_nonce"] = "1"; wrong["external_effect_proof"] = copy.deepcopy(external)
+wrong["external_effect_proof"]["authority"] = "Untrusted Ledger"; invalid.append(wrong)
 wrong = copy.deepcopy(base); wrong["claim_nonce"] = "1"; invalid.append(wrong)
 wrong = copy.deepcopy(base); wrong["key"]["failed_child"]["generation"] = 5; invalid.append(wrong)
 wrong = copy.deepcopy(base); wrong["key"]["runtime_id"] = "902"; invalid.append(wrong)
@@ -112,4 +129,4 @@ for index, doc in enumerate(invalid):
         continue
     raise AssertionError(f"invalid conformance fixture accepted: {index}")
 
-print("NATIVE_TERMINAL_RECEIPT_SCHEMA_PASS valid=5 invalid=9")
+print("NATIVE_TERMINAL_RECEIPT_SCHEMA_PASS valid=6 invalid=15")
