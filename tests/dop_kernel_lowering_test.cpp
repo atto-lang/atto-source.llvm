@@ -66,6 +66,21 @@ int main() {
                   << generated.device_source << "\n";
     }
 
+    // CPU may handle empty data, but a GPU artifact must never attempt
+    // to dispatch an invalid zero-work NDRange or zero capacity profile.
+    for (auto kind : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
+        Plan empty(kind, 0, 2, 4, 16, kind == Layout::AoSoA ? 4u : 1u);
+        Kernel no_op(empty, Element::F32, Op::Scale, 2.0f, 0.0f);
+        HostBuffer zero_src(empty), zero_dst(empty);
+        execute_cpu(no_op, zero_src, zero_dst);
+        check(empty.byte_length() == 0);
+        expect<std::invalid_argument>([&] { (void)lower_opencl(no_op, {64, 4096, 10, true}); });
+    }
+    Plan live(Layout::AoS, 1, 1, 4, 4, 1);
+    Kernel admitted(live, Element::F32, Op::Scale, 2.0f, 0.0f);
+    expect<std::invalid_argument>([&] { (void)lower_opencl(admitted, {64, 0, 10, true}); });
+    expect<std::invalid_argument>([&] { (void)lower_opencl(admitted, {64, 4096, 0, true}); });
+
     Plan p(Layout::SoA, 2, 1, 4, 8, 1);
     Kernel k(p, Element::F32, Op::Scale, 2.0f, 0.0f);
     expect<std::invalid_argument>([&] {
