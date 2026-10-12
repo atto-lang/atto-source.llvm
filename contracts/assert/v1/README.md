@@ -16,9 +16,10 @@ backend execution fixtures and must not be inferred from JSON serialization.
 The oracle never captures actual Java/GraalVM or LLVM runtime evidence.
 
 **Backend status (2026-10-12):** Java/GraalVM `Assert` has been merged and
-verified with Maven, GraalVM Native Image AOT and hybrid. LLVM has tested
-canonical import parsing and fail-closed IR rejection; native module linking,
-`Any`/`bool`, `rt fail`, and `trap` lowering are still pending.
+verified with Maven, GraalVM Native Image AOT and hybrid. LLVM has tested canonical import parsing, sealed member-call AST and
+arity/alias validation, fail-closed IR rejection, and a native 36-case effect
+unwind precedence model. Native module linking, executable `Any`/`bool`, `rt fail`,
+and `trap` lowering are still pending.
 
 Native parity is established only when both compilers execute the *same* source
 cases and produce matching typed outcomes and failure channels, rather than
