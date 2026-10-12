@@ -46,8 +46,15 @@ static inline int ores_execution_init(OresNativeExecutionAuthority* a) {
     a->phase = ORES_EXEC_READY;
     return 1;
 }
+/* A mutex is unlocked during guest execution. pthread_mutex_destroy()
+ * alone therefore does not detect a live owner or suspended continuation.
+ * The embedding host must still fence concurrent callers before destruction. */
 static inline int ores_execution_destroy(OresNativeExecutionAuthority* a) {
-    return a && pthread_mutex_destroy(&a->mutex) == 0;
+    if (!a || pthread_mutex_lock(&a->mutex) != 0) return 0;
+    int quiescent = !a->owner
+        && (a->phase == ORES_EXEC_READY || a->phase == ORES_EXEC_TERMINATED);
+    if (pthread_mutex_unlock(&a->mutex) != 0) return 0;
+    return quiescent && pthread_mutex_destroy(&a->mutex) == 0;
 }
 static inline void ores_execution_lock(OresNativeExecutionAuthority* a) {
     if (pthread_mutex_lock(&a->mutex) != 0) __builtin_trap();
