@@ -398,8 +398,6 @@ private:
         if (token_.text == "const" || token_.text == "val"
                 || token_.text == "let" || token_.text == "state")
             fail("actor instance data must be declared in one state map");
-        if (value.fields.empty() && value.messages_type.empty() && !transform_pipe)
-            fail("actor requires a declared state map or typed mailbox");
         while (token_.text == "fnc" || token_.text == "routine"
                || token_.text == "pub" || token_.text == "receive"
                || token_.text == "receive_forward" || token_.text == "receive_backward") {
