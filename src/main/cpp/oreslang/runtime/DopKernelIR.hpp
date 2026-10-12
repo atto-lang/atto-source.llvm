@@ -28,11 +28,13 @@ enum class Element { F32 };
 enum class Op { Scale, Bias, ScaleBias };
 
 struct Kernel {
-    Plan layout;
-    Element element;
-    Op operation;
-    float scale;
-    float bias;
+    // Constructor admission remains authoritative for the whole lifetime:
+    // callers must not mutate enum tags or coefficients after validation.
+    const Plan layout;
+    const Element element;
+    const Op operation;
+    const float scale;
+    const float bias;
     Kernel(Plan l, Element e, Op o, float a, float b)
         : layout(l), element(e), operation(o), scale(a), bias(b) {
         if (element != Element::F32 || layout.scalar_bytes() != sizeof(float)
