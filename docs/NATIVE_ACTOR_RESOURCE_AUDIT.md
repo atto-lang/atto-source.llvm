@@ -43,6 +43,37 @@ Both standalone runs passed. These results **do not** imply that the whole
 LLVM source compiler or complete CMake/CTest suite passed; GitHub Actions
 on this organization's source repository still fails before starting a step.
 
+## Terminal failure and quarantine (October 12)
+
+A close attempt is not proof that its underlying socket, FFI callback, or
+arena was released. The registry now distinguishes `Reclaim::failed` /
+`Phase::failed` from `Reclaim::complete` / `Phase::reclaimed`.
+`Result.closed` counts successful callbacks only; `Result.attempted`
+counts attempts, `Result.failures` records terminal errors, and
+`Result.skipped` counts native allocations intentionally left untouched.
+
+Trusted I/O, timer, and FFI revokers run before **all** native allocation
+closers regardless of registration order. If a revoker fails, no native arena
+closer is admitted. If an allocation closer fails, remaining arena closers
+are skipped. Terminally failed registries retain the entire close-entry
+vector in `quarantined_`, including its captured RAII owners, to avoid
+accidentally releasing native memory by destroying a skipped closure.
+`quarantined_resources()` exposes this retained count for diagnostics.
+
+**Integration requirement:** A supervisor must retain ownership of a
+terminally failed registry until an independently safe reclamation or
+quarantine strategy is established. Destroying that registry can release
+its callback captures; this component cannot itself guarantee process-
+lifetime quarantine. Never mark `actor.done` successful or physically
+reclaim an actor arena based on a failed result.
+
+The exact current Git header and regression test were compiled and executed
+with C++17 strict Release `-Werror`, and ASan/UBSan/LeakSanitizer. Tests cover
+fail-closed status, callback-before-arena ordering, skipped native destructors,
+captured RAII retention, duplicate/foreign ticket rejection, and concurrent
+exactly-once completion. These targeted tests do **not** establish full LLVM
+compiler integration.
+
 ## Required before integration or merge
 
 1. The supervisor or owning actor runtime must keep the registry alive,
