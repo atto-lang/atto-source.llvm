@@ -66,6 +66,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-owned-heap-test)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+    # Exact source snapshots from oreslang-linked-queue main (2026-10-12).
+    # Until native Array<int>/class lowering is implemented, reject all input
+    # without emitting partial LLVM IR. This is NOT successful native execution.
+    add_test(NAME native_linked_queue_exact_source_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_linked_queue_fail_closed.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/linked-queue")
+    set_tests_properties(native_linked_queue_exact_source_failclosed
+        PROPERTIES TIMEOUT 90)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
         add_executable(oreslang-messagepack-wire-v2-test
