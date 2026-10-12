@@ -122,3 +122,50 @@ The final topology guard rejects distinct scheduler domains within the same
 linear flow before reservation or DATA admission. This is the deliberately
 restricted single-scheduler implementation; cross-scheduler routing requires a
 future explicitly authorized bridge rather than matching only numeric IDs.
+
+## First real LLVM guest DATA context bridge (2026-10-12)
+
+PR #240 now carries **host-issued routing provenance on actual scheduler DATA
+envelopes**, not inside application MessagePack bytes. The source compiler's
+existing `pipeline(source, transform, sink)` fixture lowers genuine
+`self.forward` and `self.backward` guest operations, and
+`SourceActorBootstrap` binds the accepted message's flow ID, unique
+process-lifetime message ID, causal parent, destination scheduler domain,
+and physical actor generation at the same locked DATA publication point.
+
+The root gets a flow identity only when bounded scheduler admission succeeds;
+malformed/rejected root mail cannot burn the one-use admission credit. Worker
+callbacks read their immutable ingress context, check current actor physical
+identity, and thread flow/message ancestry through a worker-local scoped
+context. The existing single-flow causal phase and cancellation/publication
+barrier remain mandatory. Each accepted DATA emits a testing-only provenance
+record **after** successful bounded admission.
+
+The CTest `native_exec_three_actor_bidirectional_pipeline` now requires
+`--pipeline-context-summary` as well as final state, three physical STOP
+receipts, and group drain. It verifies exactly five directional DATA records:
+root ingress → Source forward → Transform forward → Sink backward →
+Transform backward. Each record must match one nonzero flow ID, a fresh message
+ID, strict causal-parent continuity, the intended recipient, and a consistent
+nonzero scheduler domain; actor incarnations must be nonzero. Mutation tests
+reject missing, duplicate, foreign-flow, forged-parent, replayed, or
+cross-domain records.
+
+**Funded original project verification**:
+[LLVM full CMake/CTest run #38275613367](https://github.com/zed-pkg-test/java-app/actions/runs/38275613367)
+passed **163/163 CTests** with exact Git blob identity for **165** current
+`CMakeLists.txt`, `src/main/`, and `tests/` files, including the real
+compiler-generated guest execution and original TLC root-credit mutant.
+CI mirror: [zed-pkg-test/java-app PR #203](https://github.com/zed-pkg-test/java-app/pull/203).
+A later mirror-only change refreshed the capability-hardening workflow's
+previously stale source blob pin; it did not change the tested LLVM runtime
+or the source tree.
+
+**Important unresolved scope:** the provenance bridge is currently a *single*
+flow in one linear chain. It is NOT yet a call into `SourcePipelineFlows`,
+does not permit a second independent root ingress, and does not establish
+concurrent route correlation. The next runtime change must unify the new
+envelope metadata with the already-tested per-flow registry while explicitly
+maintaining group-mutex/flow-mutex lock order, actor turn finalization,
+producer leases, and bounded credits. Then introduce an opt-in compiled
+two-flow fixture and expand toward 1,000 interleaved requests.
