@@ -31,3 +31,32 @@ jobs:
         run: |
           python3 scripts/verify_actor_carrier_exclusivity.py
           python3 scripts/verify_actor_dispatch_tickets.py
+
+  tla-plus-tlc:
+    name: TLC model check both finite specifications
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Download checksum-verified official TLA+ tools v1.7.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar \
+            --output /tmp/ores-tla2tools.jar
+          echo 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104  /tmp/ores-tla2tools.jar' \
+            | sha1sum --check --status
+      - name: Parse and model check actor exclusivity and dispatch identity
+        shell: bash
+        working-directory: docs/formal
+        run: |
+          set -euo pipefail
+          for name in ReentrantActorExclusiveCarrier ActorDispatchIdentity; do
+            timeout 120s java -cp /tmp/ores-tla2tools.jar tlc2.TLC \
+              -workers 1 -config "${name}.cfg" "${name}.tla"
+          done
