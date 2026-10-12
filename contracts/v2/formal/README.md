@@ -62,3 +62,18 @@ into actor references. General untrusted cross-context capabilities need
 runtime-minted authority and context binding, not merely guess-resistant IDs.
 This model does not prove C11 memory-order refinement, general `Future<T>`
 continuations or multi-flow routing.
+
+
+## Cross-table publisher callback lock-order model
+
+`FlowCallbackReentrancy.tla` models a bounded A→B→A cross-table
+publisher callback cycle. The safe configuration
+`FlowCallbackReentrancy.cfg` forbids *any* flow-table operation while a
+publisher callback is executing, including an unrelated table. The unsafe
+`FlowCallbackReentrancyMutant.cfg` permits nested table entry and must fail
+`NoNestedRegistryEntry`.
+
+This tests the stated callback contract, not a lock-level C11 implementation
+refinement. The C executable additionally attempts all seven foreign-table
+operations while holding the outer flow callback mutex and verifies that
+none consumes the foreign reservation.
