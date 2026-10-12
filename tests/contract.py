@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--native-runtime")
     parser.add_argument("--experimental-owned-int", action="store_true")
     parser.add_argument("--no-native-abi", action="store_true")
+    parser.add_argument("--no-main-link", action="store_true")
     args = parser.parse_args()
     cmd = [args.compiler]
     if args.experimental_owned_int:
@@ -40,6 +41,23 @@ def main():
         assert "oreslang_owned_i64_region_" not in compile_result.stdout, (
             "ordinary source unexpectedly references the experimental native heap ABI"
         )
+    if args.no_main_link:
+        assert args.run is None, "--no-main-link cannot request successful execution"
+        assert args.clang, "--no-main-link requires clang"
+        assert "define i32 @main()" not in compile_result.stdout, (
+            "library-only source unexpectedly received a native OS entrypoint"
+        )
+        with tempfile.TemporaryDirectory(prefix="oreslang-missing-main-") as directory:
+            executable = str(pathlib.Path(directory) / "guest")
+            link = subprocess.run(
+                [args.clang, "-x", "ir", "-", "-o", executable],
+                input=compile_result.stdout, capture_output=True,
+                text=True, check=False, timeout=30,
+            )
+            assert link.returncode != 0, (
+                "source with no main() linked as a successful standalone process"
+            )
+        return
     if args.run is None:
         return
     assert args.clang, "--run requires a clang executable"
