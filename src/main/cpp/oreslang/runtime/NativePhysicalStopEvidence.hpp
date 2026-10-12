@@ -112,7 +112,8 @@ private:
             && r.child.runtime_id == registry_->runtime_id()
             && r.child.logical_child_id != 0
             && r.failed_actor.scheduler_domain == registry_->runtime_id()
-            && r.failed_actor.actor_slot != 0
+            // Scheduler slot zero is a valid actor address (often parent).
+            // Domain and generation, not slot truthiness, establish validity.
             && r.failed_actor.generation != 0
             && r.incarnation != 0 && r.turn_generation != 0;
     }
