@@ -25,6 +25,11 @@ typedef struct {
     size_t carrier_workers;   /* 0 => 5 */
     OresNativeActorTaskFn on_message; /* host callback; required */
     OresNativeActorTaskFn on_control; /* optional priority CONTROL callback */
+    /* Optional typed terminal-failure handler, serialized on parent's lane.
+     * REQUIRED for supervised child construction in this domain; otherwise
+     * spawn_supervised fails without consuming the requested actor slot.
+     * Not an actor-local panic catch or an external supervisor pool. */
+    OresNativeActorPanicFn on_failure;
     void* context;
 } OresNativeVMDomainConfig;
 
@@ -40,14 +45,62 @@ size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
+/* Trusted host-only immutable parentage. Child and supervisor must be distinct
+ * live actors in the SAME VM domain. A child slot is single-use. No delegation
+ * capability is granted to guest code, and no cross-domain parent is allowed.
+ * Failed registration leaves the child slot unspawned. */
+OresNativeActorRef ores_native_vm_spawn_supervised(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, OresNativeActorRef supervisor);
+/* Return immutable registered parent, or zero ref for missing, stale,
+ * unsupervised or invalid child. Host metadata only. */
+OresNativeActorRef ores_native_vm_supervisor_of(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child);
+/* Trusted host receipt after external actor-owned resource finalization.
+ * Requires the exact child ActorRef and scheduler DONE, accepts only once.
+ * Does not itself execute destructors or verify cleanup outside the VM.
+ * Repeated/stale/unregistered/live child confirmations fail closed. */
+int ores_native_vm_confirm_supervised_finalized(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child);
+/* Trusted runtime terminal notice, never a guest-authorized public syscall.
+ * Requires exact registered child, same-domain supervisor, STOP + quiescence,
+ * and an explicit host finalization receipt BEFORE publication. On a full
+ * parent CONTROL slot, returns 0 without consuming the terminal notice:
+ * caller owns retry/escalation. On success publishes exactly once; it does
+ * not itself restart, reclaim, or invoke policy synchronously. */
+int ores_native_vm_publish_supervised_failure(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorTerminalFailure failure);
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);
+/* Reject supervisor stop until all its registered direct children have
+ * drained AND their terminal notices have been admitted to priority CONTROL.
+ * VM-wide retirement still drains previously accepted actor work, but it
+ * cannot guarantee undelivered terminal notices without host reconciliation. */
 int ores_native_vm_stop(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* External trusted host barriers for compiler-generated linear ActorRef
+ * stop/teardown. They do not implement source-level suspend or Future<T>.
+ * Never call wait_done from a VM carrier callback. */
+int ores_native_vm_poll_done(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+int ores_native_vm_wait_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 int ores_native_vm_publish_control(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef parent, uint64_t payload);
+
+/* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
+ * per domain. The host event loop explicitly pumps it; no master pthread or
+ * actor carrier starts and no guest callback runs on this path.
+ * A wake is NOT actor CONTROL admission, receipt, or supervisor delivery:
+ * use ores_native_vm_publish_control() for actual actor mailbox admission.
+ * Producer/API calls must be externally fenced before final vm_close(). */
+int ores_native_vm_control_notify(
+    OresNativeVM* vm, enum OresNativeVMDomain domain);
+unsigned ores_native_vm_control_pending(OresNativeVM* vm);
+unsigned ores_native_vm_control_pump(OresNativeVM* vm);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call

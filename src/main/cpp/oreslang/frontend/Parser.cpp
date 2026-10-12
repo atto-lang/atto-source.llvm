@@ -37,7 +37,7 @@ bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
 bool reserved(std::string_view name) {
     // Keep these reserved even while their grammar is unsupported.
     static constexpr std::string_view words[] = {
-        "define", "class", "module", "contract", "conforms", "namespace",
+        "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
@@ -50,7 +50,8 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int"
+        "gpu", "quantum", "over", "structural", "int", "pure",
+        "using", "requires", "serial"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -126,6 +127,16 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
     return result;
 }
 
+// The first native terminal-try slice has no exceptional CFG. Restrict
+// protected return/guard expressions to primitive values or an addressable,
+// ownership-checked class field read: no nested calls or ownership transfers.
+bool nonthrowing_protected_read(const Expression& expr) {
+    if (expr.kind == Expression::Kind::Integer ||
+            expr.kind == Expression::Kind::Variable) return true;
+    return expr.kind == Expression::Kind::Field && expr.left &&
+           expr.left->kind == Expression::Kind::Variable;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int)
@@ -136,6 +147,10 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("serial")) {
+                require("actor");
+                fail("native serial actor requires shared HTTP/message lane lowering");
+            }
             if (accept("module")) {
                 program.module = identifier();
                 accept("as");
@@ -149,6 +164,10 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("serial")) {
+                    require("actor");
+                    fail("native serial actor requires shared HTTP/message lane lowering");
+                }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'class' or 'actor'");
@@ -170,6 +189,9 @@ private:
         actor.name = identifier();
         require("as");
         const bool braced = accept("{");
+        if (token_.text == "state") {
+            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
+        }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
             if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
@@ -280,6 +302,9 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (token_.text == "pure") {
+            fail("native pure modifier awaits transitive observable-effect verification");
+        }
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
         if (token_.text == "gpu" || token_.text == "quantum") {
@@ -314,6 +339,26 @@ private:
         require(":");
         value.returns_void = accept("void");
         if (!value.returns_void) require("int");
+        if (accept("using")) {
+            value.has_declared_effects = true;
+            do {
+                std::string name = identifier();
+                if (accept(".")) name += "." + identifier();
+                FunctionEffect effect;
+                try { effect = FunctionEffects::parse(name); }
+                catch (const std::invalid_argument&) {
+                    fail("unknown function effect '" + name + "'");
+                }
+                const auto bit = static_cast<std::uint32_t>(effect);
+                if (value.declared_effects.bits & bit)
+                    fail("duplicate function effect '" + name + "'");
+                value.declared_effects.bits |= bit;
+            } while (accept(","));
+        }
+        if (accept("requires")) {
+            // Never accept an uncertified realtime property as a mere annotation.
+            fail("native requires clause awaits verified WCET/allocation/blocking analysis");
+        }
         require("{");
         while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
             LocalBinding binding;
@@ -404,13 +449,18 @@ private:
         // if/else arms containing field writes or direct function calls.
         // They may change owned scalar state only when both predecessors
         // agree at the join; checked below by the ownership verifier.
-        auto branch_arm = [&]() {
+        auto branch_arm = [&](bool finally_scope = false) {
             std::vector<Statement> actions;
             while (token_.text != "}") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
                 Statement statement;
                 statement.offset = token_.offset;
+                if (finally_scope && (token_.text == "return" ||
+                        token_.text == "break" || token_.text == "continue"))
+                    fail("return/break/continue cannot escape finally; finally is cleanup-only");
+                if (finally_scope && (token_.text == "defer" || token_.text == "try"))
+                    fail("native finally nested defer/try requires scoped cleanup lowering");
                 if (token_.text == "let")
                     fail("native branch-local class owner requires destructor/drop lowering");
                 if (accept("const") || accept("val")) {
@@ -446,12 +496,26 @@ private:
             return actions;
         };
         bool return_guards_started = false;
+        bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "try") {
+                if (terminal_try_finally || return_guards_started)
+                    fail("native terminal try/finally must be a single return-only scope");
+                terminal_try_finally = true;
+                require("try");
+                require("{");
+                continue;
+            }
             if (token_.kind == Kind::End || token_.text == "}") {
                 if (return_guards_started) fail("expected 'return'");
                 fail("missing final return");
             }
+            // The initial native finally slice admits only guarded returns
+            // and a terminal return in the protected region. No potentially
+            // throwing calls, nested effects or suspension can be skipped.
+            if (terminal_try_finally && token_.text != "if")
+                fail("native terminal try supports only return guards and final return");
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
@@ -459,6 +523,10 @@ private:
                 auto lhs = expression();
                 if (!accept("eq")) require("==");
                 auto rhs = expression();
+                if (terminal_try_finally &&
+                        (!nonthrowing_protected_read(*lhs) ||
+                         !nonthrowing_protected_read(*rhs)))
+                    fail("native protected try guard requires nonthrowing scalar/field reads");
                 require(")");
                 require("{");
                 if (accept("return")) {
@@ -471,12 +539,16 @@ private:
                     guard.lhs = std::move(lhs);
                     guard.rhs = std::move(rhs);
                     guard.result = expression();
+                    if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
+                        fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
                     require("}");
                     require("fi");
                     value.early_returns.push_back(std::move(guard));
                     return_guards_started = true;
                 } else {
+                    if (terminal_try_finally)
+                        fail("native terminal try supports only guarded return branches");
                     if (return_guards_started)
                         fail("native conditional statements cannot follow return guards");
                     if (++branch_count > 8)
@@ -559,8 +631,52 @@ private:
             value.statements.push_back(std::move(statement));
         }
         require("return");
-        if (!value.returns_void) value.result = expression();
+        if (!value.returns_void) {
+            value.result = expression();
+            if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
+                fail("native protected try return requires nonthrowing scalar/field read");
+        }
         require(";");
+        if (terminal_try_finally) {
+            require("}");
+            // Java/Graal syntax requires catch. This native subset has no
+            // throw-capable operations inside try; catch must be empty and
+            // remains unreachable until typed exceptional CFG is implemented.
+            require("catch");
+            require("(");
+            identifier();
+            require(")");
+            require("{");
+            // Native try cannot throw: allow the Java-required catch return
+            // only as a literal sentinel. It is unreachable by construction,
+            // never lowered as a fake catch handler.
+            if (accept("return")) {
+                if (value.returns_void)
+                    fail("native nonthrowing catch return requires int result");
+                if (token_.kind != Kind::Integer)
+                    fail("native nonthrowing catch requires only an integer literal return");
+                integer_literal();
+                require(";");
+            }
+            if (token_.text != "}")
+                fail("native nonthrowing catch requires only an optional integer literal return");
+            require("}");
+            require("finally");
+            require("{");
+            auto cleanup = branch_arm(true);
+            require("}");
+            // The protected region always exits via an evaluated scalar
+            // return. Lower its finally effects as scope-exit actions
+            // registered in reverse order: finally runs in source order,
+            // before any previously registered outer-scope defers.
+            for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
+                if (it->kind != Statement::Kind::Call &&
+                        it->kind != Statement::Kind::FieldWrite)
+                    fail("native finally permits only direct calls and class field writes");
+                it->kind = Statement::Kind::Defer;
+                value.statements.push_back(std::move(*it));
+            }
+        }
         require("}");
         return value;
     }
@@ -687,6 +803,13 @@ private:
     }
 
     std::string identifier() {
+        // SelectPlan and SelectCase are source-level linear ownership
+        // capabilities, never ordinary scalar/class identifiers. Reject
+        // their native use explicitly; generic parser errors are not a
+        // trustworthy compiler admission boundary.
+        if (token_.text == "SelectPlan" || token_.text == "SelectCase")
+            fail("native SelectPlan/SelectCase ownership unsupported: "
+                 "linear case tickets, cancellation and scheduler lowering required");
         if (token_.text == "ActorGroup" ||
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
@@ -743,6 +866,43 @@ private:
         throw std::runtime_error("internal invalid expression kind");
     }
 
+    static bool contains_callable_invocation(const Expression* expr) {
+        if (!expr) return false;
+        if (expr->kind == Expression::Kind::Call) return true;
+        if (contains_callable_invocation(expr->left.get()) ||
+            contains_callable_invocation(expr->right.get())) return true;
+        for (const auto& item : expr->arguments)
+            if (contains_callable_invocation(item.get())) return true;
+        return false;
+    }
+
+    static void validate_declared_effects(const Function& fn) {
+        if (!fn.has_declared_effects) return;
+        if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
+                || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
+            throw std::runtime_error(
+                "using effects on actor actions requires trusted actor effect summaries");
+        }
+        for (const auto& local : fn.locals) {
+            if (local.heap_owned && !fn.declared_effects.has(FunctionEffect::Alloc))
+                throw std::runtime_error(
+                    "owned allocation violates using signature without alloc");
+            if (contains_callable_invocation(local.initializer.get()))
+                throw std::runtime_error(
+                    "using effects require transitive call summaries");
+        }
+        for (const auto& stmt : fn.statements)
+            if (contains_callable_invocation(stmt.expression.get()))
+                throw std::runtime_error("using effects require transitive call summaries");
+        for (const auto& guard : fn.early_returns)
+            if (contains_callable_invocation(guard.lhs.get()) ||
+                contains_callable_invocation(guard.rhs.get()) ||
+                contains_callable_invocation(guard.result.get()))
+                throw std::runtime_error("using effects require transitive call summaries");
+        if (contains_callable_invocation(fn.result.get()))
+            throw std::runtime_error("using effects require transitive call summaries");
+    }
+
     static void validate(const Program& program) {
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
@@ -751,6 +911,7 @@ private:
         }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
+            validate_declared_effects(fn);
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
                 throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
                                          + std::to_string(fn.offset));

@@ -109,6 +109,14 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
+/* Exact live actor identity for trusted callback/FFI bridges only. */
+int ores_native_actor_scheduler_is_current_actor(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Host CONTROL-plane wake only: signals an existing scheduler condition.
+ * Does not admit actor mail, start workers, invoke guest code, or count as
+ * a supervisor delivery receipt. Returns zero once retired.
+ * Caller must fence the scheduler's lifetime. */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
 /* Requires retirement, drained tasks AND caller-owned submitter fence.
  * Returns 0 when not ready; after success the pointer is invalid.
  */
