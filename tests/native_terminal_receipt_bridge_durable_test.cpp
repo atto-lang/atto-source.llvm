@@ -159,14 +159,31 @@ int main() {
                 foreign, [](const auto&) { return true; });
         } catch (const std::logic_error&) { foreign_denied = true; }
         check(foreign_denied, "foreign original-parent proof bypassed journal owner");
-        check(!bridge->reconcile_durable_external_effect(
-                  evidence, [](const auto&) { return false; }),
-              "unverified CONTROL effect released durable quarantine");
-        check(bridge->reconcile_durable_external_effect(
-                  evidence, [&](const auto& p) {
-                      return calls.load() == 1 && effects.load() == 1
-                          && p.key == key && p.nonce == recorded.nonce;
-                  }), "independently checked host CONTROL effect not proven");
+        // Both reconciliation APIs require authoritative external proof.
+        // The coupled path also reconciles an outstanding native scheduler
+        // ACK and rejects duplicate finalization; neither reruns policy.
+        auto denied = [](const auto&) { return false; };
+        if (mode == 0) {
+            check(!bridge->reconcile_durable_terminal_effect(evidence, denied),
+                  "unverified coupled ACK released durable quarantine");
+        } else {
+            check(!bridge->reconcile_durable_external_effect(evidence, denied),
+                  "unverified CONTROL effect released durable quarantine");
+        }
+        const auto verified = [&](const auto& p) {
+            return calls.load() == 1 && effects.load() == 1
+                && p.key == key && p.nonce == recorded.nonce;
+        };
+        if (mode == 0) {
+            check(bridge->reconcile_durable_terminal_effect(evidence, verified),
+                  "coupled external proof and terminal ACK did not commit");
+            check(!bridge->reconcile_durable_terminal_effect(
+                      evidence, verified),
+                  "completed durable ACK was replayed");
+        } else {
+            check(bridge->reconcile_durable_external_effect(evidence, verified),
+                  "independently checked host CONTROL effect not proven");
+        }
         check(journal->inspect(key).phase == DurableTerminalPhase::acknowledged,
               "durable effect ACK did not persist");
         if (mode == 0) stop_and_wait(s, parent);
