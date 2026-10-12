@@ -41,7 +41,10 @@ public:
         static_assert(std::is_nothrow_invocable_r_v<bool, TryAdmit&, const Notification&>,
                       "scheduler CONTROL admission must return bool without throwing");
         if (budget == 0) return 0;
-        std::lock_guard<std::mutex> pump_lock(pump_mu_);
+        // Reentrant or competing pumps must not deadlock or duplicate
+        // CONTROL receipts. The caller can retry on a future scheduler tick.
+        std::unique_lock<std::mutex> pump_lock(pump_mu_, std::try_to_lock);
+        if (!pump_lock.owns_lock()) return 0;
         // Snapshot does not consume; registry metadata locks are not held
         // during CONTROL queue admission.
         const auto notifications = registry_.pending_notifications();
@@ -50,8 +53,7 @@ public:
             if (receipts == budget || !try_admit(notification)) break;
             // If cancellation raced admission, the READY receipt is stale;
             // the guest consumer must fence it using admitted() before work.
-            (void)registry_.acknowledge(notification.continuation_id,
-                                        notification.status);
+            (void)registry_.acknowledge(notification);
             ++receipts;
         }
         return receipts;
