@@ -295,6 +295,28 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_transform_endpoint_last
         transform-pipe-sink-role-reject.ores
         --diagnostic "transform pipe actor must be an interior pipeline stage")
+    # Canonical fixed-key state is the only actor-owned data declaration.
+    oreslang_contract_test(native_ir_method_only_actor
+        actor-method-only-positive.ores
+        --ir "oreslang_actor_MethodOnly_increment")
+    oreslang_contract_test(reject_actor_instance_field
+        actor-raw-field-reject.ores
+        --diagnostic "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_duplicate_state
+        actor-duplicate-state-reject.ores
+        --diagnostic "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_direct_field_mutation
+        actor-direct-mutation-reject.ores
+        --diagnostic "actor state mutation requires scoped handle_state callback")
+    oreslang_contract_test(reject_actor_unknown_state_key
+        actor-unknown-state-key-reject.ores
+        --diagnostic "state callback writes unknown or immutable key")
+    oreslang_contract_test(reject_actor_unscoped_state_read
+        actor-unscoped-state-read-reject.ores
+        --diagnostic "expected int expression")
+    oreslang_contract_test(reject_actor_state_loan_escape
+        actor-state-loan-escape-reject.ores
+        --diagnostic "expected int expression")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
