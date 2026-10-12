@@ -218,21 +218,62 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
 - Funded [LLVM run #38195059645](https://github.com/zed-pkg-test/java-app/actions/runs/38195059645)
   passed exact source hashes, real compiler/IR, the 100 native repeated
   executions, the 30 ASan/UBSan repeated executions, and the guest-source
-  wrong-ingress replay rejection. In this early native slice, an invalid
-  phase is still a process-level invariant failure; typed error propagation
-  and graceful destination teardown are **not implemented**.
+  wrong-ingress replay rejection. That older revision rejected invalid
+  phases by process-level invariant failure; the subsequent bounded LLVM
+  milestone replaces selected pipeline failures with recoverable status
+  returns and trusted-main physical actor teardown (see below).
 - The 17-state TLA+ model currently captures a simpler bounded
   reservation/admission protocol. It **does not prove** the stage termination
   hook, route-installation race, or scheduler-issued ingress context. Those
   require extended model/refinement checks and controlled concurrent tests.
+
+## LLVM bounded N-stage execution and recoverable terminal failures (2026-10-11)
+
+- LLVM now compiles **2 through 16 source-defined, statically distinct,
+  ordered actors** via `pipeline(source, ..., sink)`. The compiler lowers
+  borrowed actor refs into an N-element stack array and native registration
+  copies the refs under the group mutex. Each stage has exactly one upstream
+  and downstream neighbor (when applicable); the last stage returns a typed
+  result along the reverse path. `self.respond()` remains distinct from
+  `self.backward()` and is not lowered.
+- A per-chain atomic phase and scheduler-issued ingress direction fence each
+  hop, with expected phases derived from the stage index and chain length.
+  Completion checks each actor's finalized DATA-turn count, all returned
+  mailbox credits, exact forward/backward admissions, and final source result.
+  It remains **one flow at a time per native actor chain**.
+- Executed [2/3/4-stage guest verification
+  #38195872249](https://github.com/zed-pkg-test/java-app/actions/runs/38195872249):
+  40 repeated native runs each for two and four stages; 100 native runs plus
+  30 ASan/UBSan executions for the original three-stage program. Expected
+  results: **24**, **19**, **29**.
+- The runtime now has `pipeline_expect_status`: terminal nonzero error
+  values for invalid route (1), causal phase (2), rejected admission (3),
+  missing required hop (4), timeout (5), wrong result (6), and explicit
+  cancellation (7). The compiled trusted main joins/stops all actors and
+  exits with `70 + status` after a failure instead of aborting the entire
+  process. A guest `cancel_pipeline(source)` command is admitted *before
+  initial DATA admission*, not from actor scheduler workers.
+- Exact-source [recoverable failure CI
+  #38196466672](https://github.com/zed-pkg-test/java-app/actions/runs/38196466672)
+  passed real guest compilation, normal two/three/four-actor delivery,
+  missing Sink reply (74), wrong expected result (76), root cancellation
+  (77), and unauthorized ingress replay (71). These errors are **terminal
+  statuses**, not a general resumable Future<T> or catchable guest exception.
+- **Still unimplemented:** concurrent independent flows, per-message
+  correlation IDs and context tickets across await, dynamic graph/ports and
+  fan-in, typed `Future<T>` backpressure, actor restart generation/ABA,
+  general value payload lowering beyond nominal int cases, and independent
+  nonblocking waiter completion. The previous fixed two-child TLC model does
+  not prove correctness of the variable-length chain or failure API.
 
 ## Current admission status
 
 Java/GraalVM now admits compiler-checked `self.forward` and `self.backward`
 for nominal enum values, routed only inside actual actor mailbox DATA turns
 of a runtime-bound three-actor pipeline. `self.respond` and `self.done`
-remain unavailable. LLVM admits the corresponding fixed linear three-actor
-`int` pipeline described above. Neither backend exposes unrestricted graph
+remain unavailable. LLVM admits **bounded ordered 2..16-stage** linear
+`int` pipelines, with terminal error statuses and explicit trusted-main
+cancellation. Neither backend exposes unrestricted graph
 routing or general pipeline Futures. Native Image guest execution is
 verified for the fixed three-actor Java slice, but comprehensive cross-backend
 lifecycle refinement remains unverified. No release readiness or general
