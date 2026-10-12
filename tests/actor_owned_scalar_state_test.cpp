@@ -103,6 +103,28 @@ int main() {
     check(std::get<std::int64_t>(state.critical(actor, 201, checked, allowed,
             [&](State::Access& a) -> State::Value { return a.read("count"); })) == 100);
 
+    // The runtime also checks each real operation against the compiler's
+    // inferred effects, not just against the enclosing with declaration.
+    auto inferred_write_only = checked;
+    inferred_write_only.inferred = {
+            static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
+    rejects([&] {
+        (void) state.critical(actor, 208, inferred_write_only, allowed,
+                [](State::Access& access) -> State::Value {
+            return access.read("count");
+        });
+    });
+    auto inferred_read_only = checked;
+    inferred_read_only.inferred = readonly;
+    rejects([&] {
+        (void) state.critical(actor, 209, inferred_read_only, allowed,
+                [](State::Access& access) -> State::Value {
+            access.write("count", std::int64_t{999});
+            return std::int64_t{999};
+        });
+    });
+    check(state.ready_to_suspend(actor));
+
     auto underdeclared = checked;
     rejects([&] {
         (void) state.critical(actor, 202, underdeclared, readonly,
