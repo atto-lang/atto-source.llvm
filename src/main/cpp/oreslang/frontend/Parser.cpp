@@ -881,8 +881,12 @@ private:
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
-            throw std::runtime_error("native gpu/cpu/quantum boundary unsupported: "
-                    "validated effects, ownership, host/device lowering and explicit "
+            // Preserve the existing GPU/QPU diagnostic used by conformance tests.
+            const char* domain = token_.text == "cpu"
+                    ? "native cpu execution block boundary unsupported: "
+                    : "native gpu/quantum boundary unsupported: ";
+            throw std::runtime_error(std::string(domain)
+                    + "validated effects, ownership, host/device lowering and explicit "
                     "backend admission required; nested cpu/gpu blocks cannot "
                     "silently execute on the host; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
