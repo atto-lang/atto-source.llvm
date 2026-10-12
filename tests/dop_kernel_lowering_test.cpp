@@ -7,7 +7,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 
 static void check(bool condition) {
     if (!condition) throw std::runtime_error("typed DOP kernel test failed");
