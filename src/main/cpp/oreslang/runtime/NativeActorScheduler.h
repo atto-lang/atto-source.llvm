@@ -61,6 +61,12 @@ int ores_native_actor_scheduler_stop(
  */
 int ores_native_actor_scheduler_poll_ready(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Host-only, generation-checked observation of physical routing visibility.
+ * READY is not enough: unpublished RESTART actors may be alive but must not
+ * accept external messages until scheduler lease publication is complete.
+ */
+int ores_native_actor_scheduler_poll_published(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Unlike physical readiness, this also requires externally routable admission.
  * A staged but unpublished restart candidate must fail this probe. */
 int ores_native_actor_scheduler_poll_published(
