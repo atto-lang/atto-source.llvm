@@ -115,3 +115,47 @@ producer authority while another worker is actively running the actor.
 new Java and native production regressions have not yet been run in full
 Maven/CTest/native-image CI; the latest upstream Actions jobs lack executed
 runner steps. This branch is not merge-certified.
+
+
+## October 12 follow-up audit: concrete correctness and executable gates
+
+The Java actor execution boundary regression had a stray literal `''` before a
+JUnit assertion; it has been removed. Java also rejects a nested physical
+actor context before overriding its ambient ThreadLocal identity, and the
+stale-dispatch regression now exercises this hostile entrypoint. This is
+separate from the already deployed ticket-identity and TurnExecutor
+fail-closed guards.
+
+The native typed supervisor PANIC/DATA regression now uses a monotonic atomic
+maximum and explicitly records any simultaneous parent executions, so a
+racing callback cannot accidentally overwrite violation evidence. A private
+exact-source CI mirror has the updated test blob.
+
+**Local executable evidence (the exact cited repository Git blobs):**
+
+- `VersionedActorCell.hpp`, SHA `02cd3994d0830b6efd1edb0371acc412caabf28f`,
+  and `versioned_actor_cell_test.cpp`, SHA
+  `0d8334c6c1778343c0ac277c8bebf81b20dce690`, compiled and ran
+  successfully with GCC 14 C++17 strict Release and Clang 17 C++17 strict
+  Release; Clang ASan+UBSan also passed. Repeated GCC Release 100/100 and
+  Clang ASan+UBSan 30/30 with the 32-thread CAS race exercise.
+- The exact native `NativeActorScheduler.h` blob
+  `93a274141b1d7bfe8d60f91dc37e0953a710d836` and revised
+  `native_actor_typed_control_exclusive_test.c` blob
+  `56f00b6275534763e1a56c49d2c089509cc55c13`
+  passed GCC 14 and Clang 17 strict C11 *syntax-only* compilation.
+  This is not a linked or executing native actor scheduler test.
+- The exact `verify_actor_dispatch_tickets.py` blob
+  `7c7eda09637e3120598fbb2d078b35001813c0fe` reproduced
+  88 safe states and its deliberately broken stale-release counterexample.
+- Both formal workflows now additionally attempt TLC on the two TLA+
+  specifications using the official v1.7.4 `tla2tools.jar` distribution,
+  checksum checked against the official published SHA-1. TLC has **not** yet
+  executed: hosted project runners continue reporting zero executed steps.
+
+The production Java and C scheduler changes are **not** validated by these
+component-level checks. Java Maven/JUnit, native scheduler-linked CTest,
+TLC, full LLVM/GraalVM pipelines and source/FFI bridge refinement remain
+explicit merge blockers. The optimistic scalar state helper is host-only:
+atomic CAS alone never grants a foreign thread authority to execute or
+mutate guest-visible actor state outside the actor's admitted lane.
