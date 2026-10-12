@@ -52,7 +52,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial", "critical-read", "critical-write", "transform-pipe", "nb-select"
+        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -100,8 +100,6 @@ public:
             if (first == "critical") {
                 if (source_.substr(at_, 5) == "-read") second = "read";
                 else if (source_.substr(at_, 6) == "-write") second = "write";
-            } else if (first == "transform" && source_.substr(at_, 5) == "-pipe") {
-                second = "pipe";
             } else if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 second = "select";
             }
