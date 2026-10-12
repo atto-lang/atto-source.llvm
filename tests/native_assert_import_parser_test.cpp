@@ -102,6 +102,53 @@ int main() {
             "import module Assert from \"std/assert\"; "
             "define module Entry as pub fnc main(): int { return 0; } end",
             "duplicate native module imports");
+        // Source-bound qualified calls are represented as module calls,
+        // never as a scalar class field or an untyped host symbol. A bool
+        // signature is retained only behind the import/codegen admission gate.
+        auto typed = oreslang::parse_program(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert.equal(7, 7); } "
+            "pub fnc main(): int { return 0; }");
+        if (typed.functions.size() != 2 ||
+            !typed.functions[0].returns_bool ||
+            !typed.functions[0].result ||
+            typed.functions[0].result->kind != oreslang::Expression::Kind::ModuleCall ||
+            typed.functions[0].result->name != "equal" ||
+            !typed.functions[0].result->left ||
+            typed.functions[0].result->left->name != "Assert" ||
+            typed.functions[0].result->arguments.size() != 2)
+            throw std::runtime_error("typed Assert module-call AST missing");
+
+        expect_rejected(
+            "pub fnc main(): int { return Assert.equal(1, 1); }",
+            "unbound native Assert module alias");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Assert.eqaul(1, 1); }",
+            "unknown sealed Assert member");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Assert.equal(1); }",
+            "wrong sealed Assert member arity");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Assert.equal; }",
+            "native Assert member must be called");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(int Assert): int { return 0; }",
+            "sealed Assert module alias cannot be shadowed");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc Assert(): int { return 0; }",
+            "sealed Assert module alias cannot be shadowed");
+        expect_rejected(
+            "pub fnc check(): bool { return 1; }",
+            "native bool return requires sealed module ABI linking");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(int x): bool { return Assert.equal(rt borrow x, 7); }",
+            "borrowed reference may only be passed to a borrowed parameter");
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {
