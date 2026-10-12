@@ -184,7 +184,9 @@ inline std::string cl_float(float value) {
 
 inline OpenClArtifact lower_opencl(const Kernel& kernel, GpuTarget target) {
     const auto& p = kernel.layout;
-    if (target.address_bits != 64 || !target.float32
+    // Empty DOP shapes are valid CPU data but cannot allocate/launch GPU work.
+    if (p.rows() == 0 || p.byte_length() == 0
+            || target.address_bits != 64 || !target.float32
             || p.byte_length() > target.maximum_buffer_bytes
             || p.rows() > target.maximum_rows)
         throw std::invalid_argument("GPU target cannot admit kernel effects or buffer");
