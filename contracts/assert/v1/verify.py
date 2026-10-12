@@ -138,7 +138,9 @@ def main():
         results = [not list(validator.iter_errors(altered)) for validator in validators]
         if any(results):
             raise ValueError(f"schema admitted forbidden mutation {index}: {results}")
-    print(f"ASSERT_SCHEMA_TYPESPEC_PARITY_PASS cases={len(suite['cases'])} "
+    label = ("ASSERT_SCHEMA_TYPESPEC_PARITY_PASS" if len(validators) == 2
+             else "ASSERT_JSON_SCHEMA_ORACLE_PASS")
+    print(f"{label} cases={len(suite['cases'])} "
           f"mutants=10 schemas={len(validators)}")
 
 
