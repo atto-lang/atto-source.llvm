@@ -81,28 +81,28 @@ int main() {
 
     // Cancellation backpressure must not create unbounded retained
     // continuation records while the CONTROL channel is unavailable.
-    Registry bounded;
+    Bridge bounded;
     CHECK(bounded.request(1, Mode::Read).status == Status::Ready);
     for (std::uint64_t id = 2;
-         id <= Registry::max_outstanding_continuations; ++id) {
+         id <= Bridge::max_outstanding_continuations; ++id) {
         CHECK(bounded.request(id, Mode::Write).status == Status::Queued);
         bounded.cancel_queued(id);
     }
     CHECK(bounded.pending_notifications().size() ==
-          Registry::max_outstanding_continuations - 1);
+          Bridge::max_outstanding_continuations - 1);
     bool saturated = false;
     try {
-        (void)bounded.request(Registry::max_outstanding_continuations + 1,
+        (void)bounded.request(Bridge::max_outstanding_continuations + 1,
                               Mode::Write);
     } catch (const std::overflow_error&) {
         saturated = true;
     }
     CHECK(saturated);
     for (std::uint64_t id = 2;
-         id <= Registry::max_outstanding_continuations; ++id) {
+         id <= Bridge::max_outstanding_continuations; ++id) {
         CHECK(bounded.acknowledge(id, Status::Cancelled));
     }
-    CHECK(bounded.request(Registry::max_outstanding_continuations + 1,
+    CHECK(bounded.request(Bridge::max_outstanding_continuations + 1,
                           Mode::Write).status == Status::Queued);
     bounded.retire();
     CHECK(bounded.pending_notifications().size() == 2);
