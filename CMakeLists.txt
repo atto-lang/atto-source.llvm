@@ -1074,6 +1074,21 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_typed_panic_exclusive_carrier
         COMMAND oreslang-native-actor-typed-control-exclusive-test)
     set_tests_properties(native_actor_typed_panic_exclusive_carrier PROPERTIES TIMEOUT 20)
+    # Dedicated bounded typed RW state wakes cannot steal the supervisor
+    # panic slot and must execute on the actor's single carrier lane.
+    add_executable(oreslang-native-actor-state-wake-scheduler-test
+        tests/native_actor_state_wake_scheduler_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-state-wake-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-state-wake-scheduler-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-actor-state-wake-scheduler-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_rw_wake_supervisor_priority_exclusive
+        COMMAND oreslang-native-actor-state-wake-scheduler-test)
+    set_tests_properties(native_actor_rw_wake_supervisor_priority_exclusive
+        PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-native-actor-exclusive-control-test
         tests/native_actor_exclusive_control_test.c
