@@ -237,6 +237,17 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(native_pipeline_root_rejected_frame_keeps_credit
             PROPERTIES TIMEOUT 45)
+        # The compiler-generated three-actor guest must reject a stale
+        # runtime-only causal parent BEFORE DATA admission and drain cleanly.
+        add_test(NAME native_compiled_pipeline_forged_parent_rejected
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_pipeline_forged_causal_parent.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_compiled_pipeline_forged_parent_rejected
+            PROPERTIES TIMEOUT 45)
+
         set_tests_properties(native_pipeline_cancel_publication_linearization
             PROPERTIES TIMEOUT 45)
         add_test(NAME native_pipeline_cancel_worker_forward_linearization
