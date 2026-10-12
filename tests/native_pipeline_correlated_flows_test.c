@@ -202,10 +202,118 @@ static unsigned cancellation_races(OresFlowTable* table) {
     }
     return admitted;
 }
+
+/* A blocked scheduler admission for flow A must not block unrelated flow B,
+ * including its cancellation. Retiring the currently publishing flow returns
+ * BUSY instead of taking a global lock and stalling the other flow. */
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int entered;
+    int release;
+    OresFlowTable* table;
+    uint64_t id;
+    OresFlowTicket ticket;
+    OresFlowError result;
+} BlockedPublish;
+static int wait_for_test_release(void* ctx, const OresFlowTicket* ticket) {
+    BlockedPublish* test = ctx;
+    assert(test->ticket.message_id == ticket->message_id);
+    assert(pthread_mutex_lock(&test->mutex) == 0);
+    test->entered = 1;
+    assert(pthread_cond_broadcast(&test->cond) == 0);
+    while (!test->release)
+        assert(pthread_cond_wait(&test->cond, &test->mutex) == 0);
+    assert(pthread_mutex_unlock(&test->mutex) == 0);
+    return 1;
+}
+static void* blocked_sender(void* ctx) {
+    BlockedPublish* test = ctx;
+    test->result = ores_flow_publish(test->table, &test->ticket,
+                                     wait_for_test_release, test);
+    return NULL;
+}
+static int reentrant_publisher(void* ctx, const OresFlowTicket* ticket) {
+    OresFlowTable* table = ctx;
+    OresFlowSnapshot snapshot;
+    assert(ores_flow_snapshot(table, ticket->flow_id, &snapshot)
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_cancel(table, ticket->flow_id, stages[0])
+           == ORES_FLOW_REENTRANT);
+    assert(ores_flow_retire(table, ticket->flow_id)
+           == ORES_FLOW_REENTRANT);
+    return 1;
+}
+static void slow_publisher_isolation(OresFlowTable* table) {
+    BlockedPublish test = {0};
+    test.table = table;
+    assert(pthread_mutex_init(&test.mutex, NULL) == 0);
+    assert(pthread_cond_init(&test.cond, NULL) == 0);
+    assert(ores_flow_open(table, 17, 3, stages, 3, &test.id) == ORES_FLOW_OK);
+    assert(ores_flow_reserve(table, test.id, (OresFlowActor){0,0},
+                ORES_FLOW_ROOT, 0, &test.ticket) == ORES_FLOW_OK);
+    pthread_t thread;
+    assert(pthread_create(&thread, NULL, blocked_sender, &test) == 0);
+    assert(pthread_mutex_lock(&test.mutex) == 0);
+    while (!test.entered)
+        assert(pthread_cond_wait(&test.cond, &test.mutex) == 0);
+    assert(pthread_mutex_unlock(&test.mutex) == 0);
+
+    /* These calls would deadlock if try_publish held table.mutex. */
+    uint64_t other;
+    OresFlowTicket ticket;
+    assert(ores_flow_open(table, 17, 3, stages, 3, &other) == ORES_FLOW_OK);
+    assert(ores_flow_reserve(table, other, (OresFlowActor){0,0},
+                ORES_FLOW_ROOT, 0, &ticket) == ORES_FLOW_OK);
+    assert(ores_flow_cancel(table, other, stages[0]) == ORES_FLOW_OK);
+    assert(ores_flow_retire(table, other) == ORES_FLOW_OK);
+    assert(ores_flow_retire(table, test.id) == ORES_FLOW_BUSY);
+
+    assert(pthread_mutex_lock(&test.mutex) == 0);
+    test.release = 1;
+    assert(pthread_cond_signal(&test.cond) == 0);
+    assert(pthread_mutex_unlock(&test.mutex) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(test.result == ORES_FLOW_OK);
+    assert(ores_flow_cancel(table, test.id, stages[0]) == ORES_FLOW_OK);
+    assert(ores_flow_retire(table, test.id) == ORES_FLOW_OK);
+    assert(pthread_cond_destroy(&test.cond) == 0);
+    assert(pthread_mutex_destroy(&test.mutex) == 0);
+}
+static void reentrant_and_recreated_table(OresFlowTable* table) {
+    uint64_t old_id, new_id;
+    OresFlowTicket ticket;
+    assert(ores_flow_open(table, 17, 3, stages, 3, &old_id) == ORES_FLOW_OK);
+    assert(ores_flow_reserve(table, old_id, (OresFlowActor){0,0},
+        ORES_FLOW_ROOT, 0, &ticket) == ORES_FLOW_OK);
+    assert(ores_flow_publish(table, &ticket, reentrant_publisher, table)
+           == ORES_FLOW_OK);
+    assert(ores_flow_cancel(table, old_id, stages[0]) == ORES_FLOW_OK);
+    assert(ores_flow_retire(table, old_id) == ORES_FLOW_OK);
+    OresFlowTable* second = ores_flow_table_create();
+    assert(second);
+    assert(ores_flow_open(second, 17, 3, stages, 3, &new_id) == ORES_FLOW_OK);
+    assert(new_id != old_id);
+    assert(ores_flow_publish(second, &ticket, accept, NULL)
+           == ORES_FLOW_NOT_FOUND);
+    assert(ores_flow_cancel(second, new_id, stages[0]) == ORES_FLOW_OK);
+    assert(ores_flow_retire(second, new_id) == ORES_FLOW_OK);
+    ores_flow_table_destroy(second);
+}
+static void reject_restarted_duplicate_stage(OresFlowTable* table) {
+    OresFlowActor incompatible[3] = {{100, 10}, {100, 11}, {102, 10}};
+    uint64_t flow;
+    assert(ores_flow_open(table, 17, 3, incompatible, 3, &flow)
+           == ORES_FLOW_BAD_ARGUMENT);
+}
+
 int main(void) {
     OresFlowTable* table = ores_flow_table_create();
     assert(table);
     basic_and_adversarial(table);
+    reject_restarted_duplicate_stage(table);
+    slow_publisher_isolation(table);
+    reentrant_and_recreated_table(table);
     rejection_and_incomplete(table);
     capacity(table);
     sixteen_stages(table);
@@ -227,6 +335,6 @@ int main(void) {
     }
     assert(atomic_load(&delivered) == 5 + 8 * 10 * 5 + race_admitted);
     ores_flow_table_destroy(table);
-    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1");
+    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1 slow_publish=1 reentry=1");
     return 0;
 }
