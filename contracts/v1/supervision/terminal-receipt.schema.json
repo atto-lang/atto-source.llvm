@@ -30,7 +30,7 @@
       "$ref": "#/$defs/physical_done"
     },
     "claim_nonce": {
-      "$ref": "#/$defs/u64"
+      "$ref": "#/$defs/nonZeroU64"
     },
     "external_effect_proof": {
       "$ref": "#/$defs/external_effect"
@@ -52,13 +52,13 @@
       ],
       "properties": {
         "scheduler_domain": {
-          "$ref": "#/$defs/u64"
+          "$ref": "#/$defs/nonZeroU64"
         },
         "actor_slot": {
           "$ref": "#/$defs/u64"
         },
         "generation": {
-          "$ref": "#/$defs/u64"
+          "$ref": "#/$defs/nonZeroU64"
         }
       }
     },
@@ -78,10 +78,10 @@
       ],
       "properties": {
         "supervisor_id": {
-          "$ref": "#/$defs/u64"
+          "$ref": "#/$defs/nonZeroU64"
         },
         "runtime_id": {
-          "$ref": "#/$defs/u64"
+          "$ref": "#/$defs/nonZeroU64"
         },
         "original_parent": {
           "$ref": "#/$defs/actor"
@@ -103,10 +103,10 @@
           "$ref": "#/$defs/u64"
         },
         "logical_child_id": {
-          "$ref": "#/$defs/u64"
+          "$ref": "#/$defs/nonZeroU64"
         },
         "logical_incarnation": {
-          "$ref": "#/$defs/u64"
+          "$ref": "#/$defs/nonZeroU64"
         }
       }
     },
@@ -136,7 +136,7 @@
       ],
       "properties": {
         "claim_nonce": {
-          "$ref": "#/$defs/u64"
+          "$ref": "#/$defs/nonZeroU64"
         },
         "evidence_sha256": {
           "type": "string",
@@ -147,6 +147,11 @@
           "pattern": "^[a-z][a-z0-9._:-]{0,127}$"
         }
       }
+    },
+    "nonZeroU64": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "maxLength": 20
     }
   },
   "allOf": [
