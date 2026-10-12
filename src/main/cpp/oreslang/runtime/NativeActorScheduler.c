@@ -417,6 +417,16 @@ int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
     unlock(s);
     return ready;
 }
+int ores_native_actor_scheduler_poll_published(OresNativeActorScheduler* s,
+                                               OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ready = matching(s, actor) && !s->retired
+        && !s->actors[actor.actor_slot].retired
+        && s->actors[actor.actor_slot].published;
+    unlock(s);
+    return ready;
+}
 int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
                                           OresNativeActorRef actor) {
     if (!s) return 0;
