@@ -109,11 +109,14 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
-/* Trusted runtime predicate: current worker owns the exact actor's exclusive
- * physical execution lane, including DATA / supervisor CONTROL. It is not a
- * transferable guest capability and is false on producer/transport threads. */
+/* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Host CONTROL-plane wake only: signals an existing scheduler condition.
+ * Does not admit actor mail, start workers, invoke guest code, or count as
+ * a supervisor delivery receipt. Returns zero once retired.
+ * Caller must fence the scheduler's lifetime. */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
 /* Requires retirement, drained tasks AND caller-owned submitter fence.
  * Returns 0 when not ready; after success the pointer is invalid.
  */
@@ -123,6 +126,10 @@ size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* sc
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* scheduler);
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
+/* Test-only deterministic worker-create failure; no production symbol. */
+void ores_native_actor_scheduler_test_fail_next_create(void);
+#endif
 #ifdef __cplusplus
 }
 #endif

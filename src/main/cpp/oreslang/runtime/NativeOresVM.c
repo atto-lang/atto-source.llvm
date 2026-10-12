@@ -1,9 +1,15 @@
 #include "oreslang/runtime/NativeOresVM.h"
+#include <pthread.h>
 #include <stdlib.h>
 
 struct OresNativeVM {
     OresNativeActorScheduler* schedulers[ORES_NATIVE_VM_DOMAIN_COUNT];
     size_t workers[ORES_NATIVE_VM_DOMAIN_COUNT];
+    /* Metadata-only central CONTROL wake coordinator. No master pthread.
+     * This is not the per-actor supervisor mail lane itself. */
+    pthread_mutex_t control_lock;
+    unsigned pending_control_wakes;
+    int control_retired;
 };
 
 static int valid_domain(enum OresNativeVMDomain domain) {
@@ -14,6 +20,10 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
     if (!config) return NULL;
     OresNativeVM* vm = (OresNativeVM*)calloc(1, sizeof(*vm));
     if (!vm) return NULL;
+    if (pthread_mutex_init(&vm->control_lock, NULL) != 0) {
+        free(vm);
+        return NULL;
+    }
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         const OresNativeVMDomainConfig* p = &config->domains[i];
         size_t workers = p->carrier_workers ? p->carrier_workers : 5;
@@ -37,6 +47,7 @@ failed:
             if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) abort();
             if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
         }
+    if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
     free(vm);
     return NULL;
 }
@@ -71,6 +82,17 @@ int ores_native_vm_stop(
         && ores_native_actor_scheduler_stop(vm->schedulers[domain], ref);
 }
 
+int ores_native_vm_poll_done(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_poll_done(vm->schedulers[domain], ref);
+}
+int ores_native_vm_wait_done(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_wait_done(vm->schedulers[domain], ref);
+}
+
 int ores_native_vm_publish_control(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef parent, uint64_t payload) {
@@ -79,10 +101,57 @@ int ores_native_vm_publish_control(
             vm->schedulers[domain], parent, payload);
 }
 
+static void control_lock(OresNativeVM* vm) {
+    if (pthread_mutex_lock(&vm->control_lock) != 0) abort();
+}
+static void control_unlock(OresNativeVM* vm) {
+    if (pthread_mutex_unlock(&vm->control_lock) != 0) abort();
+}
+int ores_native_vm_control_notify(
+    OresNativeVM* vm, enum OresNativeVMDomain domain) {
+    if (!vm || !valid_domain(domain)) return 0;
+    control_lock(vm);
+    int ok = !vm->control_retired;
+    if (ok) vm->pending_control_wakes |= 1u << (unsigned)domain;
+    control_unlock(vm);
+    return ok;
+}
+unsigned ores_native_vm_control_pending(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    unsigned pending = vm->pending_control_wakes;
+    control_unlock(vm);
+    return pending;
+}
+unsigned ores_native_vm_control_pump(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    if (vm->control_retired) {
+        control_unlock(vm);
+        return 0;
+    }
+    unsigned pending = vm->pending_control_wakes;
+    vm->pending_control_wakes = 0;
+    unsigned signalled = 0;
+    /* Lock order is master CONTROL -> pool scheduler. The pool never calls
+     * back into the master while holding its lock. No guest callback occurs. */
+    for (unsigned i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        if ((pending & (1u << i)) &&
+            ores_native_actor_scheduler_signal_control(vm->schedulers[i]))
+            signalled |= 1u << i;
+    control_unlock(vm);
+    return signalled;
+}
 void ores_native_vm_retire(OresNativeVM* vm) {
     if (!vm) return;
+    control_lock(vm);
+    vm->control_retired = 1;
+    vm->pending_control_wakes = 0;
+    /* Retire while holding the master control fence; pump cannot race pool
+     * retirement or deliver a wake after shutdown begins. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         ores_native_actor_scheduler_retire(vm->schedulers[i]);
+    control_unlock(vm);
 }
 
 int ores_native_vm_close(OresNativeVM* vm) {
@@ -100,6 +169,7 @@ int ores_native_vm_close(OresNativeVM* vm) {
     /* Caller-owned API/producer fence is required before memory reclamation. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
+    if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
     free(vm);
     return 1;
 }

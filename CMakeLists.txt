@@ -684,6 +684,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-mailbox-test)
     set_tests_properties(native_actor_fifo_mailbox_admission PROPERTIES TIMEOUT 20)
 
+    # Zero-thread central CONTROL wake coordinator on the four-domain VM.
+    add_executable(oreslang-native-vm-control-plane-test
+        tests/native_vm_control_plane_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-control-plane-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-control-plane-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-control-plane-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_master_control_wake_coalescing
+        COMMAND oreslang-native-vm-control-plane-test)
+    set_tests_properties(native_vm_master_control_wake_coalescing PROPERTIES TIMEOUT 25)
+
     # VM-level ownership: four independent scheduler domains, five carriers
     # by default; cross-domain ActorRefs cannot be admitted by another pool.
     add_executable(oreslang-native-ores-vm-test
@@ -722,6 +736,21 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Fault injection is compiled only into this test executable. A blocked
+    # actor must not make a different actor's unserviceable work "ACCEPTED".
+    add_executable(oreslang-native-carrier-create-failure-test
+        tests/native_actor_carrier_create_failure_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-carrier-create-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-carrier-create-failure-test PRIVATE
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1)
+    target_link_libraries(oreslang-native-carrier-create-failure-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-carrier-create-failure-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_lazy_carrier_creation_failure_fence
+        COMMAND oreslang-native-carrier-create-failure-test)
+    set_tests_properties(native_actor_lazy_carrier_creation_failure_fence PROPERTIES TIMEOUT 30)
 
     # Send and stop contend on one linearizable actor admission authority.
     add_executable(oreslang-native-send-stop-race-test
@@ -786,7 +815,6 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_typed_panic_event
         COMMAND oreslang-native-supervisor-panic-test)
     set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
-
     # Optimistic CAS for logical continuations: state must not be overwritten
     # after stale, foreign, retired, or exhausted version evidence.
     add_executable(oreslang-native-versioned-actor-cell-test
