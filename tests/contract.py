@@ -59,7 +59,11 @@ def main():
         result = subprocess.run(
             [executable], capture_output=True, text=True, check=False, timeout=10
         )
-        # The native platform truncates main's i64 return to its process exit code.
+        # Only a checked i32 OS wrapper may produce the process status.
+        # Raw i64 guest results must never rely on platform truncation.
+        assert "define i32 @main()" in compile_result.stdout, (
+            "native executable lacks an i32 main entrypoint wrapper"
+        )
         assert result.returncode == args.run, (
             f"native exit {result.returncode}, expected {args.run}: {result.stderr}"
         )
