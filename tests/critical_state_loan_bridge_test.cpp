@@ -57,7 +57,7 @@ int main() {
     missing.state_mode = CriticalStateMode::None;
     CriticalStateLoan invalid;
     CHECK(invalid.begin(state, 123, 901, missing, declared)
-            == CriticalStateAdmission::MissingCallbackCritical);
+            == CriticalStateAdmission::ReadModeCannotWrite);
     CHECK(!invalid.active());
 
     // An exception must revoke the ephemeral loan through stack unwinding.
