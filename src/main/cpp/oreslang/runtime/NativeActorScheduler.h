@@ -216,6 +216,15 @@ int ores_native_actor_scheduler_claim_terminal_receipt(
 int ores_native_actor_scheduler_claim_live_parent_terminal_receipt(
     OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
     OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
+/* Identity-mode callback-carrier authorization: only the scheduler thread
+ * currently executing THIS exact typed PANIC for THIS parent generation may
+ * claim a host delivery. A queued receipt, copied ActorRef, or unrelated
+ * carrier does not confer callback execution authority.
+ * The check and one-use receipt claim share the STOP mutex. */
+int ores_native_actor_scheduler_claim_delivered_terminal_receipt(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef original_parent,
+    OresNativeActorRef failed_child, OresNativeTerminalReceipt* out);
+
 /* Recovery-only atomic receipt claim. Bind original terminal parent evidence
  * to an ALREADY published, exact NEW parent generation in the same slot.
  * Validation and the one-use claim share the scheduler mutex with STOP;
