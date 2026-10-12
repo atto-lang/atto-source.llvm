@@ -148,13 +148,27 @@ public:
                   const OresNativeActorTerminalFailure& failure) noexcept {
         if (!valid(parent) || parent.scheduler_domain != parent_.scheduler_domain
                 || parent.actor_slot != parent_.actor_slot
-                || parent.generation != parent_.generation)
-            return false;
-        return on_panic(static_cast<std::size_t>(parent.actor_slot), failure);
+                || parent.generation != parent_.generation
+                || !ores_native_actor_scheduler_uses_identity_callbacks(scheduler_)
+                || !ores_native_actor_scheduler_poll_published(scheduler_, parent))
+            return reject();
+        return on_panic_checked(static_cast<std::size_t>(parent.actor_slot), failure);
     }
 
+    /* Legacy callback entry point. Calling this with an identity-mode
+     * scheduler would drop the parent's generation and bypass the stricter
+     * callback fence, so reject it before touching logical child state. */
     bool on_panic(std::size_t parent_slot,
                   const OresNativeActorTerminalFailure& failure) noexcept {
+        if (ores_native_actor_scheduler_uses_identity_callbacks(scheduler_)
+                || !ores_native_actor_scheduler_poll_published(scheduler_, parent_))
+            return reject();
+        return on_panic_checked(parent_slot, failure);
+    }
+
+private:
+    bool on_panic_checked(std::size_t parent_slot,
+                          const OresNativeActorTerminalFailure& failure) noexcept {
         try {
             if (parent_slot != parent_.actor_slot
                     || failure.kind < ORES_NATIVE_CONTROL_PANIC
@@ -209,6 +223,7 @@ public:
         }
     }
 
+public:
     /**
      * Trusted host wiring for the verified source installer. A source STOP
      * policy must share this exact registry with its scheduler panic bridge:
