@@ -81,6 +81,15 @@ typedef struct {
 typedef int (*OresFlowTryPublish)(void* ctx, const OresFlowTicket* ticket);
 
 OresFlowTable* ores_flow_table_create(void);
+/* Checked terminal teardown. Caller MUST fence/join all external producers
+ * before attempting this operation; this function does not manufacture a
+ * shutdown barrier or wait for guest continuations. Returns BUSY if any
+ * per-flow callback holds a lock, INCOMPLETE if a live/terminal slot has not
+ * been explicitly retired, or REENTRANT from inside any publish callback.
+ * On OK, frees the table; do not access it again. */
+OresFlowError ores_flow_table_try_destroy(OresFlowTable* table);
+/* Legacy fail-closed destructor: aborts if checked teardown rejects.
+ * All flows MUST be terminalized and explicitly retired first. */
 void ores_flow_table_destroy(OresFlowTable* table);
 OresFlowError ores_flow_open(OresFlowTable* table, uint64_t pipeline_id,
     uint64_t route_generation, const OresFlowActor* stages,
