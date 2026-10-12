@@ -48,13 +48,29 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) 
     for (int pass = 1; pass >= 0; --pass) {
         for (size_t offset = 0; offset < s->actor_count; ++offset) {
             size_t i = (s->next_actor + offset) % s->actor_count;
-            if (!s->actors[i].active
-                && (pass ? s->actors[i].has_control : s->actors[i].queued != 0)) {
-                *actor = i;
-                *control = pass;
-                s->next_actor = (i + 1) % s->actor_count;
-                return 1;
+            ActorLane* candidate = &s->actors[i];
+            if (candidate->active) continue;
+            if (pass) {
+                if (!candidate->has_control) continue;
+                if (candidate->control_is_failure) {
+                    /* A stopped child may have published its failure from
+                     * inside an active user turn. Do not admit parent panic
+                     * code until physical finalization and all owned turns
+                     * are quiescent, even when other carriers are idle. */
+                    OresNativeActorRef child = candidate->failure.child;
+                    if (child.actor_slot >= s->actor_count) continue;
+                    ActorLane* child_lane = &s->actors[child.actor_slot];
+                    if (!child_lane->retired || child_lane->active
+                        || child_lane->queued || child_lane->has_control)
+                        continue;
+                }
+            } else if (!candidate->queued) {
+                continue;
             }
+            *actor = i;
+            *control = pass;
+            s->next_actor = (i + 1) % s->actor_count;
+            return 1;
         }
     }
     return 0;
@@ -101,7 +117,9 @@ static void* carrier(void* raw) {
         s->outstanding--;
         s->completed++;
         if (control) ++s->control_completed;
-        if (lane->queued || lane->has_control) pthread_cond_signal(&s->ready);
+        /* Another lane's typed CONTROL may have waited on this actor's
+         * final turn. Wake workers even if this lane is now empty. */
+        pthread_cond_signal(&s->ready);
         if (lane->retired && !lane->active && !lane->queued && !lane->has_control)
             pthread_cond_broadcast(&s->drained);
         if (!s->outstanding) {
@@ -262,6 +280,7 @@ int ores_native_actor_scheduler_publish_failure(
     lock(s);
     int ok = s->panic_callback != NULL && !s->retired
         && matching(s, parent) && matching(s, failure.child)
+        && s->actors[failure.child.actor_slot].retired
         && parent.actor_slot != failure.child.actor_slot
         && failure.kind >= ORES_NATIVE_CONTROL_PANIC
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
