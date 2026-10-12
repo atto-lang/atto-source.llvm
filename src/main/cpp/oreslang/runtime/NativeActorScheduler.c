@@ -14,12 +14,19 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
+    unsigned published; /* hidden until a host RESTART transaction commits */
+    uint64_t restart_lease_nonce;
+    pthread_t restart_lease_owner;
     /* Mutually exclusive terminal classification, under the scheduler lock. */
     unsigned failure_attempted, failure_published, normal_exit_sealed;
     uint64_t generation;
 } ActorLane;
 struct OresNativeActorScheduler {
     pthread_mutex_t lock;
+    /* A separate host publication gate: never hold lock across registry
+     * calls. STOP/retire cannot invalidate a leased physical incarnation. */
+    pthread_mutex_t restart_publication_gate;
+    uint64_t next_restart_lease_nonce;
     pthread_cond_t ready;
     pthread_cond_t drained;
     ActorLane* actors;
@@ -165,6 +172,13 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         pthread_mutex_destroy(&s->lock);
         goto allocation_failed;
     }
+    if (pthread_mutex_init(&s->restart_publication_gate, NULL) != 0) {
+        pthread_mutex_destroy(&s->restart_publication_gate);
+        pthread_cond_destroy(&s->drained);
+        pthread_cond_destroy(&s->ready);
+        pthread_mutex_destroy(&s->lock);
+        goto allocation_failed;
+    }
     size_t started = 0;
     while (started < workers && pthread_create(&s->threads[started], NULL, carrier, s) == 0)
         ++started;
@@ -206,7 +220,8 @@ static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
 }
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
-        || !s->actors[i].spawned || s->actors[i].retired
+        || !s->actors[i].spawned || !s->actors[i].published
+        || s->actors[i].retired
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
         || s->accepted == UINT64_MAX) {
         if (s->rejected != UINT64_MAX) s->rejected++;
@@ -221,8 +236,10 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     pthread_cond_signal(&s->ready);
     return 1;
 }
-OresNativeActorRef ores_native_actor_scheduler_spawn(
-    OresNativeActorScheduler* s, size_t i) {
+/* A replacement must use the unpublished variant so neither ref-based
+ * send nor legacy index submit can bypass the bridge's identity commit. */
+static OresNativeActorRef spawn_internal(
+    OresNativeActorScheduler* s, size_t i, unsigned published) {
     OresNativeActorRef missing = {0, 0, 0};
     if (!s) return missing;
     lock(s);
@@ -232,10 +249,71 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     }
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
+    a->published = published;
     a->generation = 1;
     OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
     unlock(s);
     return ref;
+}
+OresNativeActorRef ores_native_actor_scheduler_spawn(
+    OresNativeActorScheduler* s, size_t i) {
+    return spawn_internal(s, i, 1);
+}
+OresNativeActorRef ores_native_actor_scheduler_spawn_unpublished(
+    OresNativeActorScheduler* s, size_t i) {
+    return spawn_internal(s, i, 0);
+}
+int ores_native_actor_scheduler_acquire_restart_lease(
+    OresNativeActorScheduler* s, OresNativeActorRef actor,
+    OresNativeRestartLease* out) {
+    if (!s || !out) return 0;
+    /* The gate stays held only by the acquiring trusted host thread.
+     * STOP and whole-scheduler retirement take this same gate first. */
+    if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
+    lock(s);
+    int ok = matching(s, actor) && !s->retired
+        && !s->actors[actor.actor_slot].retired
+        && !s->actors[actor.actor_slot].published
+        && !s->actors[actor.actor_slot].restart_lease_nonce
+        && s->next_restart_lease_nonce != UINT64_MAX;
+    if (ok) {
+        ActorLane* a = &s->actors[actor.actor_slot];
+        a->restart_lease_nonce = ++s->next_restart_lease_nonce;
+        a->restart_lease_owner = pthread_self();
+        out->actor = actor;
+        out->nonce = a->restart_lease_nonce;
+    }
+    unlock(s);
+    if (!ok && pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+    return ok;
+}
+static int matches_restart_lease(OresNativeActorScheduler* s,
+                                  OresNativeRestartLease lease) {
+    return lease.nonce && matching(s, lease.actor)
+        && s->actors[lease.actor.actor_slot].restart_lease_nonce == lease.nonce
+        && pthread_equal(s->actors[lease.actor.actor_slot].restart_lease_owner,
+                         pthread_self());
+}
+int ores_native_actor_scheduler_publish_restart_lease(
+    OresNativeActorScheduler* s, OresNativeRestartLease lease) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matches_restart_lease(s, lease) && !s->retired
+        && !s->actors[lease.actor.actor_slot].retired
+        && !s->actors[lease.actor.actor_slot].published;
+    if (ok) s->actors[lease.actor.actor_slot].published = 1;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_release_restart_lease(
+    OresNativeActorScheduler* s, OresNativeRestartLease lease) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matches_restart_lease(s, lease);
+    if (ok) s->actors[lease.actor.actor_slot].restart_lease_nonce = 0;
+    unlock(s);
+    if (ok && pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+    return ok;
 }
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
@@ -286,6 +364,7 @@ int ores_native_actor_scheduler_publish_failure(
      */
     int attempted = s->panic_callback != NULL
         && matching(s, parent) && matching(s, failure.child)
+        && s->actors[failure.child.actor_slot].published
         && s->actors[failure.child.actor_slot].retired
         && !s->actors[failure.child.actor_slot].normal_exit_sealed
         && parent.actor_slot != failure.child.actor_slot
@@ -322,13 +401,13 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
 int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor) {
     if (!s) return 0;
+    if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
     lock(s);
-    if (!matching(s, actor) || s->actors[actor.actor_slot].retired) {
-        unlock(s); return 0;
-    }
-    s->actors[actor.actor_slot].retired = 1;
+    int ok = matching(s, actor) && !s->actors[actor.actor_slot].retired;
+    if (ok) s->actors[actor.actor_slot].retired = 1;
     unlock(s);
-    return 1;
+    if (pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+    return ok;
 }
 int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
                                            OresNativeActorRef actor) {
@@ -379,11 +458,13 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
 }
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     if (!s) abort();
+    if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
     lock(s);
     s->retired = 1;
     for (size_t i = 0; i < s->actor_count; ++i) s->actors[i].retired = 1;
     pthread_cond_broadcast(&s->ready);
     unlock(s);
+    if (pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
 }
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
@@ -395,17 +476,23 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
 }
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
+    if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
     lock(s);
     int ready = s->retired && !s->outstanding;
     if (ready) pthread_cond_broadcast(&s->ready);
     unlock(s);
-    if (!ready) return 0;
+    if (!ready) {
+        if (pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+        return 0;
+    }
     /* Caller must externally fence producers; no concurrent API calls now. */
     for (size_t i = 0; i < s->worker_count; ++i)
         if (pthread_join(s->threads[i], NULL) != 0) abort();
     if (pthread_cond_destroy(&s->drained) != 0
         || pthread_cond_destroy(&s->ready) != 0
         || pthread_mutex_destroy(&s->lock) != 0) abort();
+    if (pthread_mutex_unlock(&s->restart_publication_gate) != 0
+        || pthread_mutex_destroy(&s->restart_publication_gate) != 0) abort();
     free(s->threads);
     free(s->slots);
     free(s->actors);
