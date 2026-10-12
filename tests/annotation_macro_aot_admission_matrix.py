@@ -2,6 +2,7 @@
 """Closed-world LLVM AOT admission: unsupported attributes/macros must fail without IR."""
 import argparse
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,12 @@ def invoke(compiler, directory, case, source, target=None):
     workdir.mkdir()
     path = workdir / "input.ores"
     path.write_text(source, encoding="utf-8")
-    command = [str(pathlib.Path(compiler).resolve())]
+    # Absolute compiler paths and executables resolved through PATH both work
+    # after changing the subprocess working directory to its isolated fixture.
+    executable = shutil.which(compiler)
+    if executable is None:
+        raise FileNotFoundError("LLVM compiler is not executable: " + compiler)
+    command = [str(pathlib.Path(executable).resolve())]
     if target:
         command.append("--target=" + target)
     command.append(str(path))
