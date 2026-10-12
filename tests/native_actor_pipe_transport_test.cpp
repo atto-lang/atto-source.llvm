@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeActorPipeTransport.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <stdexcept>
@@ -111,6 +112,53 @@ int main() {
         try { pending.get(); } catch (const std::logic_error&) { cancelled = true; }
         check(cancelled, "shutdown promoted a queued last-edge writer");
     }
+    // A second close caller must not return with unsettled pending Futures,
+    // even when closure traverses a large number of independently locked
+    // mailbox edges. Concurrent write admission must be fenced afterward.
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        std::vector<PipeStage> many;
+        many.push_back({"Start", PipeRole::readable, "", "Message"});
+        for (int i = 0; i < 32; ++i)
+            many.push_back({"Relay" + std::to_string(i),
+                            PipeRole::transform, "Message", "Message"});
+        many.push_back({"End", PipeRole::writable, "Message", ""});
+        NativeActorPipeTransport pipe(registry, supervisor, many, 1, 3);
+        std::vector<std::shared_future<void>> pending;
+        for (std::size_t i = 0; i < pipe.edge_count(); ++i) {
+            pipe.write_async(i, "existing").get();
+            pending.push_back(pipe.write_async(i, "blocked"));
+        }
+        std::atomic<bool> start{false};
+        std::thread first([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            pipe.close();
+        });
+        std::thread second([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            pipe.close();
+        });
+        start.store(true, std::memory_order_release);
+        first.join();
+        second.join();
+        check(pipe.closed(), "concurrent pipe close failed to publish terminal");
+        for (std::size_t i = 0; i < pipe.edge_count(); ++i) {
+            check(pending[i].wait_for(0ms) == std::future_status::ready,
+                  "concurrent close returned with unsettled pending write");
+            bool denied = false;
+            try { pending[i].get(); }
+            catch (const std::logic_error&) { denied = true; }
+            check(denied, "closed pipe admitted a previously blocked writer");
+            check(pipe.read_async(i).get() == "existing",
+                  "concurrent close erased previously acknowledged data");
+            denied = false;
+            try { pipe.write_async(i, "after-close").get(); }
+            catch (const std::logic_error&) { denied = true; }
+            check(denied, "pipe admitted new writes after terminal close");
+        }
+    }
+
     bool rejected = false;
     NativeSupervisorRegistry foreign(10, 10, 10);
     try { NativeActorPipeTransport bad(registry, foreign.root(), stages(), 1, 3); }
