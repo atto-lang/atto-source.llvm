@@ -14,56 +14,68 @@ int main() {
     CriticalStateCallback c{};
     c.one_state_parameter = true;
     c.inferred = row(READ | WRITE);
-    const auto using_rw = row(READ | WRITE);
-    CHECK(admit_critical_handle_state(c, using_rw)
+    const auto with_rw = row(READ | WRITE);
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
     // The serial actor base is an immutable compiler property, but an
     // implicit critical callback is safe only with an actual lifetime lease.
     c.actor_is_serial = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
     c.serial_lifetime_admission_proven = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
-            == CriticalStateAdmission::Accept);
+    // Serial does not grant implicit WRITE; explicit critical is required.
+    CHECK(admit_critical_handle_state(c, with_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
     c.actor_is_serial = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
     c.serial_lifetime_admission_proven = false;
     c.callback_critical = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::Accept);
 
     c.actor_is_serial = true;
     c.serial_lifetime_admission_proven = true;
     c.callback_critical = false;
     c.intrinsic_critical = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingIntrinsicCritical);
     c.intrinsic_critical = true;
 
+    // Unmarked callbacks are READ-only, for ordinary and serial actors alike.
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::Accept);
+    c.actor_is_serial = false;
+    c.serial_lifetime_admission_proven = false;
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::Accept);
+    c.callback_critical = true;
+    c.inferred = row(READ | WRITE);
+
     c.lexical = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::InvalidStateCallback);
     c.lexical = true;
     c.one_state_parameter = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::InvalidStateCallback);
     c.one_state_parameter = true;
 
     c.escapes = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::CallbackEscape);
     c.escapes = false;
 
     CHECK(admit_critical_handle_state(c, row(READ))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     c.inferred = row(READ);
     CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);
 
     c.inferred = row(READ | IO);
     CHECK(admit_critical_handle_state(c, row(READ))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     CHECK(admit_critical_handle_state(c, row(READ | IO))
             == CriticalStateAdmission::Accept);
 

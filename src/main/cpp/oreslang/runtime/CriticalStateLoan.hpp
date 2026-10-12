@@ -28,9 +28,9 @@ public:
                                  std::uint64_t actor_id,
                                  std::uint64_t continuation_id,
                                  const CriticalStateCallback& callback,
-                                 FunctionEffects declared_using) noexcept {
+                                 FunctionEffects declared_with) noexcept {
         if (active_) return CriticalStateAdmission::InvalidStateCallback;
-        const auto approved = admit_critical_handle_state(callback, declared_using);
+        const auto approved = admit_critical_handle_state(callback, declared_with);
         if (approved != CriticalStateAdmission::Accept) return approved;
         const auto entered = ores_actor_state_enter_continuation(
                 &state, actor_id, continuation_id, &token_);
