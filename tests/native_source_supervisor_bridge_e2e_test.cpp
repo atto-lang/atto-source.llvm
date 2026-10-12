@@ -24,7 +24,7 @@ struct Fixture {
     OresNativeActorRef parent{}, child{};
     std::shared_ptr<SupervisorControlScheduler> control;
     std::shared_ptr<SupervisorChildRegistry> registry;
-    std::unique_ptr<NativePhysicalStopEvidence> host_receipts;
+    std::shared_ptr<NativePhysicalStopEvidence> host_receipts;
     std::shared_ptr<SupervisorProcess> process;
     std::unique_ptr<NativeSupervisorPanicBridge> bridge;
     std::atomic<unsigned> terminal_events{0};
@@ -66,8 +66,12 @@ static void typed_terminal(void* raw, size_t parent_slot,
         ++f.failed_checks;
 }
 
-static void exercise(bool ambiguous, bool lost_ack = false) {
+static void exercise(bool ambiguous, bool lost_ack = false,
+                     bool missing_attestation = false) {
     require(!lost_ack || ambiguous, "lost ACK must model an unknown callback result");
+    require(!missing_attestation || !ambiguous,
+            "missing-attestation test requires normally returning callback");
+    const bool unknown = ambiguous || missing_attestation;
     Fixture f;
     f.scheduler = ores_native_actor_scheduler_open_typed_control(
         2, 2, 2, ordinary, nullptr, typed_terminal, &f);
@@ -81,7 +85,7 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
     const auto domain = f.parent.scheduler_domain;
     f.control = std::make_shared<SupervisorControlScheduler>(2, 16);
     f.registry = std::make_shared<SupervisorChildRegistry>(supervisor, domain);
-    f.host_receipts = std::make_unique<NativePhysicalStopEvidence>(
+    f.host_receipts = std::make_shared<NativePhysicalStopEvidence>(
         f.scheduler, f.registry);
     constexpr auto source = R"(
         define supervisor Root as
@@ -126,7 +130,7 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
             // adapter, using the real scheduler DONE barrier. It is not a
             // fabricated callback result and not evidence of other effects.
             // The lost-ACK case records DONE before throwing to CONTROL.
-            if (!ambiguous || lost_ack) {
+            if ((!ambiguous && !missing_attestation) || lost_ack) {
                 const auto current = f.registry->stop_receipt(
                     SupervisorChildRegistry::ChildRef{
                         supervisor, domain, n.logical_child_id});
@@ -153,7 +157,7 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
             }
             if (ambiguous)
                 throw std::runtime_error("unknown external STOP acknowledgment");
-        });
+        }, f.host_receipts);
     f.bridge = std::make_unique<NativeSupervisorPanicBridge>(
         f.scheduler, f.parent, f.process, f.registry);
     require(f.bridge->trusted_child_registry() == f.registry,
@@ -169,7 +173,7 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
     while (std::chrono::steady_clock::now() < deadline) {
         if (f.applied.load() == 1
             && f.accepted.load() == 1 && f.terminal_events.load() == 1
-            && (ambiguous ? f.process->undelivered() == 1
+            && (unknown ? f.process->undelivered() == 1
                           : f.process->resolved() == 1))
             break;
         std::this_thread::sleep_for(1ms);
@@ -221,15 +225,15 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
         }
     }
     require(reserves == 1 && invokes == 1
-                && uncertain == (ambiguous ? 1U : 0U)
-                && acknowledgments == (ambiguous ? 0U : 1U),
+                && uncertain == (unknown ? 1U : 0U)
+                && acknowledgments == (unknown ? 0U : 1U),
             "real CONTROL host STOP was duplicated or falsely acknowledged");
     std::printf("NATIVE_SUPERVISOR_STOP_OBSERVED_V1=%s reserved=1 invoked=1 "
                 "uncertain=%u acknowledged=%u\n",
-                ambiguous ? "uncertain" : "successful",
+                unknown ? "uncertain" : "successful",
                 uncertain, acknowledgments);
-    require(f.process->resolved() == (ambiguous ? 0U : 1U)
-                && f.process->undelivered() == (ambiguous ? 1U : 0U),
+    require(f.process->resolved() == (unknown ? 0U : 1U)
+                && f.process->undelivered() == (unknown ? 1U : 0U),
             "CONTROL misaccounted acknowledged or ambiguous STOP");
     bool restart_denied = false;
     try {
@@ -247,9 +251,9 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
     // whereas a separately recorded physical DONE can reconcile after the
     // original host acknowledgment is lost, without replaying the sink.
     require(f.host_receipts->size() ==
-                (ambiguous && !lost_ack ? 0U : 1U),
+                (unknown && !lost_ack ? 0U : 1U),
             "host-owned physical STOP evidence ledger has wrong cardinality");
-    if (ambiguous) {
+    if (unknown) {
         const auto original = f.registry->stop_receipt(logical);
         auto forged = original;
         forged.turn_generation++;
@@ -285,6 +289,9 @@ static void exercise(bool ambiguous, bool lost_ack = false) {
         } else {
             std::puts("NATIVE_SUPERVISOR_UNKNOWN_QUARANTINED_V1"
                       " attested=0 invoked=1 reconciled=0 replay=0");
+            if (missing_attestation)
+                std::puts("NATIVE_SUPERVISOR_NO_PROOF_QUARANTINED_V1"
+                          " callback_ok=1 attested=0 reconciled=0");
         }
     }
 
@@ -305,5 +312,6 @@ int main() {
     exercise(false);
     exercise(true);
     exercise(true, true);
+    exercise(false, false, true);
     std::puts("NATIVE_SOURCE_SUPERVISOR_BRIDGE_E2E_PASS typed=1 stop=1 unknown_quarantined=1");
 }
