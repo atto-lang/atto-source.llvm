@@ -254,3 +254,39 @@ lifetimes require an external producer fence and final drain before destroy.
 lifetimes, source-actor codegen integration, and cross-backend conformance.
 These runtime host adapters are not themselves a license for concurrent
 guest execution or escaping state loans.
+
+
+## Scheduler callback-type confinement and exceptional cleanup (2026-10-12)
+
+A **physical actor execution claim alone is insufficient** authorization
+to start reader/writer work. The same actor's normal DATA or supervisor
+callbacks may also own that lane. The scheduler therefore binds the exact
+dequeued `OresNativeActorStateWake` (actor incarnation, continuation ID,
+READY/CANCELLED status) to carrier-local trusted context **only for the
+specific STATE-WAKE callback**. The new
+`ores_native_actor_scheduler_is_current_state_wake` check requires both
+this complete envelope and the actor's authenticated execution claim.
+
+`ActorStateReadWriteSchedulerBridge::try_enter`, `complete`, and
+`is_own_cancellation` now require this stronger check. Forging the same
+ticket during DATA/PANIC/CONTROL execution, modifying the current ticket
+ID/status, replaying a wake, or trying to complete an unrelated ticket is
+rejected. The context is cleared before the physical actor claim is
+released; no guest-facing API can set it.
+
+`ActorStateReadWriteSchedulerBridge::ScopedWake` provides a noncopyable,
+nonmovable callback-local guard for runtime-generated state access. It
+claims exactly one wake and releases the grant on both normal scope exit
+and C++ guest exceptions. Callers must catch guest exceptions inside
+the C++ wrapper, **never unwind through the scheduler's C callback ABI**.
+Unexpected failures releasing a claimed grant terminate the process
+rather than silently leave a stranded writer/read loan. The compiler's
+eventual `handle_state` lowering must emit a scope guard or equally
+strong structured cleanup on all exits (return, throw, panic propagation,
+cancellation); current source lowering is still disabled.
+
+Exact-source verification: private
+https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38320107048
+passed GCC + Clang scheduler suites, cross-language C/C++ bridge
+tests, ASan + UBSan, same-actor DATA impersonation rejection, wrong-ticket
+and wrong-status rejection, and throw-then-writer-progress.
