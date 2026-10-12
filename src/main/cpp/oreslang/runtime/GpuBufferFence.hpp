@@ -53,6 +53,8 @@ class BufferFence {
         }
     };
 public:
+    // Pair terminal transitions use the same all-or-nothing state-machine.
+    // Only the trusted backend may call these after device-event verification.
     BufferFence(Identity identity, std::uint64_t bytes)
         : state_(std::make_shared<State>(std::move(identity), bytes)) {}
     BufferFence(const BufferFence&) = delete;
@@ -143,6 +145,23 @@ public:
         return tickets;
     }
 
+    static void complete_pair(BufferFence& input, BufferFence& output,
+                              const PairTickets& pair, bool succeeded) {
+        transition_pair(input, output, pair,
+                succeeded ? PairAction::CompleteOk : PairAction::CompleteFailed);
+    }
+
+    static void cancel_pair(BufferFence& input, BufferFence& output,
+                            const PairTickets& pair) {
+        transition_pair(input, output, pair, PairAction::Cancel);
+    }
+
+    // Called ONLY after BOTH cancelled device events are verified quiescent.
+    static void acknowledge_cancelled_pair(BufferFence& input, BufferFence& output,
+                                           const PairTickets& pair) {
+        transition_pair(input, output, pair, PairAction::AcknowledgeCancelled);
+    }
+
     Ticket begin_command(const Identity& caller) {
         std::lock_guard<std::mutex> owner_guard(owner_lock_);
         active();
@@ -221,6 +240,58 @@ public:
     }
 
 private:
+
+    enum class PairAction { CompleteOk, CompleteFailed, Cancel, AcknowledgeCancelled };
+
+    static void transition_pair(BufferFence& input, BufferFence& output,
+                                const PairTickets& pair, PairAction action) {
+        if (&input == &output)
+            throw std::invalid_argument("paired GPU owners must differ");
+        auto* first = std::less<BufferFence*>{}(&input, &output) ? &input : &output;
+        auto* second = first == &input ? &output : &input;
+        std::lock_guard<std::mutex> owner_one(first->owner_lock_);
+        std::lock_guard<std::mutex> owner_two(second->owner_lock_);
+        if (!input.state_ || !output.state_ || input.state_ == output.state_)
+            throw std::logic_error("moved or aliased GPU pair owner");
+        auto* a = input.state_.get();
+        auto* b = output.state_.get();
+        auto* low = std::less<State*>{}(a, b) ? a : b;
+        auto* high = low == a ? b : a;
+        std::lock_guard<std::mutex> state_one(low->lock);
+        std::lock_guard<std::mutex> state_two(high->lock);
+        // Compare exact submission seals as well as diagnostic integer fields.
+        if (!(a->identity == pair.input) || !(b->identity == pair.output)
+                || !a->active_seal || !b->active_seal
+                || a->active_seal != pair.input_ticket.seal_
+                || b->active_seal != pair.output_ticket.seal_
+                || pair.input_ticket.generation != a->identity.allocation_generation
+                || pair.output_ticket.generation != b->identity.allocation_generation
+                || pair.input_ticket.sequence != a->sequence
+                || pair.output_ticket.sequence != b->sequence)
+            throw std::logic_error("stale or foreign GPU pair tickets");
+        if (action == PairAction::AcknowledgeCancelled) {
+            if (a->status != Status::Poisoned || b->status != Status::Poisoned
+                    || a->backend_quiescent || b->backend_quiescent)
+                throw std::logic_error("device pair has not been cancelled or is partly acknowledged");
+            a->backend_quiescent = b->backend_quiescent = true;
+            a->active_seal.reset();
+            b->active_seal.reset();
+            return;
+        }
+        if (a->status != Status::InFlight || b->status != Status::InFlight
+                || a->backend_quiescent || b->backend_quiescent)
+            throw std::logic_error("GPU pair is not jointly in flight");
+        if (action == PairAction::Cancel) {
+            a->status = b->status = Status::Poisoned;
+            return; // seals retained and both physical allocations still live
+        }
+        a->status = b->status =
+                action == PairAction::CompleteOk ? Status::Idle : Status::Poisoned;
+        a->backend_quiescent = b->backend_quiescent = true;
+        a->active_seal.reset();
+        b->active_seal.reset();
+    }
+
     explicit BufferFence(std::shared_ptr<State> state) : state_(std::move(state)) {}
     void active() const {
         // Every caller holds owner_lock_, including const snapshot/status.
