@@ -714,6 +714,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
     # Across all actor-owned entrypoints (DATA and supervisor CONTROL), no
     # actor can have two physical guest executors, even on separate workers.
+    # A typed supervisor panic is actor-owned CONTROL work and must obey
+    # the same exclusive carrier admission as normal DATA for that parent.
+    add_executable(oreslang-native-actor-typed-control-exclusive-test
+        tests/native_actor_typed_control_exclusive_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-typed-control-exclusive-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-typed-control-exclusive-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-typed-control-exclusive-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_typed_panic_exclusive_carrier
+        COMMAND oreslang-native-actor-typed-control-exclusive-test)
+    set_tests_properties(native_actor_typed_panic_exclusive_carrier PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-actor-exclusive-control-test
         tests/native_actor_exclusive_control_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
