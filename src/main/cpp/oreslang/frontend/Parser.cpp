@@ -560,7 +560,8 @@ private:
                     statement.receiver = target->left->name;
                     statement.field = target->name;
                     statement.expression = expression();
-                } else if (target->kind == Expression::Kind::Call) {
+                } else if (target->kind == Expression::Kind::Call ||
+                    target->kind == Expression::Kind::ModuleCall) {
                     statement.kind = Statement::Kind::Call;
                     statement.expression = std::move(target);
                 } else {
@@ -667,7 +668,8 @@ private:
                     deferred.receiver = target->left->name;
                     deferred.field = target->name;
                     deferred.expression = expression();
-                } else if (target->kind == Expression::Kind::Call) {
+                } else if (target->kind == Expression::Kind::Call ||
+                    target->kind == Expression::Kind::ModuleCall) {
                     deferred.expression = std::move(target);
                 } else {
                     fail("native defer requires a direct function call or class field assignment");
@@ -704,7 +706,8 @@ private:
                 statement.receiver = action->left->name;
                 statement.field = action->name;
                 statement.expression = expression();
-            } else if (action->kind == Expression::Kind::Call) {
+            } else if (action->kind == Expression::Kind::Call ||
+                    action->kind == Expression::Kind::ModuleCall) {
                 statement.kind = Statement::Kind::Call;
                 statement.expression = std::move(action);
             } else {
