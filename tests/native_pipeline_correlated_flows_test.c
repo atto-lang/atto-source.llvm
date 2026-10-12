@@ -5,13 +5,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static const OresFlowActor stages[3] = {{100, 10}, {101, 10}, {102, 10}};
+static const OresFlowActor stages[3] = {{100, 10, 77}, {101, 10, 77}, {102, 10, 77}};
 static _Atomic unsigned delivered = 0;
 static int accept(void* unused, const OresFlowTicket* ticket) {
     (void)unused;
     assert(ticket->correlation_id == ticket->flow_id);
     assert(ticket->pipeline_id == 17 && ticket->route_generation == 3);
     assert(ticket->destination.actor_generation == 10);
+    assert(ticket->destination.scheduler_domain == 77);
     atomic_fetch_add(&delivered, 1);
     return 1;
 }
@@ -22,7 +23,7 @@ static int reject(void* unused, const OresFlowTicket* ticket) {
 }
 static OresFlowActor sender_for(unsigned phase, unsigned n,
                                 const OresFlowActor* actors) {
-    if (phase == 0) return (OresFlowActor){0, 0};
+    if (phase == 0) return (OresFlowActor){0, 0, 0};
     if (phase < n) return actors[phase - 1];
     return actors[2 * (n - 1) - phase + 1];
 }
@@ -69,13 +70,13 @@ static void basic_and_adversarial(OresFlowTable* table) {
     assert(a != b);
     assert(ores_flow_reserve(table, a, stages[0], ORES_FLOW_ROOT, 0, &t)
            == ORES_FLOW_WRONG_SENDER);
-    assert(ores_flow_reserve(table, a, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, a, (OresFlowActor){0, 0, 0},
              ORES_FLOW_FORWARD, 0, &t) == ORES_FLOW_WRONG_SENDER);
-    assert(ores_flow_reserve(table, a, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, a, (OresFlowActor){0, 0, 0},
              ORES_FLOW_ROOT, 100, &t) == ORES_FLOW_BAD_CAUSAL_PARENT);
-    assert(ores_flow_reserve(table, a, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, a, (OresFlowActor){0, 0, 0},
              ORES_FLOW_ROOT, 0, &t) == ORES_FLOW_OK);
-    assert(ores_flow_reserve(table, a, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, a, (OresFlowActor){0, 0, 0},
              ORES_FLOW_ROOT, 0, &t) == ORES_FLOW_ALREADY_RESERVED);
     OresFlowTicket forged = t;
     forged.route_generation++;
@@ -85,14 +86,20 @@ static void basic_and_adversarial(OresFlowTable* table) {
     forged.destination.actor_generation++;
     assert(ores_flow_publish(table, &forged, accept, NULL)
            == ORES_FLOW_BAD_TICKET);
-    assert(ores_flow_cancel(table, a, (OresFlowActor){100, 11})
+    forged = t;
+    forged.destination.scheduler_domain = 99;
+    assert(ores_flow_publish(table, &forged, accept, NULL)
+           == ORES_FLOW_BAD_TICKET);
+    assert(ores_flow_cancel(table, a, (OresFlowActor){100, 11, 77})
+           == ORES_FLOW_WRONG_SENDER);
+    assert(ores_flow_cancel(table, a, (OresFlowActor){100, 10, 99})
            == ORES_FLOW_WRONG_SENDER);
     /* Producer paused after reservation, cancellation wins before publish. */
     unsigned before = atomic_load(&delivered);
     assert(ores_flow_cancel(table, a, stages[0]) == ORES_FLOW_OK);
     assert(ores_flow_publish(table, &t, accept, NULL) == ORES_FLOW_TERMINAL);
     assert(atomic_load(&delivered) == before);
-    assert(ores_flow_reserve(table, a, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, a, (OresFlowActor){0, 0, 0},
              ORES_FLOW_ROOT, 0, &t) == ORES_FLOW_TERMINAL);
     assert(ores_flow_retire(table, a) == ORES_FLOW_OK);
     assert(ores_flow_publish(table, &t, accept, NULL) == ORES_FLOW_NOT_FOUND);
@@ -111,7 +118,7 @@ static void rejection_and_incomplete(OresFlowTable* table) {
     OresFlowTicket ticket = {0};
     assert(ores_flow_open(table, 17, 3, stages, 3, &id) == ORES_FLOW_OK);
     assert(ores_flow_finish(table, id, stages[0], 0) == ORES_FLOW_INCOMPLETE);
-    assert(ores_flow_reserve(table, id, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, id, (OresFlowActor){0, 0, 0},
              ORES_FLOW_ROOT, 0, &ticket) == ORES_FLOW_OK);
     assert(ores_flow_publish(table, &ticket, reject, NULL)
            == ORES_FLOW_REJECTED_MAIL);
@@ -138,12 +145,14 @@ static int accept_route(void* ctx, const OresFlowTicket* ticket) {
     assert(ticket->destination.actor_id == actors[ticket->stage_index].actor_id);
     assert(ticket->destination.actor_generation ==
            actors[ticket->stage_index].actor_generation);
+    assert(ticket->destination.scheduler_domain ==
+           actors[ticket->stage_index].scheduler_domain);
     return 1;
 }
 static void sixteen_stages(OresFlowTable* table) {
     OresFlowActor s[16];
     for (unsigned i = 0; i < 16; ++i)
-        s[i] = (OresFlowActor){500 + i, 50 + i};
+        s[i] = (OresFlowActor){500 + i, 50 + i, 77};
     uint64_t id, parent = 0;
     assert(ores_flow_open(table, 17, 3, s, 16, &id) == ORES_FLOW_OK);
     for (unsigned phase = 0; phase < 31; ++phase) {
@@ -181,7 +190,7 @@ static unsigned cancellation_races(OresFlowTable* table) {
         Race race={0};
         race.table=table;
         assert(ores_flow_open(table,17,3,stages,3,&race.id)==ORES_FLOW_OK);
-        assert(ores_flow_reserve(table,race.id,(OresFlowActor){0,0},
+        assert(ores_flow_reserve(table,race.id,(OresFlowActor){0, 0, 0},
                ORES_FLOW_ROOT,0,&race.ticket)==ORES_FLOW_OK);
         pthread_t send_thread,cancel_thread;
         assert(pthread_create(&send_thread,NULL,publish_racer,&race)==0);
@@ -250,7 +259,7 @@ static void slow_publisher_isolation(OresFlowTable* table) {
     assert(pthread_mutex_init(&test.mutex, NULL) == 0);
     assert(pthread_cond_init(&test.cond, NULL) == 0);
     assert(ores_flow_open(table, 17, 3, stages, 3, &test.id) == ORES_FLOW_OK);
-    assert(ores_flow_reserve(table, test.id, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, test.id, (OresFlowActor){0, 0, 0},
                 ORES_FLOW_ROOT, 0, &test.ticket) == ORES_FLOW_OK);
     pthread_t thread;
     assert(pthread_create(&thread, NULL, blocked_sender, &test) == 0);
@@ -263,7 +272,7 @@ static void slow_publisher_isolation(OresFlowTable* table) {
     uint64_t other;
     OresFlowTicket ticket;
     assert(ores_flow_open(table, 17, 3, stages, 3, &other) == ORES_FLOW_OK);
-    assert(ores_flow_reserve(table, other, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, other, (OresFlowActor){0, 0, 0},
                 ORES_FLOW_ROOT, 0, &ticket) == ORES_FLOW_OK);
     assert(ores_flow_cancel(table, other, stages[0]) == ORES_FLOW_OK);
     assert(ores_flow_retire(table, other) == ORES_FLOW_OK);
@@ -284,7 +293,7 @@ static void reentrant_and_recreated_table(OresFlowTable* table) {
     uint64_t old_id, new_id;
     OresFlowTicket ticket;
     assert(ores_flow_open(table, 17, 3, stages, 3, &old_id) == ORES_FLOW_OK);
-    assert(ores_flow_reserve(table, old_id, (OresFlowActor){0,0},
+    assert(ores_flow_reserve(table, old_id, (OresFlowActor){0, 0, 0},
         ORES_FLOW_ROOT, 0, &ticket) == ORES_FLOW_OK);
     assert(ores_flow_publish(table, &ticket, reentrant_publisher, table)
            == ORES_FLOW_OK);
@@ -301,9 +310,12 @@ static void reentrant_and_recreated_table(OresFlowTable* table) {
     ores_flow_table_destroy(second);
 }
 static void reject_restarted_duplicate_stage(OresFlowTable* table) {
-    OresFlowActor incompatible[3] = {{100, 10}, {100, 11}, {102, 10}};
+    OresFlowActor incompatible[3] = {{100, 10, 77}, {100, 11, 77}, {102, 10, 77}};
     uint64_t flow;
     assert(ores_flow_open(table, 17, 3, incompatible, 3, &flow)
+           == ORES_FLOW_BAD_ARGUMENT);
+    OresFlowActor missing_domain[3] = {{100, 10, 77}, {101, 10, 0}, {102, 10, 77}};
+    assert(ores_flow_open(table, 17, 3, missing_domain, 3, &flow)
            == ORES_FLOW_BAD_ARGUMENT);
 }
 
