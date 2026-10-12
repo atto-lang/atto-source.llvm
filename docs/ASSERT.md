@@ -1,5 +1,9 @@
 # Core assertions
 
+> **LLVM status:** This is a source/API contract, not an executable native
+> standard library. The example below currently runs on Java/GraalVM only.
+> Native imports and assertion/trap lowering are deliberately rejected.
+
 Import the source-owned module with `import module Assert from "std/assert";`.
 
 | Predicate | Meaning | Failure-producing counterpart |
@@ -35,7 +39,8 @@ pub routine main(): void {
 `trap` is currently a callable modifier, not a call-site operator. It wraps normal
 returns in Some and ordinary runtime failures in None, without retaining error
 detail. Untrapped assertion failures retain the message and can be caught by
-ordinary try/catch. Panic, cancellation, and termination continue to bypass trap.
+ordinary try/catch. Panic, cancellation, process termination, and capability or
+permission denials must bypass trap: they are not assertion mismatches.
 
 The source module uses `rt fail(String message): void`, a general runtime failure
 operation. The host only transports that failure; predicates and messages live in
