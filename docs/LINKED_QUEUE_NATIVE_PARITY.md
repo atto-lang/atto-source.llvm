@@ -51,3 +51,15 @@ Do not silently weaken these expectations to accept any nonzero exit:
 A passing CTest still proves only safe parser rejection and a separate scalar
 native execution path. LLVM support requires source compilation and actual
 instrumented execution of the queue fixtures before retiring this test.
+
+## In-progress native runtime substrate
+
+A bounded native integer-array owner ABI is now staged in
+`src/main/cpp/oreslang/runtime/NativeIntArrayRegion.{h,c}`, with its own
+Release and sanitizer security tests. See
+[NATIVE_ARRAY_I64_ABI.md](NATIVE_ARRAY_I64_ABI.md).
+
+This does **not** change the strict exact-source queue parser rejection.
+Passing a raw-array runtime CTest is distinct from supporting guest
+`Array<int>` syntax and checked class/Option lowering. The original six
+queue fixtures remain pinned and rejected without any partial IR.
