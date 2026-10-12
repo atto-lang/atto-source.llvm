@@ -38,6 +38,9 @@ if(BUILD_TESTING)
     add_test(NAME source_nominal_enum_pattern_parser_gate
         COMMAND oreslang-nominal-message-parser-test)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_compiled_pipeline_evidence_mutation_gate
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pipeline_guest_evidence.py")
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
