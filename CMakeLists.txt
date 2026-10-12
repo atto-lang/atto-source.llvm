@@ -422,6 +422,39 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_handle_read_call
         actor-handle-read-call-reject.ores
         --diagnostic "state read/write loan cannot invoke arbitrary functions")
+    # Function-level 'with' effect upper bound is distinct from scoped
+    # 'using' acquisition and sealed handle_state authority.
+    foreach(mode read write)
+        oreslang_contract_test(native_ir_with_${mode}
+            actor-with-${mode}-positive.ores
+            --ir "oreslang_actor_Probe_receive")
+        if(ORE_CLANG)
+            oreslang_contract_test(native_exec_with_${mode}_fifteen
+                source-actor-pipeline-fifteen-with-${mode}.ores
+                --run 43 --clang "${ORE_CLANG}"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+        endif()
+    endforeach()
+    oreslang_contract_test(native_ir_with_write_only
+        actor-with-write-only-positive.ores
+        --ir "oreslang_actor_Probe_receive")
+    oreslang_contract_test(reject_with_write_undeclared
+        actor-with-underdeclared-write-reject.ores
+        --diagnostic "state.write loan not permitted by with effects")
+    oreslang_contract_test(reject_with_read_undeclared
+        actor-with-underdeclared-read-reject.ores
+        --diagnostic "state.read operation not permitted by with effects")
+    oreslang_contract_test(reject_with_read_capability_undeclared
+        actor-with-read-loan-underdeclared-reject.ores
+        --diagnostic "state.read loan not permitted by with effects")
+    oreslang_contract_test(reject_with_duplicate
+        actor-with-duplicate-effect-reject.ores
+        --diagnostic "duplicate with state effect")
+    oreslang_contract_test(reject_using_signature
+        actor-with-using-signature-reject.ores
+        --diagnostic "using acquires scoped capabilities; use with for function effects")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
