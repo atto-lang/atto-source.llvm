@@ -132,27 +132,75 @@ static void capacity(OresFlowTable* table) {
         assert(ores_flow_retire(table, ids[i]) == ORES_FLOW_OK);
     }
 }
+static int accept_route(void* ctx, const OresFlowTicket* ticket) {
+    const OresFlowActor* actors = (const OresFlowActor*)ctx;
+    assert(ticket->stage_index < 16);
+    assert(ticket->destination.actor_id == actors[ticket->stage_index].actor_id);
+    assert(ticket->destination.actor_generation ==
+           actors[ticket->stage_index].actor_generation);
+    return 1;
+}
 static void sixteen_stages(OresFlowTable* table) {
     OresFlowActor s[16];
     for (unsigned i = 0; i < 16; ++i)
         s[i] = (OresFlowActor){500 + i, 50 + i};
-    uint64_t id;
+    uint64_t id, parent = 0;
     assert(ores_flow_open(table, 17, 3, s, 16, &id) == ORES_FLOW_OK);
-    /* accept() only validates shared generation 10, so this test uses its
-     * own publisher and validates every route shape. */
-    uint64_t parent = 0;
     for (unsigned phase = 0; phase < 31; ++phase) {
         OresFlowTicket t;
         assert(ores_flow_reserve(table, id, sender_for(phase,16,s),
             direction_for(phase,16),parent,&t)==ORES_FLOW_OK);
-        assert(t.destination.actor_id >= 500 && t.destination.actor_id < 516);
-        /* publish accepts only trusted, scheduler-checked destination. */
-        assert(ores_flow_publish(table,&t,reject,NULL)==ORES_FLOW_REJECTED_MAIL);
-        assert(phase == 0);
-        break;
+        assert(ores_flow_publish(table,&t,accept_route,s)==ORES_FLOW_OK);
+        parent=t.message_id;
     }
-    assert(ores_flow_cancel(table,id,s[0])==ORES_FLOW_TERMINAL);
+    assert(ores_flow_finish(table,id,s[0],parent)==ORES_FLOW_OK);
+    OresFlowSnapshot snapshot;
+    assert(ores_flow_snapshot(table,id,&snapshot)==ORES_FLOW_OK);
+    assert(snapshot.committed_hops==31 && snapshot.state==ORES_FLOW_COMPLETED);
     assert(ores_flow_retire(table,id)==ORES_FLOW_OK);
+}
+typedef struct {
+    OresFlowTable* table;
+    uint64_t id;
+    OresFlowTicket ticket;
+    OresFlowError result;
+} Race;
+static void* publish_racer(void* arg) {
+    Race* r = (Race*)arg;
+    r->result = ores_flow_publish(r->table, &r->ticket, accept, NULL);
+    return NULL;
+}
+static void* cancel_racer(void* arg) {
+    Race* r = (Race*)arg;
+    assert(ores_flow_cancel(r->table, r->id, stages[0])==ORES_FLOW_OK);
+    return NULL;
+}
+static unsigned cancellation_races(OresFlowTable* table) {
+    unsigned admitted = 0;
+    for (unsigned iteration=0; iteration<200; ++iteration) {
+        Race race={0};
+        race.table=table;
+        assert(ores_flow_open(table,17,3,stages,3,&race.id)==ORES_FLOW_OK);
+        assert(ores_flow_reserve(table,race.id,(OresFlowActor){0,0},
+               ORES_FLOW_ROOT,0,&race.ticket)==ORES_FLOW_OK);
+        pthread_t send_thread,cancel_thread;
+        assert(pthread_create(&send_thread,NULL,publish_racer,&race)==0);
+        assert(pthread_create(&cancel_thread,NULL,cancel_racer,&race)==0);
+        assert(pthread_join(send_thread,NULL)==0);
+        assert(pthread_join(cancel_thread,NULL)==0);
+        OresFlowSnapshot snap;
+        assert(ores_flow_snapshot(table,race.id,&snap)==ORES_FLOW_OK);
+        assert(snap.state==ORES_FLOW_CANCELLED && !snap.reserved);
+        if(race.result==ORES_FLOW_OK) {
+            assert(snap.committed_hops==1);
+            ++admitted;
+        } else {
+            assert(race.result==ORES_FLOW_TERMINAL);
+            assert(snap.committed_hops==0);
+        }
+        assert(ores_flow_retire(table,race.id)==ORES_FLOW_OK);
+    }
+    return admitted;
 }
 int main(void) {
     OresFlowTable* table = ores_flow_table_create();
@@ -161,6 +209,7 @@ int main(void) {
     rejection_and_incomplete(table);
     capacity(table);
     sixteen_stages(table);
+    unsigned race_admitted = cancellation_races(table);
     Worker workers[8] = {0};
     pthread_t threads[8];
     for (unsigned t = 0; t < 8; ++t) {
@@ -176,8 +225,8 @@ int main(void) {
         for (unsigned j = 0; j < 10; ++j)
             assert(ores_flow_retire(table, workers[t].ids[j]) == ORES_FLOW_OK);
     }
-    assert(atomic_load(&delivered) == 5 + 8 * 10 * 5);
+    assert(atomic_load(&delivered) == 5 + 8 * 10 * 5 + race_admitted);
     ores_flow_table_destroy(table);
-    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 isolation=1 terminal=1 generation=1");
+    puts("SOURCE_PIPELINE_CORRELATED_FLOWS_PASS flows=80 hops=400 race_attempts=200 isolation=1 terminal=1 generation=1");
     return 0;
 }
