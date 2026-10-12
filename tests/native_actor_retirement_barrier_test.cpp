@@ -90,6 +90,10 @@ static void failed_ffi_revocation_is_quarantined() {
     }
     require(!retained.expired(),
             "quarantine lost captured ownership after actor/group destruction");
+    // This test has no real outstanding external FFI references. Its mock
+    // producer has been fully stopped; explicitly discharge quarantine.
+    quarantine.release_after_verified_isolate_shutdown();
+    require(retained.expired(), "verified quarantine discharge retained callback");
 }
 
 static void quarantine_saturation_does_not_settle_done() {
@@ -116,6 +120,10 @@ static void quarantine_saturation_does_not_settle_done() {
     require(r2.get_done().wait_for(std::chrono::milliseconds(0))
                     == std::future_status::timeout,
             "quarantine full fabricated physical done");
+    // Mock FFI producers are stopped; host has verified this test's isolation
+    // boundary and can explicitly drop quarantined captures. The second
+    // registry remains owned by the live barrier until the test exits.
+    quarantine.release_after_verified_isolate_shutdown();
 }
 
 static void done_waits_for_group_detachment() {
