@@ -305,6 +305,12 @@ public:
         // the scheduler publication gate (consistent with RESTART commit).
         // A close that wins this transaction leaves the OLD actor stopped.
         return process_->with_healthy_restart_transaction([&] {
+            // Serialize the host shutdown fence with the final physical
+            // resurrection decision. This dedicated lock is distinct from
+            // the bridge's PANIC-routing lock: admission holds scheduler
+            // gate -> routing lock, so never take routing lock before the
+            // scheduler gate in this path.
+            std::lock_guard<std::mutex> recycle_guard(recycle_fence_mutex_);
             if (!child_registry_->restart_admission_open())
                 throw std::logic_error(
                     "closed supervisor cannot recycle a live hidden candidate");
@@ -320,6 +326,10 @@ public:
 
     /** Terminal supervisor teardown fences any in-flight RESTART commit. */
     void fence_restart_publication() {
+        // If this wins first, the bridge cannot recycle into a new live
+        // unpublished lane. If recycling wins, the caller still owns the
+        // returned candidate and must stop it if the next reservation closes.
+        std::lock_guard<std::mutex> recycle_guard(recycle_fence_mutex_);
         child_registry_->close_restart_admission();
     }
 
@@ -439,6 +449,10 @@ private:
     const std::shared_ptr<SupervisorProcess> process_;
     std::shared_ptr<SupervisorChildRegistry> child_registry_;
     mutable std::mutex mutex_;
+    // Host-only recycle-versus-bridge-close linearization. Never acquire
+    // this while holding the scheduler's internal mutex or PANIC-routing
+    // lock, and never execute guest callbacks while owning it.
+    mutable std::mutex recycle_fence_mutex_;
     std::unordered_map<Key, SupervisorChildRegistry::Snapshot, KeyHash> registered_;
     std::size_t accepted_ = 0;
     std::size_t rejected_ = 0;
