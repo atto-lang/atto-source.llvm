@@ -728,7 +728,7 @@ static int source_send_binary_unlocked(SourceActor* actor,
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         if (has_admitted_trace) {
             fprintf(stderr,
-                "SOURCE_PIPELINE_ADMIT target=%zu direction=%u variant=%zu value=%lld\\n",
+                "SOURCE_PIPELINE_ADMIT target=%zu direction=%u variant=%zu value=%lld\n",
                 actor->pipeline_index, (unsigned)direction,
                 index, (long long)admitted_trace_value);
         }
