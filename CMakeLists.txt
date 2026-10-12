@@ -184,9 +184,11 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
-    # Core assertion source is staged; imports must not silently compile.
+    # Fail closed: staged standard-library source is not native executable code.
     oreslang_contract_test(reject_unadmitted_core_assert_import
-        unsupported-core-assert-import.ores --diagnostic "expected fnc or routine at byte 0")
+        unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
+    oreslang_contract_test(reject_unadmitted_nested_core_assert_import
+        unsupported-core-assert-nested-import.ores --diagnostic "native module imports are unsupported")
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
