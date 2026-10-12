@@ -661,7 +661,7 @@ int main() {
 
     // True scheduler-backed RESTART admission and shutdown fencing. The
     // replacement must be physically READY, not just a fresh actor number.
-    for (int mode = 0; mode < 4; ++mode) {
+    for (int mode = 0; mode < 5; ++mode) {
         auto* runtime = ores_native_actor_scheduler_open_typed_control(
             3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
         check(runtime != nullptr, "restart proof scheduler startup failed");
@@ -756,7 +756,7 @@ int main() {
             check(children->abort_restart(ticket).phase
                       == oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
                   "closed supervisor could not release unspawned claim");
-        } else {
+        } else if (mode == 3) {
             // Stronger scheduler-backed scenario: a physical candidate was
             // spawned and admitted, then the supervisor closed BEFORE logical
             // publication. Cleanup must precede abort, and no message may
@@ -807,6 +807,48 @@ int main() {
             check(closed == 1 && cleanup == 1 && aborts == 1 && commits == 0,
                   "shutdown RESTART journal violated cleanup-before-abort");
             std::puts("NATIVE_SUPERVISOR_RESTART_SHUTDOWN_E2E_PASS admitted=1 closed=1 cleaned=1 aborted=1 committed=0");
+        } else {
+            // Reclaim a failed, never-published candidate only AFTER exact
+            // physical DONE and registry cleanup. A subsequent RESTART may
+            // reuse the *same slot* with a fresh generation, without ever
+            // accepting a late message addressed to the abandoned actor.
+            children->stage_replacement(ticket, replacement);
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                    && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "abandoned physical candidate was not fully stopped");
+            auto rolled_back = bridge->abort_cleaned_replacement(
+                ticket, replacement);
+            check(rolled_back.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "failed candidate abort did not restore old finalized child");
+            auto reused = ores_native_actor_scheduler_recycle_unpublished_done(
+                runtime, replacement);
+            check(reused.scheduler_domain == replacement.scheduler_domain
+                      && reused.actor_slot == replacement.actor_slot
+                      && reused.generation == replacement.generation + 1,
+                  "physical candidate recycling did not advance the slot");
+            check(!ores_native_actor_scheduler_send(runtime, replacement, 77)
+                      && !ores_native_actor_scheduler_poll_done(runtime, replacement)
+                      && !ores_native_actor_scheduler_submit(
+                          runtime, static_cast<size_t>(replacement.actor_slot), 88),
+                  "stale reference or legacy index leaked into reused incarnation");
+            const auto second_ticket =
+                children->begin_restart(child.child, dying, 1);
+            const auto next = bridge->admit_verified_replacement(
+                second_ticket, reused);
+            check(next.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::active
+                      && next.incarnation == 2
+                      && next.actor.actor_slot == reused.actor_slot
+                      && next.actor.generation == reused.generation,
+                  "supervisor committed wrong recycled physical generation");
+            check(ores_native_actor_scheduler_send(runtime, reused, 99),
+                  "new incarnation was not message-routable after publication");
+            check(ores_native_actor_scheduler_stop(runtime, reused)
+                      && ores_native_actor_scheduler_wait_done(runtime, reused),
+                  "new incarnation failed physical teardown");
+            bridge->fence_restart_publication();
+            std::puts("NATIVE_SUPERVISOR_RECYCLED_RESTART_PASS old_gen=1 new_gen=2 cleanup=1 admitted=1");
         }
         bridge.reset();
         process->close();
