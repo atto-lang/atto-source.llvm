@@ -6,6 +6,45 @@ import sys
 import tempfile
 
 CASES = {
+    # Host/device scopes are currently reserved, never interpreted as i64
+    # expressions or silently executed on the CPU. The same applies at
+    # callable declarations and inside nested blocks.
+    "gpu-callable": (
+        "pub gpu fnc kernel(): int { return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "cpu-callable": (
+        "pub cpu fnc kernel(): int { return 42; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "cpu-block": (
+        "pub fnc main(): int { cpu { return 7; } return 42; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "gpu-block": (
+        "pub fnc main(): int { gpu { return 7; } return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "gpu-in-cpu": (
+        "pub fnc main(): int { cpu { gpu { return 7; } } return 42; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "cpu-in-gpu": (
+        "pub fnc main(): int { gpu { cpu { return 7; } } return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "gpu-identifier": (
+        "pub fnc gpu(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "cpu-identifier": (
+        "pub fnc cpu(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "quantum-callable": (
+        "pub quantum fnc kernel(): int { return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
     "over-function": (
         "pub fnc over(): int { return 42; }",
         "expected non-keyword identifier",
