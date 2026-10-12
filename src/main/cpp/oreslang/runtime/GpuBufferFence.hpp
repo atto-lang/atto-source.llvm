@@ -24,9 +24,17 @@ struct Identity {
             && allocation_generation == other.allocation_generation;
     }
 };
-struct Ticket {
+// A ticket must be bound to one exact allocation and one exact submission.
+// Generation/sequence are diagnostic values, NOT completion authority.
+class Ticket {
+public:
     std::uint64_t generation;
     std::uint64_t sequence;
+private:
+    std::shared_ptr<const std::uint8_t> seal_;
+    Ticket(std::uint64_t g, std::uint64_t s, std::shared_ptr<const std::uint8_t> seal)
+        : generation(g), sequence(s), seal_(std::move(seal)) {}
+    friend class BufferFence;
 };
 
 class BufferFence {
@@ -36,6 +44,7 @@ class BufferFence {
         std::uint64_t sequence = 0;
         Status status = Status::Idle;
         bool backend_quiescent = true;
+        std::shared_ptr<const std::uint8_t> active_seal;
         mutable std::mutex lock;
         State(Identity i, std::uint64_t n)
             : identity(std::move(i)), bytes(n) {
@@ -116,9 +125,15 @@ public:
         if (a->sequence == std::numeric_limits<std::uint64_t>::max()
                 || b->sequence == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("device ticket sequence exhausted");
-        // Allocate/copy returned identities BEFORE mutating either fence.
-        PairTickets tickets{a->identity, {a->identity.allocation_generation, a->sequence + 1},
-                            b->identity, {b->identity.allocation_generation, b->sequence + 1}};
+        // Allocate two fresh, per-submission seals and copy identity strings
+        // before changing either allocation. No throwing operations remain.
+        auto seal_a = std::make_shared<const std::uint8_t>(0);
+        auto seal_b = std::make_shared<const std::uint8_t>(0);
+        PairTickets tickets{
+            a->identity, Ticket(a->identity.allocation_generation, a->sequence + 1, seal_a),
+            b->identity, Ticket(b->identity.allocation_generation, b->sequence + 1, seal_b)};
+        a->active_seal = std::move(seal_a);
+        b->active_seal = std::move(seal_b);
         ++a->sequence;
         ++b->sequence;
         a->backend_quiescent = false;
@@ -136,9 +151,13 @@ public:
         if (state_->status != Status::Idle) throw std::logic_error("buffer not idle");
         if (state_->sequence == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("device ticket sequence exhausted");
+        auto seal = std::make_shared<const std::uint8_t>(0);
+        Ticket ticket(state_->identity.allocation_generation, state_->sequence + 1, seal);
+        state_->active_seal = std::move(seal);
+        ++state_->sequence;
         state_->backend_quiescent = false;
         state_->status = Status::InFlight;
-        return Ticket{state_->identity.allocation_generation, ++state_->sequence};
+        return ticket;
     }
 
     void complete(Ticket ticket, bool succeeded) {
@@ -148,6 +167,7 @@ public:
         validate_inflight(ticket);
         state_->status = succeeded ? Status::Idle : Status::Poisoned;
         state_->backend_quiescent = true;
+        state_->active_seal.reset();
     }
     void cancel_pending(Ticket ticket) {
         std::lock_guard<std::mutex> owner_guard(owner_lock_);
@@ -163,9 +183,11 @@ public:
         if (!(state_->identity == caller) || state_->status != Status::Poisoned
             || state_->backend_quiescent
             || ticket.generation != state_->identity.allocation_generation
-            || ticket.sequence != state_->sequence)
+            || ticket.sequence != state_->sequence
+            || !state_->active_seal || ticket.seal_ != state_->active_seal)
             throw std::logic_error("stale cancelled device fence acknowledgement");
         state_->backend_quiescent = true;
+        state_->active_seal.reset();
     }
     void retire_after_backend_release(const Identity& caller) {
         std::lock_guard<std::mutex> owner_guard(owner_lock_);
@@ -209,7 +231,8 @@ private:
     void validate_inflight(Ticket ticket) const {
         if (state_->status != Status::InFlight ||
             ticket.generation != state_->identity.allocation_generation ||
-            ticket.sequence != state_->sequence)
+            ticket.sequence != state_->sequence ||
+            !state_->active_seal || ticket.seal_ != state_->active_seal)
             throw std::logic_error("stale or mismatched device event");
     }
     mutable std::mutex owner_lock_;
