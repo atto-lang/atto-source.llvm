@@ -51,6 +51,8 @@ struct ActorSend {
     std::unique_ptr<Expression> payload;
     // Nominal case, e.g. Messages.Stop; never lowered as scalar i64.
     std::string tagged_variant;
+    // Compiler-validated single nested enum constructor; not a host pointer.
+    std::string nested_tagged_variant;
     std::size_t offset = 0;
 };
 
