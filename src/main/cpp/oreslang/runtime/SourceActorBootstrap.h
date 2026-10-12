@@ -137,6 +137,9 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
  * compiled variant callback: 1 upstream->downstream, 2 downstream->upstream,
  * 0 without a pipeline delivery. Never accepts an untrusted direction arg. */
 uint64_t oreslang_source_actor_pipeline_ingress(void);
+/* Compiler-only invalid-direction or wrong-nominal-domain delivery gate.
+ * Marks terminal pipeline failure, never invokes guest handler code. */
+void oreslang_source_actor_pipeline_reject_delivery(void);
 /* 0 is completed success. Nonzero is a terminal pipeline failure:
  * 1 wrong ingress, 2 invalid phase/replay, 3 rejected DATA admission,
  * 4 stage omitted its required hop, 5 timeout, 6 wrong final result,
