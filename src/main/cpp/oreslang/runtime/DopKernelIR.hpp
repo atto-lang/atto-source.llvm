@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <locale>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -35,6 +36,8 @@ struct Kernel {
     Kernel(Plan l, Element e, Op o, float a, float b)
         : layout(l), element(e), operation(o), scale(a), bias(b) {
         if (element != Element::F32 || layout.scalar_bytes() != sizeof(float)
+                || (operation != Op::Scale && operation != Op::Bias
+                    && operation != Op::ScaleBias)
                 || !std::isfinite(scale) || !std::isfinite(bias))
             throw std::invalid_argument("only finite homogeneous f32 DOP kernels are admitted");
     }
@@ -63,6 +66,17 @@ class HostBuffer {
         std::size_t loans = 0;
         bool closed = false;
         static std::size_t checked_host_size(const Plan& layout) {
+            // HostBuffer read()/write() always copy sizeof(float) bytes. A
+            // descriptor with smaller scalar slots used to corrupt adjacent
+            // fields or overrun the backing allocation on the last slot.
+            // Reject it before allocating storage or granting any loan.
+            if (layout.scalar_bytes() != sizeof(float))
+                throw std::invalid_argument("HostBuffer requires 4-byte F32 elements");
+            // The current Java DOP byte-buffer ABI is little-endian. Do not
+            // silently treat native big-endian float bytes as that ABI.
+            const std::uint32_t probe = 1;
+            if (*reinterpret_cast<const unsigned char*>(&probe) != 1)
+                throw std::runtime_error("big-endian DOP HostBuffer not supported");
             return oreslang::TargetAbi::checked_host_bytes(layout.byte_length());
         }
         explicit State(Plan value)
@@ -180,6 +194,9 @@ inline void execute_cpu(const Kernel& kernel, const HostBuffer& input, HostBuffe
 
 inline std::string cl_float(float value) {
     std::ostringstream result;
+    // Kernel source is a language artifact, not locale-sensitive UI text.
+    // A process-global decimal-comma locale would produce invalid OpenCL C.
+    result.imbue(std::locale::classic());
     // max_digits10 significant digits preserve every finite f32 constant,
     // including tiny subnormals that fixed decimal precision would round to zero.
     result << std::scientific << std::setprecision(std::numeric_limits<float>::max_digits10 - 1)
