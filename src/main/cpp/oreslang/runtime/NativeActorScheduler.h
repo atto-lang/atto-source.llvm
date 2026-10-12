@@ -93,9 +93,26 @@ int ores_native_actor_scheduler_publish_failure(
     OresNativeActorTerminalFailure failure);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
+/* Native scheduler construction eagerly allocates its bounded metadata but
+ * creates ZERO pthreads. First actor spawn starts the ONE dedicated pool
+ * scheduler CONTROL thread; it never executes callbacks. The first accepted
+ * user/CONTROL event starts one worker. Physical workers scale with runnable
+ * demand up to five, even if a legacy host requests more than five.
+ * A failed activation fails closed without publishing unserviceable work. */
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn callback, void* ctx);
+
+/* Host diagnostic only. No guest pointer or scheduler internals are exposed. */
+/* Zero at open, one after the first successfully spawned actor. This is a
+ * dedicated blocking scheduler CONTROL thread, never a carrier. */
+/* Host CONTROL-only wakeup. Does not enqueue a user message or call guest
+ * code; the owning scheduler observes it on its blocking condition wait.
+ * Caller must own/fence the scheduler lifetime. Returns zero after retire.
+ */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
+size_t ores_native_actor_scheduler_started_control_threads(OresNativeActorScheduler* scheduler);
+size_t ores_native_actor_scheduler_started_workers(OresNativeActorScheduler* scheduler);
 /* Legacy index admission requires an already-spawned host actor.\n * New hosts should use the generation-checked actor ref send API.\n * O(1), nonblocking admission. Returns 1 on accepted, 0 on capacity or retirement.
  * Does not allocate and never invokes callbacks inline. Capacity includes the
  * currently executing task. Caller retains ownership on rejection.

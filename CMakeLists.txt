@@ -26,8 +26,49 @@ add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
+# The host OresVM scheduler is a separately linkable native runtime library:
+# one eagerly created master CONTROL pthread, one lazily activated scheduler
+# CONTROL pthread per actor pool, and 0..5 guest carriers. This library does
+# not add a GC and does not silently enable unsupported source await/select.
+find_package(Threads REQUIRED)
+add_library(oreslang-native-actor-control STATIC
+    src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+    src/main/cpp/oreslang/runtime/NativeOresVMMasterScheduler.c)
+set_target_properties(oreslang-native-actor-control PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+target_include_directories(oreslang-native-actor-control PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+target_link_libraries(oreslang-native-actor-control PUBLIC Threads::Threads)
+target_compile_options(oreslang-native-actor-control PRIVATE
+    -Wall -Wextra -Wpedantic -Werror)
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(oreslang-native-vm-master-test
+        tests/native_vm_master_scheduler_test.c)
+    set_target_properties(oreslang-native-vm-master-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+    target_link_libraries(oreslang-native-vm-master-test PRIVATE
+        oreslang-native-actor-control)
+    target_compile_options(oreslang-native-vm-master-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_oresvm_master_blocking_pool_wakeups
+        COMMAND oreslang-native-vm-master-test)
+    set_tests_properties(native_oresvm_master_blocking_pool_wakeups
+        PROPERTIES TIMEOUT 20)
+    # Host-only cyclic FAIR selector. Source-level readch/select still fail
+    # closed until LLVM generation-safe channel registration is implemented.
+    add_executable(oreslang-native-select-fair-test
+        tests/native_select_round_robin_test.c)
+    set_target_properties(oreslang-native-select-fair-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+    target_include_directories(oreslang-native-select-fair-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-select-fair-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_select_cyclic_fair_bitmap
+        COMMAND oreslang-native-select-fair-test)
+    set_tests_properties(native_select_cyclic_fair_bitmap PROPERTIES TIMEOUT 15)
     # Host-only quantum policy. Executable native guest await/cooperate must
     # prove its own continuation lowering before claiming cross-backend parity.
     add_executable(oreslang-native-cooperation-quantum-test

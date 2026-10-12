@@ -9,6 +9,7 @@ typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
+    unsigned reserved; /* scheduler-issued turn not yet claimed by a carrier */
     unsigned has_control;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
@@ -16,14 +17,24 @@ typedef struct {
     unsigned spawned, retired;
     uint64_t generation;
 } ActorLane;
+typedef struct {
+    size_t actor_slot;
+    int control;
+} SchedulerDispatch;
 struct OresNativeActorScheduler {
     pthread_mutex_t lock;
-    pthread_cond_t ready;
+    pthread_cond_t ready; /* pool workers wait for scheduler-issued dispatches */
     pthread_cond_t drained;
+    pthread_cond_t scheduler_wakeup; /* event-driven scheduler select/_blocking */
+    pthread_t scheduler_thread;
     ActorLane* actors;
     uint64_t* slots;
     pthread_t* threads;
-    size_t actor_count, per_actor_capacity, worker_count;
+    SchedulerDispatch* dispatches;
+    size_t dispatch_head, dispatch_tail, dispatch_count;
+    size_t busy_workers; /* currently executing user/CONTROL callbacks */
+    size_t actor_count, per_actor_capacity, worker_count, started_workers;
+    int scheduler_started, activation_failed;
     size_t next_actor, outstanding;
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
@@ -70,7 +81,7 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) 
     for (int pass = 1; pass >= 0; --pass) {
         for (size_t offset = 0; offset < s->actor_count; ++offset) {
             size_t i = (s->next_actor + offset) % s->actor_count;
-            if (!s->actors[i].active
+            if (!s->actors[i].active && !s->actors[i].reserved
                 && (pass ? s->actors[i].has_control : s->actors[i].queued != 0)) {
                 *actor = i;
                 *control = pass;
@@ -81,34 +92,81 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) 
     }
     return 0;
 }
+/*
+ * Exactly one dedicated pool scheduler thread, started by the first actor
+ * registration. Only this loop selects runnable actors. It never invokes
+ * callbacks or runs guest code; workers consume bounded dispatch tickets.
+ * Both waits use condition variables and release the monitor atomically.
+ */
+static void* pool_scheduler_loop(void* raw) {
+    OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
+    lock(s);
+    for (;;) {
+        if (s->retired && !s->outstanding) {
+            unlock(s);
+            return NULL;
+        }
+        int issued = 0;
+        size_t actor = 0;
+        int control = 0;
+        /* Pre-issue tickets only to currently idle carriers. A speculative
+         * normal ticket parked behind a busy carrier could otherwise outrank
+         * a later supervisor CONTROL event when that carrier finishes. */
+        while (s->dispatch_count + s->busy_workers < s->started_workers
+               && find_ready(s, &actor, &control)) {
+            ActorLane* lane = &s->actors[actor];
+            lane->reserved = 1;
+            s->dispatches[s->dispatch_tail] =
+                (SchedulerDispatch){actor, control};
+            s->dispatch_tail = (s->dispatch_tail + 1) % s->worker_count;
+            ++s->dispatch_count;
+            issued = 1;
+            pthread_cond_signal(&s->ready);
+        }
+        if (!issued) {
+            if (pthread_cond_wait(&s->scheduler_wakeup, &s->lock) != 0)
+                abort();
+        }
+    }
+}
 static void* carrier(void* raw) {
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
     for (;;) {
         lock(s);
-        size_t i = 0;
-        int control = 0;
-        while (!find_ready(s, &i, &control)) {
+        while (!s->dispatch_count) {
             if (s->retired && !s->outstanding) {
                 unlock(s);
                 return NULL;
             }
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
         }
+        SchedulerDispatch ticket = s->dispatches[s->dispatch_head];
+        s->dispatch_head = (s->dispatch_head + 1) % s->worker_count;
+        --s->dispatch_count;
+        ++s->busy_workers;
+        size_t i = ticket.actor_slot;
+        int control = ticket.control;
         ActorLane* lane = &s->actors[i];
+        if (!lane->reserved || lane->active) abort();
+        lane->reserved = 0;
         uint64_t payload;
         OresNativeActorTerminalFailure failure = {0};
         int typed_failure = control && lane->control_is_failure;
         if (control) {
+            if (!lane->has_control) abort();
             payload = lane->control_payload;
             if (typed_failure) failure = lane->failure;
             lane->control_is_failure = 0;
             lane->has_control = 0;
         } else {
+            if (!lane->queued) abort();
             payload = lane->messages[lane->head];
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
         lane->active = 1;
+        // A free dispatch slot may admit a different actor immediately.
+        pthread_cond_signal(&s->scheduler_wakeup);
         unlock(s);
 
         executing = s;
@@ -120,15 +178,23 @@ static void* carrier(void* raw) {
         lock(s);
         if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        if (!s->busy_workers) abort();
+        --s->busy_workers;
         s->outstanding--;
         s->completed++;
         if (control) ++s->control_completed;
-        if (lane->queued || lane->has_control) pthread_cond_signal(&s->ready);
-        if (lane->retired && !lane->active && !lane->queued && !lane->has_control)
+        /* A physical worker became idle: let the scheduler choose among
+         * all ready actors, prioritizing CONTROL over queued user mail. */
+        pthread_cond_signal(&s->scheduler_wakeup);
+        if (lane->retired && !lane->active && !lane->reserved
+            && !lane->queued && !lane->has_control)
             pthread_cond_broadcast(&s->drained);
         if (!s->outstanding) {
             pthread_cond_broadcast(&s->drained);
-            if (s->retired) pthread_cond_broadcast(&s->ready);
+            if (s->retired) {
+                pthread_cond_broadcast(&s->ready);
+                pthread_cond_broadcast(&s->scheduler_wakeup);
+            }
         }
         unlock(s);
     }
@@ -140,17 +206,23 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
+    /* A thread pool has at most five physical carriers, irrespective of
+     * larger legacy host configuration requests. The scheduler CONTROL
+     * thread is separate and never counts as a carrier. */
+    const size_t effective_workers = workers > 5 ? 5 : workers;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
-    s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    if (!s->actors || !s->slots || !s->threads) goto allocation_failed;
+    s->threads = (pthread_t*)calloc(effective_workers, sizeof(pthread_t));
+    s->dispatches = (SchedulerDispatch*)calloc(effective_workers, sizeof(SchedulerDispatch));
+    if (!s->actors || !s->slots || !s->threads || !s->dispatches)
+        goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
     s->per_actor_capacity = capacity;
-    s->worker_count = workers;
+    s->worker_count = effective_workers;
     s->callback = callback;
     s->control_callback = control_callback;
     s->panic_callback = panic_callback;
@@ -167,19 +239,17 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         pthread_mutex_destroy(&s->lock);
         goto allocation_failed;
     }
-    size_t started = 0;
-    while (started < workers && pthread_create(&s->threads[started], NULL, carrier, s) == 0)
-        ++started;
-    if (started != workers) {
-        ores_native_actor_scheduler_retire(s);
-        for (size_t i = 0; i < started; ++i) pthread_join(s->threads[i], NULL);
+    if (pthread_cond_init(&s->scheduler_wakeup, NULL) != 0) {
         pthread_cond_destroy(&s->drained);
         pthread_cond_destroy(&s->ready);
         pthread_mutex_destroy(&s->lock);
         goto allocation_failed;
     }
+    /* CONFIGURED: no scheduler or worker threads until the first actor.
+     * Scheduler starts on actor registration; workers start on first work. */
     return s;
 allocation_failed:
+    free(s->dispatches);
     free(s->threads);
     free(s->slots);
     free(s->actors);
@@ -206,11 +276,33 @@ static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
         && s->actors[ref.actor_slot].spawned
         && s->actors[ref.actor_slot].generation == ref.generation;
 }
+/* Caller holds s->lock. A cold pool starts ONE worker for its first
+ * admission; a backlog activates at most one further worker per additional
+ * outstanding item, capped by the configured maximum. No guest work is
+ * published before its required activation completes. Failure fences new
+ * admission and retains already-started workers until retirement. */
+static int ensure_workers_started_locked(OresNativeActorScheduler* s) {
+    if (s->activation_failed || s->retired) return 0;
+    size_t desired = s->worker_count;
+    if (s->outstanding < desired) desired = (size_t)s->outstanding + 1;
+    while (s->started_workers < desired) {
+        size_t slot = s->started_workers;
+        if (pthread_create(&s->threads[slot], NULL, carrier, s) != 0) {
+            s->activation_failed = 1;
+            return 0;
+        }
+        ++s->started_workers;
+    }
+    pthread_cond_signal(&s->scheduler_wakeup);
+    return 1;
+}
+
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
-        || s->accepted == UINT64_MAX) {
+        || s->accepted == UINT64_MAX
+        || !ensure_workers_started_locked(s)) {
         if (s->rejected != UINT64_MAX) s->rejected++;
         return 0;
     }
@@ -220,7 +312,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->queued++;
     s->accepted++;
     s->outstanding++;
-    pthread_cond_signal(&s->ready);
+    pthread_cond_signal(&s->scheduler_wakeup);
     return 1;
 }
 OresNativeActorRef ores_native_actor_scheduler_spawn(
@@ -231,6 +323,15 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     if (s->retired || i >= s->actor_count || s->actors[i].spawned) {
         unlock(s);
         return missing;
+    }
+    /* First actor activates only the scheduler CONTROL thread. */
+    if (!s->scheduler_started) {
+        if (pthread_create(&s->scheduler_thread, NULL,
+                           pool_scheduler_loop, s) != 0) {
+            unlock(s);
+            return missing;
+        }
+        s->scheduler_started = 1;
     }
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
@@ -252,7 +353,9 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             status = ORES_NATIVE_SEND_TERMINATED;
         } else if (lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
-        } else if (s->accepted == UINT64_MAX) {
+        } else if (s->accepted == UINT64_MAX || s->activation_failed) {
+            status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        } else if (!ensure_workers_started_locked(s)) {
             status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
         } else {
             /* enqueue_locked and stop() arbitrate under this same lock.
@@ -287,7 +390,8 @@ int ores_native_actor_scheduler_publish_control(
     int ok = !s->retired && s->control_callback && matching(s, parent)
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX;
+        && s->accepted != UINT64_MAX
+        && ensure_workers_started_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
         lane->control_payload = payload;
@@ -295,7 +399,7 @@ int ores_native_actor_scheduler_publish_control(
         lane->has_control = 1;
         ++s->accepted;
         ++s->outstanding;
-        pthread_cond_signal(&s->ready);
+        pthread_cond_signal(&s->scheduler_wakeup);
     } else if (s->rejected != UINT64_MAX) ++s->rejected;
     unlock(s);
     return ok;
@@ -312,7 +416,8 @@ int ores_native_actor_scheduler_publish_failure(
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX;
+        && s->accepted != UINT64_MAX
+        && ensure_workers_started_locked(s);
     if (ok) {
         ActorLane* a = &s->actors[parent.actor_slot];
         a->failure = failure;
@@ -320,10 +425,40 @@ int ores_native_actor_scheduler_publish_failure(
         a->has_control = 1;
         s->accepted++;
         s->outstanding++;
-        pthread_cond_signal(&s->ready);
+        /* A ready worker cannot consume this event until the pool scheduler
+         * issues a dispatch ticket. Wake the scheduler, not the worker. */
+        pthread_cond_signal(&s->scheduler_wakeup);
     } else if (s->rejected != UINT64_MAX) s->rejected++;
     unlock(s);
     return ok;
+}
+/* Master-to-pool CONTROL notification. No callbacks or guest execution on
+ * caller/master; the pool scheduler consumes the condition event. */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int accepted = !s->retired;
+    if (accepted && s->scheduler_started) {
+        if (pthread_cond_signal(&s->scheduler_wakeup) != 0) abort();
+    }
+    unlock(s);
+    return accepted;
+}
+/* Host metric: the scheduler is started at first actor registration. */
+size_t ores_native_actor_scheduler_started_control_threads(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    size_t n = (size_t)s->scheduler_started;
+    unlock(s);
+    return n;
+}
+/* Trusted host metric. A configured scheduler with no work has zero workers. */
+size_t ores_native_actor_scheduler_started_workers(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    size_t n = s->started_workers;
+    unlock(s);
+    return n;
 }
 uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler* s) {
     if (!s) return 0;
@@ -382,6 +517,7 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     s->retired = 1;
     for (size_t i = 0; i < s->actor_count; ++i) s->actors[i].retired = 1;
     pthread_cond_broadcast(&s->ready);
+    pthread_cond_broadcast(&s->scheduler_wakeup);
     unlock(s);
 }
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
@@ -396,15 +532,22 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
     int ready = s->retired && !s->outstanding;
-    if (ready) pthread_cond_broadcast(&s->ready);
+    if (ready) {
+        pthread_cond_broadcast(&s->ready);
+        pthread_cond_broadcast(&s->scheduler_wakeup);
+    }
     unlock(s);
     if (!ready) return 0;
     /* Caller must externally fence producers; no concurrent API calls now. */
-    for (size_t i = 0; i < s->worker_count; ++i)
+    if (s->scheduler_started
+        && pthread_join(s->scheduler_thread, NULL) != 0) abort();
+    for (size_t i = 0; i < s->started_workers; ++i)
         if (pthread_join(s->threads[i], NULL) != 0) abort();
-    if (pthread_cond_destroy(&s->drained) != 0
+    if (pthread_cond_destroy(&s->scheduler_wakeup) != 0
+        || pthread_cond_destroy(&s->drained) != 0
         || pthread_cond_destroy(&s->ready) != 0
         || pthread_mutex_destroy(&s->lock) != 0) abort();
+    free(s->dispatches);
     free(s->threads);
     free(s->slots);
     free(s->actors);

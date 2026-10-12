@@ -69,6 +69,35 @@ int main(void) {
     check(ores_native_actor_scheduler_stop(s.scheduler,s.parent));
     ores_native_actor_scheduler_retire(s.scheduler);
     check(ores_native_actor_scheduler_try_destroy(s.scheduler));
+    /*
+     * Regression: a typed failure to an IDLE parent must activate a worker
+     * and wake the dedicated scheduler thread. Signalling only the worker
+     * ready condvar strands the control message without a dispatch ticket.
+     */
+    State idle = {0};
+    idle.scheduler = ores_native_actor_scheduler_open_typed_control(
+        2, 1, 3, normal, NULL, panic_handler, &idle);
+    check(idle.scheduler != NULL);
+    idle.parent = ores_native_actor_scheduler_spawn(idle.scheduler, 0);
+    idle.child = ores_native_actor_scheduler_spawn(idle.scheduler, 1);
+    check(idle.parent.scheduler_domain && idle.child.scheduler_domain);
+    check(ores_native_actor_scheduler_started_control_threads(idle.scheduler) == 1);
+    check(ores_native_actor_scheduler_started_workers(idle.scheduler) == 0);
+    check(ores_native_actor_scheduler_stop(idle.scheduler, idle.child));
+    atomic_store(&idle.finalized, 1);
+    OresNativeActorTerminalFailure first_idle_failure = {
+        ORES_NATIVE_CONTROL_PANIC, idle.child, 19, 702
+    };
+    check(ores_native_actor_scheduler_publish_failure(
+        idle.scheduler, idle.parent, first_idle_failure));
+    check(ores_native_actor_scheduler_started_workers(idle.scheduler) == 1);
+    wait_for(&idle.delivered);
+    check(ores_native_actor_scheduler_control_completed(idle.scheduler) == 1);
+    check(atomic_load(&idle.violations) == 0);
+    check(ores_native_actor_scheduler_stop(idle.scheduler, idle.parent));
+    ores_native_actor_scheduler_retire(idle.scheduler);
+    check(ores_native_actor_scheduler_drain(idle.scheduler));
+    check(ores_native_actor_scheduler_try_destroy(idle.scheduler));
     puts("NATIVE_SUPERVISOR_PANIC_PASS typed=1 finalized=1 exclusive_parent=1");
     return 0;
 }
