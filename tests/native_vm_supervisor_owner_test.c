@@ -19,6 +19,11 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     atomic_int* admitted;
 } Sender;
+typedef struct {
+    OresNativeVM* vm;
+    OresNativeActorRef supervisor;
+    atomic_int* stopped;
+} Stopper;
 
 static void check(int ok) { if (!ok) abort(); }
 static void nap(void) { struct timespec t = {0, 1000000}; nanosleep(&t, NULL); }
@@ -77,6 +82,12 @@ static void* publish(void* arg) {
     if (ores_native_vm_publish_supervised_failure(
             p->vm, ORES_NATIVE_VM_MAIN, p->failure))
         atomic_fetch_add(p->admitted, 1);
+    return NULL;
+}
+static void* stop_supervisor(void* arg) {
+    Stopper* s = (Stopper*)arg;
+    if (ores_native_vm_stop(s->vm, ORES_NATIVE_VM_MAIN, s->supervisor))
+        atomic_store(s->stopped, 1);
     return NULL;
 }
 int main(void) {
@@ -181,15 +192,23 @@ int main(void) {
      * identity, irrespective of the parent carrier already consuming it. */
     atomic_int admitted = 0;
     Sender sender = {vm, failure, &admitted};
-    pthread_t p[2];
+    atomic_int parent_stopped = 0;
+    Stopper stopper = {vm, parent, &parent_stopped};
+    pthread_t p[2], stopper_thread;
     check(pthread_create(&p[0], NULL, publish, &sender) == 0);
+    check(pthread_create(&stopper_thread, NULL, stop_supervisor, &stopper) == 0);
     check(pthread_create(&p[1], NULL, publish, &sender) == 0);
     for (int i=0; i<2; ++i) check(pthread_join(p[i], NULL) == 0);
+    check(pthread_join(stopper_thread, NULL) == 0);
     check(atomic_load(&admitted) == 1);
+    /* Either STOP lost the race and was correctly rejected, or it won
+     * only after terminal CONTROL was already admitted. In both cases the
+     * parent's handler must still execute exactly once. */
+    if (!atomic_load(&parent_stopped))
+        check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
     until(&s->terminal_seen, 1);
     check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, unsupervised));
-    check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(ores_native_vm_stop(vm, ORES_NATIVE_VM_SHARED, foreign));
     ores_native_vm_retire(vm);
     check(!ores_native_vm_spawn_supervised(vm, ORES_NATIVE_VM_MAIN, 1, parent).scheduler_domain);
