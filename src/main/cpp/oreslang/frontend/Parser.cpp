@@ -370,6 +370,27 @@ private:
                 binding.owner_mutable = accept("mut");
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
+                if (token_.text == "Array") {
+                    // Native slice #265: only a lexical, exclusively owned Array<int>.
+                    // No implicit copies, fields, captures, cross-call transfers, or
+                    // suspension can enter the current synchronous array ABI.
+                    if (!binding.owner_mutable)
+                        fail("native Array<int> requires let mut owner");
+                    require("Array");
+                    require("<");
+                    require("int");
+                    require(">");
+                    binding.name = identifier();
+                    require("=");
+                    require("new");
+                    require("Array");
+                    require("<");
+                    require("int");
+                    require(">");
+                    require("(");
+                    require(")");
+                    binding.int_array = true;
+                } else {
                 binding.class_name = identifier();
                 binding.name = identifier();
                 require("=");
@@ -386,6 +407,7 @@ private:
                     binding.move_source = identifier();
                     if (parenthesized) require(")");
                     binding.move_class = true;
+                }
                 }
             } else {
                 // A val owns mutable scalar storage; const permits only shared
@@ -485,7 +507,8 @@ private:
                     statement.receiver = target->left->name;
                     statement.field = target->name;
                     statement.expression = expression();
-                } else if (target->kind == Expression::Kind::Call) {
+                } else if (target->kind == Expression::Kind::Call ||
+                           target->kind == Expression::Kind::ArrayCall) {
                     statement.kind = Statement::Kind::Call;
                     statement.expression = std::move(target);
                 } else {
@@ -629,7 +652,8 @@ private:
                 statement.receiver = action->left->name;
                 statement.field = action->name;
                 statement.expression = expression();
-            } else if (action->kind == Expression::Kind::Call) {
+            } else if (action->kind == Expression::Kind::Call ||
+                       action->kind == Expression::Kind::ArrayCall) {
                 statement.kind = Statement::Kind::Call;
                 statement.expression = std::move(action);
             } else {
@@ -795,6 +819,17 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            // A method call is distinct from a field access. The ownership
+            // pass admits only get in value position, and add/set as effects.
+            if (accept("(")) {
+                field->kind = Expression::Kind::ArrayCall;
+                if (!accept(")")) {
+                    do {
+                        field->arguments.push_back(expression());
+                    } while (accept(","));
+                    require(")");
+                }
+            }
             expr = std::move(field);
         }
         return expr;
@@ -843,6 +878,11 @@ private:
                 return;
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions);
+                return;
+            case Expression::Kind::ArrayCall:
+                validate_expression(*expr.left, parameters, functions);
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions);
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
@@ -980,7 +1020,11 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.new_class || binding.move_class) {
+                if (binding.int_array) {
+                    // Construction was parsed as exactly new Array<int>().
+                    // Its initializer is a trusted runtime operation, never
+                    // a user-callable scalar or transferable class value.
+                } else if (binding.new_class || binding.move_class) {
                     if (classes.count(binding.class_name) == 0)
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
                     if (binding.move_class && !params.count(binding.move_source))
