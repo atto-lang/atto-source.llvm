@@ -13,6 +13,10 @@
 #include <limits.h>
 
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
+/* Source ref ABI is a non-dereferenceable uint64 capability encoded in void*.
+ * The supported native targets must retain all 64 token bits. */
+_Static_assert(sizeof(uintptr_t) >= sizeof(uint64_t),
+               "source actor handles require 64-bit pointer targets");
 #define SOURCE_GROUP_SLOTS 64u
 #define SOURCE_GROUP_CARRIERS 4u
 #define SOURCE_GROUP_MAILBOX 128u
@@ -74,6 +78,7 @@ typedef struct {
     OresNativeActorFuture* ready_future;
     OresSourceActorContinuation continuation;
     SourceActor* actor;
+    void* continuation_handle;
     int done;
     int64_t result;
 } ReadyAwaitFrame;
@@ -130,6 +135,23 @@ static void check_invariant(int condition, const char* predicate, int line) {
 #define ensure(expr) check_invariant((expr), #expr, __LINE__)
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
+/* Public refs are monotonically issued ID capabilities, never heap addresses.
+ * Lookup runs under group.mutex before inspecting any mutable SourceActor.
+ * The ID is never recycled when the scheduler closes/reopens or slots reuse.
+ * The DATA producer lease is acquired before releasing the registry lock. */
+static SourceActor* source_resolve_locked(void* opaque) {
+    const uint64_t token = (uint64_t)(uintptr_t)opaque;
+    if (!token) return NULL;
+    for (size_t slot = 0; slot < group.next_slot; ++slot) {
+        SourceActor* actor = group.actors[slot];
+        if (actor && actor->id == token
+                && actor->magic == SOURCE_ACTOR_MAGIC
+                && actor->ref.actor_slot == slot
+                && actor->ref.scheduler_domain != 0) return actor;
+    }
+    return NULL;
+}
+
 /* Actor workers may signal failure, but never synchronously tear down peers
  * or terminate the process. Only the host-main waiter performs teardown. */
 static void pipeline_fail(int code) {
@@ -169,9 +191,9 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         ensure(ores_native_actor_future_status(frame->ready_future)
             == ORES_NATIVE_FUTURE_READY);
         OresSourceActorContinuation continuation = frame->continuation;
-        SourceActor* actor = frame->actor;
+        void* handle = frame->continuation_handle;
         group_unlock();
-        const int64_t result = continuation(actor);
+        const int64_t result = continuation(handle);
         group_lock();
         frame->result = result;
         frame->done = 1;
@@ -437,7 +459,7 @@ static void* source_spawn(
     ensure(ores_native_actor_scheduler_publish_control(
         group.scheduler, instance->ref, 0));
     group_unlock();
-    return instance;
+    return (void*)(uintptr_t)instance->id;
 }
 void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
                                   OresSourceActorMessage on_message,
@@ -470,15 +492,16 @@ void* oreslang_source_actor_spawn_tagged_variants(
 }
 int64_t oreslang_source_actor_await_ready(
     void* opaque, OresSourceActorContinuation continuation) {
-    SourceActor* actor = (SourceActor*)opaque;
-    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC && continuation);
+    ensure(continuation);
     group_lock();
-    ensure(group.scheduler && !group.pending_ready);
+    SourceActor* actor = source_resolve_locked(opaque);
+    ensure(actor && group.scheduler && !group.pending_ready);
     const size_t slot = (size_t)actor->ref.actor_slot;
     ensure(slot < group.next_slot && group.actors[slot] == actor);
     ReadyAwaitFrame frame = {0};
     ensure(pthread_cond_init(&frame.completed, NULL) == 0);
     frame.actor = actor;
+    frame.continuation_handle = opaque;
     frame.continuation = continuation;
     frame.ready_future = ores_native_actor_future_open(
         group.scheduler, group.root_ref, 1);
@@ -502,13 +525,16 @@ int64_t oreslang_source_actor_await_ready(
     return result;
 }
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message && !instance->on_wire);
-    /* The source language still only permits one trusted-main submitter.
-     * Nonblocking bounded sends fail closed on overload. */
+    /* Scalar send is a trusted-main, nonblocking operation; lock the registry
+     * through its admission to prevent stop/recycle during the submission. */
+    group_lock();
+    SourceActor* instance = source_resolve_locked(opaque);
+    ensure(instance && instance->on_message && !instance->on_wire
+        && !(atomic_load_explicit(&instance->producer_gate,
+                                  memory_order_acquire) & SOURCE_PRODUCER_CLOSED));
     ensure(ores_native_actor_scheduler_send(
         group.scheduler, instance->ref, (uint64_t)payload));
+    group_unlock();
 }
 /* Peek the *canonical* schema ONLY from a detached owned wire snapshot.
  * The selected contract then validates those exact same bytes including
@@ -545,11 +571,9 @@ static int source_select_variant(const SourceActor* actor,
     }
     return 0;
 }
-/* Producer leases protect calls that have entered the send ABI before
- * trusted stop closes admission. They do NOT validate stale opaque pointers:
- * the host must fence the start of new producer calls before destruction.
- * No hot-path clock reads and no per-message polling.
- */
+/* Producer leases protect the actor after a locked token lookup. A public
+ * call never dereferences a stale/fabricated pointer; internal scheduler-owned
+ * callbacks continue to pass live SourceActor* values directly. */
 static int source_enter_producer(SourceActor* actor) {
     uint_fast64_t state = atomic_load_explicit(&actor->producer_gate,
                                                memory_order_acquire);
@@ -567,31 +591,42 @@ static void source_leave_producer(SourceActor* actor) {
         &actor->producer_gate, 1, memory_order_acq_rel);
     ensure((prior & SOURCE_PRODUCER_COUNT) != 0);
 }
+/* Resolve + pin is atomic with respect to stop's terminal gate. Even if
+ * callers race stop, the acquired lease protects actor lifetime until exit. */
+static SourceActor* source_pin_public_producer(void* opaque) {
+    group_lock();
+    SourceActor* actor = source_resolve_locked(opaque);
+    if (actor && !source_enter_producer(actor)) actor = NULL;
+    group_unlock();
+    return actor;
+}
 static int source_send_binary_unlocked(SourceActor* actor,
                                        const uint8_t* wire, size_t size,
                                        uint8_t direction);
-static int source_send_binary(SourceActor* actor,
-                              const uint8_t* wire, size_t size,
-                              uint8_t direction) {
-    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !source_enter_producer(actor))
-        return 0;
+static int source_send_binary_leased(SourceActor* actor,
+                                     const uint8_t* wire, size_t size,
+                                     uint8_t direction) {
     if (actor->upstream || actor->downstream) {
-        if (atomic_load_explicit(&group.pipeline_failure, memory_order_acquire)) {
-            source_leave_producer(actor);
+        if (atomic_load_explicit(&group.pipeline_failure, memory_order_acquire))
             return 0;
-        }
         if (direction == 0) {
             int expected = 0;
             if (actor != group.pipeline_source
                     || !atomic_compare_exchange_strong_explicit(
                         &group.pipeline_root_sent, &expected, 1,
-                        memory_order_acq_rel, memory_order_acquire)) {
-                source_leave_producer(actor);
+                        memory_order_acq_rel, memory_order_acquire))
                 return 0;
-            }
         }
     }
-    int result = source_send_binary_unlocked(actor, wire, size, direction);
+    return source_send_binary_unlocked(actor, wire, size, direction);
+}
+static int source_send_binary(SourceActor* actor,
+                              const uint8_t* wire, size_t size,
+                              uint8_t direction) {
+    /* Used only with scheduler-owned live pointers in an executing turn. */
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
+            || !source_enter_producer(actor)) return 0;
+    const int result = source_send_binary_leased(actor, wire, size, direction);
     source_leave_producer(actor);
     return result;
 }
@@ -691,17 +726,21 @@ static int source_send_binary_unlocked(SourceActor* actor,
 }
 int oreslang_source_actor_send_wire(void* opaque,
                                    const uint8_t* wire, size_t size) {
-    SourceActor* actor = opaque;
-    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC
-            || !actor->on_wire || actor->variant_count != 1) return 0;
-    return source_send_binary(actor, wire, size, 0);
+    SourceActor* actor = source_pin_public_producer(opaque);
+    if (!actor) return 0;
+    const int accepted = actor->on_wire && actor->variant_count == 1
+        && source_send_binary_leased(actor, wire, size, 0);
+    source_leave_producer(actor);
+    return accepted;
 }
 int oreslang_source_actor_send_variant(void* opaque,
                                       const uint8_t* wire, size_t size) {
-    SourceActor* actor = opaque;
-    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC || !actor->on_variant)
-        return 0;
-    return source_send_binary(actor, wire, size, 0);
+    SourceActor* actor = source_pin_public_producer(opaque);
+    if (!actor) return 0;
+    const int accepted = actor->on_variant
+        && source_send_binary_leased(actor, wire, size, 0);
+    source_leave_producer(actor);
+    return accepted;
 }
 int64_t oreslang_source_actor_tagged_i64(const uint8_t* wire, size_t size) {
     int64_t value = 0;
@@ -714,7 +753,11 @@ void oreslang_source_actor_send_variant_checked(
     // This narrow bootstrap uses terminal host error until Future<T>
     // backpressure/cancellation has a proper compiler continuation.
     if (oreslang_source_actor_send_variant(opaque, wire, size)) return;
-    if (group.pipeline_source == opaque) {
+    group_lock();
+    const int pipeline_source = group.pipeline_source
+        && group.pipeline_source->id == (uint64_t)(uintptr_t)opaque;
+    group_unlock();
+    if (pipeline_source) {
         pipeline_fail(SOURCE_PIPELINE_REJECTED_MAIL);
         return;
     }
@@ -730,12 +773,12 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
         && requested_count <= SOURCE_PIPELINE_MAX_STAGES);
     const size_t count = (size_t)requested_count;
     SourceActor* stages[SOURCE_PIPELINE_MAX_STAGES] = {0};
-    /* Snapshot all opaque refs immediately; never retain the borrowed
-     * compiler-owned stack array. The group mutex is the admission barrier. */
-    for (size_t i = 0; i < count; ++i)
-        stages[i] = (SourceActor*)opaque[i];
+    /* The stack array is borrowed only during registration. Resolve every
+     * capability while holding the registry lock: never dereference it. */
     group_lock();
     ensure(group.scheduler && !group.pipeline_source && group.pipeline_count == 0);
+    for (size_t i = 0; i < count; ++i)
+        stages[i] = source_resolve_locked(opaque[i]);
     SourceActor* const first = stages[0];
     ensure(first && first->magic == SOURCE_ACTOR_MAGIC
         && first->variant_count >= 1 && first->on_variant);
@@ -881,9 +924,12 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
  * teardown is performed by main after this routine returns. */
 int32_t oreslang_source_actor_pipeline_expect_status(void* source,
                                                     int64_t expected) {
-    SourceActor* actor = source;
-    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC) return SOURCE_PIPELINE_INVALID_ROUTE;
     group_lock();
+    SourceActor* actor = source_resolve_locked(source);
+    if (!actor) {
+        group_unlock();
+        return SOURCE_PIPELINE_INVALID_ROUTE;
+    }
     const size_t count = group.pipeline_count;
     if (group.pipeline_source != actor || count < 2
             || count > SOURCE_PIPELINE_MAX_STAGES) {
@@ -955,10 +1001,23 @@ int32_t oreslang_source_actor_pipeline_expect_status(void* source,
     return status;
 }
 void oreslang_source_actor_pipeline_cancel(void* source) {
-    /* Explicit trusted-main cancellation; an in-flight actor DATA turn can
-     * finish but subsequent hops will be rejected and stops join the pool. */
-    if (source && source == group.pipeline_source)
-        pipeline_fail(SOURCE_PIPELINE_CANCELLED);
+    /* Publish cancellation while the registry identity is still held.
+     * An old source capability cannot cancel a newly bound pipeline. */
+    group_lock();
+    SourceActor* actor = source_resolve_locked(source);
+    if (actor && actor == group.pipeline_source) {
+        int expected = SOURCE_PIPELINE_OK;
+        if (atomic_compare_exchange_strong_explicit(
+                &group.pipeline_failure, &expected, SOURCE_PIPELINE_CANCELLED,
+                memory_order_acq_rel, memory_order_acquire)) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+            fprintf(stderr, "SOURCE_PIPELINE_FAILURE code=%d\n",
+                    SOURCE_PIPELINE_CANCELLED);
+#endif
+            ensure(pthread_cond_broadcast(&group.pipeline_completed) == 0);
+        }
+    }
+    group_unlock();
 }
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
     ensure(oreslang_source_actor_pipeline_expect_status(source, expected)
@@ -966,9 +1025,9 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
 }
 
 void oreslang_source_actor_stop(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     group_lock();
+    SourceActor* instance = source_resolve_locked(opaque);
+    ensure(instance);
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.scheduler && slot < group.next_slot && group.actors[slot] == instance);
     /* Once this bit is set no new sender lease can enter. Producers that
