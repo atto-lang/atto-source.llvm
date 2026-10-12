@@ -154,6 +154,18 @@ int main() {
     foreign_release.blocks[0].operations[1].loan_id = 101;
     verify(foreign_release);
 
+    // Token zero is the unique legacy entry-loan identity, not a value
+    // that an independently executed branch may mint.
+    Graph forged_entry;
+    forged_entry.entry = {{"x", cell(kOwned)}};
+    forged_entry.blocks = {{{op(Kind::BorrowShared, "x"), op(Kind::ReleaseShared, "x")}, {}}};
+    forged_entry.blocks[0].operations[0].loan_id = 0;
+    assert(rejected([&] { verify(forged_entry); }));
+    forged_entry.blocks[0].operations = {
+        {Kind::BorrowExclusive, "x", 0}, {Kind::ReleaseExclusive, "x", 0}
+    };
+    assert(rejected([&] { verify(forged_entry); }));
+
     // Two simultaneously borrowed shared loans need explicit release IDs.
     Graph anonymous_release;
     anonymous_release.entry = {{"x", cell(kOwned)}};
