@@ -30,13 +30,23 @@ NEGATIVE_CASES = {
 
 
 def invoke(compiler, directory, case, source, target=None):
-    path = pathlib.Path(directory) / (case + ".ores")
+    # Give every fixture an isolated working directory. A reject result may
+    # emit an .ll, .bc or binary file without printing IR to stdout: that
+    # violates closed-world AOT admission even when the exit status is nonzero.
+    workdir = pathlib.Path(directory) / case
+    workdir.mkdir()
+    path = workdir / "input.ores"
     path.write_text(source, encoding="utf-8")
-    command = [compiler]
+    command = [str(pathlib.Path(compiler).resolve())]
     if target:
         command.append("--target=" + target)
     command.append(str(path))
-    return subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
+    result = subprocess.run(command, cwd=workdir,
+                            capture_output=True, text=True, check=False, timeout=15)
+    emitted = sorted(str(item.relative_to(workdir))
+                     for item in workdir.rglob("*")
+                     if item.is_file() and item != path)
+    return result, emitted
 
 
 def main():
@@ -46,7 +56,7 @@ def main():
     failures = []
     with tempfile.TemporaryDirectory(prefix="oreslang-aot-attributes-") as directory:
         for target in ("host", "wasm32"):
-            good = invoke(args.compiler, directory, "control_" + target,
+            good, _good_files = invoke(args.compiler, directory, "control_" + target,
                           "// @derive(Eq) in comments is not active metadata\n"
                           + "/* macro_rules! fake { () => { 42 }; } */\n" + BASE,
                           target)
@@ -54,11 +64,14 @@ def main():
                 failures.append("positive control failed for " + target +
                                 ": " + good.stderr[:350])
             for label, source in NEGATIVE_CASES.items():
-                result = invoke(args.compiler, directory, label + "_" + target, source, target)
+                result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
                 if result.returncode == 0:
                     failures.append(label + "/" + target + " accepted unsupported syntax")
                 if result.stdout.strip():
                     failures.append(label + "/" + target + " emitted IR on rejected source")
+                if emitted:
+                    failures.append(label + "/" + target
+                                    + " wrote artifacts on rejected source: " + ", ".join(emitted))
                 if not result.stderr.strip():
                     failures.append(label + "/" + target + " gave no rejection diagnostic")
     if failures:
