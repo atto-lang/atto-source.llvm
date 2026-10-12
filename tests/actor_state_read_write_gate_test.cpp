@@ -1,5 +1,6 @@
 #include "oreslang/runtime/ActorStateReadWriteGate.hpp"
 
+#include <atomic>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -123,6 +124,35 @@ int main() {
     for (const auto& request : reads) {
         CHECK(request.admission == Gate::Admission::acquired);
         CHECK(gate.release(request.token).empty());
+    }
+
+    // Concurrency stress: queued cancellation may race a release/handoff.
+    // Every one-shot token must reach a terminal state without a stuck owner.
+    {
+        Gate race;
+        std::atomic<int> errors{0};
+        std::vector<std::thread> workers;
+        for (int t = 0; t < 8; ++t) {
+            workers.emplace_back([&, t] {
+                for (int i = 0; i < 256; ++i) {
+                    try {
+                        const auto mode = (i + t) % 3 == 0
+                                ? Gate::Mode::Write : Gate::Mode::Read;
+                        auto req = race.request(mode);
+                        // This is either normal release or a queued cancel.
+                        // The other thread may hand off a ticket meanwhile.
+                        (void)race.release(req.token);
+                    } catch (...) {
+                        errors.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            });
+        }
+        for (auto& worker : workers) worker.join();
+        CHECK(errors.load(std::memory_order_relaxed) == 0);
+        CHECK(race.waiting() == 0);
+        CHECK(race.active_readers() == 0);
+        CHECK(race.retire().empty());
     }
 
     const auto terminal = gate.request(Gate::Mode::Read);
