@@ -260,27 +260,46 @@ private:
         result.name = identifier();
         require("as");
         std::unordered_set<std::string> seen;
-        // Only plain, ordered i64 fields are admitted: no nested objects,
-        // pointers, destructors, user initializers or implicit heap storage.
+        // Ordered i64 scalar slots and owned Array<int> handles only.
+        // No nested class, arbitrary initializer, method, or pointer escape.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
             require("let");
-            require("int");
             ClassField field;
-            field.name = identifier();
-            if (!seen.insert(field.name).second)
-                fail("duplicate class field '" + field.name + "'");
-            require("=");
-            if (token_.kind != Kind::Integer)
-                fail("class field requires i64 literal initializer");
-            field.initial = integer_literal();
+            if (accept("mut")) {
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                field.int_array = true;
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                require("new");
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                require("(");
+                require(")");
+            } else {
+                require("int");
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                if (token_.kind != Kind::Integer)
+                    fail("class field requires i64 literal initializer");
+                field.initial = integer_literal();
+            }
             require(";");
             result.fields.push_back(std::move(field));
         }
-        if (result.fields.empty()) fail("native class requires at least one i64 field");
+        if (result.fields.empty()) fail("native class requires at least one field");
         require("end");
         return result;
     }
@@ -815,12 +834,13 @@ private:
                 } while (accept(","));
                 require(")");
             }
-        } else if (accept(".")) {
+        }
+        // Class-owned array expressions are intentionally limited to one
+        // field selection followed by a native array method or .size.
+        while (accept(".")) {
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
-            // A method call is distinct from a field access. The ownership
-            // pass admits only get in value position, and add/set as effects.
             if (accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
@@ -831,6 +851,7 @@ private:
                 }
             }
             expr = std::move(field);
+            if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
     }
