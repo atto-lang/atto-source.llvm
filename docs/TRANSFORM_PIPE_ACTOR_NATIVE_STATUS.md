@@ -45,11 +45,13 @@ a runner (runner_id=0), so no source-org green status is claimed.
 
 ## Not yet supported
 
-- The combined `state { value: int = 0; }` and scoped
-  `self.handle_state(critical |state| -> { ... })` example is **not**
-  lowered by this restricted LLVM bootstrap compiler. Executable fixtures
-  currently use actor-owned scalar `let` fields. Do not treat the proposal
-  in `TRANSFORM_PIPE_ACTOR_PROPOSAL.ores` as runnable yet.
+- Fixed-key `state { value: int = 0; }` and synchronous scoped
+  `self.handle_state(critical |state| -> { ... })` **now execute** in the
+  restricted native tagged receive arm. The callback returns a copied int;
+  state references cannot escape. All three 15-actor fixtures use this
+  contract. Native compilation currently supports fixed int keys only,
+  not general state maps, ordinary-method callbacks, read/write loan
+  upgrades or suspension-aware state access.
 - This implementation only supports one nominal ingress/output domain per
   direction, not distinct forward-in/forward-out/backward-in/backward-out
   ports; four-port transformations remain to be specified.
@@ -59,8 +61,8 @@ a runner (runner_id=0), so no source-org green status is claimed.
 - Bounded one-flow synchronous native output is not general guest async
   `Future<T>` backpressure, arbitrary streams, correlated responses, or
   a guarantee that state loans can cross an `await` boundary.
-- Keep the PR in draft until Java compilation/dispatch, scoped state lowering,
-  release CI and cross-backend semantic conformance are verified.
+- Keep the PR in draft until Java runtime dispatch, general state loans,
+  full release CI and cross-backend semantic conformance are verified.
 
 ## Final hardening audit: destination, ingress, evidence (2026-10-12)
 
@@ -92,3 +94,22 @@ Git blobs were verified before compiler/native builds.
 This is a focused **subset** gate, not full head CMake/CTest or a
 Java/GraalVM executable pipeline. The source repository still lacks
 allocated runner minutes; the private funded repo carries test only.
+
+## Canonical state milestone — October 12, 2026
+
+The new actor-data rule is enforced by the restricted native compiler:
+actors may declare methods and at most one fixed-key state map, **not** ordinary
+class `let`/`val`/`const` instance fields. Method-only actors are valid.
+Every compiled state update executes in a scoped critical callback; a primitive
+i64 scalar is copied from the callback to the outer arm. The source root actor
+can return that copied scalar from an exhaustive tagged match via an LLVM PHI,
+without exposing the state loan. Direct class mutation, duplicate maps, unknown
+state keys, unscoped reads, and state reference escapes have negative fixtures.
+
+[Funded exact-source GitHub Actions #38311796992](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38311796992)
+passed **24/24 focused CTests**. These include three complete compiled
+15-actor forward/backward pipelines (five repeats each), native Clang
+ASan/UBSan, optimized-Python negative canary, six new state isolation
+rejection gates, method-only actor acceptance, and prior directional domain
+rejections. This is not yet full-tree native suite validation. See
+`docs/ACTOR_STATE_INVARIANT.md` for the exact restriction and release limits.
