@@ -50,7 +50,8 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int"
+        "gpu", "quantum", "over", "structural", "int", "pure",
+        "using", "requires", "serial"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -136,6 +137,10 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("serial")) {
+                require("actor");
+                fail("native serial actor requires shared HTTP/message lane lowering");
+            }
             if (accept("module")) {
                 program.module = identifier();
                 accept("as");
@@ -149,6 +154,10 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("serial")) {
+                    require("actor");
+                    fail("native serial actor requires shared HTTP/message lane lowering");
+                }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'class' or 'actor'");
@@ -170,6 +179,9 @@ private:
         actor.name = identifier();
         require("as");
         const bool braced = accept("{");
+        if (token_.text == "state") {
+            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
+        }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
             if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
@@ -280,6 +292,9 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        if (token_.text == "pure") {
+            fail("native pure modifier awaits transitive observable-effect verification");
+        }
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
         if (token_.text == "gpu" || token_.text == "quantum") {
@@ -314,6 +329,26 @@ private:
         require(":");
         value.returns_void = accept("void");
         if (!value.returns_void) require("int");
+        if (accept("using")) {
+            value.has_declared_effects = true;
+            do {
+                std::string name = identifier();
+                if (accept(".")) name += "." + identifier();
+                FunctionEffect effect;
+                try { effect = FunctionEffects::parse(name); }
+                catch (const std::invalid_argument&) {
+                    fail("unknown function effect '" + name + "'");
+                }
+                const auto bit = static_cast<std::uint32_t>(effect);
+                if (value.declared_effects.bits & bit)
+                    fail("duplicate function effect '" + name + "'");
+                value.declared_effects.bits |= bit;
+            } while (accept(","));
+        }
+        if (accept("requires")) {
+            // Never accept an uncertified realtime property as a mere annotation.
+            fail("native requires clause awaits verified WCET/allocation/blocking analysis");
+        }
         require("{");
         while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
             LocalBinding binding;
@@ -744,6 +779,43 @@ private:
         throw std::runtime_error("internal invalid expression kind");
     }
 
+    static bool contains_callable_invocation(const Expression* expr) {
+        if (!expr) return false;
+        if (expr->kind == Expression::Kind::Call) return true;
+        if (contains_callable_invocation(expr->left.get()) ||
+            contains_callable_invocation(expr->right.get())) return true;
+        for (const auto& item : expr->arguments)
+            if (contains_callable_invocation(item.get())) return true;
+        return false;
+    }
+
+    static void validate_declared_effects(const Function& fn) {
+        if (!fn.has_declared_effects) return;
+        if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
+                || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
+            throw std::runtime_error(
+                "using effects on actor actions requires trusted actor effect summaries");
+        }
+        for (const auto& local : fn.locals) {
+            if (local.heap_owned && !fn.declared_effects.has(FunctionEffect::Alloc))
+                throw std::runtime_error(
+                    "owned allocation violates using signature without alloc");
+            if (contains_callable_invocation(local.initializer.get()))
+                throw std::runtime_error(
+                    "using effects require transitive call summaries");
+        }
+        for (const auto& stmt : fn.statements)
+            if (contains_callable_invocation(stmt.expression.get()))
+                throw std::runtime_error("using effects require transitive call summaries");
+        for (const auto& guard : fn.early_returns)
+            if (contains_callable_invocation(guard.lhs.get()) ||
+                contains_callable_invocation(guard.rhs.get()) ||
+                contains_callable_invocation(guard.result.get()))
+                throw std::runtime_error("using effects require transitive call summaries");
+        if (contains_callable_invocation(fn.result.get()))
+            throw std::runtime_error("using effects require transitive call summaries");
+    }
+
     static void validate(const Program& program) {
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
@@ -752,6 +824,7 @@ private:
         }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
+            validate_declared_effects(fn);
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
                 throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
                                          + std::to_string(fn.offset));
