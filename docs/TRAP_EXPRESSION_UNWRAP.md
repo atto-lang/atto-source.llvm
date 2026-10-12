@@ -102,8 +102,9 @@ an `Option` happens to be expected.
 This rule applies **before** trap classification, including synchronous
 `try/catch/finally`, suspended source-task `try/catch/finally`, `defer`
 stacks, and mutex-guard release. Run all cleanup, but retain the strongest
-in-flight failure and attach lesser failures as suppressed diagnostics.
-A `finally` cast error may not erase an earlier panic/cancellation,
+in-flight failure and attach lesser failures as suppressed diagnostics,
+with a finite diagnostic budget so untrusted code cannot produce an unbounded
+list of failing defers. A `finally` cast error may not erase an earlier panic/cancellation,
 and a `finally` or `defer` panic outranks an earlier ordinary cast error.
 Unknown host/internal failures are not ordinary merely because cleanup
 encounters them.
