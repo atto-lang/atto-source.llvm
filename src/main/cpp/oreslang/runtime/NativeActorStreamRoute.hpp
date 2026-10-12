@@ -154,6 +154,13 @@ public:
 
     void fail() noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
+        // Successful whole-pipeline completion is a terminal observation:
+        // no actor remains alive to report a new failure. A delayed or
+        // duplicate failure event must not revoke a success already
+        // established by the final scheduler-owned physical DONE receipt.
+        // Whichever event first crosses this mutex is the terminal winner.
+        if (!aborted_ && done_count_ == actors_.size() &&
+            phase_ == 2 * actors_.size()) return;
         aborted_ = true;
     }
 

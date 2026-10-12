@@ -57,8 +57,50 @@ static void roundtrip(std::size_t n) {
     check(route.done() == Route::Done::Succeeded, "complete roundtrip not acknowledged");
     rejected([&] { route.physical_done(a[0], true); });
 }
+
+static void advance_to(Route& route, const std::vector<std::uint64_t>& a,
+                       std::size_t target, const std::string& domain) {
+    const auto n = a.size();
+    if (target >= 1) route.commit_published(route.claim_root(a[0], domain));
+    for (std::size_t i = 0; i < n - 1 && route.phase() < target; ++i) {
+        auto claim = route.claim_directional(a[i], i ? a[i-1] : 0,
+            Route::Direction::Forward, domain);
+        route.commit_published(claim);
+    }
+    for (std::size_t i = n - 1; i > 0 && route.phase() < target; --i) {
+        auto claim = route.claim_directional(a[i],
+            i == n - 1 ? a[i-1] : a[i+1],
+            Route::Direction::Backward, domain);
+        route.commit_published(claim);
+    }
+    if (route.phase() < target) route.complete_source(a[0], a[1]);
+    check(route.phase() == target, "failed to construct requested phase");
+}
+static void physical_done_phase_matrix(std::size_t n) {
+    const auto a = ids(n);
+    for (std::size_t pos = 0; pos < n; ++pos) {
+        const std::size_t required = pos ? 2*n-pos : 2*n;
+        for (std::size_t phase = 0; phase <= 2*n; ++phase) {
+            Route route(a, "closed-domain");
+            advance_to(route, a, phase, "closed-domain");
+            route.physical_done(a[pos], true);
+            check(route.done() == (phase < required
+                  ? Route::Done::Failed : Route::Done::Pending),
+                  "premature physical DONE threshold mismatch");
+            check(!route.fenced(a[pos]),
+                  "completed stage retained its own admission fence");
+            for (std::size_t peer = 0; peer < n; ++peer)
+                if (peer != pos)
+                    check(route.fenced(a[peer]),
+                          "stage DONE unregistered a live sibling's fence");
+        }
+    }
+}
 int main() {
-    for (auto n: {2u, 3u, 4u, 15u, 16u}) roundtrip(n);
+    for (auto n: {2u, 3u, 4u, 15u, 16u}) {
+        roundtrip(n);
+        physical_done_phase_matrix(n);
+    }
     for (auto n: {1u, 17u}) {
         try { Route invalid(ids(n), "PipeMessages"); }
         catch (const std::invalid_argument&) { continue; }
@@ -192,6 +234,57 @@ int main() {
         rejected([&] { route.reject_prepublication(pending); });
         check(route.phase() == 0 && route.done() == Route::Done::Failed,
               "terminal failure was undone by a late publication");
+    }
+
+    // Terminal success cannot be revoked by a delayed post-DONE failure
+    // notification. Before the final DONE, any failure remains fatal.
+    {
+        auto a = ids(3);
+        Route finished(a, "domain");
+        advance_to(finished, a, 6, "domain");
+        for (auto actor : a) finished.physical_done(actor, true);
+        check(finished.done() == Route::Done::Succeeded,
+              "missing terminal success");
+        finished.fail();
+        check(finished.done() == Route::Done::Succeeded,
+              "late failure revoked already-published whole-route success");
+
+        Route incomplete(a, "domain");
+        advance_to(incomplete, a, 6, "domain");
+        incomplete.physical_done(a[0], true);
+        incomplete.physical_done(a[2], true);
+        incomplete.fail();
+        incomplete.physical_done(a[1], true);
+        check(incomplete.done() == Route::Done::Failed,
+              "failure before final DONE was incorrectly ignored");
+    }
+    // Serialized final-DONE versus failure race must yield one stable
+    // terminal answer, not success followed by failure.
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        auto a = ids(3);
+        Route route(a, "domain");
+        advance_to(route, a, 6, "domain");
+        route.physical_done(a[0], true);
+        route.physical_done(a[2], true);
+        std::atomic<bool> start{false};
+        std::thread done_worker([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            route.physical_done(a[1], true);
+        });
+        std::thread fail_worker([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            route.fail();
+        });
+        start.store(true, std::memory_order_release);
+        done_worker.join();
+        fail_worker.join();
+        auto result = route.done();
+        check(result == Route::Done::Failed ||
+              result == Route::Done::Succeeded,
+              "physical-DONE/failure race stayed pending");
+        route.fail();
+        check(route.done() == result,
+              "terminal state changed after finalization/failure race");
     }
     // One publisher owns the claim; concurrent contenders cannot obtain
     // duplicate route authority while the first claim is pending.
