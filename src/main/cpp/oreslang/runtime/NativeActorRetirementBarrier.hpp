@@ -62,6 +62,25 @@ public:
         return state_->entries.size();
     }
 
+    /**
+     * Trusted supervisor ONLY, following an independently verified shutdown
+     * of the entire native isolation domain. Never infer that proof from a
+     * deadline or a FAILED resource closer. Drops retained callback captures
+     * but does NOT retry any closer. Tests call this after all fake callback
+     * producers have been disabled, so LeakSanitizer can verify the success
+     * and failure test paths without mistaking safety quarantine for leaks.
+     */
+    void release_after_verified_isolate_shutdown() {
+        std::vector<std::shared_ptr<ActorResourceRegistry>> retired;
+        {
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            retired.swap(state_->entries);
+        }
+        // Destruct outside the quarantine mutex: RAII destructors may enter
+        // other host locks, and must never observe this mutex held.
+    }
+
+
 private:
     struct State {
         mutable std::mutex mutex;
