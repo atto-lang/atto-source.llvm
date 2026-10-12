@@ -681,6 +681,13 @@ private:
     }
 
     std::string identifier() {
+        // SelectPlan and SelectCase are source-level linear ownership
+        // capabilities, never ordinary scalar/class identifiers. Reject
+        // their native use explicitly; generic parser errors are not a
+        // trustworthy compiler admission boundary.
+        if (token_.text == "SelectPlan" || token_.text == "SelectCase")
+            fail("native SelectPlan/SelectCase ownership unsupported: "
+                 "linear case tickets, cancellation and scheduler lowering required");
         if (token_.text == "ActorGroup" ||
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
