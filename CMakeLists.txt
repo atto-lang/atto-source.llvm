@@ -579,6 +579,19 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+    # The native frontend may recognize a sealed actor state AST, but
+    # may not lower it as legacy scalar actor fields before effect/loan proof.
+    add_executable(oreslang-actor-sealed-state-frontend-test
+        tests/actor_sealed_state_frontend_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-actor-sealed-state-frontend-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-sealed-state-frontend-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_state_ast_fail_closed
+        COMMAND oreslang-actor-sealed-state-frontend-test)
+    set_tests_properties(native_actor_state_ast_fail_closed PROPERTIES TIMEOUT 20)
     add_executable(oreslang-actor-state-rw-gate-test tests/actor_state_read_write_gate_test.cpp)
     target_include_directories(oreslang-actor-state-rw-gate-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
