@@ -37,6 +37,13 @@ int main() {
         if (nested.module != "Entry" || nested.imports.size() != 1)
             throw std::runtime_error("wrapped canonical import metadata missing");
 
+        auto prelude = oreslang::parse_program(
+            "import module Assert from \"std/assert\"; "
+            "define module Entry as "
+            "pub fnc main(): int { return 42; } end");
+        if (prelude.module != "Entry" || prelude.imports.size() != 1)
+            throw std::runtime_error("file-level import prelude metadata missing");
+
         expect_rejected(
             "import module Evil from \"std/assert\"; "
             "pub fnc main(): int { return 0; }",
