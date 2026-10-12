@@ -525,7 +525,20 @@ private:
                      * The literal is encoded at compile time, never cast
                      * into an actor's scalar i64 mail channel. */
                     if (accept("(")) {
-                        send.payload = expression();
+                        // Stage 1: a real source-level *nullary* inner enum
+                        // constructor. Any other payload expression is still
+                        // lowered through the existing typed scalar path.
+                        Lexer nested_probe = lexer_;
+                        Token nested_next = nested_probe.next();
+                        if (token_.kind == Kind::Identifier && !reserved(token_.text)
+                                && nested_next.text == ".") {
+                            const std::string owner = identifier();
+                            require(".");
+                            send.nested_tagged_variant = owner + "." + identifier();
+                            if (accept("(")) require(")");
+                        } else {
+                            send.payload = expression();
+                        }
                         require(")");
                     }
                 } else {
@@ -1176,8 +1189,31 @@ private:
                         if (!member->has_payload) {
                             if (send.payload)
                                 throw std::runtime_error("payloadless enum send has arguments");
+                        } else if (member->payload.kind == MessageShape::Kind::EnumRef) {
+                            // One-level nominal values are compiled as an
+                            // exact checked v2 frame, never as scalar/i64
+                            // or a caller-supplied heap pointer.
+                            if (send.payload || send.nested_tagged_variant.empty())
+                                throw std::runtime_error(
+                                    "LLVM nested enum send requires a nullary inner enum constructor");
+                            const auto innerDot = send.nested_tagged_variant.find('.');
+                            if (innerDot == std::string::npos ||
+                                member->payload.nominal_name !=
+                                    send.nested_tagged_variant.substr(0, innerDot))
+                                throw std::runtime_error("nested enum owner does not match declared payload");
+                            const auto found = enumNames.find(member->payload.nominal_name);
+                            if (found == enumNames.end())
+                                throw std::runtime_error("unknown nested enum owner");
+                            const auto variantName = send.nested_tagged_variant.substr(innerDot + 1);
+                            const auto inner = std::find_if(found->second->cases.begin(),
+                                found->second->cases.end(), [&](const EnumCase& x) {
+                                    return x.name == variantName;
+                                });
+                            if (inner == found->second->cases.end() || inner->has_payload)
+                                throw std::runtime_error(
+                                    "LLVM nested send requires a declared nullary enum child");
                         } else if (member->payload.kind != MessageShape::Kind::Integer
-                                   || !send.payload
+                                   || !send.payload || !send.nested_tagged_variant.empty()
                                    || send.payload->kind != Expression::Kind::Integer
                                    || send.payload->integer < 0
                                    || send.payload->integer > INT32_MAX) {
@@ -1212,7 +1248,8 @@ private:
                         method->parameters.size() != 1)
                         throw std::runtime_error("actor send requires pub on_message(int)");
                 }
-                validate_expression(*send.payload, available, functions);
+                if (send.payload)
+                    validate_expression(*send.payload, available, functions);
             }
             validate_expression(*fn.result, available, functions);
             for (const auto& name : fn.actor_stops) {
@@ -1461,9 +1498,10 @@ private:
                         });
                     if (it == owner->cases.end()
                             || (it->has_payload
-                                && it->payload.kind != MessageShape::Kind::Integer))
+                                && it->payload.kind != MessageShape::Kind::Integer
+                                && it->payload.kind != MessageShape::Kind::EnumRef))
                         throw std::runtime_error(
-                            "LLVM tagged source subset requires payloadless or int cases");
+                            "LLVM tagged source subset requires payloadless, int or nested enum cases");
                 }
                 const auto receiver = std::find_if(actor.methods.begin(),
                     actor.methods.end(), [](const Function& f) { return f.is_receiver; });
