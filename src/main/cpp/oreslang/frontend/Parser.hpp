@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -136,8 +137,17 @@ struct Function {
     bool has_declared_effects = false;
 };
 
+/* Deliberately not ActorDecl.fields: sealed state has a different
+ * ownership and access capability and must never flow through legacy
+ * actor scalar-field codegen or inheritance/member resolution.
+ */
+struct ActorSealedState {
+    std::vector<LocalBinding> fields;
+};
+
 struct ActorDecl {
     std::string name;
+    std::optional<ActorSealedState> sealed_state; // syntax only until verified lowering
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
