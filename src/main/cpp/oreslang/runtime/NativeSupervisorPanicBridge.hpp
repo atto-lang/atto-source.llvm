@@ -388,6 +388,11 @@ public:
         if (durable_journal_)
             throw std::logic_error(
                 "durable receipts require external-proof-bound reconciliation");
+        // In durable mode a scheduler-only ACK would leave the disk receipt
+        // CLAIMED, bypassing the external-proof/ACK state machine.
+        if (durable_journal_)
+            throw std::logic_error(
+                "durable terminal effect requires journal-bound reconciliation");
         if (!verify_committed_effect
                 || original_parent.scheduler_domain != parent_.scheduler_domain
                 || original_parent.actor_slot != parent_.actor_slot
@@ -428,6 +433,72 @@ public:
     }
 
 public:
+    /**
+     * Trusted host reconciliation of a durable terminal effect. The journal's
+     * fsync'd external proof must precede the final host ACK, even when the
+     * scheduler has already ACKed CONTROL enqueue (not effect execution).
+     * Never reenters SupervisorProcess::accept or reruns its policy/sink.
+     *
+     * A crash-stranded effect_proven record can be ACKed without rerunning
+     * its verifier. The host may instead reopen the journal after a process
+     * crash and ACK directly, since the in-memory scheduler no longer exists.
+     * A CLAIMED record is never sufficient evidence by itself.
+     */
+    bool reconcile_durable_terminal_effect(
+            const ExternalEffectProof& proof,
+            const std::function<bool(const ExternalEffectProof&)>&
+                verify_committed_effect) {
+        if (!durable_journal_)
+            throw std::logic_error("durable journal not installed");
+        const auto& w = proof.key.words;
+        if (!proof.key.valid() || !proof.nonce
+                || w[0] != process_->supervisor_id()
+                || w[1] != process_->runtime_id()
+                || w[2] != parent_.scheduler_domain
+                || w[3] != parent_.actor_slot
+                || w[4] != parent_.generation
+                || w[5] != parent_.scheduler_domain)
+            throw std::logic_error("foreign durable terminal receipt identity");
+
+        const OresNativeActorRef child{w[5], w[6], w[7]};
+        OresNativeTerminalReceipt receipt{};
+        if (!ores_native_actor_scheduler_terminal_receipt(
+                scheduler_, parent_, child, &receipt)
+                || (receipt.status != ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+                    && receipt.status != ORES_NATIVE_TERMINAL_RECEIPT_ACKNOWLEDGED)
+                || receipt.failure.kind != w[8]
+                || receipt.failure.failure_code != w[9]
+                || receipt.failure.correlation != w[10])
+            throw std::logic_error("no matching scheduler terminal claim");
+
+        const auto before = durable_journal_->inspect(proof.key);
+        if (before.nonce != proof.nonce)
+            throw std::logic_error("stale durable terminal nonce");
+        if (before.phase == DurableTerminalPhase::claimed) {
+            if (!durable_journal_->prove_external_effect(
+                    proof, verify_committed_effect)) return false;
+        } else if (before.phase != DurableTerminalPhase::effect_proven
+                   && before.phase != DurableTerminalPhase::acknowledged) {
+            throw std::logic_error("durable terminal effect is not proven");
+        }
+        const auto proven = durable_journal_->inspect(proof.key);
+        if (proven.nonce != proof.nonce
+                || proven.external_evidence_sha256 != proof.evidence_sha256)
+            throw std::logic_error("durable external proof changed");
+        if (proven.phase == DurableTerminalPhase::acknowledged) {
+            if (receipt.status == ORES_NATIVE_TERMINAL_RECEIPT_ACKNOWLEDGED)
+                return false; // completed duplicate; no effect replay
+        } else {
+            durable_journal_->acknowledge(proof); // fsync before scheduler ACK
+        }
+        if (receipt.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+            && !ores_native_actor_scheduler_ack_terminal_receipt(
+                   scheduler_, receipt))
+            throw std::logic_error(
+                "durable terminal ACK persisted but scheduler receipt changed");
+        return true;
+    }
+
     /**
      * Trusted host wiring for the verified source installer. A source STOP
      * policy must share this exact registry with its scheduler panic bridge:
