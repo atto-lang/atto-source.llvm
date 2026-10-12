@@ -30,10 +30,21 @@ struct LocalBinding {
     std::size_t offset = 0;
 };
 
+// One explicitly typed equality guard leading to a return. All locals are
+// initialized before guards, so both the taken and fall-through paths own the
+// same set of lexical bindings. Branch-local owners are not yet admitted.
+struct GuardedReturn {
+    std::unique_ptr<Expression> lhs;
+    std::unique_ptr<Expression> rhs;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
     std::vector<LocalBinding> locals;
+    std::vector<GuardedReturn> early_returns;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;

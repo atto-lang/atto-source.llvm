@@ -1,0 +1,10 @@
+// A skipped early return must reach the ordinary final return and drop once.
+pub fnc main(): int {
+  const a: owned int = 6;
+  val b: owned int = 7;
+  if (a == 9) {
+    return 1;
+  }
+  fi
+  return a * b;
+}

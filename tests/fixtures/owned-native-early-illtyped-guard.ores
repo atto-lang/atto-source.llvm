@@ -1,0 +1,9 @@
+// Only explicit int == int comparisons have a well-typed bool result.
+pub fnc main(): int {
+  const a: owned int = 6;
+  if (a) {
+    return 42;
+  }
+  fi
+  return 0;
+}

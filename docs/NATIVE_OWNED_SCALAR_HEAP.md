@@ -38,9 +38,16 @@ the region-close guard to abort instead.
 - Only `owned int` works. No user class, struct, destructor body, field,
   array, string, aliasing native pointer, borrow across await, exception or
   cancellation is accepted by this compiler subset.
-- The compiler currently supports one ordinary return at function end, so
-  cleanup is complete for **supported paths** only. Expand lifetime insertion
-  to every CFG exit before adding early returns, throws, `trap` and `await`.
+- The compiler now also admits a **restricted early-return CFG** after all
+  scalar local bindings are initialized: `if (int_expr eq int_expr) {
+  return int_expr; } fi`, repeated zero or more times before the mandatory
+  final `return`. Every admitted exit computes its result then drops ALL
+  initialized owned scalar bindings in reverse order and closes the lexical
+  native region. The current branch has no conditional locals, nested blocks,
+  `else`, mutation, exceptional unwind, `throw`, `panic`, `defer`,
+  `trap`, `await` or cancellation lowering. Unsupported source must reject
+  without emitting LLVM IR. Partial initialization/drop flags and general
+  CFG cleanup remain future work; this is not general source-level RAII.
 - Native `calloc/free` may contend or page fault; *zero tracing-GC pauses*
   is not a claim of constant-time allocation or general real-time execution.
 - Native code outside this compiler-generated guest ABI must be independently
@@ -52,3 +59,29 @@ The funded exact-source test mirror builds Release LLVM CMake, runs all 43
 CTest contracts, including native execution of nested owned regions, validates
 compiler rejection of unsupported types, and inspects IR for reverse drops,
 closure and absence of tracing-GC statepoints.
+
+## Guarded early-return example (experimental)
+
+```oreslang
+pub fnc main(): int {
+  const a: owned int = 6;
+  val b: owned int = 7;
+  if (a eq 6) {
+    return a * b; // native drop(b), drop(a), close(region), return 42
+  }
+  fi
+  return 0;       // also emits drop(b), drop(a), close(region)
+}
+```
+
+The guard compares two `int` expressions using canonical `eq` or the
+compatible `==` alias, and requires the Java-compatible `fi` terminator.
+It does not
+permit integer truthiness or arbitrary boolean constructs. Runtime tests must
+exercise the taken, not-taken and chained paths, verify all per-path drop/close
+calls, and reject branch-local ownership or missing final returns before LLVM IR
+emission. Native ABI `close` refuses live objects, providing an executable
+check against omitted drop calls in the accepted slice.
+
+These fixtures are designed as a bounded stepping stone to an explicit
+control-flow ownership/dataflow pass, not a replacement for one.

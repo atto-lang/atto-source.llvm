@@ -1,0 +1,8 @@
+// No implicit fallthrough: the early guard can be false.
+pub fnc main(): int {
+  const a: owned int = 6;
+  if (a == 6) {
+    return a * 7;
+  }
+  fi
+}
