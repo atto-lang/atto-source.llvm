@@ -202,7 +202,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_unadmitted_core_assert_import
         unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
     oreslang_contract_test(reject_unadmitted_nested_core_assert_import
-        unsupported-core-assert-nested-import.ores --diagnostic "native module imports are unsupported")
+        unsupported-core-assert-nested-import.ores --diagnostic "native module imports must precede declarations")
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
