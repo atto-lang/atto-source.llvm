@@ -290,7 +290,7 @@ if(BUILD_TESTING)
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
             --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
             --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19"
-            --pipeline-three-actor-summary)
+            --pipeline-three-actor-summary --pipeline-context-summary)
     endif()
     oreslang_contract_test(source_actor_send_ir source-actor-send.ores
         --ir "oreslang_source_actor_send")
