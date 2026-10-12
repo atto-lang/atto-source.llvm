@@ -140,6 +140,14 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
+    // A parsed import is not a linked module. Reject before constructing an
+    // LLVM module or exporting a symbol until the source-owned stdlib ABI
+    // (Any, bool, typed failure, trap) is executable on this backend.
+    if (!source.imports.empty()) {
+        throw std::runtime_error(
+            "native module imports are unsupported until linked stdlib "
+            "and typed assertion/trap lowering are implemented");
+    }
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
     // Its state lives in private Wasm globals owned by exactly one Worker.
