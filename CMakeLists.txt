@@ -67,6 +67,14 @@ if(BUILD_TESTING)
                 --node "${ORE_NODE}"
                 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_tests_properties(wasm32_source_class_ownership_runtime PROPERTIES TIMEOUT 240)
+        add_test(NAME wasm32_compiler_generated_source_actor_state
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_source_actor_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --node "${ORE_NODE}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/wasm32-source-actor-counter.ores")
+        set_tests_properties(wasm32_compiler_generated_source_actor_state PROPERTIES TIMEOUT 120)
     endif()
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
