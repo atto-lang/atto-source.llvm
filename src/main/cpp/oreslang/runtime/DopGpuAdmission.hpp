@@ -12,7 +12,7 @@ namespace oreslang::dop {
 // Trusted-provider descriptor. Byte length alone never establishes whether
 // storage is AoS, SoA or AoSoA; an equal-size, wrong-layout buffer is invalid.
 struct DeviceBuffer {
-    Plan layout;
+    const Plan layout; // immutable after binding; no concurrent shape substitution
     gpu::BufferFence& fence;
 
     DeviceBuffer(Plan shape, gpu::BufferFence& owner)
