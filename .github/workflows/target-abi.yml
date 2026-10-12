@@ -31,3 +31,7 @@ jobs:
             -fsanitize=thread -fno-omit-frame-pointer -pthread -I src/main/cpp \
             tests/dop_hostbuffer_concurrency_test.cpp -o "$tempdir/dop-tsan"
           "$tempdir/dop-tsan"
+          g++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=thread -fno-omit-frame-pointer -pthread -I src/main/cpp \
+            tests/gpu_buffer_fence_test.cpp -o "$tempdir/gpu-fence-tsan"
+          "$tempdir/gpu-fence-tsan"
