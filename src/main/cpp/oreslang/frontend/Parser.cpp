@@ -52,7 +52,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial"
+        "using", "requires", "serial", "critical-read", "critical-write", "transform-pipe", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -93,6 +93,25 @@ public:
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+            // Do not legalize '-' in names or reinterpret subtraction. Only
+            // exact whitelisted compound keyword spellings consume a hyphen.
+            const auto first = source_.substr(start, at_ - start);
+            std::string_view second;
+            if (first == "critical") {
+                if (source_.substr(at_, 5) == "-read") second = "read";
+                else if (source_.substr(at_, 6) == "-write") second = "write";
+            } else if (first == "transform" && source_.substr(at_, 5) == "-pipe") {
+                second = "pipe";
+            } else if (first == "nb" && source_.substr(at_, 7) == "-select") {
+                second = "select";
+            }
+            if (!second.empty()) {
+                const auto end = at_ + 1 + second.size();
+                if (end == source_.size() ||
+                        (source_[end] != '-' && !identifier_part(source_[end]))) {
+                    at_ = end;
+                }
+            }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
         if (digit(ch)) {
@@ -159,7 +178,10 @@ public:
             } else {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else fail("expected 'module', 'class' or 'actor'");
+                else if (accept("transform-pipe")) {
+                    require("actor");
+                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+                } else fail("expected 'module', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
@@ -171,7 +193,10 @@ public:
                 }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else fail("expected 'class' or 'actor'");
+                else if (accept("transform-pipe")) {
+                    require("actor");
+                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+                } else fail("expected 'class' or 'actor'");
             } else {
                 program.functions.push_back(function());
             }
@@ -317,11 +342,17 @@ private:
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
+        if (token_.text == "critical-read" || token_.text == "critical-write") {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+        if (token_.text == "critical-read" || token_.text == "critical-write") {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         value.name = identifier();
         require("(");
         if (!accept(")")) {
