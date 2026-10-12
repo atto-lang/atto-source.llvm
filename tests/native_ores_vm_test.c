@@ -118,7 +118,10 @@ int main(void) {
          && !atomic_load(&one->parallel_messages); ++tries) sched_yield();
     require(atomic_load(&one->parallel_messages) == 1);
     require(ores_native_vm_started_carriers(vm, ORES_NATIVE_VM_MAIN) == 2);
-    atomic_store(&one->unblock, 1);
+    /* Keep MAIN actor 0 blocked while a different domain attempts to
+     * close the VM. This specifically proves the global self-carrier
+     * preflight runs BEFORE any cross-domain drain or pthread join. */
+    require(!atomic_load(&one->unblock));
 
     /* An UNTRUSTED worker must never synchronously drain/join its own VM.
      * Even if MAIN workers are busy, callback-originated close must fail fast. */
@@ -132,6 +135,11 @@ int main(void) {
     for (int tries = 0; tries < 1000000
          && atomic_load(&hostile->attempted_close) == 2; ++tries) sched_yield();
     require(atomic_load(&hostile->attempted_close) == 0);
+    /* Closure returned despite MAIN still having an active blocked turn.
+     * The untrusted callback may retire but MUST NOT wait for that turn. */
+    require(atomic_load(&one->blocked_entered));
+    require(!atomic_load(&one->unblock));
+    require(atomic_load(&one->messages) == 1);
     /* Callback close retires every domain but cannot join its own carrier.
      * Other domains must reject new work while accepted work drains.
      * No worker pool may exceed its configured carrier budget. */
@@ -146,6 +154,9 @@ int main(void) {
     }
     /* Retire is idempotent; no new admissions after retirement. */
     ores_native_vm_retire(vm);
+    /* A retired VM must still deliver already admitted DATA; release the
+     * blocked carrier before external drain/close joins its pool. */
+    atomic_store(&one->unblock, 1);
     /* External submitters are fenced: now a host thread can safely finish. */
     require(ores_native_vm_close(vm));
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
@@ -155,6 +166,14 @@ int main(void) {
             (i == ORES_NATIVE_VM_MAIN ? 1 : 0));
         require(atomic_load(&state[i].control) == 1);
     }
+    /* Failure while opening a later domain must reclaim every earlier
+     * metadata-only scheduler without allocating any carrier threads. */
+    OresNativeVMConfig invalid = cfg;
+    invalid.domains[ORES_NATIVE_VM_UNTRUSTED].on_message = NULL;
+    require(ores_native_vm_open(&invalid) == NULL);
+    invalid = cfg;
+    invalid.domains[ORES_NATIVE_VM_UNTRUSTED].carrier_workers = 129;
+    require(ores_native_vm_open(&invalid) == NULL);
     puts("NATIVE_ORES_VM_PASS domains=4 default_workers=5 control=priority");
     return 0;
 }
