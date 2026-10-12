@@ -31,6 +31,17 @@ int main() {
     check(shots == simulate_shots(bell, 1000, 42));
     auto xstate = Builder(1, 1).x(0).measure(0, 0).build();
     check(simulate_probabilities(xstate) == std::vector<double>({0.0, 1.0}));
+    // Unlike Java enums, native gate tags can be forged through static_cast
+    // or FFI. They must not silently disappear from QASM/simulation.
+    expect<std::invalid_argument>([] {
+        (void)Circuit(1, 1, {{static_cast<Op>(255), 0, -1, -1},
+                             {Op::Measure, 0, -1, 0}});
+    });
+    expect<std::invalid_argument>([] {
+        (void)Circuit(1, 1, {{Op::X, 0, -1, -1},
+                             {static_cast<Op>(-1), 0, -1, -1},
+                             {Op::Measure, 0, -1, 0}});
+    });
     expect<std::invalid_argument>([] { (void)Builder(17, 1); });
     expect<std::invalid_argument>([] { (void)Builder(2, 2).cx(0, 0).measure(0, 0).build(); });
     expect<std::invalid_argument>([] { (void)Builder(2, 2).measure(0, 0).measure(0, 1).build(); });
