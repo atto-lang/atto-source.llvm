@@ -124,6 +124,15 @@ void oreslang_source_actor_pipeline_connect_many(void* const* stages, uint64_t c
 void oreslang_source_actor_pipeline_connect(void* source, void* transform, void* sink);
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                                uint64_t variant, int64_t value);
+/* 0 is completed success. Nonzero is a terminal pipeline failure:
+ * 1 wrong ingress, 2 invalid phase/replay, 3 rejected DATA admission,
+ * 4 stage omitted its required hop, 5 timeout, 6 wrong final result,
+ * 7 explicit cancellation. Unlike expect(), this never aborts. */
+int32_t oreslang_source_actor_pipeline_expect_status(void* source,
+                                                    int64_t expected);
+void oreslang_source_actor_pipeline_cancel(void* source);
+/* Legacy fatal assertion ABI. Guest code uses expect_status and returns
+ * a nonzero process result only AFTER stopping every pipeline actor. */
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected);
 
 void oreslang_source_actor_stop(void* actor);
