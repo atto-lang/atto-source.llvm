@@ -186,6 +186,9 @@ private:
             require(";");
             actor.fields.push_back(std::move(field));
         }
+        if (token_.text == "final") {
+            fail("native final actor fields require typed field initialization and ownership lowering");
+        }
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
