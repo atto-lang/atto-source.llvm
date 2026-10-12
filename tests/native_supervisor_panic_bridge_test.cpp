@@ -661,7 +661,7 @@ int main() {
 
     // True scheduler-backed RESTART admission and shutdown fencing. The
     // replacement must be physically READY, not just a fresh actor number.
-    for (int mode = 0; mode < 7; ++mode) {
+    for (int mode = 0; mode < 9; ++mode) {
         auto* runtime = ores_native_actor_scheduler_open_typed_control(
             3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
         check(runtime != nullptr, "restart proof scheduler startup failed");
@@ -853,7 +853,7 @@ int main() {
                   "published replacement did not physically terminate");
             bridge->fence_restart_publication();
             std::puts("NATIVE_SUPERVISOR_RECYCLED_RESTART_PASS old_gen=1 new_gen=2 cleanup=1 admitted=1");
-        } else {
+        } else if (mode == 5 || mode == 6) {
             // Deterministic close at BOTH handoff seams:
             // (5) after physical recycling but before next logical ticket,
             // (6) after ticket but before native admission.
@@ -921,6 +921,45 @@ int main() {
             std::puts(mode == 5
                 ? "NATIVE_RECYCLE_CLOSE_BEFORE_RESERVE_PASS done=1 orphan=0"
                 : "NATIVE_RECYCLE_CLOSE_BEFORE_ADMISSION_PASS done=1 orphan=0");
+        } else {
+            // Throw independently of CONTROL close to exercise rollback of
+            // a newly-created physical actor on an arbitrary host exception.
+            // Both the pre-ticket and post-ticket seams must release DONE.
+            children->stage_replacement(ticket, replacement);
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "throw-injection old candidate was not physically DONE");
+            auto injected_failure = [] {
+                throw std::runtime_error("intentional native RESTART injection");
+            };
+            bool threw = false;
+            try {
+                (void) bridge->abort_recycle_and_admit_verified(
+                    ticket, replacement,
+                    mode == 7 ? std::function<void()>(injected_failure)
+                              : std::function<void()>(),
+                    mode == 8 ? std::function<void()>(injected_failure)
+                              : std::function<void()>());
+            } catch (const std::runtime_error&) { threw = true; }
+            const auto hidden = OresNativeActorRef{
+                replacement.scheduler_domain, replacement.actor_slot,
+                replacement.generation + 1};
+            check(threw
+                      && ores_native_actor_scheduler_poll_done(runtime, hidden)
+                      && !ores_native_actor_scheduler_poll_published(runtime, hidden)
+                      && children->snapshot(child.child).phase ==
+                          oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "injected host exception leaked a hidden candidate or permit");
+            // Unlike the close case, a healthy supervisor must remain able
+            // to claim a clean fresh logical ticket after rollback.
+            const auto retry = children->begin_restart(child.child, dying, 1);
+            check(children->abort_restart(retry).phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "injected failure stranded a new logical RESTART reservation");
+            bridge->fence_restart_publication();
+            std::puts(mode == 7
+                ? "NATIVE_RECYCLE_THROW_BEFORE_RESERVE_PASS done=1 orphan=0"
+                : "NATIVE_RECYCLE_THROW_BEFORE_ADMISSION_PASS done=1 orphan=0");
         }
         bridge.reset();
         process->close();
