@@ -1,98 +1,97 @@
-# Actor state capability scopes: `using`, `critical`, and ownership
+# Actor state access: canonical `self.handle_state` contract
 
-Status: **restricted LLVM executable profile; Java compiler fail-closed**.
+Status: **restricted LLVM compiled execution verified; Java compiler fail-closed**.
 Updated October 12, 2026.
 
-## Canonical scoped capability syntax
+## Normative source syntax
+
+An actor has methods and at most one fixed-key `state` map; ordinary
+actor instance `let`, `val` and `const` properties are not allowed.
 
 ```ores
-define actor Worker as
+define actor Counter as
     state { value: int = 0; }
+
+    // Callback is implicitly read-only if no "critical" modifier.
+    pub fnc read_value(): int {
+        const value = self.handle_state(|state| -> {
+            return state.value;
+        });
+        return value;
+    }
+
+    // The "critical" modifier grants exclusive write authority.
+    pub fnc increment(): int {
+        const next = self.handle_state(critical |state| -> {
+            state.value = state.value + 1;
+            return state.value;
+        });
+        return next;
+    }
 end
 ```
 
-Actor class data is permitted **only** within one fixed-key `state` map;
-methods may be declared without state. `self.state`, direct actor fields,
-and assignments such as `value = 10` outside a state capability fail.
+The source above specifies **the intended language API**. The current
+restricted LLVM compiler supports the two callback spellings in exhaustive
+tagged receive arms, **not yet in ordinary actor methods**. Do not label
+the complete class-method example runnable until general method-state
+lowering is implemented and tested. The current Java compiler deliberately
+rejects either spelling before guest execution.
 
-The first executable native profile admits these value-returning scopes
-inside an exhaustive typed `receive` / `receive_forward` /
-`receive_backward` arm:
+For this API, the name is `self.handle_state` (dot access), not
+`self_handle_state` as a standalone global function.
 
-```ores
-const seen = using state.read(|state| -> {
-    return state.value;
-});
+## Borrow/capability rules
 
-const next = using state.write(critical |state| -> {
-    state.value = state.value + 1;
-    return state.value;
-});
-```
-
-Legacy `self.handle_state(critical |state| -> {...})` remains the
-**write** capability equivalent, not a read capability. All results are
-**copied `int` scalars**, never references to the state map.
-
-## Capability matrix
-
-| Access | `using state.read(...)` | `using state.write(critical ...)` |
+| Contract | `self.handle_state(|state| -> {...})` | `self.handle_state(critical |state| -> {...})` |
 |---|---|---|
-| Read declared state keys | Yes | Yes |
-| Mutate a declared state key | **No; compile error** | Yes |
-| Return copied `int` result | Yes | Yes |
-| Return/capture state map reference | **No** | **No** |
-| Await, select, nest a loan, or call arbitrary functions | **No** | **No** |
-| Reenter actor methods while holding a loan | **No** | **No** |
-| Reach actor properties outside `state` | **No** | **No** |
+| Borrow category | Immutable/read-only state loan | Exclusive/mutable state loan |
+| Read declared fixed keys | Yes | Yes |
+| Write declared fixed keys | **Compile error** | Yes |
+| Copy an `int` result out | Yes | Yes |
+| Return/retain the state reference | **Forbidden** | **Forbidden** |
+| Suspend via `await` or `select` | **Forbidden** | **Forbidden** |
+| Nest a state loan or invoke arbitrary guest code during a loan | **Forbidden in native subset** | **Forbidden in native subset** |
 
-The callback ends synchronously before any subsequent `self.forward()` or
-`self.backward()`. Nested capability scopes and suspending operations
-are rejected before LLVM IR is emitted; the loan cannot be promoted,
-extended, stored, or returned.
+The permission applies **only** inside its callback. The result must
+not contain a borrowed state object or pointer; the current executable
+subset copies an `int` scalar. The actor's private state remains
+unavailable in `self.state`, from an ordinary member field, or
+outside the callback. The compiler must reject a write through a read
+loan even if the surrounding actor method is otherwise mutable.
 
-`critical` on `state.write` is deliberately mandatory. The present
-native scheduler enforces **single-threaded actor execution**; write
-exclusivity derives from that lane and its actor-owned heap turn, not
-from a separate general-purpose reader/writer mutex. In particular,
-**`using state.read` does not currently run multiple readers in
-parallel** and is *not* proof of a multi-reader concurrency feature.
-Future `critical read` / `critical write` scheduling or off-lane
-immutable snapshots require their own formal rules and runtime tests.
-Do not weaken the single-flight actor invariant to enable parallel readers.
+Oreslang actors remain **single-threaded at any instant**. The read-only
+mode does not currently admit simultaneous executing readers; parallel
+read snapshots would require a separate scheduler and isolation design.
 
-## Audited failure modes
+## `using` and `critical`
 
-- No class-level `let`/`val`/`const` actor data.
-- No duplicate state maps, unknown keys, or reserved capability names.
-- No write through a read scope.
-- No write loan missing its `critical` keyword.
-- No `critical` write syntax on a read scope.
-- No forged `state.take` or other unsupported capability.
-- No `await`, `select`, nested `using`, or loan-reference return.
-- No arbitrary guest function call inside a state callback; this blocks
-  synchronous reentrancy while the state loan is active.
-- Native read-only fixture IR contains **no call** to
-  `ores_actor_i64_heap_field_write`; write fixture IR contains the call.
-- Clang AddressSanitizer and UndefinedBehaviorSanitizer execute real
-  15-stage pipelines with both capability modes.
+The **canonical user-facing actor-state API is `self.handle_state`**.
+The presence of `critical` selects the mutable write capability; its
+absence means read-only. The earlier prototype's
+`using state.read(|state| -> {...})` and
+`using state.write(critical |state| -> {...})` currently continue to
+compile in the restricted LLVM profile as implementation-era aliases,
+**not** as the preferred language design. The `using` keyword should
+continue to denote lifetime/resource management where appropriate;
+it need not be part of ordinary actor state access. Removing these
+prototype aliases can be decided separately before the 1.0 syntax
+freeze.
 
-## Evidence and limitations
+## Verified implementation boundary
 
-Native: [exact source funded Actions #38313725825](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38313725825)
-passed **45/45 selected CTests**, with 61 Git source blobs verified
-prior to compilation. The 15-actor read and write pipeline examples
-complete and return the expected result on the real native runtime.
-These tests are a targeted subset, not the full LLVM repository suite.
+- **LLVM:** [funded exact-source Actions run #38314809579](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314809579)
+  passed **57/57 focused CTests**. It includes compiled 15-actor forward/
+  backward pipelines with both canonical forms, LLVM IR checks proving
+  read-only callbacks cannot emit actor-heap writes, and Clang
+  AddressSanitizer/UndefinedBehaviorSanitizer execution.
+- **Java/GraalVM:** [funded JDK 25 run #38314867754](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314867754)
+  passed **27 focused parser/compiler checks**. Both canonical forms
+  explicitly fail closed because scoped guest state access isn't
+  implemented; neither form runs on Java yet.
 
-Java: [focused JDK 25 Actions #38313160385](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38313160385)
-passed **25 parser/compiler tests**. Java explicitly diagnoses
-`using state.read/write` as requiring unavailable scoped capability
-lowering, rather than treating it as an ordinary guest method call.
-Java actor state and directional guest execution are still not runnable.
-
-The restricted native implementation supports one synchronous loan per
-tagged match arm and fixed `int` keys. General state values,
-reader/writer lock scheduling, multi-flow message concurrency, full
-`using` statement syntax, async-safe immutable snapshots, and Java/LLVM
-executable parity remain **unimplemented**. Maintain both PRs in draft.
+Full native repository regressions, historical `let` actor-field
+migration, ordinary-method callback support, async/suspend-aware loans,
+general state value types, multiple concurrent flows, reader snapshot
+semantics and Java/LLVM executable parity are still release blockers.
+**Keep both PRs draft and do not claim full feature parity.**
