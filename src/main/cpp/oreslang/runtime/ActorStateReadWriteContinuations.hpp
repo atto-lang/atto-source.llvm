@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/ActorStateReadWriteGate.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <limits>
@@ -132,11 +133,16 @@ public:
     }
 
     // Observing is not consuming: enqueue failure cannot lose a notification.
-    [[nodiscard]] std::vector<Notification> pending_notifications() const {
+    // Bound each scheduler pump's snapshot to its actual CONTROL budget;
+    // a full cancellation backlog must not allocate thousands of receipts
+    // on every tick when only a handful can be admitted.
+    [[nodiscard]] std::vector<Notification> pending_notifications(
+            std::size_t limit = std::numeric_limits<std::size_t>::max()) const {
         std::lock_guard<std::mutex> lock(mu_);
         std::vector<Notification> pending;
-        pending.reserve(entries_.size());
+        pending.reserve(std::min(entries_.size(), limit));
         for (const auto& [id, entry] : entries_) {
+            if (pending.size() == limit) break;
             if (entry.needs_ack) pending.push_back({incarnation_, id, entry.status});
         }
         return pending;
