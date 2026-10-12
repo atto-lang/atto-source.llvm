@@ -24,6 +24,11 @@
   explicit exit in an unwind remains authoritative; later deferred cleanup
   failures are attached as suppressed diagnostic information, not substituted
   as unrelated process statuses.
+- A failure already pending when deferred cleanup begins cannot be converted
+  to success by a subsequent `process.exit(0)` (or any other deferred exit).
+  A preexisting unhandled failure stays authoritative; later exit attempts
+  are suppressed diagnostics. Only an exit requested before cleanup failure
+  preserves its requested status.
 - External OS signals/faults follow OS rules and are not synthesized as
   language-level statuses. On POSIX, shells can present signal termination
   differently from an ordinary explicit `exit(128+n)`.
