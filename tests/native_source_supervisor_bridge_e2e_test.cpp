@@ -295,6 +295,31 @@ static void exercise(bool ambiguous, bool lost_ack = false,
         }
     }
 
+    // Reclaim only an acknowledged, exact-identity physical receipt.
+    // Neither UNCERTAIN nor an absent attestation may be evicted early.
+    if (!unknown || lost_ack) {
+        const auto acknowledged = f.registry->stop_receipt(logical);
+        require(f.host_receipts->forget_acknowledged(acknowledged)
+                    && f.host_receipts->size() == 0,
+                "acknowledged physical STOP evidence was not reclaimed");
+        require(!f.host_receipts->confirms_physical_done(acknowledged),
+                "retired attestation remained eligible for replay");
+    } else {
+        require(!f.host_receipts->forget_acknowledged(receipt),
+                "unresolved STOP evidence was reclaimed without proof");
+    }
+
+    // The scheduler is a raw C handle. Revoke every observer before freeing it.
+    f.host_receipts->close();
+    f.host_receipts->close();
+    require(f.host_receipts->size() == 0
+                && !f.host_receipts->confirms_physical_done(receipt),
+            "closed STOP ledger leaked proof or a scheduler pointer");
+    bool closed_observer_denied = false;
+    try { (void) f.host_receipts->observe_physical_done(receipt); }
+    catch (const std::logic_error&) { closed_observer_denied = true; }
+    require(closed_observer_denied, "closed STOP ledger accepted new evidence");
+
     require(ores_native_actor_scheduler_stop(f.scheduler, f.parent),
             "supervisor parent could not stop");
     ores_native_actor_scheduler_retire(f.scheduler);
