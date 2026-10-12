@@ -18,8 +18,8 @@ def run(argv, **kwargs):
 ir = run([args.compiler, "--target=wasm32", args.fixture])
 assert ir.returncode == 0 and not ir.stderr, (ir.stderr, ir.stdout)
 assert 'target triple = "wasm32-unknown-unknown"' in ir.stdout
-assert '@oreslang_actor_Counter_init()' in ir.stdout
-assert '@oreslang_actor_Counter_on_message(i64' in ir.stdout
+assert '@oreslang_wasm_actor_init()' in ir.stdout
+assert '@oreslang_wasm_actor_on_message(i64' in ir.stdout
 assert "declare void @oreslang_source_actor_" not in ir.stdout
 
 with tempfile.TemporaryDirectory(prefix="oreslang-actor-wasm32-") as folder:
@@ -27,8 +27,9 @@ with tempfile.TemporaryDirectory(prefix="oreslang-actor-wasm32-") as folder:
     link = run([
         args.clang, "--target=wasm32", "-x", "ir", "-Oz", "-nostdlib",
         "-Wl,--no-entry",
-        "-Wl,--export=oreslang_actor_Counter_init",
-        "-Wl,--export=oreslang_actor_Counter_on_message",
+        "-Wl,--export=oreslang_wasm_actor_init",
+        "-Wl,--export=oreslang_wasm_actor_on_message",
+        "-Wl,--export=oreslang_wasm_actor_teardown",
         "-Wl,--initial-memory=131072", "-Wl,--max-memory=131072",
         "-o", wasm, "-"
     ], input=ir.stdout)
@@ -40,18 +41,21 @@ if(!WebAssembly.validate(b))throw Error('invalid compiled Wasm');
 const mod=new WebAssembly.Module(b);
 if(WebAssembly.Module.imports(mod).length)throw Error('unexpected host import');
 const a=new WebAssembly.Instance(mod),other=new WebAssembly.Instance(mod);
-const init=a.exports.oreslang_actor_Counter_init;
-const handle=a.exports.oreslang_actor_Counter_on_message;
+const init=a.exports.oreslang_wasm_actor_init;
+const handle=a.exports.oreslang_wasm_actor_on_message;
 if(typeof init!=='function'||typeof handle!=='function'||init.length!==0||handle.length!==1)
  throw Error('wrong generated actor ABI');
+try{handle(1n);throw Error('no preinit trap')}catch(e){if(!(e instanceof WebAssembly.RuntimeError))throw e}
 init();
 if(handle(2n)!==12n||handle(3n)!==15n)throw Error('actor state lost across turns');
-other.exports.oreslang_actor_Counter_init();
-if(other.exports.oreslang_actor_Counter_on_message(1n)!==11n)
+other.exports.oreslang_wasm_actor_init();
+if(other.exports.oreslang_wasm_actor_on_message(1n)!==11n)
  throw Error('second module instance failed');
 if(handle(1n)!==16n)throw Error('module-instance state isolation broken');
-init();
-if(handle(0n)!==10n)throw Error('explicit initialization failed to reset fields');
+try{init();throw Error('duplicate init accepted')}catch(e){if(!(e instanceof WebAssembly.RuntimeError))throw e}
+a.exports.oreslang_wasm_actor_teardown();
+try{handle(0n);throw Error('post-teardown execution')}catch(e){if(!(e instanceof WebAssembly.RuntimeError))throw e}
+other.exports.oreslang_wasm_actor_teardown();
 console.log('SOURCE_ACTOR_WASM32_ISOLATION_PASS');
 """
     result = run([args.node, "--input-type=module", "-e", js, wasm])

@@ -10,8 +10,8 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -139,12 +139,20 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     llvm::LLVMContext context;
-    // The first Wasm actor ABI is one synchronous i64 actor per isolated
-    // module instance. Source-driven spawn/send/stop still need the trusted
-    // supervisor and typed mailbox lowering; never compile their native ABI.
+    // A bounded, import-free Wasm guest may lower ONE synchronous actor.
+    // Its state lives in private Wasm globals owned by exactly one Worker.
+    // Native scheduler, ActorRef, suspension and supervisor APIs remain gated.
     if (wasm32_target) {
         if (source.actors.size() > 1)
-            throw std::runtime_error("wasm32 guest supports exactly one source actor per instance");
+            throw std::runtime_error("wasm32 actor guest supports one actor per instance");
+        for (const auto& actor : source.actors) {
+            if (actor.fields.empty() || actor.fields.size() > 16)
+                throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
+            if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
+                actor.on_message.returns_void || !actor.on_message.statements.empty() ||
+                !actor.on_message.locals.empty() || !actor.on_message.early_returns.empty())
+                throw std::runtime_error("wasm32 actor guest requires synchronous scalar handler");
+        }
         for (const auto& fn : source.functions) {
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
@@ -198,7 +206,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
-    std::unordered_map<std::string, std::vector<llvm::GlobalVariable*>> wasmActorFields;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
@@ -223,28 +230,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             actorHandlers.emplace(actor.name, llvm::Function::Create(
                 llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
                 llvm::Function::ExternalLinkage, prefix + "on_message", module));
-        }
-    }
-    if (wasm32_target && !source.actors.empty()) {
-        // Each guest instance has its own private scalar field globals. The
-        // browser Worker must instantiate a fresh module for each actor,
-        // call init once, and serialize calls to on_message. There are no
-        // scheduler, heap, host I/O, or capability imports in this ABI.
-        for (const auto& actor : source.actors) {
-            const std::string prefix = "oreslang_actor_" + actor.name + "_";
-            actorInits.emplace(actor.name, llvm::Function::Create(
-                llvm::FunctionType::get(llvm::Type::getVoidTy(context), false),
-                llvm::Function::ExternalLinkage, prefix + "init", module));
-            actorHandlers.emplace(actor.name, llvm::Function::Create(
-                llvm::FunctionType::get(i64, {i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "on_message", module));
-            std::vector<llvm::GlobalVariable*> fields;
-            for (const auto& field : actor.fields)
-                fields.push_back(new llvm::GlobalVariable(module, i64, false,
-                    llvm::GlobalValue::InternalLinkage,
-                    llvm::ConstantInt::get(i64, 0),
-                    prefix + "field_" + field.name));
-            wasmActorFields.emplace(actor.name, std::move(fields));
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
@@ -551,52 +536,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     }
 
 
-    // Generated actor methods execute *only* from the admitted native
-    // scheduler turn, with persistent actor-owned heap and fresh turn tokens.
-    for (const auto& actor : source.actors) {
-        if (wasm32_target) {
-            auto* ctor = actorInits.at(actor.name);
-            llvm::IRBuilder<> init(llvm::BasicBlock::Create(context, "entry", ctor));
-            const std::unordered_map<std::string, llvm::Value*> emptyStorage;
-            const std::unordered_map<std::string, llvm::Function*> emptyFunctions;
-            const auto& fieldGlobals = wasmActorFields.at(actor.name);
-            for (std::size_t i = 0; i < actor.fields.size(); ++i) {
-                llvm::Value* initial = lower(*actor.fields[i].initializer, init,
-                    i64, emptyStorage, emptyStorage, emptyFunctions);
-                init.CreateStore(initial, fieldGlobals[i]);
-            }
-            init.CreateRetVoid();
-
-            // This handler is the real compiler-lowered source actor turn.
-            // Only the dedicated Worker owns invocation and serial admission.
-            auto* handler = actorHandlers.at(actor.name);
-            llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", handler));
-            std::unordered_map<std::string, llvm::Value*> values, emptyFields;
-            const std::string& parameter = actor.on_message.parameters[0].name;
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr, parameter + ".slot");
-            builder.CreateStore(&*handler->arg_begin(), slot);
-            values.emplace(parameter, slot);
-            for (std::size_t i = 0; i < actor.fields.size(); ++i) {
-                const auto& field = actor.fields[i];
-                llvm::Value* fieldSlot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
-                builder.CreateStore(builder.CreateLoad(i64, fieldGlobals[i]), fieldSlot);
-                values.emplace(field.name, fieldSlot);
-            }
-            for (const auto& write : actor.on_message.actor_field_writes) {
-                auto found = std::find_if(actor.fields.begin(), actor.fields.end(),
-                    [&](const LocalBinding& f) { return f.name == write.field; });
-                if (found == actor.fields.end() || !found->field_mutable)
-                    throw std::runtime_error("invalid wasm32 actor field write");
-                llvm::Value* value = lower(*write.expression, builder, i64,
-                    values, emptyFields, declarations);
-                const std::size_t index = std::distance(actor.fields.begin(), found);
-                builder.CreateStore(value, fieldGlobals[index]);
-                builder.CreateStore(value, values.at(write.field));
-            }
-            builder.CreateRet(lower(*actor.on_message.result, builder, i64,
-                values, emptyFields, declarations));
-            continue;
-        }
+    // Native source actors execute only on OresVM scheduler turns. The
+    // portable guest below uses an independent, no-import single-actor ABI.
+    if (!wasm32_target) for (const auto& actor : source.actors) {
         auto* ctor = actorInits.at(actor.name);
         llvm::BasicBlock* initial = llvm::BasicBlock::Create(context, "entry", ctor);
         llvm::IRBuilder<> init(initial);
@@ -651,6 +593,95 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
             emptyFields, declarations);
         builder.CreateRet(result);
+    }
+
+    // Compiler-generated Wasm guest actor v0. One module instance belongs
+    // exclusively to one dedicated Worker; no native OresVM symbols/imports.
+    // INIT -> ACTIVE -> STOPPED is monotonic; any illegal call traps. This
+    // is NOT source ActorRef/spawn/send/suspend/supervisor lowering.
+    if (wasm32_target && !source.actors.empty()) {
+        const auto& actor = source.actors.front();
+        auto* voidTy = llvm::Type::getVoidTy(context);
+        auto* zero = llvm::ConstantInt::get(i64, 0);
+        auto* one = llvm::ConstantInt::get(i64, 1);
+        auto* two = llvm::ConstantInt::get(i64, 2);
+        auto* lifecycle = new llvm::GlobalVariable(module, i64, false,
+            llvm::GlobalValue::InternalLinkage, zero, "oreslang.wasm.actor.lifecycle");
+        std::vector<llvm::GlobalVariable*> globals;
+        for (const auto& field : actor.fields) {
+            globals.push_back(new llvm::GlobalVariable(module, i64, false,
+                llvm::GlobalValue::InternalLinkage, zero,
+                "oreslang.wasm.actor.field." + field.name));
+        }
+        // Every export validates the guest state itself, even if a buggy
+        // host invokes it after teardown or initializes twice.
+        auto guard = [&](llvm::IRBuilder<>& b, llvm::Function* fn,
+                         llvm::Value* expected) {
+            auto* pass = llvm::BasicBlock::Create(context, "admitted", fn);
+            auto* denied = llvm::BasicBlock::Create(context, "trap", fn);
+            auto* state = b.CreateLoad(i64, lifecycle, "lifecycle");
+            b.CreateCondBr(b.CreateICmpEQ(state, expected), pass, denied);
+            b.SetInsertPoint(denied);
+            // 'unreachable' alone is optimizer UB, not a reliable runtime
+            // guard. Emit a real llvm.trap, which lowers to Wasm's trap
+            // instruction even at -Oz; never permit duplicate INIT/TEARDOWN.
+            b.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+            b.CreateUnreachable();
+            b.SetInsertPoint(pass);
+        };
+        auto* initialize = llvm::Function::Create(
+            llvm::FunctionType::get(voidTy, {}, false),
+            llvm::Function::ExternalLinkage, "oreslang_wasm_actor_init", module);
+        llvm::IRBuilder<> init(llvm::BasicBlock::Create(context, "entry", initialize));
+        guard(init, initialize, zero);
+        const std::unordered_map<std::string, llvm::Value*> noStorage;
+        const std::unordered_map<std::string, llvm::Function*> noFunctions;
+        for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+            auto* initial = lower(*actor.fields[i].initializer, init, i64,
+                noStorage, noStorage, noFunctions);
+            init.CreateStore(initial, globals[i]);
+        }
+        init.CreateStore(one, lifecycle);
+        init.CreateRetVoid();
+
+        auto* handler = llvm::Function::Create(
+            llvm::FunctionType::get(i64, {i64}, false),
+            llvm::Function::ExternalLinkage, "oreslang_wasm_actor_on_message", module);
+        llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", handler));
+        guard(b, handler, one);
+        std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+        auto* paramSlot = b.CreateAlloca(i64, nullptr, "message.slot");
+        b.CreateStore(&*handler->arg_begin(), paramSlot);
+        values.emplace(actor.on_message.parameters[0].name, paramSlot);
+        for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+            auto* slot = b.CreateAlloca(i64, nullptr, actor.fields[i].name + ".slot");
+            b.CreateStore(b.CreateLoad(i64, globals[i]), slot);
+            values.emplace(actor.fields[i].name, slot);
+        }
+        for (const auto& write : actor.on_message.actor_field_writes) {
+            auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                [&](const LocalBinding& f) { return f.name == write.field; });
+            if (field == actor.fields.end() || !field->field_mutable)
+                throw std::runtime_error("invalid wasm32 actor field write");
+            auto* value = lower(*write.expression, b, i64, values, emptyFields, noFunctions);
+            b.CreateStore(value, values.at(write.field));
+        }
+        auto* value = lower(*actor.on_message.result, b, i64, values,
+            emptyFields, noFunctions);
+        // Commit all private state only after evaluating the handler; no
+        // host callback or suspension may interleave during this transition.
+        for (std::size_t i = 0; i < actor.fields.size(); ++i)
+            b.CreateStore(b.CreateLoad(i64, values.at(actor.fields[i].name)), globals[i]);
+        b.CreateRet(value);
+
+        auto* teardown = llvm::Function::Create(
+            llvm::FunctionType::get(voidTy, {}, false),
+            llvm::Function::ExternalLinkage, "oreslang_wasm_actor_teardown", module);
+        llvm::IRBuilder<> finish(llvm::BasicBlock::Create(context, "entry", teardown));
+        guard(finish, teardown, one);
+        for (auto* field : globals) finish.CreateStore(zero, field);
+        finish.CreateStore(two, lifecycle);
+        finish.CreateRetVoid();
     }
 
     std::string diagnostics;
