@@ -1438,41 +1438,43 @@ private:
             // Static variant coverage alone cannot authorize execution:
             // per-case MessagePack DATA and typed continuation lowering
             // must be implemented before guest source reaches LLVM IR.
-            if (typedDomains.count(actor.messages_type)) {
-                // The first executable LLVM slice accepts only valueless
-                // tagged cases, no payload destructuring, and an exhaustive
-                // set of side-effect-only scalar field assignments.
-                std::vector<std::string> allowed;
-                for (const auto& pattern : program.tagged_patterns)
-                    if (pattern.name == actor.messages_type)
-                        allowed = pattern.alternatives;
-                if (const auto found = enumNames.find(actor.messages_type);
-                        found != enumNames.end())
-                    for (const auto& c : found->second->cases)
-                        allowed.push_back(found->first + "." + c.name);
-                if (allowed.empty() || allowed.size() > 64)
-                    throw std::runtime_error("LLVM tagged actor supports 1..64 variants");
-                for (const auto& alternative : allowed) {
-                    const auto dot = alternative.find('.');
-                    const auto owner = enumNames.at(alternative.substr(0, dot));
-                    const auto it = std::find_if(owner->cases.begin(), owner->cases.end(),
-                        [&](const EnumCase& c) {
-                            return c.name == alternative.substr(dot + 1);
-                        });
-                    if (it == owner->cases.end()
-                            || (it->has_payload
-                                && it->payload.kind != MessageShape::Kind::Integer))
+            if (typedDomains.count(actor.messages_type) || actor.transform_pipe) {
+                // Exhaustiveness is directional for transform pipe actors:
+                // each handler matches exactly its declared input domain.
+                for (const auto& receiver : actor.methods) {
+                    if (!receiver.is_receiver) continue;
+                    const std::string domain = !actor.transform_pipe
+                        ? actor.messages_type
+                        : receiver.name == "receive_forward"
+                            ? actor.forward_messages_type : actor.backward_messages_type;
+                    std::vector<std::string> allowed;
+                    for (const auto& pattern : program.tagged_patterns)
+                        if (pattern.name == domain) allowed = pattern.alternatives;
+                    if (const auto found = enumNames.find(domain);
+                            found != enumNames.end())
+                        for (const auto& c : found->second->cases)
+                            allowed.push_back(found->first + "." + c.name);
+                    if (allowed.empty() || allowed.size() > 64)
+                        throw std::runtime_error("LLVM tagged actor supports 1..64 variants per direction");
+                    for (const auto& alternative : allowed) {
+                        const auto dot = alternative.find('.');
+                        const auto owner = enumNames.at(alternative.substr(0, dot));
+                        const auto it = std::find_if(owner->cases.begin(), owner->cases.end(),
+                            [&](const EnumCase& c) {
+                                return c.name == alternative.substr(dot + 1);
+                            });
+                        if (it == owner->cases.end()
+                                || (it->has_payload
+                                    && it->payload.kind != MessageShape::Kind::Integer))
+                            throw std::runtime_error(
+                                "LLVM tagged source subset requires payloadless or int cases");
+                    }
+                    if (receiver.tagged_arms.size() != allowed.size()
+                            || !receiver.boolean_arms.empty()
+                            || !receiver.assignments.empty())
                         throw std::runtime_error(
-                            "LLVM tagged source subset requires payloadless or int cases");
+                            "LLVM tagged actor requires exhaustive side-effect-only match");
                 }
-                const auto receiver = std::find_if(actor.methods.begin(),
-                    actor.methods.end(), [](const Function& f) { return f.is_receiver; });
-                if (receiver == actor.methods.end()
-                        || receiver->tagged_arms.size() != allowed.size()
-                        || !receiver->boolean_arms.empty()
-                        || !receiver->assignments.empty())
-                    throw std::runtime_error(
-                        "LLVM tagged actor requires exhaustive side-effect-only match");
             }
         }
     }
