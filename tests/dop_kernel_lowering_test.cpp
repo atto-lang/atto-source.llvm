@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <type_traits>
+#include <limits>
 
 static void check(bool condition) {
     if (!condition) throw std::runtime_error("typed DOP kernel test failed");
@@ -23,6 +25,12 @@ protected:
 
 int main() {
     using namespace oreslang::dop;
+    static_assert(!std::is_assignable<Kernel&, Kernel>::value,
+                  "an admitted native kernel must not be mutable");
+    static_assert(!std::is_assignable<decltype((std::declval<Kernel&>().scale)), float>::value,
+                  "F32 coefficients must remain finite after validation");
+    static_assert(!std::is_assignable<decltype((std::declval<Kernel&>().operation)), Op>::value,
+                  "operation tags must remain valid after validation");
     // A valid POD layout with undersized scalar slots must never become a
     // HostBuffer: F32 memcpy used to write past its allocation.
     for (auto bytes : {1u, 2u, 8u}) {
@@ -62,6 +70,10 @@ int main() {
     Kernel k(p, Element::F32, Op::Scale, 2.0f, 0.0f);
     expect<std::invalid_argument>([&] {
         Kernel invalid_op(p, Element::F32, static_cast<Op>(255), 1.0f, 0.0f);
+    });
+    expect<std::invalid_argument>([&] {
+        Kernel nonfinite(p, Element::F32, Op::Scale,
+                         std::numeric_limits<float>::quiet_NaN(), 0.0f);
     });
     HostBuffer original(p);
     {
