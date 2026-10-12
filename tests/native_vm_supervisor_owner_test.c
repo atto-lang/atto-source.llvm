@@ -11,6 +11,7 @@ typedef struct {
     OresNativeVM* vm;
     OresNativeActorRef child;
     atomic_int holding_parent, release_parent, child_finished;
+    atomic_int child_blocked, release_child;
     atomic_int control_seen, terminal_seen, parent_active, violations;
 } State;
 typedef struct {
@@ -40,6 +41,8 @@ static void on_data(void* context, size_t actor, uint64_t value) {
     } else if (actor == 1) {
         check(value == 20);
         check(ores_native_vm_stop(s->vm, ORES_NATIVE_VM_MAIN, s->child));
+        atomic_store(&s->child_blocked, 1);
+        while (!atomic_load(&s->release_child)) nap();
         atomic_store(&s->child_finished, 1);
     } else abort();
 }
@@ -126,6 +129,10 @@ int main(void) {
     until(&s->holding_parent, 1);
     check(ores_native_vm_try_send(vm, ORES_NATIVE_VM_MAIN, s->child, 20)
         == ORES_NATIVE_SEND_ACCEPTED);
+    until(&s->child_blocked, 1);
+    check(!ores_native_vm_poll_done(vm, ORES_NATIVE_VM_MAIN, s->child));
+    check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
+    atomic_store(&s->release_child, 1);
     until(&s->child_finished, 1);
     /* The stopped child is still on a carrier until its turn ends. The
      * official VM publication must only succeed after poll_done. */
