@@ -25,8 +25,8 @@ syntax are **not** evidence of behavioral parity.
 | --- | --- | --- | --- |
 | Typed `int` function/call/return subset | Implemented | Executable i64 subset | Differential execution not yet certified |
 | Scalar `rt copy/take/share` | Language/runtime forms | Native i64 admission and borrowing subset | Cross-backend ownership trace gate outstanding |
-| `try/catch/finally` | Synchronous and suspension-aware paths, regressions | Rejected; no unwind IR | BLOCKED |
-| `throw`, `raise`, `panic` source statements | Keywords reserved; source statements rejected | Keywords reserved; rejected | BLOCKED; no source feature |
+| `try/catch/finally` | Synchronous and suspension-aware paths | Bounded terminal try/finally and guarded snapshot returns; catch/unwind unsupported | General parity remains BLOCKED |
+| `throw`, `raise`, `panic` source statements | Keywords reserved; source statements rejected | Source effects rejected before IR | General parity remains BLOCKED |
 | Host panic/raise markers | Distinct runtime signals | Distinct native `FailureKind` values only | Runtime representation partially aligned |
 | `defer` unwind | Runtime cleanup and precedence tests | Native policy value-combining only; no source lowering | BLOCKED |
 | `trap` | Synchronous `Option` boundary | Rejected | BLOCKED |
@@ -34,7 +34,7 @@ syntax are **not** evidence of behavioral parity.
 | `await` / `select` / channels | Suspension-aware Java runtime paths | Rejected; native continuation frames missing | BLOCKED |
 | Source actors (shared/isolated/untrusted) | JVM actor execution exists, physical heap guarantees vary | Source actors rejected; carrier primitives alone | BLOCKED |
 | Failed child CONTROL notice | Bounded, data-only direct-parent queue and non-cancellable notice Future | Data-only `Failure` policy primitive, no actor delivery | BLOCKED |
-| `on_throw/on_raise/on_panic` supervision | Actor method spellings rejected until checked handler dispatch exists | Actors rejected | BLOCKED |
+| `on_throw/on_raise/on_panic` supervision | Actor hook spellings rejected until checked dispatch exists | Scalar on_message actor slice; effect hooks unsupported | General parity remains BLOCKED |
 | Error precedence and suppressed diagnostics | `OresExceptionPolicy`, including uncaught host `Error` classification | `ExceptionPolicy.hpp`, including strict invalid-tag rejection | Policy primitives aligned; exhaustive rank-pair regressions added, NOT source/runtime parity |
 | Supervisor diagnostic UTF-8 size | 1,024-byte cap, malformed UTF-16 surrogate replacement | 1,024-byte cap, malformed UTF-8 byte replacement | Control-metadata primitive gate only |
 

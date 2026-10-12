@@ -14,6 +14,14 @@
 
 namespace oreslang::runtime {
 
+namespace {
+thread_local HungryCarrier::NativeHeap* tls_actor_heap = nullptr;
+}
+
+HungryCarrier::NativeHeap* HungryCarrier::active_heap() noexcept {
+    return tls_actor_heap;
+}
+
 // An independent shared control block outlives the carrier. One atomic
 // admission word linearizes close versus in-flight producer leases.
 struct HungryCarrier::ProducerGate {
@@ -237,6 +245,13 @@ void HungryCarrier::join() noexcept {
     } else {
         abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
     }
+    joined_.store(true, std::memory_order_release);
+}
+
+std::optional<CarrierRetirementProof> HungryCarrier::retirement_proof() const noexcept {
+    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value())
+        return std::nullopt;
+    return CarrierRetirementProof{*options_.heap_owner};
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
@@ -271,7 +286,11 @@ bool HungryCarrier::pin_cpu() noexcept {
 
 void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
+    // Only actor handler execution may access this heap. Suspension does not
+    // invalidate its handles; broker callbacks have no such capability.
+    tls_actor_heap = &actor_heap_;
     const auto step = handler_(actor_state_, message, resumed, result);
+    tls_actor_heap = nullptr;
     if (stop_.load(std::memory_order_acquire)) return;
     if (step.kind == StepKind::done) {
         completed_.fetch_add(1, std::memory_order_release);
@@ -329,7 +348,7 @@ void HungryCarrier::wait_actor() noexcept {
 void HungryCarrier::actor_loop() noexcept {
     const auto tag = std::hash<std::thread::id>{}(std::this_thread::get_id());
     thread_tag_.store(static_cast<std::uint64_t>(tag), std::memory_order_release);
-    const bool admitted = pin_cpu();
+    const bool admitted = pin_cpu() && actor_heap_.bind_carrier();
     setup_ok_.store(admitted, std::memory_order_release);
     setup_done_.store(true, std::memory_order_release);
     if (!admitted) {

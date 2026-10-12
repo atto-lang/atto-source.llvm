@@ -6,6 +6,23 @@ import sys
 import tempfile
 
 CASES = {
+    # Enum/pattern declaration kinds are reserved; not executable source support yet.
+    "enum-function": (
+        "pub fnc enum(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "pattern-function": (
+        "pub fnc pattern(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "enum-parameter": (
+        "pub fnc main(int enum): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "pattern-parameter": (
+        "pub fnc main(int pattern): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
     "over-function": (
         "pub fnc over(): int { return 42; }",
         "expected non-keyword identifier",
@@ -30,8 +47,7 @@ CASES = {
         "pub fnc main(int value): int { return structural; }",
         "expected int expression",
     ),
-    # Exceptional control effects are reserved in both implementations.
-    # LLVM cannot silently reinterpret them as ordinary user identifiers.
+    # Exceptional controls must fail closed without emitting LLVM IR.
     "throw-function": (
         "pub fnc throw(): int { return 42; }",
         "expected non-keyword identifier",
@@ -68,12 +84,16 @@ CASES = {
         "pub fnc main(): int { panic 42; return 0; }",
         "native exception/control effect unsupported",
     ),
-    "defer-statement": (
-        "pub fnc main(): int { defer cleanup(); return 0; }",
+    "throw-statement": (
+        "pub fnc main(): int { throw 42; return 0; }",
         "native exception/control effect unsupported",
     ),
     "try-statement": (
         "pub fnc main(): int { try { return 42; } catch (err) { return 0; } }",
+        "expected 'finally'",
+    ),
+    "recover-statement": (
+        "pub fnc main(): int { recover 42; return 0; }",
         "native exception/control effect unsupported",
     ),
 }

@@ -126,9 +126,10 @@ does not unblock the failed actor, and cannot suppress the audit event.
 
 **LLVM native**
 
-* The current compiler only lowers the restricted i64 function/return fragment.
-  No general exceptions, actor execution, cleanup unwinding, `trap`,
-  `recover` or supervision handlers exist yet.
+* The current compiler includes bounded scalar actor on_message dispatch and
+  terminal try/finally return snapshots. Those slices do not provide general
+  exceptions, catch/unwind, trap/recover, or source supervision handlers.
+  Host CONTROL/runtime policy tests are distinct from source effect admission.
 * Reserved exceptional keywords and unsupported control statements must
   produce a nonzero compilation exit and **no LLVM IR**. This is a
   fail-closed compatibility safeguard, not implementation parity.
