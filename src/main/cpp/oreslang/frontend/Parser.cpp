@@ -626,7 +626,17 @@ private:
                         require(".");
                         arm.route_variant += "." + identifier();
                         require("(");
-                        arm.route_payload = expression();
+                        Lexer nested_probe = lexer_;
+                        Token nested_next = nested_probe.next();
+                        if (token_.kind == Kind::Identifier && !reserved(token_.text)
+                                && nested_next.text == ".") {
+                            const std::string owner = identifier();
+                            require(".");
+                            arm.route_nested_variant = owner + "." + identifier();
+                            if (accept("(")) require(")");
+                        } else {
+                            arm.route_payload = expression();
+                        }
                         require(")");
                         require(")");
                         require(";");
@@ -1416,8 +1426,9 @@ private:
                                 if ((role->second == 0 && arm.route_direction == "backward")
                                     || (role->second == 2 && arm.route_direction == "forward"))
                                     throw std::runtime_error("pipeline route direction is not authorized for actor role");
-                                if (!arm.route_payload || arm.tuple_destructure)
-                                    throw std::runtime_error("pipeline route requires scalar payload expression");
+                                if (arm.tuple_destructure
+                                        || (!arm.route_payload && arm.route_nested_variant.empty()))
+                                    throw std::runtime_error("pipeline route requires checked typed payload");
                                 if (arm.route_variant.find('.') == std::string::npos
                                         || !allowed.count(arm.route_variant))
                                     throw std::runtime_error("pipeline route outside nominal message contract");
@@ -1427,10 +1438,33 @@ private:
                                     output->cases.end(), [&](const EnumCase& c) {
                                         return c.name == arm.route_variant.substr(
                                             arm.route_variant.find('.') + 1); });
-                                if (outputCase == output->cases.end() || !outputCase->has_payload
-                                    || outputCase->payload.kind != MessageShape::Kind::Integer)
-                                    throw std::runtime_error("pipeline route requires typed int enum case");
-                                validate_expression(*arm.route_payload, armAvailable, functions);
+                                if (outputCase == output->cases.end() || !outputCase->has_payload)
+                                    throw std::runtime_error("pipeline route requires typed enum case");
+                                if (outputCase->payload.kind == MessageShape::Kind::EnumRef) {
+                                    if (arm.route_payload || arm.route_nested_variant.empty())
+                                        throw std::runtime_error("nested pipeline route requires enum literal");
+                                    const auto dot = arm.route_nested_variant.find('.');
+                                    if (dot == std::string::npos
+                                        || outputCase->payload.nominal_name !=
+                                            arm.route_nested_variant.substr(0, dot))
+                                        throw std::runtime_error("nested pipeline route owner mismatch");
+                                    const auto inner = enumNames.find(outputCase->payload.nominal_name);
+                                    if (inner == enumNames.end())
+                                        throw std::runtime_error("unknown nested route enum owner");
+                                    const auto innerCase = std::find_if(inner->second->cases.begin(),
+                                        inner->second->cases.end(), [&](const EnumCase& c) {
+                                            return c.name == arm.route_nested_variant.substr(dot+1);
+                                        });
+                                    if (innerCase == inner->second->cases.end() || innerCase->has_payload)
+                                        throw std::runtime_error(
+                                            "nested pipeline route requires nullary inner enum case");
+                                } else {
+                                    if (outputCase->payload.kind != MessageShape::Kind::Integer
+                                            || !arm.route_payload
+                                            || !arm.route_nested_variant.empty())
+                                        throw std::runtime_error("pipeline route requires typed int enum case");
+                                    validate_expression(*arm.route_payload, armAvailable, functions);
+                                }
                             }
                             if (arm.binds_payload) {
                                 if (matched->has_payload &&
