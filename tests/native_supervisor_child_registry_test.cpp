@@ -473,6 +473,105 @@ int main() {
               "fenced physical generation blocked a genuinely new incarnation");
     }
 
+
+    // The journal below is emitted from real committed registry transitions,
+    // not the older hand-assembled phase-only trace. It intentionally does
+    // not assert unobserved CONTROL ownership or host STOP invocation.
+    {
+        SupervisorChildRegistry observed{6617, 42};
+        const OresNativeActorRef old{42, 171, 1};
+        const auto child = observed.register_child(old);
+        observed.finalized(child.child, old, 1);
+        const auto permit = observed.begin_restart(child.child, old, 1);
+        const OresNativeActorRef next{42, 172, 1};
+        observed.stage_replacement(permit, next);
+        must_reject([&] { observed.replace(permit, next); });
+        observed.acknowledge_replacement_admission(
+            permit, next, [] { return true; });
+        auto activated = observed.replace(permit, next);
+        observed.finalized(activated.child, next, 2);
+        const auto retry = observed.begin_restart(activated.child, next, 2);
+        const OresNativeActorRef doomed{42, 173, 1};
+        observed.stage_replacement(retry, doomed);
+        must_reject([&] { observed.abort_restart(retry); });
+        observed.acknowledge_replacement_cleanup(
+            retry, doomed, [] { return true; });
+        observed.abort_restart(retry);
+        const auto entries = observed.committed_transitions();
+        const std::vector<std::string> expected{
+            "register", "finalize-asserted", "restart.reserve",
+            "restart.spawn-asserted", "restart.admit-verified", "restart.commit",
+            "finalize-asserted", "restart.reserve", "restart.spawn-asserted",
+            "restart.cleanup-verified", "restart.abort"};
+        check(entries.size() == expected.size() && observed.audit_trace_complete(),
+              "native registry journal was incomplete");
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            check(entries[i].sequence == i + 1
+                  && std::string(entries[i].operation) == expected[i]
+                  && entries[i].state.has_value()
+                  && entries[i].state->child == child.child,
+                  "native journal asserted a missing or out-of-order transition");
+        }
+        check(entries[2].restart_permit == permit.nonce
+              && entries[5].restart_permit == permit.nonce
+              && entries[7].restart_permit == retry.nonce
+              && entries[10].restart_permit == retry.nonce
+              && permit.nonce != retry.nonce,
+              "native journal lost restart permit incarnation fencing");
+        check(entries[5].state->incarnation == 2
+              && entries[5].replacement.has_value(),
+              "native committed restart journal lost new incarnation");
+        std::cout << "SUPERVISOR_REGISTRY_TRANSITIONS_V1=";
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            if (i) std::cout << '>';
+            std::cout << entries[i].operation;
+        }
+        std::cout << '\\n';
+    }
+
+    {
+        SupervisorChildRegistry observed{6717, 42};
+        const OresNativeActorRef old{42, 181, 1};
+        const auto child = observed.register_child(old);
+        observed.finalized(child.child, old, 1);
+        observed.begin_stop(child.child, old, 1, 43);
+        observed.record_stop_uncertain(child.child, old, 1, 43);
+        observed.record_stop_uncertain(child.child, old, 1, 43);
+        const auto entries = observed.committed_transitions();
+        check(entries.size() == 4
+              && std::string(entries[2].operation) == "stop.reserve"
+              && std::string(entries[3].operation) == "stop.uncertain"
+              && entries[3].stop_turn == 43,
+              "native uncertain STOP was duplicated or falsely acknowledged");
+        check(observed.snapshot(child.child).phase
+              == SupervisorChildRegistry::Phase::stopping,
+              "native STOP uncertainty lost its quarantine");
+    }
+
+    {
+        SupervisorChildRegistry observed{6817, 42};
+        const OresNativeActorRef old{42, 191, 1};
+        const auto child = observed.register_child(old);
+        observed.finalized(child.child, old, 1);
+        const auto permit = observed.begin_restart(child.child, old, 1);
+        const OresNativeActorRef next{42, 192, 1};
+        observed.stage_replacement(permit, next);
+        observed.acknowledge_replacement_admission(
+            permit, next, [] { return true; });
+        observed.close_restart_admission();
+        must_reject([&] { observed.replace(permit, next); });
+        must_reject([&] { observed.abort_restart(permit); });
+        observed.acknowledge_replacement_cleanup(
+            permit, next, [] { return true; });
+        observed.abort_restart(permit);
+        const auto entries = observed.committed_transitions();
+        check(entries.size() == 8
+              && std::string(entries[5].operation) == "restart.close"
+              && std::string(entries[6].operation) == "restart.cleanup-verified"
+              && std::string(entries[7].operation) == "restart.abort",
+              "native journal missed close/cleanup/abort transaction");
+    }
+
     std::cout << "NATIVE_SUPERVISOR_CHILD_IDENTITY_PASS stable=1 "
                  "stale=0 cross_supervisor=0 replacement_race=1\n";
 }
