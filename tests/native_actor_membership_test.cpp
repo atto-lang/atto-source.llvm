@@ -202,4 +202,45 @@ int main() {
         check(foreign_rejected, "same-runtime-ID foreign registry permit was accepted");
         check(second.join(local, 55, 2), "local permit rejected after foreign probe");
     }
+    {
+        // A manager closing the room competes with permit rotation on the
+        // same registry lock. Neither a newly issued nor an old permit can
+        // bring a closed room back, even when its numeric ID gets reused.
+        for (int round = 0; round < 96; ++round) {
+            NativeActorMembershipRegistry m(70, 2, 2);
+            auto old = m.create_group(1, 2);
+            check(m.register_actor(88, 3), "close/rotate actor registration failed");
+            std::atomic<bool> go{false};
+            std::atomic<bool> rotated{false};
+            std::atomic<bool> unexpected{false};
+            std::thread rotator([&] {
+                while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+                try {
+                    auto fresh = m.rotate_join(old);
+                    rotated.store(true, std::memory_order_release);
+                    // A concurrent close can win before this admission.
+                    try { (void)m.join(fresh, 88, 3); }
+                    catch (const std::logic_error&) { }
+                } catch (const std::logic_error&) {
+                    // The close linearized before rotation.
+                } catch (...) {
+                    unexpected.store(true, std::memory_order_relaxed);
+                }
+            });
+            go.store(true, std::memory_order_release);
+            check(m.close_group(1), "close/rotate race failed to close group");
+            rotator.join();
+            check(!unexpected.load() && m.member_count(1) == 0
+                      && m.membership_count(88, 3) == 0,
+                  "close/rotate resurrected membership or corrupted indexes");
+            check(rejected([&] { (void)m.join(old, 88, 3); }),
+                  "old capability admitted closed room after close/rotate");
+            auto successor = m.create_group(1, 2);
+            check(rejected([&] { (void)m.join(old, 88, 3); }),
+                  "old capability admitted recreated room after close/rotate");
+            check(m.join(successor, 88, 3),
+                  "new incarnation capability rejected after close/rotate");
+            (void)rotated;
+        }
+    }
 }
