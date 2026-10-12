@@ -152,16 +152,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
     }
     // Native C entrypoints return i32; Oreslang int remains an internal i64.
+    // Qualified module.main retains its exported guest symbol and gains a wrapper.
     // Browser Wasm is deliberately excluded: it has a separate host entry ABI.
     constexpr const char* guest_main_symbol = "__oreslang_guest_main";
     const auto main_it = std::find_if(source.functions.begin(), source.functions.end(),
         [](const Function& fn) { return fn.name == "main"; });
-    const bool native_main = !wasm32_target && source.module.empty() &&
-        main_it != source.functions.end();
+    const bool native_main = !wasm32_target && main_it != source.functions.end();
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
-        if (std::any_of(source.functions.begin(), source.functions.end(),
+        if (source.module.empty() && std::any_of(source.functions.begin(), source.functions.end(),
                 [](const Function& fn) { return fn.name == "__oreslang_guest_main"; }))
             throw std::runtime_error("reserved native entrypoint symbol collision");
     }
@@ -252,7 +252,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
     for (const auto& fn : source.functions) {
-        const std::string symbol = native_main && fn.name == "main"
+        const std::string symbol = native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name);
         std::vector<llvm::Type*> argument_types;
