@@ -54,6 +54,25 @@ if(BUILD_TESTING)
           --clang "${ORE_NATIVE_ARRAY_CLANG}"
           --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(native_int_array_llvm_abi PROPERTIES TIMEOUT 120)
+    # Actual Oreslang source -> verified LLVM IR -> linked native Array<int>.
+    # Keep this separate from the ABI-only (handwritten LLVM IR) test above.
+    add_test(NAME native_int_array_source_llvm
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_array_source_matrix.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_int_array_source_llvm PROPERTIES TIMEOUT 120)
+    add_test(NAME native_int_array_source_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_array_source_matrix.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --sanitize)
+    set_tests_properties(native_int_array_source_asan_ubsan PROPERTIES TIMEOUT 120)
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
