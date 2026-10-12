@@ -18,9 +18,29 @@ struct State {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef actor{};
     std::atomic<int> accepted{0}, rejected{0}, failures{0};
+    std::atomic<int> data_rejected{0}, cancelled{0};
 };
-extern "C" void on_data(void*, size_t, uint64_t) {
-    std::abort();
+extern "C" void on_data(void* raw, size_t actor, uint64_t payload) {
+    auto& s = *static_cast<State*>(raw);
+    if (actor != s.actor.actor_slot || payload != 41
+            || !ores_native_actor_scheduler_is_current_actor(s.scheduler, s.actor)) {
+        s.failures.fetch_add(1);
+        return;
+    }
+    // Same physical actor lane but WRONG callback kind: cannot claim a
+    // still-pending READY ticket or finalize it through a DATA callback.
+    const OresNativeActorStateWake forged{
+        s.registry.incarnation(), 1, ORES_NATIVE_RW_READY
+    };
+    if (ores_native_actor_scheduler_is_current_state_wake(
+            s.scheduler, s.actor, forged)
+            || s.bridge->try_enter(forged, Mode::Read))
+        s.failures.fetch_add(1);
+    bool denied = false;
+    try { s.bridge->complete(1); }
+    catch (const std::logic_error&) { denied = true; }
+    if (!denied) s.failures.fetch_add(1);
+    s.data_rejected.fetch_add(1);
 }
 extern "C" void on_state(void* raw, size_t actor, OresNativeActorStateWake wake) {
     auto& s = *static_cast<State*>(raw);
@@ -29,6 +49,27 @@ extern "C" void on_state(void* raw, size_t actor, OresNativeActorStateWake wake)
         s.failures.fetch_add(1);
         return;
     }
+    if (!ores_native_actor_scheduler_is_current_state_wake(
+            s.scheduler, s.actor, wake))
+        s.failures.fetch_add(1);
+    const OresNativeActorStateWake mismatched{
+        wake.incarnation, wake.continuation_id + 10, wake.status
+    };
+    if (ores_native_actor_scheduler_is_current_state_wake(
+            s.scheduler, s.actor, mismatched)
+            || s.bridge->try_enter(mismatched, Mode::Read))
+        s.failures.fetch_add(1);
+    if (wake.status == ORES_NATIVE_RW_CANCELLED) {
+        if (!s.bridge->is_own_cancellation(wake))
+            s.failures.fetch_add(1);
+        s.cancelled.fetch_add(1);
+        return;
+    }
+    const OresNativeActorStateWake false_cancellation{
+        wake.incarnation, wake.continuation_id, ORES_NATIVE_RW_CANCELLED
+    };
+    if (s.bridge->is_own_cancellation(false_cancellation))
+        s.failures.fetch_add(1);
     if (!s.bridge->try_enter(wake, Mode::Read)) {
         s.rejected.fetch_add(1);
         return;
@@ -56,6 +97,11 @@ int main() {
     // Force receiver-before-ack race: publish directly, without pumping.
     // The actor callback must be able to atomically claim the valid READY.
     CHECK(state.registry.request(incarnation, 1, Mode::Read).status == Status::Ready);
+    CHECK(!state.registry.admitted(incarnation, 1, Mode::Read));
+    CHECK(ores_native_actor_scheduler_send(state.scheduler, state.actor, 41));
+    CHECK(ores_native_actor_scheduler_drain(state.scheduler));
+    CHECK(state.data_rejected.load() == 1);
+    CHECK(state.failures.load() == 0);
     CHECK(!state.registry.admitted(incarnation, 1, Mode::Read));
     const OresNativeActorStateWake first{incarnation, 1, ORES_NATIVE_RW_READY};
     CHECK(ores_native_actor_scheduler_publish_state_wake(
@@ -89,6 +135,16 @@ int main() {
     CHECK(!bridge.try_enter(third, Mode::Read));
     CHECK(bridge.pump(1) == 1);
     CHECK(ores_native_actor_scheduler_drain(state.scheduler));
+    CHECK(state.accepted.load() == 3);
+    CHECK(state.failures.load() == 0);
+
+    // Exact CANCELLED notifications authorize terminal bookkeeping only
+    // from that callback, never a READY claim.
+    CHECK(state.registry.request(incarnation, 4, Mode::Write).status == Status::Ready);
+    state.registry.cancel_pending(incarnation, 4);
+    CHECK(bridge.pump(1) == 1);
+    CHECK(ores_native_actor_scheduler_drain(state.scheduler));
+    CHECK(state.cancelled.load() == 1);
     CHECK(state.accepted.load() == 3);
     CHECK(state.failures.load() == 0);
 
