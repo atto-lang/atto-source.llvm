@@ -85,3 +85,33 @@ by executable project CI in this audit: the upstream GitHub Actions jobs
 failed without recorded runner steps (logs unavailable). TLC, full Java
 Maven/JUnit, real native CTest and sanitizers remain required. Keep the
 two PRs draft. No claim of complete source-code refinement is made.
+
+
+## Dispatch identity ABA hardening (October 12)
+
+`scripts/verify_actor_dispatch_tickets.py` models three non-reusable
+dispatcher tickets and two possible physical workers. The independent local
+bounded checker **executed successfully**: 88 reachable safe states and a
+five-operation witness showing how an unchecked obsolete release destroys a
+newer active ticket after exploring 84 states. An obsolete ticket's release,
+cancel or replay must have **no effect** on another ticket, even if the
+`scheduled` boolean has cycled false->true. This property is independent
+of ordinary one-worker-at-a-time exclusivity.
+
+Java now publishes a fresh `scheduledDispatchToken` atomically with the
+schedule claim under `lifecycleLock`; `runBatch(ticket)` must match it to
+admit guest code **and to clear scheduling authority**. Shutdown cancellation
+invalidates the ticket first. A new JUnit reflection regression replays an
+old queued `runBatch` during a newer actor turn; a separate negative test
+runs a misbehaving `TurnExecutor` callback off-carrier, which must fail
+before invoking any actor constructor or handler.
+
+Native already uses a scheduler-domain/actor-incarnation generation plus a
+mutex-protected per-actor active lane, with exact current actor checked by
+the callback bridge. An additional DATA/CONTROL test rejects external
+producer authority while another worker is actively running the actor.
+
+**Scope:** Both bounded model checkers were actually run locally. These
+new Java and native production regressions have not yet been run in full
+Maven/CTest/native-image CI; the latest upstream Actions jobs lack executed
+runner steps. This branch is not merge-certified.
