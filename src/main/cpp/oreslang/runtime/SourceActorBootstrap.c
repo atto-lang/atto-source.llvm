@@ -756,45 +756,42 @@ void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
     SourceActor* actor = source;
     ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC);
     group_lock();
-    ensure(group.pipeline_source == actor);
+    const size_t count = group.pipeline_count;
+    ensure(group.pipeline_source == actor && count >= 2
+        && count <= SOURCE_PIPELINE_MAX_STAGES);
     struct timespec deadline;
     ensure(clock_gettime(CLOCK_REALTIME, &deadline) == 0);
     deadline.tv_sec += 20;
-    while (!group.pipeline_done
-           || atomic_load_explicit(&actor->processed, memory_order_acquire) != 2
-           || atomic_load_explicit(&group.pipeline_middle->processed,
-                                   memory_order_acquire) != 2
-           || atomic_load_explicit(&group.pipeline_sink->processed,
-                                   memory_order_acquire) != 1) {
+    for (;;) {
+        bool finished = group.pipeline_done;
+        for (size_t i = 0; i < count; ++i) {
+            SourceActor* stage = group.pipeline_stages[i];
+            ensure(stage && stage->magic == SOURCE_ACTOR_MAGIC);
+            uint64_t expected_turns = (i + 1 == count) ? 1 : 2;
+            if (atomic_load_explicit(&stage->processed, memory_order_acquire)
+                != expected_turns) finished = false;
+            if (atomic_load_explicit(&stage->wire_reserved, memory_order_acquire)
+                != 0) finished = false;
+        }
+        if (finished) break;
         int status = pthread_cond_timedwait(
             &group.pipeline_completed, &group.mutex, &deadline);
         ensure(status == 0);
     }
     ensure(group.pipeline_result == expected);
-    ensure(atomic_load_explicit(&group.pipeline_phase, memory_order_acquire) == 5);
-    ensure(atomic_load_explicit(&actor->processed, memory_order_acquire) == 2);
+    ensure(atomic_load_explicit(&group.pipeline_phase, memory_order_acquire)
+        == (int)(2 * (count - 1) + 1));
     ensure(atomic_load_explicit(&actor->last_result, memory_order_acquire) == expected);
     const uint64_t forwards = atomic_load_explicit(
         &group.pipeline_forward_count, memory_order_acquire);
     const uint64_t backwards = atomic_load_explicit(
         &group.pipeline_backward_count, memory_order_acquire);
-    ensure(forwards == 2 && backwards == 2);
-    ensure(group.pipeline_middle && group.pipeline_sink);
-    ensure(atomic_load_explicit(&group.pipeline_middle->processed,
-                                memory_order_acquire) == 2);
-    ensure(atomic_load_explicit(&group.pipeline_sink->processed,
-                                memory_order_acquire) == 1);
-    /* All DATA reservations (preparing, queued, executing) are returned.
-     * This is the single-flow owned-frame quiescence barrier before stop. */
-    ensure(atomic_load_explicit(&actor->wire_reserved, memory_order_acquire) == 0);
-    ensure(atomic_load_explicit(&group.pipeline_middle->wire_reserved,
-                                memory_order_acquire) == 0);
-    ensure(atomic_load_explicit(&group.pipeline_sink->wire_reserved,
-                                memory_order_acquire) == 0);
+    ensure(forwards == count - 1 && backwards == count - 1);
     group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
-    fprintf(stderr, "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=%llu backward=%llu result=%lld\n",
-        (unsigned long long)forwards, (unsigned long long)backwards,
+    fprintf(stderr,
+        "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=%zu typed=1 forward=%llu backward=%llu result=%lld\n",
+        count, (unsigned long long)forwards, (unsigned long long)backwards,
         (long long)expected);
 #endif
 }
@@ -840,8 +837,10 @@ void oreslang_source_actor_stop(void* opaque) {
     if (instance == group.pipeline_source) {
         ensure(group.pipeline_done);
         group.pipeline_source = NULL;
-        group.pipeline_middle = NULL;
-        group.pipeline_sink = NULL;
+        for (size_t i = 0; i < group.pipeline_count; ++i) {
+            group.pipeline_stages[i] = NULL;
+        }
+        group.pipeline_count = 0;
     }
     ensure(atomic_load_explicit(&instance->wire_reserved,
                                  memory_order_acquire) == 0);
