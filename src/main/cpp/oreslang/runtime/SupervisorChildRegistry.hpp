@@ -8,6 +8,8 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <vector>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -63,6 +65,29 @@ public:
         Phase phase;
     };
 
+
+    /** Actual committed registry mutations only, not unobserved host effects. */
+    struct Transition {
+        std::uint64_t sequence;
+        const char* operation;
+        std::optional<Snapshot> state;
+        std::uint64_t restart_permit;
+        std::uint64_t stop_turn;
+        std::optional<OresNativeActorRef> replacement;
+    };
+
+    std::vector<Transition> committed_transitions() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (!trace_complete_)
+            throw std::logic_error("incomplete supervisor registry audit trace");
+        return transitions_;
+    }
+
+    bool audit_trace_complete() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return trace_complete_;
+    }
+
     SupervisorChildRegistry(std::uint64_t supervisor_id, std::uint64_t runtime_id)
         : supervisor_id_(supervisor_id), runtime_id_(runtime_id) {
         if (!supervisor_id_ || !runtime_id_)
@@ -100,6 +125,7 @@ public:
             if (new_slot) highest_generation_.erase(seen_it);
             throw;
         }
+        record_transition("register", first);
         return first;
     }
 
@@ -116,6 +142,7 @@ public:
             child, actor, incarnation, Phase::active);
         active_actors_.erase(actor_key(current.actor));
         children_.erase(child.logical_child_id);
+        record_transition("detach-active", current);
         // highest_generation_ intentionally survives: stale scheduler
         // incarnations must not register again even after detachment.
     }
@@ -128,6 +155,7 @@ public:
         active_actors_.erase(actor_key(current.actor));
         auto& stored = children_.at(child.logical_child_id);
         stored.phase = Phase::finalized;
+        record_transition("finalize-asserted", stored);
         return stored;
     }
 
@@ -150,13 +178,17 @@ public:
             child.logical_child_id, permit.nonce);
         (void) it;
         if (!inserted) throw std::logic_error("restart reservation already exists");
-        children_.at(child.logical_child_id).phase = Phase::restarting;
+        auto& restarting = children_.at(child.logical_child_id);
+        restarting.phase = Phase::restarting;
+        record_transition("restart.reserve", restarting, permit.nonce);
         return permit;
     }
 
     void close_restart_admission() {
         std::lock_guard<std::mutex> guard(mutex_);
+        if (restart_closed_) return;
         restart_closed_ = true;
+        record_transition("restart.close");
     }
 
     /**
@@ -191,6 +223,8 @@ public:
                                  ReplacementPhase::spawned});
             (void) it;
             if (!added) throw std::logic_error("replacement already staged");
+            record_transition("restart.spawn-asserted",
+                children_.at(permit.child.logical_child_id), permit.nonce, 0, actor);
         } catch (...) {
             staged_slots_.erase(slot_it);
             throw;
@@ -231,6 +265,8 @@ public:
             throw std::logic_error("replacement admission became stale");
         replacements_.at(permit.child.logical_child_id).phase
             = ReplacementPhase::admitted;
+        record_transition("restart.admit-verified",
+            children_.at(permit.child.logical_child_id), permit.nonce, 0, actor);
     }
 
     void acknowledge_replacement_cleanup(
@@ -253,6 +289,8 @@ public:
             throw std::logic_error("replacement cleanup became stale");
         replacements_.at(permit.child.logical_child_id).phase
             = ReplacementPhase::cleaned;
+        record_transition("restart.cleanup-verified",
+            children_.at(permit.child.logical_child_id), permit.nonce, 0, actor);
     }
 
     /** Identity commit only; caller must have admitted a fresh actor. */
@@ -287,6 +325,7 @@ public:
         staged_slots_.erase(replacement.actor_slot);
         replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
+        record_transition("restart.commit", stored, permit.nonce, 0, replacement);
         return stored;
     }
 
@@ -304,6 +343,7 @@ public:
             staged_slots_.erase(candidate->second.actor.actor_slot);
         replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
+        record_transition("restart.abort", stored, permit.nonce);
         return stored;
     }
 
@@ -337,6 +377,7 @@ public:
         }
         auto& state = children_.at(child.logical_child_id);
         state.phase = Phase::stopping;
+        record_transition("stop.reserve", state, 0, turn_generation);
         return state;
     }
 
@@ -363,6 +404,8 @@ public:
             throw std::logic_error(
                 "STOP receipt is not pending; uncertain effects require reconciliation");
         receipt.status = StopReceiptStatus::applied;
+        record_transition("stop.applied", children_.at(child.logical_child_id),
+                          0, turn_generation);
         return receipt;
     }
 
@@ -375,7 +418,10 @@ public:
         if (receipt.status == StopReceiptStatus::applied
                 || receipt.status == StopReceiptStatus::acknowledged)
             return receipt;
+        if (receipt.status == StopReceiptStatus::uncertain) return receipt;
         receipt.status = StopReceiptStatus::uncertain;
+        record_transition("stop.uncertain", children_.at(child.logical_child_id),
+                          0, turn_generation);
         return receipt;
     }
 
@@ -414,6 +460,7 @@ public:
         state.phase = Phase::stopped;
         verified.status = StopReceiptStatus::acknowledged;
         pending_stops_.erase(child.logical_child_id);
+        record_transition("stop.ack-reconciled", state, 0, turn_generation);
         return true;
     }
 
@@ -447,6 +494,7 @@ public:
         state.phase = Phase::stopped;
         receipt.status = StopReceiptStatus::acknowledged;
         pending_stops_.erase(found);
+        record_transition("stop.ack-applied", state, 0, turn_generation);
         return state;
     }
 
@@ -456,6 +504,7 @@ public:
         require_expected(child, failed_actor, incarnation, Phase::finalized);
         auto& stored = children_.at(child.logical_child_id);
         stored.phase = Phase::stopped;
+        record_transition("stop-direct", stored);
         return stored;
     }
 
@@ -466,6 +515,7 @@ public:
             throw std::logic_error("cannot retire active/restartable child");
         children_.erase(child.logical_child_id);
         stop_receipts_.erase(child.logical_child_id);
+        record_transition("retire-stopped", current);
     }
 
     std::size_t tracked_children() const {
@@ -474,6 +524,26 @@ public:
     }
 
 private:
+    // Called only while mutex_ is held. Audit failures quarantine the trace,
+    // never roll back a completed runtime decision or call an external sink.
+    void record_transition(const char* operation,
+                           std::optional<Snapshot> state = std::nullopt,
+                           std::uint64_t permit = 0, std::uint64_t turn = 0,
+                           std::optional<OresNativeActorRef> candidate = std::nullopt) noexcept {
+        if (!trace_complete_) return;
+        if (transitions_.size() >= 100000) {
+            trace_complete_ = false;
+            return;
+        }
+        try {
+            transitions_.push_back(Transition{
+                static_cast<std::uint64_t>(transitions_.size() + 1),
+                operation, state, permit, turn, candidate});
+        } catch (...) {
+            trace_complete_ = false;
+        }
+    }
+
     StopReceipt& require_stop_receipt(
             ChildRef child, OresNativeActorRef actor,
             std::uint64_t incarnation, std::uint64_t turn_generation) {
@@ -571,6 +641,8 @@ private:
     inline static std::atomic<std::uint64_t> next_global_child_id_{0};
     inline static std::atomic<std::uint64_t> next_restart_nonce_{0};
     bool restart_closed_ = false;
+    bool trace_complete_ = true;
+    std::vector<Transition> transitions_;
     std::unordered_map<std::uint64_t, ReplacementState> replacements_;
     std::unordered_map<std::uint64_t, std::uint64_t> staged_slots_;
     std::unordered_map<std::uint64_t, std::uint64_t> pending_restarts_;
