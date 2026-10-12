@@ -129,6 +129,13 @@ static _Thread_local SourceActor* active_pipeline_actor;
 static _Thread_local uint8_t active_pipeline_ingress;
 static _Thread_local uint64_t active_pipeline_flow_id;
 static _Thread_local uint64_t active_pipeline_message_id;
+
+/* Compiler-only actor callback dispatch; the trusted route direction lives
+ * in carrier-local state for exactly the duration of the admitted DATA turn.
+ * No guest-supplied flags or wire properties may set this value. */
+uint64_t oreslang_source_actor_pipeline_ingress(void) {
+    return active_pipeline_actor ? (uint64_t)active_pipeline_ingress : 0;
+}
 static _Atomic uint64_t next_pipeline_flow_id = 1;
 static _Atomic uint64_t next_pipeline_message_id = 1;
 /* Identity allocation is monotonic for the process lifetime, including
