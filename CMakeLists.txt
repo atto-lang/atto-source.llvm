@@ -587,6 +587,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_state_rw_fifo_admission COMMAND oreslang-actor-state-rw-gate-test)
     set_tests_properties(native_actor_state_rw_fifo_admission PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-actor-state-rw-continuations-test
+        tests/actor_state_read_write_continuations_test.cpp)
+    target_include_directories(oreslang-actor-state-rw-continuations-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-state-rw-continuations-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-state-rw-continuations-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_state_rw_continuation_delivery
+        COMMAND oreslang-actor-state-rw-continuations-test)
+    set_tests_properties(native_actor_state_rw_continuation_delivery PROPERTIES TIMEOUT 20)
     add_executable(oreslang-function-effects-test tests/function_effects_test.cpp)
     target_include_directories(oreslang-function-effects-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
