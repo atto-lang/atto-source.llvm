@@ -1,6 +1,6 @@
 # Actor pipelines: bidirectional routing and lifecycle contract (draft v1)
 
-Status: **LLVM bounded linear three-actor guest execution verified; Java/GraalVM pipeline lowering pending; general routing still design**.
+Status: **bounded three-actor guest execution verified on LLVM and Java/GraalVM JVM; general routing and cross-backend lifecycle refinement still in design**.
 Java/GraalVM and LLVM must give these operators identical observable semantics
 before all of `self.forward`, `self.backward`, `self.respond`, and `self.done`
 are enabled as general guest intrinsics. A stub, dynamically looked-up actor method,
@@ -76,8 +76,8 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
 6. The compiler may not synthesize a callable `self.forward`/ `self.backward`
    fallback as an ordinary actor method while the runtime intrinsic is
    unavailable. Unsupported backend/lowering is a compile-time diagnostic.
-   LLVM's limited three-actor typed-i64 pipeline is a specifically authorized
-   compiled lowering; it does not enable dynamic graph routing, Java parity,
+   LLVM and Java/GraalVM each have explicitly bounded compiled three-actor
+   nominal-int linear slices. This does not enable dynamic graph routing,
    arbitrary payloads, pipeline Futures, or unrestricted async callers.
 
 ## Compatibility and verification
@@ -126,15 +126,45 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
   missing routing topology and unauthorized sink-forward calls.
 - Not yet supported: generic dynamic fan-out/fan-in, actor-incarnation
   rebinding, bidirectional `Future<T>` admission, cancellation during
-  backpressure, multiple in-flight flows, arbitrary payload shapes, Java
-  compiler guest execution, or full original-repository build matrices.
+  backpressure, multiple in-flight flows, arbitrary payload shapes, or
+  full original-repository build matrices.
   Do not treat the passing slice as proof of these semantics.
+
+## Verified Java/GraalVM JVM guest-execution milestone (2026-10-11)
+
+- The source program `examples/actor-pipeline-bidirectional.ores` defines
+  three real Oreslang actors using the same `Signal.Data: int` and
+  `Signal.Result: int` nominal cases as LLVM. It compiles with the
+  Java/GraalVM evaluator and uses `self.forward()` and `self.backward()`
+  in guest source, with no handwritten host callbacks.
+- `pipeline(source, transform, sink)` binds three separate actor refs to
+  a runtime-owned linear routing table. Every directional message uses the
+  existing compiler-bound canonical MessagePack v2 decoder, detached
+  recipient-owned DATA snapshot, bounded mailbox accounting, and serialized
+  actor execution turn.
+- The runtime checks actor/sender membership and a single-flow causal phase
+  sequence: external source ingress, source forward, transform forward,
+  sink backward, transform backward, then authorized source completion.
+  Duplicate source ingress, direct middle-stage sends, stale/unbound route
+  use and out-of-order or wrong-direction transitions fail closed.
+- The typed guest source reaches final state **19** and ends all three actor
+  lifecycles. The focused tests and entire **1,464-test JVM suite** (0 failures,
+  0 errors, 0 skips) passed on GraalVM 25 in the exact-source funded run
+  [#38189356102](https://github.com/zed-pkg-test/java-app/actions/runs/38189356102).
+  The funded mirror checked 74 exact production Git source blobs.
+- This **does not** establish Native Image AOT/hybrid execution; the Java
+  route binder is a fixed single-flow, synchronous admission-only subset
+  without general `Future<T>` pipeline suspension or graph fan-out/fan-in.
+  There is no machine-checked refinement proof yet between the two runtime
+  lifecycle implementations.
 
 ## Current admission status
 
-The Java type checker intentionally rejects `self.forward`,
-`self.backward`, `self.respond`, and `self.done` until the routing
-context and actual Java guest lowering land. LLVM admits only the
-compiler-checked, fixed linear three-actor `int` pipeline described above;
-all nonmatching pipeline forms continue to fail closed. No general pipeline
-API, Java/LLVM runtime parity, or release readiness is claimed.
+Java/GraalVM now admits compiler-checked `self.forward` and `self.backward`
+for nominal enum values, routed only inside actual actor mailbox DATA turns
+of a runtime-bound three-actor pipeline. `self.respond` and `self.done`
+remain unavailable. LLVM admits the corresponding fixed linear three-actor
+`int` pipeline described above. Neither backend exposes unrestricted graph
+routing or general pipeline Futures. Native Image and comprehensive
+cross-backend lifecycle refinement remain unverified, so no release readiness
+or general actor-pipeline semantic parity is claimed.
