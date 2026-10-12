@@ -363,7 +363,7 @@ if(BUILD_TESTING)
     endforeach()
     oreslang_contract_test(reject_actor_using_read_mut
         actor-using-read-mut-reject.ores
-        --diagnostic "using state.read cannot mutate state")
+        --diagnostic "read-only actor state loan cannot mutate state")
     oreslang_contract_test(reject_actor_using_write_no_critical
         actor-using-write-no-critical-reject.ores
         --diagnostic "expected 'critical'")
@@ -383,6 +383,45 @@ if(BUILD_TESTING)
             actor-using-${mode}-escape-reject.ores
             --diagnostic "actor state reference cannot escape handle_state callback")
     endforeach()
+    # Canonical API: self.handle_state(...) is read-only by default;
+    # only self.handle_state(critical ...) grants write authority.
+    oreslang_contract_test(native_ir_handle_read_no_write
+        actor-handle-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_ir_handle_write_has_write
+        actor-handle-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    foreach(mode read write)
+        oreslang_contract_test(native_ir_handle_${mode}
+            actor-handle-${mode}-positive.ores
+            --ir "oreslang_actor_Probe_receive")
+        if(ORE_CLANG)
+            oreslang_contract_test(native_exec_handle_${mode}_pipeline
+                source-actor-pipeline-fifteen-handle-${mode}.ores
+                --run 43 --clang "${ORE_CLANG}"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+            oreslang_contract_test(native_asan_handle_${mode}_pipeline
+                source-actor-pipeline-fifteen-handle-${mode}.ores
+                --run 43 --clang "${ORE_CLANG}" --sanitize
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+        endif()
+    endforeach()
+    oreslang_contract_test(reject_handle_noncritical_write
+        actor-handle-read-mut-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_handle_read_await
+        actor-handle-read-await-reject.ores
+        --diagnostic "state read/write loan cannot suspend or nest")
+    oreslang_contract_test(reject_handle_read_escape
+        actor-handle-read-escape-reject.ores
+        --diagnostic "actor state reference cannot escape handle_state callback")
+    oreslang_contract_test(reject_handle_read_call
+        actor-handle-read-call-reject.ores
+        --diagnostic "state read/write loan cannot invoke arbitrary functions")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
