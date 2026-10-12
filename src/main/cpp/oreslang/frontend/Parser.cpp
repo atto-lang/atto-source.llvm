@@ -675,11 +675,12 @@ private:
                         }
                     }
                     require("{");
-                    // State capabilities are compiler intrinsics, not
-                    // guest-callable methods or ordinary actor properties.
-                    // using state.read -> immutable, using state.write ->
-                    // exclusive mutation. Critical write is mandatory; the
-                    // legacy handle_state(critical ...) spells the same loan.
+                    // Canonical actor state API:
+                    // self.handle_state(|state| -> {...})          -> read loan
+                    // self.handle_state(critical |state| -> {...}) -> write loan.
+                    // The earlier using state.read/write syntax is retained
+                    // only as a restricted equivalent for this migration.
+                    // No loan may escape the callback or suspend.
                     if (accept("const")) {
                         auto loan = std::make_unique<StateLoan>();
                         loan->result_binding = identifier();
@@ -699,15 +700,16 @@ private:
                         } else {
                             require("self"); require(".");
                             require("handle_state"); require("(");
-                            require("critical");
-                            loan->mode = StateLoan::Mode::Write;
+                            loan->mode = accept("critical")
+                                ? StateLoan::Mode::Write
+                                : StateLoan::Mode::Read;
                         }
                         require("|"); require("state"); require("|");
                         require("->"); require("{");
                         state_loan_depth_ = 1;
                         while (token_.text == "state") {
                             if (loan->mode == StateLoan::Mode::Read)
-                                fail("using state.read cannot mutate state");
+                                fail("read-only actor state loan cannot mutate state");
                             FieldAssignment assignment;
                             assignment.offset = token_.offset;
                             require("state"); require(".");
@@ -1482,7 +1484,7 @@ private:
                                 if (arm.state_loan->mode == StateLoan::Mode::Read
                                         && !arm.state_loan->assignments.empty())
                                     throw std::runtime_error(
-                                        "using state.read cannot mutate state");
+                                        "read-only actor state loan cannot mutate state");
                                 std::unordered_set<std::string> loanAvailable = armAvailable;
                                 for (const auto& field : actor.fields)
                                     loanAvailable.insert("@state." + field.name);
