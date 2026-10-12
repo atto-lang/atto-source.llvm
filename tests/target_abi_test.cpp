@@ -47,6 +47,12 @@ int main(int argc, char** argv) {
             rejects<std::overflow_error>([&] { (void)target.checked_contiguous_bytes(2147483648ULL); });
         } else {
             check(target.checked_contiguous_bytes(1ULL << 33) == (1ULL << 33));
+            check(target.checked_contiguous_bytes(
+                static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                == static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()));
+            rejects<std::overflow_error>([&] {
+                (void)target.checked_contiguous_bytes(1ULL << 63);
+            });
         }
         ++count;
     }
@@ -69,6 +75,11 @@ int main(int argc, char** argv) {
     rejects<std::invalid_argument>([] { (void)oreslang::TargetAbi::parse("wasm64-unknown-unknown"); });
     rejects<std::invalid_argument>([] { (void)oreslang::TargetAbi::parse("aarch64-unknown-linux-musl"); });
     check(oreslang::TargetAbi::checked_host_bytes(0) == 0);
+    const auto max_host = static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max());
+    check(oreslang::TargetAbi::checked_host_bytes(max_host) == max_host);
+    rejects<std::overflow_error>([&] {
+        (void)oreslang::TargetAbi::checked_host_bytes(max_host + 1);
+    });
     rejects<std::overflow_error>([] {
         (void)oreslang::TargetAbi::checked_host_bytes(std::numeric_limits<std::uint64_t>::max());
     });
