@@ -65,15 +65,24 @@ def verify_three_actor_pipeline_trace(stderr):
     if len(lines) != 1 or len(lines[0]) > 16384:
         raise ValueError("missing, duplicated or oversized native trace")
     try:
-        value = json.loads(lines[0], parse_constant=lambda x: (_ for _ in ()).throw(
-            ValueError("noncanonical trace constant")))
+        def no_duplicate_fields(fields):
+            result = {}
+            for key, value in fields:
+                if key in result:
+                    raise ValueError("duplicate native trace JSON key")
+                result[key] = value
+            return result
+        value = json.loads(lines[0],
+                           object_pairs_hook=no_duplicate_fields,
+                           parse_constant=lambda x: (_ for _ in ()).throw(
+                               ValueError("noncanonical trace constant")))
     except (ValueError, TypeError) as e:
         raise ValueError("malformed native trace JSON") from e
     if not isinstance(value, dict) or set(value) != {
         "schemaVersion", "kind", "backend", "sourceGitBlobSha1", "events"
     }:
         raise ValueError("noncanonical top-level trace")
-    if (value["schemaVersion"] != 1
+    if (type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
             or value["kind"] != "compiled-actor-pipeline-trace-v1"
             or value["backend"] != "llvm-native"
             or value["sourceGitBlobSha1"] !=
