@@ -1,13 +1,13 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
+#include <list>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
-#include <unordered_map>
 #include <vector>
 
 namespace oreslang::runtime {
@@ -66,7 +66,7 @@ public:
         }
         Token token(scope_, ++issued_);
         if (available) {
-            owners_.emplace(token.sequence_, mode);
+            owners_.push_back({token, mode});
             if (mode == Mode::Write) writer_active_ = true;
             return {token, Admission::acquired};
         }
@@ -83,27 +83,35 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         validate(token);
         if (closed_) return {};
-        auto owner = owners_.find(token.sequence_);
-        if (owner != owners_.end()) {
-            if (owner->second == Mode::Write) writer_active_ = false;
-            owners_.erase(owner);
-        } else {
-            for (auto it = waiting_.begin(); it != waiting_.end(); ++it) {
-                if (it->token == token) {
-                    waiting_.erase(it);
-                    return admit_waiters();
-                }
-            }
-            return {}; // stale or duplicate completion
+        const auto owner = std::find_if(owners_.begin(), owners_.end(),
+                [&](const Waiter& w) { return w.token == token; });
+        if (owner == owners_.end()) {
+            const auto waiter = std::find_if(waiting_.begin(), waiting_.end(),
+                    [&](const Waiter& w) { return w.token == token; });
+            if (waiter == waiting_.end()) return {}; // stale/duplicate completion
+            // Allocate wake capacity BEFORE changing queue state. Splicing
+            // existing list nodes into active owners is thereafter noexcept.
+            std::vector<Token> admitted;
+            admitted.reserve(waiting_.size());
+            waiting_.erase(waiter);
+            admit_waiters(admitted);
+            return admitted;
         }
-        return admit_waiters();
+        std::vector<Token> admitted;
+        admitted.reserve(waiting_.size());
+        const bool was_writer = owner->mode == Mode::Write;
+        owners_.erase(owner);
+        if (was_writer) writer_active_ = false;
+        admit_waiters(admitted);
+        return admitted;
     }
 
     [[nodiscard]] bool holds(Token token, Mode mode) const {
         std::lock_guard<std::mutex> lock(mu_);
         if (closed_ || !token || token.scope_ != scope_) return false;
-        auto it = owners_.find(token.sequence_);
-        return it != owners_.end() && it->second == mode;
+        return std::any_of(owners_.begin(), owners_.end(), [&](const Waiter& w) {
+            return w.token == token && w.mode == mode;
+        });
     }
 
     [[nodiscard]] std::size_t waiting() const {
@@ -116,13 +124,24 @@ public:
         return writer_active_ ? 0 : owners_.size();
     }
 
-    // Retirement invalidates all outstanding capabilities.
-    void retire() {
+    /**
+     * Atomic retirement returns active and queued tokens to the trusted
+     * scheduler so every suspended waiter can receive terminal cancellation.
+     * If allocation fails, no authority is revoked or silently discarded.
+     * The scheduler must publish cancellations outside this metadata lock.
+     */
+    [[nodiscard]] std::vector<Token> retire() {
         std::lock_guard<std::mutex> lock(mu_);
+        if (closed_) return {};
+        std::vector<Token> revoked;
+        revoked.reserve(owners_.size() + waiting_.size());
+        for (const auto& w : owners_) revoked.push_back(w.token);
+        for (const auto& w : waiting_) revoked.push_back(w.token);
         closed_ = true;
         owners_.clear();
         waiting_.clear();
         writer_active_ = false;
+        return revoked;
     }
 
 private:
@@ -146,28 +165,24 @@ private:
         }
     }
 
-    [[nodiscard]] std::vector<Token> admit_waiters() {
-        std::vector<Token> admitted;
-        if (closed_ || writer_active_ || waiting_.empty()) return admitted;
+    // Precondition: caller has reserved admitted.capacity >= waiting_.size()
+    // before changing active/waiting ownership. No allocation on handoff.
+    void admit_waiters(std::vector<Token>& admitted) {
+        if (closed_ || writer_active_ || waiting_.empty()) return;
         if (waiting_.front().mode == Mode::Write) {
             if (owners_.empty()) {
-                const auto w = waiting_.front();
-                waiting_.pop_front();
-                owners_.emplace(w.token.sequence_, Mode::Write);
+                const Token ticket = waiting_.front().token;
+                owners_.splice(owners_.end(), waiting_, waiting_.begin());
                 writer_active_ = true;
-                admitted.push_back(w.token);
+                admitted.push_back(ticket);
             }
-            return admitted;
+            return;
         }
-        // Admit the maximal consecutive reader cohort before the next writer.
-        // Existing readers may still be active when an earlier writer cancels.
         while (!waiting_.empty() && waiting_.front().mode == Mode::Read) {
-            const auto w = waiting_.front();
-            waiting_.pop_front();
-            owners_.emplace(w.token.sequence_, Mode::Read);
-            admitted.push_back(w.token);
+            const Token ticket = waiting_.front().token;
+            owners_.splice(owners_.end(), waiting_, waiting_.begin());
+            admitted.push_back(ticket);
         }
-        return admitted;
     }
 
     inline static std::atomic<std::uint64_t> next_scope_{0};
@@ -176,8 +191,8 @@ private:
     std::uint64_t issued_ = 0;
     bool writer_active_ = false;
     bool closed_ = false;
-    std::unordered_map<std::uint64_t, Mode> owners_;
-    std::deque<Waiter> waiting_;
+    std::list<Waiter> owners_;
+    std::list<Waiter> waiting_;
 };
 
 } // namespace oreslang::runtime
