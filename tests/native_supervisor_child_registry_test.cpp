@@ -197,11 +197,17 @@ int main() {
     registry.record_stop_applied(stop_child.child, stop_actor, 1, 44);
     check(registry.stop_receipt(stop_child.child).status == Receipt::applied,
           "host proof did not advance exact reserved STOP receipt");
+    must_reject([&] {
+        registry.record_stop_uncertain(stop_child.child, stop_actor, 1, 44);
+    }); // A confirmed applied effect must never be downgraded by a late error.
     auto committed = registry.commit_stop(stop_child.child, stop_actor, 1, 44);
     check(committed.phase == SupervisorChildRegistry::Phase::stopped,
           "authoritative STOP acknowledgment failed");
     check(registry.stop_receipt(stop_child.child).status == Receipt::acknowledged,
           "committed STOP lacks ACKNOWLEDGED host receipt");
+    must_reject([&] {
+        registry.record_stop_uncertain(stop_child.child, stop_actor, 1, 44);
+    }); // A stale failure cannot downgrade terminal ACKNOWLEDGED STOP.
     must_reject([&] { registry.commit_stop(stop_child.child, stop_actor, 1, 44); });
     must_reject([&] { registry.begin_restart(stop_child.child, stop_actor, 1); });
 
