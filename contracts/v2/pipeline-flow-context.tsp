@@ -8,6 +8,7 @@ scalar DecimalU64 extends string;
 model ActorEndpointIdentity {
   actorId: DecimalU64;
   actorGeneration: DecimalU64;
+  schedulerDomain: DecimalU64;
 }
 
 model HostPipelineFlowContextV1 {
