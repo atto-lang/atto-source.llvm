@@ -145,14 +145,28 @@ int main() {
         auto evidence = ExternalEffectProof{key, recorded.nonce, {}};
         for (unsigned i = 0; i < evidence.evidence_sha256.size(); ++i)
             evidence.evidence_sha256[i] = static_cast<std::uint8_t>(i + 1);
-        check(!journal->prove_external_effect(
+        bool legacy_bypass = false;
+        try {
+            (void)bridge->reconcile_claimed_terminal_ack(
+                parent, child, [](const auto&) { return true; });
+        } catch (const std::logic_error&) { legacy_bypass = true; }
+        check(legacy_bypass, "legacy scheduler ACK bypassed durable journal proof");
+        auto foreign = evidence;
+        foreign.key.words[4]++;
+        bool foreign_denied = false;
+        try {
+            (void)bridge->reconcile_durable_external_effect(
+                foreign, [](const auto&) { return true; });
+        } catch (const std::logic_error&) { foreign_denied = true; }
+        check(foreign_denied, "foreign original-parent proof bypassed journal owner");
+        check(!bridge->reconcile_durable_external_effect(
                   evidence, [](const auto&) { return false; }),
               "unverified CONTROL effect released durable quarantine");
-        check(journal->prove_external_effect(evidence, [&](const auto& p) {
-                  return calls.load() == 1 && effects.load() == 1
-                      && p.key == key && p.nonce == recorded.nonce;
-              }), "independently checked host CONTROL effect not proven");
-        journal->acknowledge(evidence);
+        check(bridge->reconcile_durable_external_effect(
+                  evidence, [&](const auto& p) {
+                      return calls.load() == 1 && effects.load() == 1
+                          && p.key == key && p.nonce == recorded.nonce;
+                  }), "independently checked host CONTROL effect not proven");
         check(journal->inspect(key).phase == DurableTerminalPhase::acknowledged,
               "durable effect ACK did not persist");
         if (mode == 0) stop_and_wait(s, parent);
@@ -177,5 +191,5 @@ int main() {
     check(::rmdir(dir) == 0, "journal test directory cleanup failed");
     std::puts("NATIVE_DURABLE_SUPERVISOR_BRIDGE_PASS"
               " original=1 recovered=1 off_carrier=0 claim_once=1"
-              " external_ack_proof=1 no_replay=1");
+              " external_ack_proof=1 no_replay=1 legacy_bypass=0");
 }
