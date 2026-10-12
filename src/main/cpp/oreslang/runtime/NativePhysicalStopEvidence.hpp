@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -42,10 +43,11 @@ public:
 
     NativePhysicalStopEvidence(
             OresNativeActorScheduler* scheduler,
-            std::uint64_t supervisor_id, std::uint64_t runtime_id)
+            std::shared_ptr<SupervisorChildRegistry> registry)
         : scheduler_(scheduler),
-          supervisor_id_(supervisor_id), runtime_id_(runtime_id) {
-        if (!scheduler_ || !supervisor_id_ || !runtime_id_)
+          registry_(std::move(registry)) {
+        if (!scheduler_ || !registry_
+            || !registry_->supervisor_id() || !registry_->runtime_id())
             throw std::invalid_argument("invalid native STOP evidence owner");
     }
 
@@ -55,8 +57,8 @@ public:
      * and before returning a STOP acknowledgment to guest CONTROL.
      */
     Attestation observe_physical_done(const StopReceipt& requested) {
-        if (!valid(requested))
-            throw std::logic_error("foreign or unclaimed native STOP receipt");
+        if (!authoritative(requested))
+            throw std::logic_error("foreign, forged or unclaimed native STOP receipt");
         if (!ores_native_actor_scheduler_poll_done(
                 scheduler_, requested.failed_actor))
             throw std::logic_error("native STOP has no physical DONE barrier");
@@ -83,7 +85,7 @@ public:
      * acknowledgment was lost. Never reexecutes a STOP effect.
      */
     bool confirms_physical_done(const StopReceipt& requested) const {
-        if (!valid(requested)) return false;
+        if (!authoritative(requested)) return false;
         std::lock_guard<std::mutex> guard(mutex_);
         const auto it = observed_.find(binding(requested));
         if (it == observed_.end()) return false;
@@ -106,13 +108,36 @@ private:
     bool valid(const StopReceipt& r) const noexcept {
         return r.host_invoked
             && (r.status == Status::pending || r.status == Status::uncertain)
-            && r.child.supervisor_id == supervisor_id_
-            && r.child.runtime_id == runtime_id_
+            && r.child.supervisor_id == registry_->supervisor_id()
+            && r.child.runtime_id == registry_->runtime_id()
             && r.child.logical_child_id != 0
-            && r.failed_actor.scheduler_domain == runtime_id_
+            && r.failed_actor.scheduler_domain == registry_->runtime_id()
             && r.failed_actor.actor_slot != 0
             && r.failed_actor.generation != 0
             && r.incarnation != 0 && r.turn_generation != 0;
+    }
+
+    bool authoritative(const StopReceipt& supplied) const {
+        if (!valid(supplied)) return false;
+        try {
+            // Host registry, not a copied structure from the callback, is
+            // the authority for STOP reservation and invocation status.
+            const auto current = registry_->stop_receipt(supplied.child);
+            return current.child.supervisor_id == supplied.child.supervisor_id
+                && current.child.runtime_id == supplied.child.runtime_id
+                && current.child.logical_child_id == supplied.child.logical_child_id
+                && current.failed_actor.scheduler_domain
+                    == supplied.failed_actor.scheduler_domain
+                && current.failed_actor.actor_slot == supplied.failed_actor.actor_slot
+                && current.failed_actor.generation == supplied.failed_actor.generation
+                && current.incarnation == supplied.incarnation
+                && current.turn_generation == supplied.turn_generation
+                && current.host_invoked
+                && (current.status == Status::pending
+                    || current.status == Status::uncertain);
+        } catch (...) {
+            return false;
+        }
     }
 
     static Key binding(const StopReceipt& r) noexcept {
@@ -122,8 +147,7 @@ private:
     }
 
     OresNativeActorScheduler* const scheduler_;
-    const std::uint64_t supervisor_id_;
-    const std::uint64_t runtime_id_;
+    const std::shared_ptr<SupervisorChildRegistry> registry_;
     mutable std::mutex mutex_;
     std::map<Key, Attestation> observed_;
     std::uint64_t sequence_ = 0;
