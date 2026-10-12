@@ -406,7 +406,15 @@ private:
         }
         require(":");
         value.returns_void = accept("void");
-        if (!value.returns_void) require("int");
+        if (!value.returns_void) {
+            if (accept("bool")) {
+                if (!has_assert_import_)
+                    fail("native bool return requires sealed module ABI linking");
+                value.returns_bool = true;
+            } else {
+                require("int");
+            }
+        }
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
