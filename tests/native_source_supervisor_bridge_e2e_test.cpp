@@ -189,12 +189,12 @@ static void exercise(bool ambiguous, bool lost_ack = false,
     const auto logical = SupervisorChildRegistry::ChildRef{
         supervisor, domain, f.observed_child.load()};
     const auto state = f.registry->snapshot(logical);
-    require(state.phase == (ambiguous
+    require(state.phase == (unknown
                 ? SupervisorChildRegistry::Phase::stopping
                 : SupervisorChildRegistry::Phase::stopped),
             "external STOP result did not produce correct terminal disposition");
     const auto receipt = f.registry->stop_receipt(logical);
-    require(receipt.status == (ambiguous
+    require(receipt.status == (unknown
                 ? SupervisorChildRegistry::StopReceiptStatus::uncertain
                 : SupervisorChildRegistry::StopReceiptStatus::acknowledged),
             "host STOP receipt did not preserve applied versus ambiguous outcome");
