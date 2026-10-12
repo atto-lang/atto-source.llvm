@@ -2,6 +2,7 @@
 
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include "oreslang/runtime/NativePhysicalStopEvidence.hpp"
 #include "oreslang/runtime/SupervisorChildRegistry.hpp"
 #include "oreslang/runtime/SupervisorProcess.hpp"
 
@@ -101,7 +102,8 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
         std::size_t capacity,
         SupervisorProcess::Enqueue enqueue,
         std::shared_ptr<SupervisorChildRegistry> children,
-        SupervisorProcess::DecisionSink decision_sink) {
+        SupervisorProcess::DecisionSink decision_sink,
+        std::shared_ptr<NativePhysicalStopEvidence> physical_evidence = nullptr) {
     const oreslang::StopOnlySupervisor plan =
         oreslang::parse_stop_only_supervisor(source);
     if (plan.name.empty() || !children || !decision_sink) {
@@ -114,6 +116,10 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
         throw std::invalid_argument(
             "source STOP registry belongs to another supervisor or runtime");
     }
+    // Evidence is optional only to keep the existing narrow legacy host
+    // adapter source-compatible. Production physical STOP integrations
+    // should supply the host-owned physical DONE ledger so a callback
+    // return alone cannot classify an applied physical STOP.
     auto verify = [children, supervisor_id, runtime_id](
                       const SupervisorFailureNotice& notice) {
         if (notice.supervisor_id != supervisor_id
@@ -143,6 +149,7 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
             return SupervisorProcess::Directive::stop;
         },
         [verify, children, supervisor_id, runtime_id,
+         physical_evidence = std::move(physical_evidence),
          sink = std::move(decision_sink)](
                 const SupervisorProcess::Resolution& resolution) {
             if (resolution.requested != SupervisorProcess::Directive::stop) {
@@ -177,8 +184,22 @@ inline std::shared_ptr<SupervisorProcess> install_source_supervisor_stop_verifie
                 }
                 throw;
             }
-            // The sink's normal return is the authoritative host receipt.
-            // No registry lock is held across this external callback.
+            // In the opt-in attested path, the host's Boolean/normal
+            // callback return alone is never authoritative. The ledger
+            // must have independently observed physical scheduler DONE for
+            // this exact current registry reservation and CONTROL turn.
+            if (physical_evidence && !physical_evidence->confirms_physical_done(
+                    children->stop_receipt(child))) {
+                // A missing ledger entry does not prove that the sink did
+                // nothing: quarantine without retrying the host callback.
+                children->record_stop_uncertain(
+                    child, actor, n.logical_incarnation,
+                    resolution.turn_generation);
+                throw std::logic_error(
+                    "source STOP callback lacks host physical DONE evidence");
+            }
+            // The un-attested legacy adapter trusts the sink's return;
+            // it must not be used as a general guest STOP proof.
             children->record_stop_applied(
                 child, actor, n.logical_incarnation, resolution.turn_generation);
             children->commit_stop(
