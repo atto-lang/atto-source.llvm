@@ -1,5 +1,8 @@
 #include "oreslang/runtime/DopGpuAdmission.hpp"
 #include <cstdint>
+#include <atomic>
+#include <thread>
+#include <optional>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -98,6 +101,81 @@ int main() {
                 std::numeric_limits<std::uint64_t>::max(),
                 std::numeric_limits<std::uint64_t>::max(), true}, ha, hb);
     });
+
+
+    // Claiming typed DOP buffers starts both fences together.
+    {
+        const Plan shape(Layout::AoSoA, 7, 3, 4, 16, 4);
+        const Kernel operation(shape, Element::F32, Op::Scale, 2.0f, 0.0f);
+        BufferFence source(Identity{"t", "gpu", 10}, shape.byte_length());
+        BufferFence result(Identity{"t", "gpu", 11}, shape.byte_length());
+        DeviceBuffer in(shape, source), out(shape, result);
+        auto admitted = claim_gpu(operation, {64, 8192, 100, true}, in, out);
+        check(admitted.binding.bytes_per_buffer == shape.byte_length());
+        check(source.status() == oreslang::gpu::Status::InFlight);
+        check(result.status() == oreslang::gpu::Status::InFlight);
+        expect<std::logic_error>([&] { (void)source.take(); });
+        expect<std::logic_error>([&] { (void)result.take(); });
+        source.complete(admitted.tickets.input_ticket, true);
+        result.complete(admitted.tickets.output_ticket, true);
+        check(source.status() == oreslang::gpu::Status::Idle);
+        check(result.status() == oreslang::gpu::Status::Idle);
+    }
+
+    // If either buffer is busy, a rejected pair claim never changes the other.
+    {
+        BufferFence available(Identity{"t", "gpu", 20}, 64);
+        BufferFence busy(Identity{"t", "gpu", 21}, 64);
+        auto original = busy.begin_command(Identity{"t", "gpu", 21});
+        expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, busy, 64); });
+        check(available.status() == oreslang::gpu::Status::Idle);
+        check(busy.status() == oreslang::gpu::Status::InFlight);
+        busy.complete(original, true);
+        expect<std::invalid_argument>([&] { (void)BufferFence::claim_pair(available, busy, 16); });
+        check(available.status() == oreslang::gpu::Status::Idle);
+        check(busy.status() == oreslang::gpu::Status::Idle);
+        auto moved = busy.take();
+        expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, busy, 64); });
+        auto claimed = BufferFence::claim_pair(available, moved, 64);
+        available.cancel_pending(claimed.input_ticket);
+        moved.cancel_pending(claimed.output_ticket);
+        expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, moved, 64); });
+        available.acknowledge_cancelled_device_event(claimed.input_ticket, claimed.input);
+        moved.acknowledge_cancelled_device_event(claimed.output_ticket, claimed.output);
+        available.retire_after_backend_release(claimed.input);
+        moved.retire_after_backend_release(claimed.output);
+    }
+
+    // Opposite-order concurrent claims must never deadlock or half-claim.
+    for (int iteration = 0; iteration < 100; ++iteration) {
+        BufferFence left(Identity{"t", "gpu", 50}, 64);
+        BufferFence right(Identity{"t", "gpu", 51}, 64);
+        std::atomic<bool> start{false};
+        std::atomic<int> wins{0}, rejects{0};
+        std::optional<BufferFence::PairTickets> results[2];
+        auto attempt = [&](int slot, BufferFence& input, BufferFence& output) {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            try {
+                results[slot] = BufferFence::claim_pair(input, output, 64);
+                wins.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::logic_error&) {
+                rejects.fetch_add(1, std::memory_order_relaxed);
+            }
+        };
+        std::thread t1(attempt, 0, std::ref(left), std::ref(right));
+        std::thread t2(attempt, 1, std::ref(right), std::ref(left));
+        start.store(true, std::memory_order_release);
+        t1.join();
+        t2.join();
+        check(wins == 1 && rejects == 1);
+        check(left.status() == oreslang::gpu::Status::InFlight);
+        check(right.status() == oreslang::gpu::Status::InFlight);
+        const auto& winner = results[0].has_value() ? *results[0] : *results[1];
+        BufferFence& src = results[0].has_value() ? left : right;
+        BufferFence& dst = results[0].has_value() ? right : left;
+        src.complete(winner.input_ticket, true);
+        dst.complete(winner.output_ticket, true);
+    }
 
     std::cout << "typed DOP GPU placement admission tests passed\n";
 }
