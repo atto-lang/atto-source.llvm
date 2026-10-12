@@ -6,9 +6,11 @@ The new actor rule forbids ordinary class instance data in actors. Only
 `state { key: Type = initializer; }` supplies actor-owned data, and state
 access uses `self.handle_state(|state| -> {...})` for read-only
 loans and `self.handle_state(critical |state| -> {...})` for
-exclusive writes. Prototype `using state.read/write` aliases
-remain only in the restricted native implementation. User-defined actor methods
-remain allowed.
+exclusive writes. The equally canonical `using state.read(callback)` and
+`using state.write(critical callback)` forms are lexically scoped capability
+acquisition, not prototype aliases. Enclosing methods declare their effect
+bounds with `with state.read` / `with state.write`. User-defined actor methods
+remain allowed. See [WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md).
 
 The following preexisting source fixtures were inspected on the LLVM
 draft branch and **still use legacy `const`/`val`/`let` actor instance
