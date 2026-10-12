@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Mutation tests for the real compiled three-actor CTest transcript gate."""
 import unittest
-from contract import verify_three_actor_pipeline_stderr
+from contract import verify_three_actor_pipeline_stderr, verify_three_actor_flow_context
 
 VALID = "\n".join([
     "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19",
@@ -12,7 +12,35 @@ VALID = "\n".join([
     "",
 ])
 
+CONTEXT = [
+    "SOURCE_PIPELINE_CONTEXT_ADMIT flow=90 message=100 parent=0 target=0 direction=0 domain=77 generation=1",
+    "SOURCE_PIPELINE_CONTEXT_ADMIT flow=90 message=101 parent=100 target=1 direction=1 domain=77 generation=1",
+    "SOURCE_PIPELINE_CONTEXT_ADMIT flow=90 message=102 parent=101 target=2 direction=1 domain=77 generation=1",
+    "SOURCE_PIPELINE_CONTEXT_ADMIT flow=90 message=103 parent=102 target=1 direction=2 domain=77 generation=1",
+    "SOURCE_PIPELINE_CONTEXT_ADMIT flow=90 message=104 parent=103 target=0 direction=2 domain=77 generation=1",
+]
+CONTEXT_VALID = "\\n".join(CONTEXT) + "\\n"
+
 class GuestEvidenceTests(unittest.TestCase):
+    def test_compiled_guest_causal_identity(self):
+        verify_three_actor_flow_context(CONTEXT_VALID)
+
+    def test_reject_forged_or_replayed_guest_context(self):
+        bad_transcripts = [
+            CONTEXT_VALID + CONTEXT[3] + "\\n",
+            CONTEXT_VALID.replace("flow=90 message=102", "flow=91 message=102"),
+            CONTEXT_VALID.replace("message=101 parent=100", "message=101 parent=0"),
+            CONTEXT_VALID.replace("message=103 parent=102", "message=103 parent=101"),
+            CONTEXT_VALID.replace("message=104 parent=103", "message=103 parent=103"),
+            CONTEXT_VALID.replace("target=2 direction=1", "target=1 direction=1"),
+            CONTEXT_VALID.replace("domain=77 generation=1", "domain=0 generation=1"),
+            CONTEXT_VALID.replace("message=102 parent=101", "message=102 parent=101 forged=yes"),
+            CONTEXT_VALID.replace("flow=90 message=103", "flow=0 message=103"),
+        ]
+        for case in bad_transcripts:
+            with self.subTest(case=case[-96:]), self.assertRaises(AssertionError):
+                verify_three_actor_flow_context(case)
+
     def test_complete_compiled_guest_summary(self):
         verify_three_actor_pipeline_stderr(VALID)
 
