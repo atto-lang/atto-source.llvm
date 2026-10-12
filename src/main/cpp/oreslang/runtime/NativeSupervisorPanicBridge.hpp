@@ -58,7 +58,7 @@ public:
     void register_child(OresNativeActorRef child) {
         if (!valid(child) || child.scheduler_domain != parent_.scheduler_domain
                 || child.actor_slot == parent_.actor_slot
-                || !ores_native_actor_scheduler_poll_ready(scheduler_, child))
+                || !ores_native_actor_scheduler_poll_published(scheduler_, child))
             throw std::invalid_argument("foreign, stale or stopped child");
         std::lock_guard<std::mutex> lock(mutex_);
         const Key key{child.actor_slot, child.generation};
