@@ -9,16 +9,16 @@ define match pattern PipeBackwardMessages as
     Signal.Result
 end
 define transform pipe actor Stage<forward_messages=MissingForwardMessages,backward_messages=PipeBackwardMessages> as
-    let value: int = 0;
+    state { value: int = 0; }
     receive_forward(MissingForwardMessages m): void {
         do match m over {
-            on Signal.Data as n { value = n + 1; }
+            on Signal.Data as n { const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; }); }
         }
         return;
     }
     receive_backward(PipeBackwardMessages m): void {
         do match m over {
-            on Signal.Result as n { value = n + 1; }
+            on Signal.Result as n { const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; }); }
         }
         return;
     }
