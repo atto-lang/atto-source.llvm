@@ -5,11 +5,45 @@
 extern "C" {
 #endif
 typedef struct OresNativeActorScheduler OresNativeActorScheduler;
+/* Future token is a generation-fenced value, not a pthread wait handle.
+ * It never blocks a carrier, allocates on poll, or exposes actor memory.
+ * One supervisor CONTROL subscriber per stage (ready and done).
+ */
+typedef enum {
+    ORES_NATIVE_FUTURE_READY = 1,
+    ORES_NATIVE_FUTURE_DONE = 2
+} OresNativeFutureStage;
 typedef struct {
     uint64_t scheduler_domain;
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
+typedef struct {
+    OresNativeActorRef child;
+    OresNativeFutureStage stage;
+} OresNativeActorFuture;
+OresNativeActorRef ores_native_actor_scheduler_spawn_pending(
+    OresNativeActorScheduler* scheduler, size_t actor_slot);
+int ores_native_actor_scheduler_mark_ready(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Owner calls after stop, accepted-message drain AND owned-resource release. */
+int ores_native_actor_scheduler_mark_finalized(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+OresNativeActorFuture ores_native_actor_scheduler_get_ready(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+OresNativeActorFuture ores_native_actor_scheduler_get_done(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+int ores_native_actor_future_is_complete(
+    OresNativeActorScheduler* scheduler, OresNativeActorFuture future);
+/* Register parent as exclusive subscriber, delivering resolution on its
+ * reserved CONTROL lane. If the slot is busy, notification remains owned
+ * by the future and is retried automatically on CONTROL acknowledgement.
+ * This is the native counterpart of eventual await-driven continuation
+ * admission. No source-level await is lowered here yet.
+ */
+int ores_native_actor_future_subscribe(
+    OresNativeActorScheduler* scheduler, OresNativeActorFuture future,
+    OresNativeActorRef parent, uint64_t ticket);
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.

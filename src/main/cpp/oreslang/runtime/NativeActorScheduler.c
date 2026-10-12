@@ -6,11 +6,18 @@
 #include <stdatomic.h>
 
 typedef struct {
+    int subscribed, emitted;
+    OresNativeActorRef parent;
+    uint64_t ticket;
+} FutureObserver;
+typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
     unsigned spawned, retired;
     uint64_t generation;
+    unsigned init_complete, final_complete;
+    FutureObserver ready_future, done_future;
     unsigned control_pending, control_inflight;
     OresNativeActorControlKind control_kind;
     OresNativeActorRef control_child;
@@ -34,6 +41,7 @@ struct OresNativeActorScheduler {
     void* context;
 };
 static _Thread_local OresNativeActorScheduler* executing;
+static _Thread_local size_t executing_actor = SIZE_MAX;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
 static void lock(OresNativeActorScheduler* s) {
@@ -42,6 +50,11 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
+static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref);
+static void pump_futures_for_parent(OresNativeActorScheduler* s, size_t parent);
+static int post_control_locked(OresNativeActorScheduler* s, OresNativeActorRef parent,
+                               OresNativeActorRef child, OresNativeActorControlKind kind,
+                               uint64_t payload);
 static int find_ready(OresNativeActorScheduler* s, size_t* actor) {
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
@@ -86,8 +99,10 @@ static void* carrier(void* raw) {
         unlock(s);
 
         executing = s;
+        executing_actor = i;
         if (is_control) s->control_callback(s->context, i, kind, child, payload);
         else s->callback(s->context, i, payload);
+        executing_actor = SIZE_MAX;
         executing = NULL;
 
         lock(s);
@@ -99,6 +114,8 @@ static void* carrier(void* raw) {
             if (!lane->control_inflight || s->control_completed == UINT64_MAX) abort();
             lane->control_inflight = 0;
             s->control_completed++;
+            /* Deferred future notifications own their state until admitted. */
+            pump_futures_for_parent(s, i);
         }
         if (lane->control_pending || lane->queued) pthread_cond_signal(&s->ready);
         if (!s->outstanding) {
@@ -182,8 +199,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     pthread_cond_signal(&s->ready);
     return 1;
 }
-OresNativeActorRef ores_native_actor_scheduler_spawn(
-    OresNativeActorScheduler* s, size_t i) {
+static OresNativeActorRef spawn_slot(OresNativeActorScheduler* s, size_t i,
+                                     int initialized) {
     OresNativeActorRef missing = {0, 0, 0};
     if (!s) return missing;
     lock(s);
@@ -194,9 +211,20 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
     a->generation = 1;
+    a->init_complete = initialized != 0;
+    a->final_complete = 0;
     OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
     unlock(s);
     return ref;
+}
+OresNativeActorRef ores_native_actor_scheduler_spawn(
+    OresNativeActorScheduler* s, size_t i) {
+    /* Legacy synchronous host start, not compiler-lowered async initialization. */
+    return spawn_slot(s, i, 1);
+}
+OresNativeActorRef ores_native_actor_scheduler_spawn_pending(
+    OresNativeActorScheduler* s, size_t i) {
+    return spawn_slot(s, i, 0);
 }
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
@@ -231,7 +259,9 @@ int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
                                            OresNativeActorRef actor) {
     if (!s) return 0;
     lock(s);
-    int ready = matching(s, actor) && !s->retired && !s->actors[actor.actor_slot].retired;
+    int ready = matching(s, actor) && !s->retired
+        && s->actors[actor.actor_slot].init_complete
+        && !s->actors[actor.actor_slot].retired;
     unlock(s);
     return ready;
 }
@@ -254,23 +284,19 @@ int ores_native_actor_scheduler_set_control_handler(
     unlock(s);
     return ok;
 }
-int ores_native_actor_scheduler_post_control(
-    OresNativeActorScheduler* s, OresNativeActorRef parent,
-    OresNativeActorRef child, OresNativeActorControlKind kind, uint64_t payload) {
-    if (!s) return 0;
-    lock(s);
+static int post_control_locked(OresNativeActorScheduler* s,
+    OresNativeActorRef parent, OresNativeActorRef child,
+    OresNativeActorControlKind kind, uint64_t payload) {
     int valid = s->control_callback && !s->retired
         && matching(s, parent) && matching(s, child)
         && parent.actor_slot != child.actor_slot
         && !s->actors[parent.actor_slot].retired
         && kind >= ORES_ACTOR_CONTROL_READY && kind <= ORES_ACTOR_CONTROL_CANCELLED;
-    if (!valid) { unlock(s); return 0; }
+    if (!valid) return 0;
     ActorLane* lane = &s->actors[parent.actor_slot];
     if (lane->control_pending || lane->control_inflight
-        || s->control_accepted == UINT64_MAX || s->accepted == UINT64_MAX) {
-        unlock(s);
+        || s->control_accepted == UINT64_MAX || s->accepted == UINT64_MAX)
         return 0;
-    }
     lane->control_pending = 1;
     lane->control_kind = kind;
     lane->control_child = child;
@@ -279,8 +305,16 @@ int ores_native_actor_scheduler_post_control(
     s->accepted++;
     s->outstanding++;
     pthread_cond_signal(&s->ready);
-    unlock(s);
     return 1;
+}
+int ores_native_actor_scheduler_post_control(
+    OresNativeActorScheduler* s, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeActorControlKind kind, uint64_t payload) {
+    if (!s) return 0;
+    lock(s);
+    int ok = post_control_locked(s, parent, child, kind, payload);
+    unlock(s);
+    return ok;
 }
 uint64_t ores_native_actor_scheduler_control_accepted(OresNativeActorScheduler* s) {
     if (!s) return 0;
@@ -295,6 +329,117 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
     uint64_t result = s->control_completed;
     unlock(s);
     return result;
+}
+
+static int future_state_locked(OresNativeActorScheduler* s, OresNativeActorFuture future) {
+    if (!matching(s, future.child)) return -1;
+    const ActorLane* a = &s->actors[future.child.actor_slot];
+    if (future.stage == ORES_NATIVE_FUTURE_READY) return a->init_complete ? 1 : 0;
+    if (future.stage == ORES_NATIVE_FUTURE_DONE) return a->final_complete ? 1 : 0;
+    return -1;
+}
+static void try_publish_future(OresNativeActorScheduler* s, size_t child_idx,
+                               OresNativeFutureStage stage) {
+    ActorLane* child = &s->actors[child_idx];
+    FutureObserver* observer = stage == ORES_NATIVE_FUTURE_READY
+        ? &child->ready_future : &child->done_future;
+    const int finished = stage == ORES_NATIVE_FUTURE_READY
+        ? child->init_complete : child->final_complete;
+    if (!observer->subscribed || observer->emitted || !finished) return;
+    const OresNativeActorRef source = {s->domain, (uint64_t)child_idx, child->generation};
+    const OresNativeActorControlKind reason = stage == ORES_NATIVE_FUTURE_READY
+        ? ORES_ACTOR_CONTROL_READY : ORES_ACTOR_CONTROL_DONE;
+    if (post_control_locked(s, observer->parent, source, reason, observer->ticket))
+        observer->emitted = 1;
+}
+static void pump_futures_for_parent(OresNativeActorScheduler* s, size_t parent) {
+    /* Rare supervisor CONTROL completion path; O(actor_count) scan,
+     * no allocation, no loss of registered futures when CONTROL is busy. */
+    for (size_t i = 0; i < s->actor_count; ++i) {
+        ActorLane* child = &s->actors[i];
+        if (child->ready_future.subscribed
+            && child->ready_future.parent.actor_slot == parent)
+            try_publish_future(s, i, ORES_NATIVE_FUTURE_READY);
+        if (child->done_future.subscribed
+            && child->done_future.parent.actor_slot == parent)
+            try_publish_future(s, i, ORES_NATIVE_FUTURE_DONE);
+        if (s->actors[parent].control_pending) break;
+    }
+}
+int ores_native_actor_scheduler_mark_ready(
+    OresNativeActorScheduler* s, OresNativeActorRef ref) {
+    if (!s || executing != s || executing_actor != ref.actor_slot) return 0;
+    lock(s);
+    int ok = matching(s, ref) && !s->actors[ref.actor_slot].init_complete
+        && !s->actors[ref.actor_slot].retired;
+    if (ok) {
+        s->actors[ref.actor_slot].init_complete = 1;
+        try_publish_future(s, (size_t)ref.actor_slot, ORES_NATIVE_FUTURE_READY);
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_mark_finalized(
+    OresNativeActorScheduler* s, OresNativeActorRef ref) {
+    if (!s || executing == s) return 0;
+    lock(s);
+    int ok = matching(s, ref) && s->actors[ref.actor_slot].retired
+        && !s->actors[ref.actor_slot].queued && !s->actors[ref.actor_slot].active
+        && !s->actors[ref.actor_slot].final_complete;
+    if (ok) {
+        /* Caller must have released the actor's owned native resources. */
+        s->actors[ref.actor_slot].final_complete = 1;
+        try_publish_future(s, (size_t)ref.actor_slot, ORES_NATIVE_FUTURE_DONE);
+    }
+    unlock(s);
+    return ok;
+}
+static OresNativeActorFuture make_future(OresNativeActorScheduler* s,
+                                        OresNativeActorRef ref,
+                                        OresNativeFutureStage stage) {
+    OresNativeActorFuture invalid = {{0, 0, 0}, stage};
+    if (!s) return invalid;
+    lock(s);
+    if (matching(s, ref)) invalid.child = ref;
+    unlock(s);
+    return invalid;
+}
+OresNativeActorFuture ores_native_actor_scheduler_get_ready(
+    OresNativeActorScheduler* s, OresNativeActorRef ref) {
+    return make_future(s, ref, ORES_NATIVE_FUTURE_READY);
+}
+OresNativeActorFuture ores_native_actor_scheduler_get_done(
+    OresNativeActorScheduler* s, OresNativeActorRef ref) {
+    return make_future(s, ref, ORES_NATIVE_FUTURE_DONE);
+}
+int ores_native_actor_future_is_complete(OresNativeActorScheduler* s,
+                                         OresNativeActorFuture future) {
+    if (!s) return -1;
+    lock(s);
+    int result = future_state_locked(s, future);
+    unlock(s);
+    return result;
+}
+int ores_native_actor_future_subscribe(
+    OresNativeActorScheduler* s, OresNativeActorFuture future,
+    OresNativeActorRef parent, uint64_t ticket) {
+    if (!s) return 0;
+    lock(s);
+    int valid = !s->retired && s->control_callback && matching(s, parent)
+        && !s->actors[parent.actor_slot].retired
+        && future_state_locked(s, future) >= 0
+        && parent.actor_slot != future.child.actor_slot;
+    if (!valid) { unlock(s); return 0; }
+    ActorLane* child = &s->actors[future.child.actor_slot];
+    FutureObserver* watcher = future.stage == ORES_NATIVE_FUTURE_READY
+        ? &child->ready_future : &child->done_future;
+    if (watcher->subscribed) { unlock(s); return 0; }
+    watcher->subscribed = 1;
+    watcher->parent = parent;
+    watcher->ticket = ticket;
+    try_publish_future(s, (size_t)future.child.actor_slot, future.stage);
+    unlock(s);
+    return 1;
 }
 
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
