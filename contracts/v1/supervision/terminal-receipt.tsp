@@ -55,7 +55,7 @@ model TerminalReceipt {
   phase: "recorded" | "physical_done" | "claimed"
     | "effect_proven" | "acknowledged";
   physical_done_proof?: PhysicalDoneProof;
-  claim_nonce?: UInt64Decimal;
+  claim_nonce?: NonZeroUInt64Decimal;
   external_effect_proof?: ExternalEffectProof;
 }
 
