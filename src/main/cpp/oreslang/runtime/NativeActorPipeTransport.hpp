@@ -52,6 +52,10 @@ public:
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
     std::shared_future<void> write_async(std::size_t edge, std::string payload) {
+        // Admission, promise settlement and the close publication share
+        // one barrier. A write cannot acknowledge DATA after terminal close
+        // has been published, even on a different edge.
+        std::lock_guard<std::mutex> publication(publication_mutex_);
         auto& link = at(edge);
         std::lock_guard<std::mutex> lock(link.mutex);
         if (closed_.load(std::memory_order_acquire) || link.closed)
@@ -79,6 +83,10 @@ public:
     }
 
     std::shared_future<std::string> read_async(std::size_t edge) {
+        // Admission, promise settlement and the close publication share
+        // one barrier. A write cannot acknowledge DATA after terminal close
+        // has been published, even on a different edge.
+        std::lock_guard<std::mutex> publication(publication_mutex_);
         auto& link = at(edge);
         std::lock_guard<std::mutex> lock(link.mutex);
         auto receiver = std::make_shared<std::promise<std::string>>();
@@ -111,24 +119,32 @@ public:
     }
 
     void close() noexcept {
-        if (closed_.exchange(true, std::memory_order_acq_rel)) return;
-        for (auto& edge : edges_) {
-            std::lock_guard<std::mutex> lock(edge->mutex);
-            edge->closed = true;
-            // Buffered admitted payloads remain readable after closure.
-            for (auto& waiting : edge->writers) {
-                try { waiting->promise.set_exception(std::make_exception_ptr(
-                        std::logic_error("native actor pipe is closed"))); }
-                catch (...) { }
+        {
+            // Serialize terminal publication with ALL admissions, not just
+            // per-edge closure. A concurrent close() cannot return before
+            // every pending transport Future has been settled.
+            std::lock_guard<std::mutex> publication(publication_mutex_);
+            if (closed_.exchange(true, std::memory_order_acq_rel)) return;
+            for (auto& edge : edges_) {
+                std::lock_guard<std::mutex> lock(edge->mutex);
+                edge->closed = true;
+                // Buffered admitted payloads remain readable after closure.
+                for (auto& waiting : edge->writers) {
+                    try { waiting->promise.set_exception(std::make_exception_ptr(
+                            std::logic_error("native actor pipe is closed"))); }
+                    catch (...) { }
+                }
+                edge->writers.clear();
+                for (auto& waiting : edge->readers) {
+                    try { waiting->set_exception(std::make_exception_ptr(
+                            std::logic_error("native actor pipe is closed"))); }
+                    catch (...) { }
+                }
+                edge->readers.clear();
             }
-            edge->writers.clear();
-            for (auto& waiting : edge->readers) {
-                try { waiting->set_exception(std::make_exception_ptr(
-                        std::logic_error("native actor pipe is closed"))); }
-                catch (...) { }
-            }
-            edge->readers.clear();
         }
+        // Dispatch host-owned STOP callbacks outside the admission barrier:
+        // these can re-enter a pipe endpoint and must never deadlock the gate.
         group_->close();
     }
 
@@ -164,6 +180,8 @@ private:
     const std::vector<PipeConnection> schema_;
     std::vector<std::unique_ptr<Edge>> edges_;
     std::shared_ptr<NativeActorGroup> group_;
+    // Always acquired before an edge mutex. No host callback under this lock.
+    std::mutex publication_mutex_;
     std::atomic<bool> closed_{false};
 };
 
