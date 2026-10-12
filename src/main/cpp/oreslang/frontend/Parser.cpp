@@ -42,7 +42,9 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "self", "true", "false", "null", "obj", "arr",
-        "int", "owned", "declare", "receive", "Message", "bool", "string",
+        "int", "owned", "declare", "receive", "receive_forward",
+        "receive_backward", "transform", "pipe", "forward_messages",
+        "backward_messages", "Message", "bool", "string",
         "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -137,6 +139,9 @@ public:
                 wrapped_module = true;
             } else if (accept("actor")) {
                 program.actors.push_back(actor());
+            } else if (accept("transform")) {
+                require("pipe"); require("actor");
+                program.actors.push_back(actor(true));
             } else if (accept("enum")) {
                 program.enums.push_back(tagged_enum());
             } else if (accept("match")) {
@@ -152,6 +157,10 @@ public:
                 program.message_patterns.push_back(message_pattern());
             } else if (accept("define")) {
                 if (accept("actor")) program.actors.push_back(actor());
+                else if (accept("transform")) {
+                    require("pipe"); require("actor");
+                    program.actors.push_back(actor(true));
+                }
                 else if (accept("enum")) program.enums.push_back(tagged_enum());
                 else if (accept("match")) {
                     require("pattern");
@@ -327,11 +336,31 @@ private:
         return pattern;
     }
 
-    Actor actor() {
+    Actor actor(bool transform_pipe = false) {
         Actor value;
         value.offset = token_.offset;
+        value.transform_pipe = transform_pipe;
         value.name = identifier();
-        if (accept("<")) {
+        if (transform_pipe) {
+            require("<");
+            // Both directional input/output domains are required. The first
+            // native profile uses one domain per direction, not implicit Message.
+            for (unsigned i = 0; i < 2; ++i) {
+                if (accept("forward_messages")) {
+                    if (!value.forward_messages_type.empty())
+                        fail("duplicate forward_messages domain");
+                    require("="); value.forward_messages_type = identifier();
+                } else if (accept("backward_messages")) {
+                    if (!value.backward_messages_type.empty())
+                        fail("duplicate backward_messages domain");
+                    require("="); value.backward_messages_type = identifier();
+                } else fail("transform pipe actor requires forward_messages and backward_messages");
+                if (i == 0) require(",");
+            }
+            require(">");
+            if (value.forward_messages_type.empty() || value.backward_messages_type.empty())
+                fail("transform pipe actor requires both directional domains");
+        } else if (accept("<")) {
             require("messages");
             require("=");
             value.messages_type = identifier();
@@ -354,11 +383,14 @@ private:
             require(";");
             value.fields.push_back(std::move(field));
         }
-        if (value.fields.empty() && value.messages_type.empty())
+        if (value.fields.empty() && value.messages_type.empty() && !transform_pipe)
             fail("actor requires at least one scalar field");
         while (token_.text == "fnc" || token_.text == "routine"
-               || token_.text == "pub" || token_.text == "receive") {
-            value.methods.push_back(function(true, value.messages_type));
+               || token_.text == "pub" || token_.text == "receive"
+               || token_.text == "receive_forward" || token_.text == "receive_backward") {
+            value.methods.push_back(function(true,
+                transform_pipe ? value.forward_messages_type : value.messages_type,
+                value.backward_messages_type, transform_pipe));
         }
         if (value.methods.empty()) fail("actor requires at least one read-only method");
         if (braced) require("}");
@@ -383,25 +415,36 @@ private:
         return name;
     }
 
-    Function function(bool actor_method = false, const std::string& message_type = "") {
+    Function function(bool actor_method = false,
+                      const std::string& message_type = "",
+                      const std::string& backward_type = "",
+                      bool transform_pipe = false) {
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
-        value.is_receiver = actor_method && accept("receive");
-        if (value.is_receiver) {
-            value.name = "receive";
+        if (actor_method && (token_.text == "receive"
+                || token_.text == "receive_forward"
+                || token_.text == "receive_backward")) {
+            value.is_receiver = true;
+            value.name = std::string(token_.text);
+            advance();
             value.exported = true;
+            if (transform_pipe != (value.name != "receive"))
+                fail("transform pipe actor requires directional receive handlers");
         } else {
             if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
             value.name = identifier();
         }
         require("(");
         if (value.is_receiver) {
-            if (message_type.empty() || token_.text != message_type)
-                fail("receive parameter type must match declared message domain '" + message_type + "'");
-            require(message_type);
+            const std::string& domain =
+                value.name == "receive_backward" ? backward_type : message_type;
+            if (domain.empty() || token_.text != domain)
+                fail(value.name + " parameter type must match declared message domain '" + domain + "'");
+            require(domain);
             value.parameters.push_back(identifier());
             require(")");
+            if (transform_pipe) { require(":"); require("void"); }
         } else {
             if (!accept(")")) {
                 do {
@@ -706,7 +749,8 @@ private:
             require(";");
             value.assignments.push_back(std::move(assignment));
         }
-        if (value.is_receiver && token_.text == "}") {
+        if (value.is_receiver && (token_.text == "}" || (transform_pipe && token_.text == "return"))) {
+            if (accept("return")) require(";");
             value.result = make_expression(Expression::Kind::Integer, token_.offset);
             value.result->integer = 0;
         } else {
@@ -1025,15 +1069,26 @@ private:
                         throw std::runtime_error("pipeline actor ref missing or repeated");
                     const auto found = std::find_if(program.actors.begin(), program.actors.end(),
                         [&](const Actor& a) { return a.name == actorTypes.at(refName); });
-                    if (found == program.actors.end() || !typedDomains.count(found->messages_type))
+                    if (found == program.actors.end()
+                        || (found->transform_pipe
+                            ? (!typedDomains.count(found->forward_messages_type)
+                               || !typedDomains.count(found->backward_messages_type))
+                            : !typedDomains.count(found->messages_type)))
                         throw std::runtime_error("pipeline actors require nominal typed mailbox");
                     if (!uniqueTypes.insert(found->name).second)
                         throw std::runtime_error("linear pipeline requires distinct actor types");
                     pipelineRoles.emplace(found->name,
                         (unsigned)(&refName - &fn.pipeline_actors.front()));
-                    if (contract.empty()) contract = found->messages_type;
-                    else if (contract != found->messages_type)
-                        throw std::runtime_error("pipeline actor message domains must match");
+                    // Directional transform domains are resolved to a shared
+                    // pipeline wire table by the native backend. Ordinary
+                    // legacy pipelines continue to require one domain.
+                    if (!found->transform_pipe) {
+                        if (contract.empty()) contract = found->messages_type;
+                        else if (contract != found->messages_type
+                                 && std::none_of(program.actors.begin(), program.actors.end(),
+                                        [](const Actor& a) { return a.transform_pipe; }))
+                            throw std::runtime_error("pipeline actor message domains must match");
+                    }
                 }
                 if (fn.pipeline_expect_actor != fn.pipeline_actors.front())
                     throw std::runtime_error("expect_pipeline must name pipeline source");
@@ -1155,14 +1210,25 @@ private:
                 throw std::runtime_error("conflicting generated actor symbol '" + name + "'");
         };
         for (const auto& actor : program.actors) {
-            if (!actor.messages_type.empty()) {
-                if (!messagePatterns.count(actor.messages_type)
+            if (!actor.messages_type.empty() || actor.transform_pipe) {
+                if (actor.transform_pipe
+                    && (!typedDomains.count(actor.forward_messages_type)
+                        || !typedDomains.count(actor.backward_messages_type)))
+                    throw std::runtime_error("unknown transform pipe message domain");
+                if (!actor.transform_pipe && !messagePatterns.count(actor.messages_type)
                         && !typedDomains.count(actor.messages_type))
                     throw std::runtime_error(
                         "unknown actor message match contract '" + actor.messages_type + "'");
                 const auto count = std::count_if(actor.methods.begin(), actor.methods.end(),
                     [](const Function& f) { return f.is_receiver; });
-                if (count != 1)
+                if (actor.transform_pipe) {
+                    const auto forward = std::count_if(actor.methods.begin(), actor.methods.end(),
+                        [](const Function& f) { return f.name == "receive_forward"; });
+                    const auto backward = std::count_if(actor.methods.begin(), actor.methods.end(),
+                        [](const Function& f) { return f.name == "receive_backward"; });
+                    if (count != 2 || forward != 1 || backward != 1)
+                        throw std::runtime_error("transform pipe actor requires exactly one receive_forward and receive_backward");
+                } else if (count != 1)
                     throw std::runtime_error("typed actor requires exactly one receive with its declared message domain");
                 if (std::any_of(actor.methods.begin(), actor.methods.end(),
                     [](const Function& f) { return f.name == "on_message"; }))
@@ -1208,12 +1274,16 @@ private:
                         throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
                 }
                 if (method.is_receiver) {
+                    const std::string methodDomain = actor.transform_pipe
+                        ? (method.name == "receive_forward"
+                            ? actor.forward_messages_type : actor.backward_messages_type)
+                        : actor.messages_type;
                     const std::string& parameter = method.parameters.at(0);
                     if (!method.boolean_arms.empty()) {
-                        if (typedDomains.count(actor.messages_type))
+                        if (typedDomains.count(methodDomain))
                             throw std::runtime_error("boolean match cannot inspect tagged enum");
                         const MessagePattern& contract =
-                            *messagePatterns.at(actor.messages_type);
+                            *messagePatterns.at(methodDomain);
                         if (contract.alternatives.size() != 1 ||
                             contract.alternatives[0].kind != MessageShape::Kind::Boolean)
                             throw std::runtime_error(
@@ -1242,7 +1312,7 @@ private:
                                 "nonexhaustive receive boolean match");
                     }
                     if (!method.tagged_arms.empty()) {
-                        if (!typedDomains.count(actor.messages_type))
+                        if (!typedDomains.count(methodDomain))
                             throw std::runtime_error(
                                 "tagged receive match requires named enum or pattern");
                         if (method.match_subject != parameter)
@@ -1250,11 +1320,11 @@ private:
                                 "tagged receive match must inspect Message parameter");
                         std::unordered_set<std::string> allowed;
                         for (const auto& pattern : program.tagged_patterns) {
-                            if (pattern.name == actor.messages_type)
+                            if (pattern.name == methodDomain)
                                 allowed.insert(pattern.alternatives.begin(),
                                                pattern.alternatives.end());
                         }
-                        const auto directEnum = enumNames.find(actor.messages_type);
+                        const auto directEnum = enumNames.find(methodDomain);
                         if (directEnum != enumNames.end()) {
                             for (const auto& c : directEnum->second->cases)
                                 allowed.insert(directEnum->first + "." + c.name);
@@ -1290,6 +1360,10 @@ private:
                                 validate_expression(*assignment.value, armAvailable, functions);
                             }
                             if (!arm.route_direction.empty()) {
+                                if (actor.transform_pipe
+                                    && ((method.name == "receive_forward" && arm.route_direction != "forward")
+                                        || (method.name == "receive_backward" && arm.route_direction != "backward")))
+                                    throw std::runtime_error("transform handler must emit in its ingress direction");
                                 const auto role = pipelineRoles.find(actor.name);
                                 if (role == pipelineRoles.end())
                                     throw std::runtime_error("pipeline actor routing requires declared pipeline topology");
