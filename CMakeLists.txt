@@ -66,6 +66,39 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-owned-heap-test)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_package(OpenSSL QUIET COMPONENTS Crypto)
+    if(OpenSSL_FOUND)
+        add_executable(oreslang-messagepack-wire-v2-test
+            tests/messagepack_wire_v2_test.cpp)
+        target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-messagepack-wire-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-messagepack-wire-v2-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_messagepack_wire_v2_java_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/messagepack_wire_v2_matrix.py"
+                --binary "$<TARGET_FILE:oreslang-messagepack-wire-v2-test>"
+                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/messagepack_collection_vectors.json")
+        set_tests_properties(native_messagepack_wire_v2_java_parity PROPERTIES TIMEOUT 30)
+        add_executable(oreslang-tagged-message-wire-v2-test
+            tests/tagged_message_wire_v2_test.cpp)
+        target_include_directories(oreslang-tagged-message-wire-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-tagged-message-wire-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-tagged-message-wire-v2-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_tagged_enum_message_java_wire_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/tagged_message_wire_v2_matrix.py"
+                --binary "$<TARGET_FILE:oreslang-tagged-message-wire-v2-test>"
+                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/tagged_message_vectors.json")
+        set_tests_properties(native_tagged_enum_message_java_wire_parity PROPERTIES TIMEOUT 30)
+    else()
+        message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
+    endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
     find_program(ORE_NODE NAMES node nodejs)
     if(ORE_CLANG AND ORE_NODE)
@@ -119,6 +152,13 @@ if(BUILD_TESTING)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
+    oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
+    oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
+    oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
+    oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
+    oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
+
     add_test(NAME native_explicit_wasm32_target_ir
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_target_ir_test.py"
@@ -357,6 +397,29 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+    add_executable(oreslang-function-effects-test tests/function_effects_test.cpp)
+    target_include_directories(oreslang-function-effects-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-function-effects-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_function_effect_bitset_contract COMMAND oreslang-function-effects-test)
+    add_executable(oreslang-critical-state-effects-test tests/critical_handle_state_contract_test.cpp)
+    target_include_directories(oreslang-critical-state-effects-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-critical-state-effects-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_critical_handle_state_using_contract COMMAND oreslang-critical-state-effects-test)
+    add_executable(oreslang-critical-state-loan-bridge-test tests/critical_state_loan_bridge_test.cpp)
+    target_include_directories(oreslang-critical-state-loan-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-critical-state-loan-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_critical_state_loan_runtime_bridge COMMAND oreslang-critical-state-loan-bridge-test)
+    add_executable(oreslang-owned-scalar-state-test tests/actor_owned_scalar_state_test.cpp)
+    target_include_directories(oreslang-owned-scalar-state-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-owned-scalar-state-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_typed_scalar_state COMMAND oreslang-owned-scalar-state-test)
+    # Bounded synchronous state-loan guard; not source-level suspend lowering.
+    add_executable(oreslang-actor-state-scope-test tests/actor_state_scope_test.c)
+    target_compile_options(oreslang-actor-state-scope-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_state_scope_nested_loan_fencing
+        COMMAND oreslang-actor-state-scope-test)
     add_executable(oreslang-logical-mutex-test tests/logical_mutex_test.cpp)
     target_include_directories(oreslang-logical-mutex-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-logical-mutex-test PRIVATE Threads::Threads)
@@ -641,6 +704,20 @@ if(BUILD_TESTING)
     # implement the actor scheduler or certify lock-free mailbox delivery.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         find_package(Threads REQUIRED)
+        # Real joined carrier is the sole issuer of retirement proofs.
+        add_executable(oreslang-actor-graph-heap-test
+            tests/actor_owned_graph_heap_test.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-actor-graph-heap-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-actor-graph-heap-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-actor-graph-heap-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_actor_owned_cyclic_graph_heap
+            COMMAND oreslang-actor-graph-heap-test)
+        set_tests_properties(native_actor_owned_cyclic_graph_heap PROPERTIES TIMEOUT 15)
+
         add_executable(oreslang-parking-signal-test
             tests/parking_signal_test.cpp
             src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
