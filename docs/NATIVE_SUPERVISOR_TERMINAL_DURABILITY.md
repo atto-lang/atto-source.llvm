@@ -44,6 +44,37 @@ fsyncs the parent directory at creation and fsyncs each appended transition.
 Its FNV-1a checksum is for accidental corruption detection, not adversarial
 tamper protection. The host must trust the directory and filesystem.
 
+## Host-bound acknowledgment reconciliation
+
+With a durable journal installed, the old scheduler-only
+`reconcile_claimed_terminal_ack` is rejected: it cannot promote an external
+effect without the journal's proof/ACK sequence.
+
+The live bridge offers `reconcile_durable_terminal_effect(proof, verifier)`
+for a trusted host that still owns its native scheduler. It verifies the
+original supervisor and parent generation, exact failed child generation and
+terminal failure, journal nonce, and external commit digest. An authoritative
+verifier runs without journal and scheduler locks. Only verified evidence may
+persist `effect_proven` and `acknowledged`. If the scheduler's CONTROL enqueue
+ACK was lost, the method acknowledges the original one-use scheduler claim
+**after** the durable ACK. A duplicate completed ACK returns false; no
+reconciliation call dispatches the supervisor policy again.
+
+The lower-level `reconcile_durable_external_effect` and
+`acknowledge_proven_durable_effect` remain trusted-host journal operations.
+They do **not** automatically finalize the native scheduler receipt. A host
+that has lost its process-local scheduler after a crash must reconstruct
+authority externally and may acknowledge an already fsynced
+`effect_proven` record directly through the journal; it must never infer an
+external effect from `CLAIMED` alone. FNV checksums are not effect signatures.
+
+The exact-source integration gate runs the native bridge and journal tests
+three times each under both strict GCC and Clang ASan/UBSan:
+https://github.com/zed-pkg-test/java-app/actions/runs/38273714480
+The mirror is test-only and its 12 source Git blob hashes were checked before
+compilation. This focused gate does not certify full LLVM compiler or Java
+backend parity.
+
 ## Unresolved release gates
 
 The current bridge records the event when the actual callback or recovered
