@@ -284,3 +284,31 @@ silently discarding the table.
 producers *before* trying destruction; the check cannot create a producer
 shutdown barrier from thin air. This remains experimental host-side API,
 not production-integrated guest cancellation/finalization.
+
+
+## Final funded causal-ancestry verification
+
+[Exact-source Actions #38280769953](https://github.com/zed-pkg-test/java-app/actions/runs/38280769953)
+verified **167/167** current `CMakeLists.txt`, `src/main/` and `tests/`
+Git blobs and passed **165/165 original LLVM CTests** with zero failures,
+including the compiled three-actor forged-parent rejection (20 actual
+native executions), positive guest causal chain, and Python `-O` evidence
+checks. The original root-credit model reached 12 distinct states and
+rejected its unsafe preclaim mutant.
+
+The separate `PipelineCausalParentAdmission.tla` bounded model reached
+**400 distinct states**, with no safe-model invariant violations, and the
+deliberately unsafe `AllowForgedParent` variant produced the required
+`NoForgedCausalAdmission` counterexample. The mutation initially exposed
+a TLA+ successor-variable specification error; the corrected model and exact
+SHA were rerun successfully. This is abstract bounded model checking, **not**
+a compiler/runtime implementation-level refinement proof.
+
+[Funded actor lifetime + native sanitizer run #38280769873](https://github.com/zed-pkg-test/java-app/actions/runs/38280769873)
+also passed its exact-source, GCC, Clang ASan/UBSan, TLC, and
+compiled-guest gates.
+
+These are verification gates on the checked PR #240 source revision,
+not a merge authorization. The stacked parent PR #180 advanced separately
+with native event traces; PR #239 must reconcile those changes before the
+full dependency stack is considered integration-mergeable.
