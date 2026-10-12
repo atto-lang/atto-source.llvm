@@ -720,6 +720,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 ownedSlots.push_back({address, local.heap_owned});
             }
             if (!method.tagged_arms.empty()) {
+                std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> copiedStateResults;
                 const auto& cases = taggedCases.at(actor.name);
                 auto* invalid = llvm::BasicBlock::Create(context, "match.invalid", fn);
                 auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
@@ -754,6 +755,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     if (!arm.assignments.empty())
                         throw std::runtime_error(
                             "direct actor class field mutation is forbidden");
+                    llvm::Value* armCopiedState = nullptr;
                     if (arm.state_loan) {
                         // The heap snapshot, all mutations and the scalar
                         // result are confined to this callback-lowering
@@ -787,6 +789,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                         }
                         auto* copied = lower(*arm.state_loan->result, builder, i64,
                                             armParameters, loanLocals, declarations);
+                        armCopiedState = copied;
                         armParameters.emplace(arm.state_loan->result_binding, copied);
                     }
                     if (!arm.route_direction.empty()) {
@@ -805,6 +808,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                                 std::distance(cases.begin(), output)),
                             routed});
                     }
+                    if (armCopiedState)
+                        copiedStateResults.emplace_back(armCopiedState, builder.GetInsertBlock());
                     builder.CreateBr(joined);
                 }
                 builder.SetInsertPoint(invalid);
@@ -813,6 +818,17 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 // an arbitrary arm on an out-of-range case ordinal.
                 builder.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
                 builder.SetInsertPoint(joined);
+                if (!copiedStateResults.empty()) {
+                    if (copiedStateResults.size() != method.tagged_arms.size())
+                        throw std::runtime_error(
+                            "state callback result is not defined for every tagged arm");
+                    const auto& name = method.tagged_arms.front().state_loan->result_binding;
+                    auto* merged = builder.CreatePHI(
+                        i64, static_cast<unsigned>(copiedStateResults.size()), "state.loan.copy");
+                    for (const auto& [copy, predecessor] : copiedStateResults)
+                        merged->addIncoming(copy, predecessor);
+                    parameters.emplace(name, merged);
+                }
             }
             if (!method.boolean_arms.empty()) {
                 auto* subject = parameters.at(method.match_subject);
