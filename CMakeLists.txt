@@ -772,4 +772,18 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_typed_panic_event
         COMMAND oreslang-native-supervisor-panic-test)
     set_tests_properties(native_supervisor_typed_panic_event PROPERTIES TIMEOUT 30)
+
+    # Optimistic CAS for logical continuations: state must not be overwritten
+    # after stale, foreign, retired, or exhausted version evidence.
+    add_executable(oreslang-native-versioned-actor-cell-test
+        tests/versioned_actor_cell_test.cpp)
+    target_include_directories(oreslang-native-versioned-actor-cell-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-versioned-actor-cell-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-versioned-actor-cell-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_versioned_state_logical_races
+        COMMAND oreslang-native-versioned-actor-cell-test)
+    set_tests_properties(native_actor_versioned_state_logical_races
+        PROPERTIES TIMEOUT 20)
 endif()
