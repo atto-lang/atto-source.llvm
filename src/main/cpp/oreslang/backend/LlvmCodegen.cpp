@@ -11,6 +11,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -621,6 +622,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             auto* state = b.CreateLoad(i64, lifecycle, "lifecycle");
             b.CreateCondBr(b.CreateICmpEQ(state, expected), pass, denied);
             b.SetInsertPoint(denied);
+            // 'unreachable' alone is optimizer UB, not a reliable runtime
+            // guard. Emit a real llvm.trap, which lowers to Wasm's trap
+            // instruction even at -Oz; never permit duplicate INIT/TEARDOWN.
+            b.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
             b.CreateUnreachable();
             b.SetInsertPoint(pass);
         };
