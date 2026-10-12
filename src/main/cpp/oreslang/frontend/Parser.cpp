@@ -22,6 +22,18 @@ struct Token {
     std::size_t offset;
 };
 
+// This is a sealed lexical interface, not executable native module linking.
+// Keep in sync with stdlib/assert.ores and the versioned Assert contract.
+int assert_member_arity(std::string_view member) noexcept {
+    if (member == "equal" || member == "not_equal" || member == "same" ||
+        member == "equal_throws" || member == "not_equal_throws" ||
+        member == "same_throws") return 2;
+    if (member == "true" || member == "false" ||
+        member == "true_throws" || member == "false_throws" ||
+        member == "fail") return 1;
+    return -1;
+}
+
 bool exceptional_control(std::string_view word) {
     return word == "throw" || word == "raise" || word == "panic" ||
            word == "recover" || word == "defer" || word == "try" ||
@@ -235,6 +247,7 @@ private:
                 imported.canonical_path != "std/assert") {
             fail("unsupported native module import: only sealed Assert from std/assert is staged");
         }
+        has_assert_import_ = true;
         return imported;
     }
 
@@ -846,17 +859,39 @@ private:
                 require(")");
             }
         } else if (accept(".")) {
-            auto field = make_expression(Expression::Kind::Field, offset);
-            field->left = std::move(expr);
-            field->name = identifier();
-            // The native subset has no method-call or imported-symbol ABI.
-            // Do not misdiagnose a qualified Assert invocation as a scalar
-            // field read or silently lower it to an untyped host function.
-            if (token_.text == "(" && field->left->name == "Assert") {
-                fail("native module imports are unsupported: qualified Assert "
-                     "calls require linked stdlib and Any/bool/trap lowering");
+            if (expr->name == "Assert") {
+                if (!has_assert_import_)
+                    fail("unbound native Assert module alias");
+                // Oreslang permits qualified Assert.true/false callables even
+                // though true and false are reserved as bare literals.
+                if (token_.kind != Kind::Identifier &&
+                    token_.text != "true" && token_.text != "false")
+                    fail("expected sealed Assert member name");
+                const std::string member(token_.text);
+                advance();
+                const int arity = assert_member_arity(member);
+                if (arity < 0)
+                    fail("unknown sealed Assert member '" + member + "'");
+                if (!accept("("))
+                    fail("native Assert member must be called, not read as a value");
+                auto call = make_expression(Expression::Kind::ModuleCall, offset);
+                call->left = std::move(expr);
+                call->name = member;
+                if (!accept(")")) {
+                    do {
+                        call->arguments.push_back(expression());
+                    } while (accept(","));
+                    require(")");
+                }
+                if (call->arguments.size() != static_cast<std::size_t>(arity))
+                    fail("wrong sealed Assert member arity for '" + member + "'");
+                expr = std::move(call);
+            } else {
+                auto field = make_expression(Expression::Kind::Field, offset);
+                field->left = std::move(expr);
+                field->name = identifier();
+                expr = std::move(field);
             }
-            expr = std::move(field);
         }
         return expr;
     }
@@ -905,6 +940,14 @@ private:
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions);
                 return;
+            case Expression::Kind::ModuleCall:
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
+                    expr.left->name != "Assert" ||
+                    assert_member_arity(expr.name) != static_cast<int>(expr.arguments.size()))
+                    throw std::runtime_error("invalid sealed Assert call AST");
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions);
+                return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
                 if (found == functions.end() || found->second != expr.arguments.size()) {
@@ -937,7 +980,8 @@ private:
 
     static bool contains_callable_invocation(const Expression* expr) {
         if (!expr) return false;
-        if (expr->kind == Expression::Kind::Call) return true;
+        if (expr->kind == Expression::Kind::Call ||
+            expr->kind == Expression::Kind::ModuleCall) return true;
         if (contains_callable_invocation(expr->left.get()) ||
             contains_callable_invocation(expr->right.get())) return true;
         for (const auto& item : expr->arguments)
@@ -973,6 +1017,29 @@ private:
     }
 
     static void validate(const Program& program) {
+        // An imported module alias must never be shadowed by a local, class,
+        // actor or function symbol: otherwise source binding could differ
+        // between the parser, ownership checker, and future LLVM linker.
+        if (!program.imports.empty()) {
+            if (program.module == "Assert")
+                throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            for (const auto& fn : program.functions) {
+                if (fn.name == "Assert")
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                for (const auto& param : fn.parameters)
+                    if (param.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                for (const auto& binding : fn.locals)
+                    if (binding.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            }
+            for (const auto& cls : program.classes)
+                if (cls.name == "Assert")
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            for (const auto& actor : program.actors)
+                if (actor.name == "Assert")
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+        }
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
             if (!classes.insert(cls.name).second)
@@ -1073,6 +1140,8 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
+                    if (!program.imports.empty() && local.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
                     validate_expression(*local.initializer, names, functions);
                     if (!names.insert(local.name).second)
                         throw std::runtime_error("duplicate branch-local name '" +
@@ -1147,6 +1216,7 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    bool has_assert_import_ = false;
 };
 
 } // namespace
