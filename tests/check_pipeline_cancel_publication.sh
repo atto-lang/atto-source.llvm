@@ -35,7 +35,7 @@ trap 'rm -rf "$tmp"' EXIT
   -o "$tmp/guest"
 for n in $(seq 1 20); do
   set +e
-  "$tmp/guest" > "$tmp/stdout" 2> "$tmp/stderr"
+  timeout 10 "$tmp/guest" > "$tmp/stdout" 2> "$tmp/stderr"
   exit_code=$?
   set -e
   if [[ "$exit_code" -ne 77 ]]; then
