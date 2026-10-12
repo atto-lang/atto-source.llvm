@@ -175,6 +175,34 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
 
+    # Reserved supervisor CONTROL (panic/done/ready) never contends with
+    # the bounded NORMAL message ring and executes on parent's exclusive lane.
+    add_executable(oreslang-native-supervisor-control-test
+        tests/native_actor_control_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-supervisor-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-control-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_reserved_control_lane
+        COMMAND oreslang-native-supervisor-control-test)
+    set_tests_properties(native_supervisor_reserved_control_lane PROPERTIES TIMEOUT 25)
+
+    # Native Future barriers: explicit actor initialization and finalization,
+    # deferred ready/done notifications on the parent's exclusive CONTROL lane.
+    add_executable(oreslang-native-actor-future-test
+        tests/native_actor_future_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-future-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-future-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-future-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_ready_done_future_barriers
+        COMMAND oreslang-native-actor-future-test)
+    set_tests_properties(native_actor_ready_done_future_barriers PROPERTIES TIMEOUT 25)
+
     # Persistent actor-owned heap contract, distinct from per-call owned
     # scalar regions. Uses C11 atomics and cross-carrier thread migration.
     add_executable(oreslang-actor-owned-heap-test

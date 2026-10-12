@@ -5,11 +5,45 @@
 extern "C" {
 #endif
 typedef struct OresNativeActorScheduler OresNativeActorScheduler;
+/* Future token is a generation-fenced value, not a pthread wait handle.
+ * It never blocks a carrier, allocates on poll, or exposes actor memory.
+ * One supervisor CONTROL subscriber per stage (ready and done).
+ */
+typedef enum {
+    ORES_NATIVE_FUTURE_READY = 1,
+    ORES_NATIVE_FUTURE_DONE = 2
+} OresNativeFutureStage;
 typedef struct {
     uint64_t scheduler_domain;
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
+typedef struct {
+    OresNativeActorRef child;
+    OresNativeFutureStage stage;
+} OresNativeActorFuture;
+OresNativeActorRef ores_native_actor_scheduler_spawn_pending(
+    OresNativeActorScheduler* scheduler, size_t actor_slot);
+int ores_native_actor_scheduler_mark_ready(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Owner calls after stop, accepted-message drain AND owned-resource release. */
+int ores_native_actor_scheduler_mark_finalized(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+OresNativeActorFuture ores_native_actor_scheduler_get_ready(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+OresNativeActorFuture ores_native_actor_scheduler_get_done(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+int ores_native_actor_future_is_complete(
+    OresNativeActorScheduler* scheduler, OresNativeActorFuture future);
+/* Register parent as exclusive subscriber, delivering resolution on its
+ * reserved CONTROL lane. If the slot is busy, notification remains owned
+ * by the future and is retried automatically on CONTROL acknowledgement.
+ * This is the native counterpart of eventual await-driven continuation
+ * admission. No source-level await is lowered here yet.
+ */
+int ores_native_actor_future_subscribe(
+    OresNativeActorScheduler* scheduler, OresNativeActorFuture future,
+    OresNativeActorRef parent, uint64_t ticket);
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
@@ -32,6 +66,33 @@ int ores_native_actor_scheduler_poll_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
+
+/* Parent's reserved CONTROL lane, independent of the normal message ring.
+ * Callback executes exclusively on the parent's admitted logical lane, never
+ * directly from the child carrier that published the event.
+ * A single pending/in-flight CONTROL event per parent is reserved. If full,
+ * post returns 0; the publisher MUST retain and retry the owned event.
+ */
+typedef enum {
+    ORES_ACTOR_CONTROL_READY = 1,
+    ORES_ACTOR_CONTROL_DONE = 2,
+    ORES_ACTOR_CONTROL_PANIC = 3,
+    ORES_ACTOR_CONTROL_CANCELLED = 4
+} OresNativeActorControlKind;
+typedef void (*OresNativeActorControlFn)(
+    void* context, size_t parent_slot, OresNativeActorControlKind kind,
+    OresNativeActorRef child, uint64_t payload);
+/* Only configurable once, before any queued work or control events. */
+int ores_native_actor_scheduler_set_control_handler(
+    OresNativeActorScheduler* scheduler, OresNativeActorControlFn callback);
+/* Nonblocking event publication; accepts when parent's normal queue is full.
+ * No implicit acknowledgement, escalation or retry on an occupied slot.
+ */
+int ores_native_actor_scheduler_post_control(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
+    OresNativeActorRef child, OresNativeActorControlKind kind, uint64_t payload);
+uint64_t ores_native_actor_scheduler_control_accepted(OresNativeActorScheduler* scheduler);
+uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn callback, void* ctx);
