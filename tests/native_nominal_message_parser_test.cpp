@@ -173,12 +173,32 @@ int main() {
     rejects(R"(
         define enum Foo as Message1: Tuple[int, Foo] end
     )", "unboxed recursive enum payload: Foo -> Foo");
+    // Box permits finite-size layout, but no implicit cycles or wire codec.
+    auto boxed = parse_program(R"(
+        define enum Foo as Empty More: Box[Foo] end
+    )");
+    assert(boxed.enums.at(0).cases.at(1).payload.kind == MessageShape::Kind::Box);
+    assert(boxed.enums.at(0).cases.at(1).payload.elements.at(0).kind
+           == MessageShape::Kind::EnumRef);
+    auto nested = parse_program(R"(
+        define enum Bar as Message1 = 1 end
+        define enum Foo as Message1: Bar end
+    )");
+    assert(nested.enums.at(1).cases.at(0).payload.kind == MessageShape::Kind::EnumRef);
+    assert(nested.enums.at(1).cases.at(0).payload.nominal_name == "Bar");
+    assert(nested.enums.at(1).cases.at(0).tag == 1);
     rejects(R"(
-        define enum Foo as Message1: Box[Foo] end
-    )", "requires a portable nested enum wire codec");
-    rejects(R"(
-        define enum Priority as Low High end
-        define enum Foo as Message1: Priority end
+        define enum Bar as Message1 = 1 end
+        define enum Foo as Message1: Bar end
+        define actor Worker<messages=Foo> as
+            let count: int = 0;
+            receive(Message m) {
+                do match m over {
+                    on Foo.Message1 as inner { count = count + 1; }
+                }
+                return count;
+            }
+        end
     )", "requires a portable nested enum wire codec");
     rejects("define enum Foo as Message1: Missing end",
             "unknown enum payload type: Missing");
