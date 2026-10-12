@@ -55,6 +55,16 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_unique_parallel_tokens
         COMMAND oreslang-owned-i64-token-concurrent-regions-test)
     set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
+    # Header-only native arena proof: independent actor byte regions without
+    # tracing GC. This is not yet a compiled Oreslang actor object heap.
+    add_executable(oreslang-actor-owned-heap-test tests/actor_owned_heap_test.cpp)
+    target_include_directories(oreslang-actor-owned-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-owned-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_heap_contract
+        COMMAND oreslang-actor-owned-heap-test)
+
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
@@ -100,6 +110,16 @@ if(BUILD_TESTING)
                 --node "${ORE_NODE}"
                 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_tests_properties(wasm32_source_class_ownership_runtime PROPERTIES TIMEOUT 240)
+        # Actual .ores actor handler lowered to import-free Wasm, with a
+        # monotonic lifecycle and one private state image per Wasm instance.
+        add_test(NAME wasm32_source_actor_guest_lifecycle
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_source_actor_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --node "${ORE_NODE}"
+                --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        set_tests_properties(wasm32_source_actor_guest_lifecycle PROPERTIES TIMEOUT 120)
     endif()
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
@@ -128,10 +148,24 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_exact_once_field_destruction
         COMMAND oreslang-ownership-drop-plan-test)
+    add_executable(oreslang-target-abi-test tests/target_abi_test.cpp)
+    target_include_directories(oreslang-target-abi-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-target-abi-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME portable_target_abi_v1 COMMAND oreslang-target-abi-test
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/architecture/v1/targets.tsv")
     add_executable(oreslang-dop-kernel-test tests/dop_kernel_lowering_test.cpp)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_typed_cpu_opencl_ownership COMMAND oreslang-dop-kernel-test)
+    add_executable(oreslang-dop-read-loan-thread-test tests/dop_hostbuffer_concurrency_test.cpp)
+    target_include_directories(oreslang-dop-read-loan-thread-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-dop-read-loan-thread-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-dop-read-loan-thread-test PRIVATE Threads::Threads)
+    add_test(NAME dop_hostbuffer_multithread_read_loan_quiescence
+        COMMAND oreslang-dop-read-loan-thread-test)
+    set_tests_properties(dop_hostbuffer_multithread_read_loan_quiescence PROPERTIES TIMEOUT 25)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -139,6 +173,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-gpu-fence-test tests/gpu_buffer_fence_test.cpp)
     target_include_directories(oreslang-gpu-fence-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-gpu-fence-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
@@ -195,7 +230,36 @@ if(BUILD_TESTING)
         --diagnostic "native defer requires a direct function call or class field assignment")
     oreslang_contract_test(reject_native_finally_override
         native-defer-finally-unsupported.ores
-        --diagnostic "native exception/control effect unsupported")
+        --diagnostic "cannot escape finally")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_try_finally_return_snapshot
+            native-try-finally-return-snapshot.ores
+            --run 246 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(reject_finally_return_override
+        native-finally-return-reject.ores --diagnostic "cannot escape finally")
+    oreslang_contract_test(reject_finally_break_override
+        native-finally-break-reject.ores --diagnostic "cannot escape finally")
+    oreslang_contract_test(reject_finally_continue_override
+        native-finally-continue-reject.ores --diagnostic "cannot escape finally")
+    oreslang_contract_test(reject_try_nonempty_catch
+        native-try-nonempty-catch-reject.ores
+        --diagnostic "native nonthrowing catch requires only an integer literal return")
+    oreslang_contract_test(reject_try_effectful_body
+        native-try-effectful-body-reject.ores
+        --diagnostic "native terminal try supports only return guards and final return")
+    oreslang_contract_test(reject_try_throw_capable_return
+        native-try-throw-capable-return-reject.ores
+        --diagnostic "native protected try return requires nonthrowing scalar/field read")
+    oreslang_contract_test(reject_unadmitted_trap_expression
+        unsupported-trap-expression.ores
+        --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
+    oreslang_contract_test(reject_nested_unadmitted_trap_expression
+        unsupported-trap-nested-call.ores
+        --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
+    oreslang_contract_test(reject_binary_operand_trap_expression
+        unsupported-trap-binary-operand.ores
+        --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
     # Native source if/else CFG: separate branch states must join safely.
     # Real Clang execution, ASan/UBSan and no-partial-IR rejection matrix.
     if(ORE_CLANG)
@@ -319,6 +383,19 @@ if(BUILD_TESTING)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
     endif()
 
+    # Trusted host resource reclamation: close in reverse acquisition order only
+    # after active turns, outstanding loans and native callbacks quiesce.
+    add_executable(oreslang-actor-resource-registry-test
+        tests/actor_resource_registry_test.cpp)
+    target_include_directories(oreslang-actor-resource-registry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-resource-registry-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-resource-registry-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_resource_registry_quiescence
+        COMMAND oreslang-actor-resource-registry-test)
+    set_tests_properties(native_actor_resource_registry_quiescence PROPERTIES TIMEOUT 15)
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -362,6 +439,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_group_heap_loan_quiescence
         COMMAND oreslang-actor-group-heap-quiescence-test)
     set_tests_properties(native_actor_group_heap_loan_quiescence PROPERTIES TIMEOUT 15)
+    # Bind the actual native actor heap, resource registry and ActorGroup
+    # physical-done acknowledgment into one quiescence-checked host lifecycle.
+    add_executable(oreslang-native-actor-retirement-barrier-test
+        tests/native_actor_retirement_barrier_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-native-actor-retirement-barrier-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-retirement-barrier-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-retirement-barrier-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_done_resource_quiescence
+        COMMAND oreslang-native-actor-retirement-barrier-test)
+    set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
@@ -381,6 +471,19 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_suspends unsupported-suspends.ores --diagnostic "native suspends declaration requires")
     oreslang_contract_test(reject_critical unsupported-critical.ores --diagnostic "native critical declaration requires")
     oreslang_contract_test(reject_suspend_critical unsupported-suspend-critical.ores --diagnostic "native suspends declaration requires")
+    # Native parity substrate for the Graal per-incarnation i64/bool
+    # StateAccess lifetime. LLVM guest-source lowering is a separate gate.
+    add_executable(oreslang-native-scalar-state-test
+        tests/native_scalar_state_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-scalar-state-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-native-scalar-state-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-scalar-state-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_scalar_state_critical_lifetimes
+        COMMAND oreslang-native-scalar-state-test)
     # Bounded independent supervisor CONTROL transport (runtime substrate only).
     add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
     target_include_directories(oreslang-supervisor-hierarchy-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -731,6 +834,15 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-deterministic-graph-arena-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_deterministic_graph_arena COMMAND oreslang-deterministic-graph-arena-test)
+    # Independent actor-owned native heap tests are portable (no Linux syscalls).
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-heap-test tests/actor_heap_test.cpp)
+    target_include_directories(oreslang-actor-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-heap-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-heap-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_heap_no_tracing_gc
+             COMMAND oreslang-actor-heap-test)
 
     # Linux-specific actor-neutral wake/park primitive. This does NOT
     # implement the actor scheduler or certify lock-free mailbox delivery.
@@ -1002,4 +1114,5 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-versioned-actor-cell-test)
     set_tests_properties(native_actor_versioned_state_logical_races
         PROPERTIES TIMEOUT 20)
+    set_tests_properties(native_actor_state_scope_nested_loan_fencing PROPERTIES TIMEOUT 20)
 endif()
