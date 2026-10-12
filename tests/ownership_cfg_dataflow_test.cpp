@@ -75,8 +75,8 @@ int main() {
     alias_layout.entry = {{"p.a", cell(kOwned)}, {"p.a.deep", cell(kOwned)}};
     alias_layout.blocks = {{{}, {}}};
     assert(rejected([&] { verify(alias_layout); }));
-    alias_layout.entry = {{"p", cell(kOwned)}, {"p.ab", cell(kOwned)}};
-    alias_layout.blocks = {{{op(Kind::Read, "p"), op(Kind::Read, "p.ab")}, {}}};
+    alias_layout.entry = {{"p.a", cell(kOwned)}, {"p.ab", cell(kOwned)}};
+    alias_layout.blocks = {{{op(Kind::Read, "p.a"), op(Kind::Read, "p.ab")}, {}}};
     verify(alias_layout);
     alias_layout.entry = {{"p.a", cell(kOwned)}, {"p.b", cell(kOwned)}};
     alias_layout.blocks = {{{op(Kind::BorrowExclusive, "p.a"),
