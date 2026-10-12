@@ -39,6 +39,20 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
  * mail, even through legacy index submit, until publication commits. */
 OresNativeActorRef ores_native_actor_scheduler_spawn_unpublished(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
+/* Generation-safe reclamation of a failed hidden replacement only.
+ * Preconditions: exact old ActorRef is retired, physical DONE, unpublished,
+ * never admitted user or CONTROL callbacks, without any active admission
+ * lease, and global scheduler is alive. The operation advances the same
+ * physical slot to generation+1, keeps it hidden and returns the fresh ref.
+ * It can NOT recycle an ACTIVE/published incarnation: legacy message/control
+ * callback ABI is slot-index based and must be redesigned for that case.
+ * Old refs immediately become stale; legacy index submit is disabled for
+ * generation > 1, while ref-based send remains generation-checked.
+ * External owner must still prove exact DONE and abort the old registry
+ * reservation before publishing the next logical incarnation.
+ */
+OresNativeActorRef ores_native_actor_scheduler_recycle_unpublished_done(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef finalized_candidate);
 /* Serializes RESTART publication with physical stop/global retirement without
  * holding the scheduler's internal lock over registry operations. A successful
  * lease must be released exactly once on its acquiring host thread; stop and
@@ -71,10 +85,6 @@ int ores_native_actor_scheduler_poll_ready(
  * READY is not enough: unpublished RESTART actors may be alive but must not
  * accept external messages until scheduler lease publication is complete.
  */
-int ores_native_actor_scheduler_poll_published(
-    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
-/* Unlike physical readiness, this also requires externally routable admission.
- * A staged but unpublished restart candidate must fail this probe. */
 int ores_native_actor_scheduler_poll_published(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 int ores_native_actor_scheduler_poll_done(
