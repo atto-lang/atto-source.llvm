@@ -81,7 +81,12 @@ int main(void) {
     for (size_t i = 0; i < sizeof(bytes); ++i) {
         const uint8_t old = bytes[i];
         bytes[i] ^= 0x01;
-        assert(!ores_mp2_validate_owned(&c, &frame));
+        /* Structural T[S,I,E(...)] validation alone cannot bind the
+         * outer enum owner or tag. Production source_send_binary
+         * ALWAYS applies the separate nominal identity gate afterwards. */
+        assert(!ores_mp2_validate_owned(&c, &frame)
+               || !ores_mp2_tagged_identity_matches_validated(
+                   &c, &frame, "Foo", 1));
         bytes[i] = old;
     }
     assert(ores_mp2_validate_owned(&c, &frame));
