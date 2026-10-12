@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/NestedEnumV2.hpp"
 
 #include <algorithm>
 #include <array>
@@ -39,6 +40,7 @@ struct GuestNominalCase {
     std::array<std::uint8_t, 32> shape_hash;
     std::vector<std::uint8_t> wire;
     bool i64_payload = false;
+    bool nested_payload = false;
 };
 std::array<std::uint8_t, 32> sha(std::string_view text) {
     return llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(
@@ -111,10 +113,20 @@ std::vector<GuestNominalCase> tagged_cases(
             [&](const EnumCase& c) { return c.name == variant; });
         if (item == decl->cases.end()
                 || (item->has_payload
-                    && item->payload.kind != MessageShape::Kind::Integer))
-            throw std::runtime_error("LLVM typed source subset requires payloadless or int cases");
-        const bool i64_payload = item->has_payload;
-        const std::string shape = i64_payload ? "T[S,I,I]" : "T[S,I]";
+                    && item->payload.kind != MessageShape::Kind::Integer
+                    && item->payload.kind != MessageShape::Kind::EnumRef))
+            throw std::runtime_error("LLVM typed source subset requires payloadless, int or nested cases");
+        const bool nested_payload = item->has_payload &&
+            item->payload.kind == MessageShape::Kind::EnumRef;
+        const bool i64_payload = item->has_payload && !nested_payload;
+        std::string shape = i64_payload ? "T[S,I,I]" : "T[S,I]";
+        if (nested_payload) {
+            std::vector<std::string> visited;
+            shape = "T[S,I,";
+            nested_enum_v2::shape(shape, program, item->payload, visited);
+            shape += "]";
+            nested_enum_v2::require_descriptor_budget(shape);
+        }
         const auto shape_hash = sha("oreslang.actor.shape.v2/" + shape);
         const std::uint32_t tag = item->tag;
         const std::string schema = "oreslang.enum." + domain_hash + "."
@@ -123,11 +135,11 @@ std::vector<GuestNominalCase> tagged_cases(
         mp_string(wire, schema);
         wire.push_back(0xc4); wire.push_back(32);
         wire.insert(wire.end(), shape_hash.begin(), shape_hash.end());
-        wire.push_back(i64_payload ? 0x93 : 0x92);
+        wire.push_back(item->has_payload ? 0x93 : 0x92);
         mp_string(wire, owner);
         mp_tag(wire, tag);
         result.push_back({name, owner, schema, tag, shape, shape_hash,
-                          std::move(wire), i64_payload});
+                          std::move(wire), i64_payload, nested_payload});
     }
     return result;
 }
@@ -422,7 +434,20 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     throw std::runtime_error("source tagged send outside closed domain");
                 llvm::Value* wirePtr = taggedFrames.at(actorType).at(send.tagged_variant);
                 std::size_t wireBytes = it->wire.size();
-                if (it->i64_payload) {
+                if (it->nested_payload) {
+                    if (send.nested_tagged_variant.empty() || send.payload)
+                        throw std::runtime_error("nested source send requires a checked enum constructor");
+                    const auto actorDecl = std::find_if(source.actors.begin(), source.actors.end(),
+                        [&](const Actor& a) { return a.name == actorType; });
+                    if (actorDecl == source.actors.end())
+                        throw std::runtime_error("unbound nested actor receiver");
+                    const auto bytes = nested_enum_v2::one_level_nullary(
+                        source, actorDecl->messages_type,
+                        send.tagged_variant, send.nested_tagged_variant);
+                    wireBytes = bytes.size();
+                    wirePtr = at.CreateGlobalStringPtr(
+                        std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+                } else if (it->i64_payload) {
                     if (!send.payload || send.payload->kind != Expression::Kind::Integer
                             || send.payload->integer < 0
                             || send.payload->integer > INT32_MAX)
@@ -433,7 +458,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     const std::string bytes(reinterpret_cast<const char*>(frame.data()),
                                             frame.size());
                     wirePtr = at.CreateGlobalStringPtr(bytes);
-                } else if (send.payload) {
+                } else if (send.payload || !send.nested_tagged_variant.empty()) {
                     throw std::runtime_error("payloadless tagged case cannot carry data");
                 }
                 at.CreateCall(sourceSendTaggedChecked,
