@@ -35,9 +35,13 @@ public:
         return (backedges_ & (kLoopCheckInterval - 1)) == 0;
     }
 
-    // Cold path: reductions OR active-dispatch monotonic elapsed time.
-    bool shouldCooperateAtCheck() noexcept {
-        if (backedges_ >= kMaxBackedgesPerDispatch) return true;
+    // Cold path: independent watchdog request, reduction cap, or active
+    // dispatch elapsed time. This is ONLY advisory: the caller must have a
+    // compiler-proven post-commit heap continuation and no live no-yield loans.
+    // A watchdog never interrupts or rewinds an executing native stack.
+    bool shouldCooperateAtCheck(bool watchdogRequested = false) noexcept {
+        if (watchdogRequested || backedges_ >= kMaxBackedgesPerDispatch)
+            return true;
         return Clock::now() - dispatchStarted_ >= kSoftDispatchQuantum;
     }
 
