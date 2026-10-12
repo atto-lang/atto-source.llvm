@@ -650,7 +650,7 @@ int main() {
 
     // True scheduler-backed RESTART admission and shutdown fencing. The
     // replacement must be physically READY, not just a fresh actor number.
-    for (int mode = 0; mode < 3; ++mode) {
+    for (int mode = 0; mode < 4; ++mode) {
         auto* runtime = ores_native_actor_scheduler_open_typed_control(
             3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
         check(runtime != nullptr, "restart proof scheduler startup failed");
@@ -726,7 +726,7 @@ int main() {
             try { (void) children->begin_restart(child.child, dying, 1); }
             catch (const std::exception&) { rejected = true; }
             check(rejected, "closed bridge reopened restart admission");
-        } else {
+        } else if (mode == 2) {
             // Closing CONTROL while the bridge remains alive must fence the
             // replacement even though the physical scheduler actor is READY.
             process->close();
@@ -745,6 +745,57 @@ int main() {
             check(children->abort_restart(ticket).phase
                       == oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
                   "closed supervisor could not release unspawned claim");
+        } else {
+            // Stronger scheduler-backed scenario: a physical candidate was
+            // spawned and admitted, then the supervisor closed BEFORE logical
+            // publication. Cleanup must precede abort, and no message may
+            // enter its unpublished lane at any point.
+            children->stage_replacement(ticket, replacement);
+            children->acknowledge_replacement_admission(
+                ticket, replacement, [&] {
+                    return ores_native_actor_scheduler_poll_ready(runtime, replacement);
+                });
+            check(!ores_native_actor_scheduler_send(runtime, replacement, 42),
+                  "pre-publication replacement accepted external message");
+            process->close();
+            bridge->fence_restart_publication();
+            rejected = false;
+            try { (void) bridge->admit_verified_replacement(ticket, replacement); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected && bridge->registered_children() == 0,
+                  "shutdown published an already admitted replacement");
+            rejected = false;
+            try { (void) children->abort_restart(ticket); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected, "shutdown aborted a still-live replacement");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "shutdown replacement could not physically clean up");
+            const auto restored = bridge->abort_cleaned_replacement(ticket, replacement);
+            check(restored.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "shutdown cleanup did not release the old generation");
+            check(!ores_native_actor_scheduler_poll_published(runtime, replacement)
+                      && !ores_native_actor_scheduler_send(runtime, replacement, 42),
+                  "shutdown leaked an externally routable replacement");
+            const auto transitions = children->committed_transitions();
+            unsigned closed = 0, cleanup = 0, aborts = 0, commits = 0;
+            for (const auto& event : transitions) {
+                const std::string operation(event.operation);
+                if (operation == "restart.close") ++closed;
+                if (operation == "restart.cleanup-verified") ++cleanup;
+                if (operation == "restart.commit") ++commits;
+                if (operation == "restart.abort") {
+                    ++aborts;
+                    check(event.replacement.has_value()
+                              && event.replacement->actor_slot == replacement.actor_slot
+                              && event.replacement->generation == replacement.generation,
+                          "shutdown abort did not name cleaned physical incarnation");
+                }
+            }
+            check(closed == 1 && cleanup == 1 && aborts == 1 && commits == 0,
+                  "shutdown RESTART journal violated cleanup-before-abort");
+            std::puts("NATIVE_SUPERVISOR_RESTART_SHUTDOWN_E2E_PASS admitted=1 closed=1 cleaned=1 aborted=1 committed=0");
         }
         bridge.reset();
         process->close();
