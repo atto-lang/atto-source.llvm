@@ -25,9 +25,21 @@ namespace oreslang::runtime {
 class SupervisorProcess final : public std::enable_shared_from_this<SupervisorProcess> {
 public:
     enum class Directive { restart, stop, escalate, acknowledge };
+    static constexpr bool valid_directive(Directive value) noexcept {
+        switch (value) {
+            case Directive::restart:
+            case Directive::stop:
+            case Directive::escalate:
+            case Directive::acknowledge: return true;
+        }
+        return false;
+    }
     struct Resolution {
         SupervisorFailureNotice notice;
         Directive requested;
+        // Scoped to supervisor_id + runtime_id; not the actor's generation.
+        // Lifecycle owners can use this for idempotent effect receipts.
+        std::uint64_t turn_generation = 0;
     };
     // Nullopt means logical await: the carrier returns while the lease stays
     // owned. A future resolver calls resume() to schedule an admitted turn.
@@ -57,12 +69,27 @@ public:
             || notice.runtime_id != runtime_id_) {
             throw std::invalid_argument("foreign supervisor process notice");
         }
-        if (failed_ || closed_ || mailbox_.size() >= capacity_) {
+        // Value-only failure identity is either a complete trusted binding
+        // or the legacy unbound host notification, never a partial token.
+        if ((notice.logical_child_id == 0)
+                != (notice.logical_incarnation == 0)) {
+            throw std::invalid_argument("partial logical child identity");
+        }
+        if (failed_ || closed_ || close_after_commit_ || mailbox_.size() >= capacity_) {
             ++undelivered_;
             throw std::logic_error("supervisor process cannot admit CONTROL");
         }
-        mailbox_.push_back(notice);
+        try {
+            mailbox_.push_back(notice);
+        } catch (...) {
+            // The rejected notice is separate from already queued notices.
+            ++undelivered_;
+            fail_locked();
+            throw;
+        }
         schedule_locked();
+        if (failed_)
+            throw std::logic_error("supervisor CONTROL dispatch failed during admission");
     }
 
     /**
@@ -79,11 +106,19 @@ public:
         if (!expected_epoch || expected_epoch != epoch_
             || !suspended_ || resume_enqueued_ || failed_ || closed_)
             return false;
+        if (!valid_directive(decision)) {
+            // Native callers can manufacture unknown enum values through
+            // FFI or an explicit cast. Never send one to a lifecycle owner.
+            fail_locked();
+            return false;
+        }
         resume_enqueued_ = true;
         try {
             auto self = shared_from_this();
             if (!SupervisorEnqueueGuard::submit(
-                    enqueue_, [self, decision] { self->finish(decision); })) {
+                    enqueue_, [self, expected_epoch, decision] {
+                        self->finish(expected_epoch, decision);
+                    })) {
                 fail_locked();
                 return false;
             }
@@ -116,9 +151,35 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         return active_;
     }
+    /** True only after a logical await has relinquished its CONTROL carrier. */
+    bool suspended() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return active_ && suspended_ && !failed_ && !closed_;
+    }
     bool healthy() const {
         std::lock_guard<std::mutex> guard(mutex_);
-        return !failed_ && !closed_ && undelivered_ == 0;
+        return !failed_ && !closed_ && !close_after_commit_ && undelivered_ == 0;
+    }
+
+    /*
+     * Trusted, bounded host publication transaction. Coordinate RESTART
+     * with the same decision/close barrier used by authoritative STOP.
+     * Acquire the decision fence first, then the process mutex; callers
+     * may acquire the native scheduler publication gate and bridge/registry
+     * mutexes *inside* this scope, never in the reverse order.
+     *
+     * The callback must perform only bounded, callback-free host identity
+     * mutations; no guest work, blocking Future or external lifecycle
+     * effect may execute here. The process lock makes failure classification
+     * and CONTROL close atomic with the host registry publication.
+     */
+    template <typename Fn>
+    decltype(auto) with_healthy_restart_transaction(Fn&& publication) {
+        std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (failed_ || closed_ || close_after_commit_ || undelivered_ != 0)
+            throw std::logic_error("supervisor CONTROL cannot publish RESTART");
+        return std::forward<Fn>(publication)();
     }
     void close() {
         // Linearize shutdown with actual lifecycle decision side effects.
@@ -127,9 +188,17 @@ public:
         std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return;
+        if (committing_decision_ && !failed_) {
+            close_after_commit_ = true;
+            return;
+        }
         closed_ = true;
         if (!failed_) undelivered_ += mailbox_.size();
         mailbox_.clear();
+        active_ = false;
+        policy_started_ = false;
+        suspended_ = false;
+        resume_enqueued_ = false;
     }
 
 private:
@@ -139,22 +208,27 @@ private:
             fail_locked();
             return;
         }
-        ++epoch_;
+        const std::uint64_t generation = ++epoch_;
         active_ = true;
+        policy_started_ = false;
         try {
             auto self = shared_from_this();
             if (!SupervisorEnqueueGuard::submit(
-                    enqueue_, [self] { self->begin(); })) fail_locked();
+                    enqueue_, [self, generation] { self->begin(generation); })) fail_locked();
         } catch (...) {
             fail_locked();
         }
     }
 
-    void begin() noexcept {
+    void begin(std::uint64_t generation) noexcept {
         SupervisorFailureNotice next;
         try {
             std::lock_guard<std::mutex> guard(mutex_);
-            if (failed_ || closed_ || mailbox_.empty()) return;
+            // A duplicated or delayed scheduler callback cannot invoke policy
+            // twice, overlap the current policy, or enter a newer turn.
+            if (failed_ || closed_ || !active_ || policy_started_
+                || generation != epoch_ || mailbox_.empty()) return;
+            policy_started_ = true;
             next = mailbox_.front();
         } catch (...) {
             std::lock_guard<std::mutex> guard(mutex_);
@@ -173,26 +247,24 @@ private:
             if (!failed_ && !closed_) suspended_ = true;
             return;
         }
-        finish(*result);
+        finish(generation, *result);
     }
 
-    void finish(Directive decision) noexcept {
+    void finish(std::uint64_t generation, Directive decision) noexcept {
         std::lock_guard<std::recursive_mutex> decision_guard(decision_fence_);
         Resolution resolution;
         try {
             std::lock_guard<std::mutex> guard(mutex_);
-            if (failed_ || closed_ || !active_ || mailbox_.empty()) return;
-            resolution = Resolution{mailbox_.front(), decision};
+            // Validate again on the CONTROL carrier: checking the epoch at
+            // resume() admission alone does not fence a stale queued callback.
+            if (failed_ || closed_ || !active_ || generation != epoch_
+                || !policy_started_ || mailbox_.empty()) return;
+            if (!valid_directive(decision)) {
+                fail_locked();
+                return;
+            }
+            resolution = Resolution{mailbox_.front(), decision, generation};
             suspended_ = false;
-        } catch (...) {
-            std::lock_guard<std::mutex> guard(mutex_);
-            fail_locked();
-            return;
-        }
-        try {
-            // The directive is a host REQUEST; no restart/escalation occurs
-            // until the lifecycle owner explicitly applies the decision.
-            sink_(resolution);
         } catch (...) {
             std::lock_guard<std::mutex> guard(mutex_);
             fail_locked();
@@ -200,12 +272,46 @@ private:
         }
         {
             std::lock_guard<std::mutex> guard(mutex_);
+            committing_decision_ = true;
+        }
+        try {
+            // A host effect may close its owning supervisor reentrantly.
+            // Defer closure until this successfully applied decision commits.
+            sink_(resolution);
+        } catch (...) {
+            std::lock_guard<std::mutex> guard(mutex_);
+            committing_decision_ = false;
+            // The host side effect may have occurred before the exception.
+            // Never replay it or count it as committed. Complete any
+            // self-requested close after accounting for the failed decision.
+            fail_locked();
+            if (close_after_commit_) {
+                closed_ = true;
+                mailbox_.clear();
+                active_ = false;
+                policy_started_ = false;
+                suspended_ = false;
+                resume_enqueued_ = false;
+                close_after_commit_ = false;
+            }
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            committing_decision_ = false;
             if (failed_ || closed_) return;
             mailbox_.pop_front();
             ++resolved_;
             active_ = false;
+            policy_started_ = false;
             resume_enqueued_ = false;
-            schedule_locked();
+            if (close_after_commit_) {
+                closed_ = true;
+                undelivered_ += mailbox_.size();
+                mailbox_.clear();
+            } else {
+                schedule_locked();
+            }
         }
     }
 
@@ -213,6 +319,11 @@ private:
         if (failed_ || closed_) return;
         failed_ = true;
         undelivered_ += mailbox_.size();
+        mailbox_.clear(); // Failed CONTROL never retains owned notice data.
+        active_ = false;
+        policy_started_ = false;
+        suspended_ = false;
+        resume_enqueued_ = false;
     }
 
     const std::uint64_t supervisor_id_;
@@ -226,8 +337,11 @@ private:
     mutable std::mutex mutex_;
     std::deque<SupervisorFailureNotice> mailbox_;
     bool active_ = false;
+    bool policy_started_ = false;
     bool suspended_ = false;
     bool resume_enqueued_ = false;
+    bool committing_decision_ = false;
+    bool close_after_commit_ = false;
     bool failed_ = false;
     bool closed_ = false;
     std::uint64_t epoch_ = 0;

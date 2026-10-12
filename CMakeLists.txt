@@ -456,6 +456,48 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_i64_region_drop_and_provenance
         COMMAND oreslang-native-owned-i64-region-test)
 
+    # Supervisor declarations are source-visible in Java, but native
+    # lowering must fail closed until compiler-generated CONTROL hooks exist.
+    add_executable(oreslang-source-supervisor-admission-test
+        tests/source_supervisor_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-source-supervisor-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-source-supervisor-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_source_supervisor_fail_closed
+        COMMAND oreslang-source-supervisor-admission-test)
+    set_tests_properties(native_source_supervisor_fail_closed PROPERTIES TIMEOUT 15)
+
+    # Replayed enqueue adapters and stale CONTROL continuations must not
+    # execute another guest policy or apply an old lifecycle decision.
+    add_executable(oreslang-native-supervisor-replay-guards-test
+        tests/native_supervisor_replay_guards_test.cpp)
+    target_include_directories(oreslang-native-supervisor-replay-guards-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-supervisor-replay-guards-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_replay_guards
+        COMMAND oreslang-native-supervisor-replay-guards-test)
+    set_tests_properties(native_supervisor_replay_guards PROPERTIES TIMEOUT 15)
+
+    # Distinguish supervisor-owned logical children from physical native
+    # actor slot generations; reject stale finalizers and duplicate restart
+    # identity commits before exposing any guest RESTART operation.
+    add_executable(oreslang-native-supervisor-child-registry-test
+        tests/native_supervisor_child_registry_test.cpp)
+    target_include_directories(oreslang-native-supervisor-child-registry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-child-registry-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-supervisor-child-registry-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-supervisor-child-registry-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_logical_child_incarnation
+        COMMAND oreslang-native-supervisor-child-registry-test)
+    set_tests_properties(native_supervisor_logical_child_incarnation PROPERTIES TIMEOUT 15)
+
+
     # Host-only deterministic actor arena; no source actor lowering implied.
     add_executable(oreslang-native-actor-arena-test
         tests/native_actor_arena_test.c
@@ -615,6 +657,136 @@ if(BUILD_TESTING)
     add_test(NAME native_typed_panic_supervisor_process_bridge
         COMMAND oreslang-native-supervisor-panic-bridge-test)
     set_tests_properties(native_typed_panic_supervisor_process_bridge PROPERTIES TIMEOUT 30)
+
+    # Exact physical admission leases must serialize STOP and whole-scheduler
+    # retirement while unpublished actors remain unroutable.
+    add_executable(oreslang-native-restart-admission-lease-test
+        tests/native_restart_admission_lease_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-restart-admission-lease-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-restart-admission-lease-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-restart-admission-lease-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-restart-admission-lease-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_restart_admission_lease
+        COMMAND oreslang-native-restart-admission-lease-test)
+    set_tests_properties(native_restart_admission_lease PROPERTIES TIMEOUT 30)
+
+    # Safe limited reincarnation: only stopped, never-published candidates.
+    # Published user callbacks remain slot-index-only and cannot be recycled.
+    add_executable(oreslang-native-actor-reincarnation-test
+        tests/native_actor_reincarnation_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-reincarnation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-reincarnation-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-actor-reincarnation-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-actor-reincarnation-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_reincarnation
+        COMMAND oreslang-native-actor-reincarnation-test)
+    set_tests_properties(native_actor_reincarnation PROPERTIES TIMEOUT 30)
+
+    # Only opt-in identity-bearing callbacks permit physical slot reuse
+    # after previously published user activity and normal-exit sealing.
+    add_executable(oreslang-native-active-generation-test
+        tests/native_active_actor_generation_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-active-generation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-active-generation-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-active-generation-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-active-generation-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_active_actor_generation
+        COMMAND oreslang-native-active-generation-test)
+    set_tests_properties(native_active_actor_generation PROPERTIES TIMEOUT 40)
+
+    # Exact scheduler-minted terminal envelope survives parent STOP and
+    # remains single-claim across ambiguous host CONTROL admission.
+    add_executable(oreslang-native-terminal-receipt-test
+        tests/native_terminal_receipt_reconciliation_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-terminal-receipt-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-terminal-receipt-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-terminal-receipt-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-terminal-receipt-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_terminal_receipt_reconciliation
+        COMMAND oreslang-native-terminal-receipt-test)
+    set_tests_properties(native_terminal_receipt_reconciliation PROPERTIES TIMEOUT 40)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # GNU link-wrapper fault injection: no uninitialized mutex destroy
+        # and no publication-gate leak on partial pthread startup.
+        add_executable(oreslang-native-restart-startup-fault-test
+            tests/native_restart_startup_fault_test.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-restart-startup-fault-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-restart-startup-fault-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-restart-startup-fault-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        target_link_options(oreslang-native-restart-startup-fault-test PRIVATE
+            -Wl,--wrap=pthread_mutex_init
+            -Wl,--wrap=pthread_mutex_destroy
+            -Wl,--wrap=pthread_create)
+        add_test(NAME native_restart_startup_faults
+            COMMAND oreslang-native-restart-startup-fault-test)
+        set_tests_properties(native_restart_startup_faults PROPERTIES TIMEOUT 20)
+    endif()
+
+
+    add_executable(oreslang-native-restart-control-fence-test
+        tests/native_supervisor_restart_control_fence_test.cpp)
+    target_include_directories(oreslang-native-restart-control-fence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-restart-control-fence-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-restart-control-fence-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-restart-control-fence-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_restart_control_close_fence
+        COMMAND oreslang-native-restart-control-fence-test)
+    set_tests_properties(native_supervisor_restart_control_close_fence
+        PROPERTIES TIMEOUT 30)
+
+    # Real scheduler typed PANIC -> native bridge -> registry-verified
+    # compiler-owned self.stop(f.child) -> acknowledged / ambiguous STOP.
+    # This is the opt-in source STOP slice, not arbitrary guest on_panic.
+    add_executable(oreslang-native-source-supervisor-bridge-e2e-test
+        tests/native_source_supervisor_bridge_e2e_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-source-supervisor-bridge-e2e-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-source-supervisor-bridge-e2e-test
+        PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(oreslang-native-source-supervisor-bridge-e2e-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-source-supervisor-bridge-e2e-test
+        PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_source_supervisor_bridge_verified_stop_e2e
+        COMMAND oreslang-native-source-supervisor-bridge-e2e-test)
+    set_tests_properties(native_source_supervisor_bridge_verified_stop_e2e
+        PROPERTIES TIMEOUT 30)
+
+    # Independent host physical DONE evidence is checked against the live
+    # C scheduler, even when a trusted registry falsely claims FINALIZED.
+    add_executable(oreslang-native-physical-stop-evidence-test
+        tests/native_physical_stop_evidence_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-physical-stop-evidence-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-physical-stop-evidence-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-physical-stop-evidence-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-physical-stop-evidence-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_physical_stop_evidence
+        COMMAND oreslang-native-physical-stop-evidence-test)
+    set_tests_properties(native_physical_stop_evidence PROPERTIES TIMEOUT 30)
 
     # Register the runtime-wide host CONTROL saturation/safe-shutdown proof
     # in the same native test graph as the source compiler. This does not

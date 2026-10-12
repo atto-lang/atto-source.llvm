@@ -105,7 +105,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=.<>@").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -143,6 +143,8 @@ public:
             } else {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
+                else if (accept("supervisor"))
+                    fail("source supervisor on_panic requires typed Failure and compiler-lowered CONTROL turns; native host bridge alone is not guest source lowering");
                 else fail("expected 'module', 'class' or 'actor'");
             }
         }
@@ -151,6 +153,8 @@ public:
             if (accept("define")) {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
+                else if (accept("supervisor"))
+                    fail("source supervisor on_panic requires typed Failure and compiler-lowered CONTROL turns; native host bridge alone is not guest source lowering");
                 else fail("expected 'class' or 'actor'");
             } else {
                 program.functions.push_back(function());
@@ -846,7 +850,99 @@ private:
     bool experimental_owned_int_;
 };
 
+
+/**
+ * The first explicit source supervisor lowering subset. Lexer tokens, not
+ * regexes or raw source spelling, define the admitted guest operations.
+ * Any extra statement, import, hook, async effect or unknown operation is
+ * rejected before a host CONTROL callback can be installed.
+ */
+class StopOnlySupervisorParser {
+public:
+    explicit StopOnlySupervisorParser(std::string_view source)
+        : lexer_(source), token_(lexer_.next()) {}
+
+    StopOnlySupervisor parse() {
+        StopOnlySupervisor result;
+        require("define");
+        const bool module = accept("module");
+        if (module) {
+            result.module = identifier();
+            require("as");
+            require("define");
+        }
+        require("supervisor");
+        result.name = identifier();
+        require("as");
+        if (accept("@")) require("Implements");
+        (void) accept("pub");
+        require("on_panic");
+        require("(");
+        const auto failure_binding = identifier();
+        if (failure_binding == "self") fail("Failure binder cannot be self");
+        require(":");
+        require("Failure");
+        require(")");
+        require(":");
+        require("void");
+        require("{");
+        require("self");
+        require(".");
+        require("stop");
+        require("(");
+        if (token_.text != ")") {
+            // Only the *same* typed Failure parameter from on_panic may
+            // identify a lifecycle target. Reject fields, aliases, host IDs
+            // and ordinary values until general typed CONTROL lowering.
+            require(failure_binding);
+            result.explicitly_bound_failure = true;
+            if (accept(".")) {
+                require("child");
+                result.targets_logical_child = true;
+            }
+        }
+        require(")");
+        require(";");
+        require("return");
+        require(";");
+        require("}");
+        require("end");
+        if (module) require("end");
+        if (token_.kind != Kind::End)
+            fail("unexpected trailing source after STOP-only supervisor");
+        return result;
+    }
+
+private:
+    bool accept(std::string_view value) {
+        if (token_.text != value) return false;
+        token_ = lexer_.next();
+        return true;
+    }
+    void require(std::string_view value) {
+        if (!accept(value))
+            fail("expected '" + std::string(value) + "'");
+    }
+    std::string identifier() {
+        if (token_.kind != Kind::Identifier || reserved(token_.text))
+            fail("expected non-reserved supervisor identifier");
+        std::string name(token_.text);
+        token_ = lexer_.next();
+        return name;
+    }
+    [[noreturn]] void fail(const std::string& message) const {
+        throw std::runtime_error("native source supervisor STOP-only lowering: "
+            + message + " at byte " + std::to_string(token_.offset));
+    }
+    Lexer lexer_;
+    Token token_;
+};
+
 } // namespace
+
+StopOnlySupervisor parse_stop_only_supervisor(std::string_view source) {
+    return StopOnlySupervisorParser(source).parse();
+}
 
 Program parse_program(std::string_view source, bool experimental_owned_int) {
     Program program = Parser(source, experimental_owned_int).parse();

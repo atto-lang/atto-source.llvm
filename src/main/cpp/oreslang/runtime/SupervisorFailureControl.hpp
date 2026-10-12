@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -29,6 +30,10 @@ struct SupervisorFailureNotice {
     std::uint64_t native_terminal_kind = 0;
     std::uint64_t failure_code = 0;
     std::uint64_t correlation = 0;
+    // Trusted host logical-child identity, NOT a guest lifecycle token.
+    // These appear at the tail to preserve legacy aggregate initializers.
+    std::uint64_t logical_child_id = 0;
+    std::uint64_t logical_incarnation = 0;
 };
 
 /**
@@ -78,6 +83,8 @@ public:
             std::lock_guard<std::mutex> guard(mutex_);
             ++undelivered_;
             failed_ = true;
+            undelivered_ += queue_.size();
+            queue_.clear();
         }
     }
 
@@ -97,22 +104,40 @@ public:
 private:
     void schedule_locked() {
         if (!handler_ || scheduled_ || failed_ || queue_.empty()) return;
+        if (dispatch_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+            failed_ = true;
+            undelivered_ += queue_.size();
+            queue_.clear();
+            return;
+        }
+        const auto generation = ++dispatch_generation_;
         scheduled_ = true;
         try {
             auto self = shared_from_this();
-            if (!SupervisorEnqueueGuard::submit(enqueue_, [self] { self->drain(); })) {
+            if (!SupervisorEnqueueGuard::submit(
+                    enqueue_, [self, generation] { self->drain(generation); })) {
                 scheduled_ = false;
                 failed_ = true;
                 undelivered_ += queue_.size();
+                queue_.clear(); // CONTROL enqueue permanently failed.
             }
         } catch (...) {
             scheduled_ = false;
             failed_ = true;
             undelivered_ += queue_.size();
+            queue_.clear();
         }
     }
 
-    void drain() noexcept {
+    void drain(std::uint64_t generation) noexcept {
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            // Enqueue adapters must not cause duplicate handlers or let a
+            // stale batch run on the following batch's front notice.
+            if (!scheduled_ || drain_active_ || generation != dispatch_generation_
+                || failed_) return;
+            drain_active_ = true;
+        }
         std::size_t count = 0;
         while (count < 32) {
             SupervisorFailureNotice next;
@@ -121,6 +146,7 @@ private:
                 std::lock_guard<std::mutex> guard(mutex_);
                 if (failed_ || queue_.empty()) {
                     scheduled_ = false;
+                    drain_active_ = false;
                     return;
                 }
                 next = queue_.front();
@@ -129,7 +155,9 @@ private:
                 std::lock_guard<std::mutex> guard(mutex_);
                 failed_ = true;
                 undelivered_ += queue_.size();
+                queue_.clear(); // No further delivery on a failed lane.
                 scheduled_ = false;
+                drain_active_ = false;
                 return;
             }
             try { handler(next); }
@@ -137,17 +165,27 @@ private:
                 std::lock_guard<std::mutex> guard(mutex_);
                 failed_ = true;
                 undelivered_ += queue_.size();
+                queue_.clear(); // No further delivery on a failed lane.
                 scheduled_ = false;
+                drain_active_ = false;
                 return;
             }
             {
                 std::lock_guard<std::mutex> guard(mutex_);
+                if (failed_ || queue_.empty()) {
+                    // A concurrent publish failure may have retired the queue
+                    // while the user callback ran on this CONTROL carrier.
+                    scheduled_ = false;
+                    drain_active_ = false;
+                    return;
+                }
                 queue_.pop_front();
             }
             ++count;
         }
         std::lock_guard<std::mutex> guard(mutex_);
         scheduled_ = false;
+        drain_active_ = false;
         schedule_locked();
     }
 
@@ -158,6 +196,8 @@ private:
     Handler handler_;
     Enqueue enqueue_;
     bool scheduled_ = false;
+    bool drain_active_ = false;
+    std::uint64_t dispatch_generation_ = 0;
     bool failed_ = false;
     std::size_t undelivered_ = 0;
 };

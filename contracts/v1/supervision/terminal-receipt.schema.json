@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oreslang.dev/conformance/supervisor-terminal-receipt-v1.schema.json",
+  "title": "Oreslang Supervisor Terminal Receipt v1 (trusted host)",
+  "description": "Structural wire representation of a process-local/native or durable supervisor receipt. Never use a JSON claim as executable authority. Trusted host independently verifies physical DONE and external-effect evidence; cross-field identity/nonce equivalence and full uint64 bounds require semantic validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "key",
+    "phase"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "key": {
+      "$ref": "#/$defs/key"
+    },
+    "phase": {
+      "enum": [
+        "recorded",
+        "physical_done",
+        "claimed",
+        "effect_proven",
+        "acknowledged"
+      ]
+    },
+    "physical_done_proof": {
+      "$ref": "#/$defs/physical_done"
+    },
+    "claim_nonce": {
+      "$ref": "#/$defs/nonZeroU64"
+    },
+    "external_effect_proof": {
+      "$ref": "#/$defs/external_effect"
+    }
+  },
+  "$defs": {
+    "u64": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "maxLength": 20
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scheduler_domain",
+        "actor_slot",
+        "generation"
+      ],
+      "properties": {
+        "scheduler_domain": {
+          "$ref": "#/$defs/nonZeroU64"
+        },
+        "actor_slot": {
+          "$ref": "#/$defs/u64"
+        },
+        "generation": {
+          "$ref": "#/$defs/nonZeroU64"
+        }
+      }
+    },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supervisor_id",
+        "runtime_id",
+        "original_parent",
+        "failed_child",
+        "failure_kind",
+        "failure_code",
+        "correlation",
+        "logical_child_id",
+        "logical_incarnation"
+      ],
+      "properties": {
+        "supervisor_id": {
+          "$ref": "#/$defs/nonZeroU64"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/nonZeroU64"
+        },
+        "original_parent": {
+          "$ref": "#/$defs/actor"
+        },
+        "failed_child": {
+          "$ref": "#/$defs/actor"
+        },
+        "failure_kind": {
+          "enum": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "failure_code": {
+          "$ref": "#/$defs/u64"
+        },
+        "correlation": {
+          "$ref": "#/$defs/u64"
+        },
+        "logical_child_id": {
+          "$ref": "#/$defs/nonZeroU64"
+        },
+        "logical_incarnation": {
+          "$ref": "#/$defs/nonZeroU64"
+        }
+      }
+    },
+    "physical_done": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor",
+        "observation_source"
+      ],
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "observation_source": {
+          "const": "native_scheduler"
+        }
+      }
+    },
+    "external_effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_nonce",
+        "evidence_sha256",
+        "authority"
+      ],
+      "properties": {
+        "claim_nonce": {
+          "$ref": "#/$defs/nonZeroU64"
+        },
+        "evidence_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "authority": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._:-]{0,127}$"
+        }
+      }
+    },
+    "nonZeroU64": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "maxLength": 20
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "recorded"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "physical_done_proof"
+              ]
+            },
+            {
+              "required": [
+                "claim_nonce"
+              ]
+            },
+            {
+              "required": [
+                "external_effect_proof"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "physical_done"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "required": [
+          "physical_done_proof"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "claim_nonce"
+              ]
+            },
+            {
+              "required": [
+                "external_effect_proof"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "claimed"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "required": [
+          "physical_done_proof",
+          "claim_nonce"
+        ],
+        "not": {
+          "required": [
+            "external_effect_proof"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "enum": [
+              "effect_proven",
+              "acknowledged"
+            ]
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "required": [
+          "physical_done_proof",
+          "claim_nonce",
+          "external_effect_proof"
+        ]
+      }
+    }
+  ]
+}

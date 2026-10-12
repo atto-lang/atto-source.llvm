@@ -23,11 +23,16 @@ static void check(bool okay, const char* reason) {
     if (!okay) throw std::runtime_error(reason);
 }
 
+/* Test-only no-op callbacks for a scheduler whose parent CONTROL is closed. */
+static void unused_message(void*, size_t, std::uint64_t) {}
+static void unused_failure(void*, size_t, OresNativeActorTerminalFailure) {}
+
 struct State {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef parent{}, child{}, sibling{};
     std::shared_ptr<SupervisorControlScheduler> control;
     std::shared_ptr<SupervisorProcess> process;
+    std::shared_ptr<oreslang::runtime::SupervisorChildRegistry> children;
     std::unique_ptr<NativeSupervisorPanicBridge> bridge;
     std::mutex mutex;
     std::condition_variable wake;
@@ -40,6 +45,7 @@ struct State {
     std::atomic<unsigned> control_events{0};
     std::atomic<unsigned> policy_calls{0};
     std::atomic<unsigned> decisions{0};
+    std::atomic<std::uint64_t> committed_generation{0};
     std::thread::id child_carrier;
     std::thread::id policy_carrier;
 };
@@ -81,6 +87,10 @@ static void typed_parent_control(
         OresNativeActorTerminalFailure failure) {
     auto& s = *static_cast<State*>(raw);
     ++s.control_events;
+    // Physical child shutdown does NOT authorize normal-exit retirement
+    // once this terminal failure has been published to parent CONTROL.
+    if (!s.bridge || s.bridge->retire_normally_finalized_child(failure.child))
+        ++s.unexpected;
     if (!s.bridge || !s.bridge->on_panic(parent_actor, failure))
         ++s.unexpected;
 }
@@ -99,6 +109,8 @@ int main() {
           && s.sibling.scheduler_domain, "native actor spawn failed");
 
     s.control = std::make_shared<SupervisorControlScheduler>(2, 32);
+    s.children = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
+        1107, s.parent.scheduler_domain);
     s.process = std::make_shared<SupervisorProcess>(
         1107, s.parent.scheduler_domain, 8, s.control->adapter(),
         [&](const SupervisorFailureNotice& n)
@@ -111,6 +123,7 @@ int main() {
                     || n.generation != s.child.generation
                     || n.native_terminal_kind != ORES_NATIVE_CONTROL_PANIC
                     || n.failure_code != 37 || n.correlation != 20261011
+                    || !n.logical_child_id || n.logical_incarnation != 1
                     || !s.child_cleanup)
                 ++s.unexpected;
             {
@@ -123,10 +136,85 @@ int main() {
             return std::nullopt;
         },
         [&](const SupervisorProcess::Resolution& result) {
-            if (result.requested != SupervisorProcess::Directive::stop)
+            if (result.requested != SupervisorProcess::Directive::stop
+                    || result.turn_generation == 0)
                 ++s.unexpected;
+            s.committed_generation.store(result.turn_generation);
+            try {
+                auto claim = s.bridge->reserve_finalized_stop(result);
+                if (claim.phase !=
+                        oreslang::runtime::SupervisorChildRegistry::Phase::stopping
+                    || claim.child.logical_child_id != result.notice.logical_child_id)
+                    ++s.unexpected;
+            } catch (...) {
+                ++s.unexpected;
+            }
+            // A reservation alone is not a host-effect invocation. Reject
+            // an attempted authoritative ACK before entering the real sink.
+            try {
+                (void) s.bridge->acknowledge_finalized_stop(result);
+                ++s.unexpected;
+            } catch (const std::logic_error&) {
+                // Expected: the host has not yet claimed effect invocation.
+            }
+            // Record the exact callback-entry boundary before the physical
+            // sibling host effect. The entry is not an applied-effect proof.
+            s.bridge->claim_finalized_stop_host_invocation(result);
+            // The sibling shutdown is a separate host lifecycle effect,
+            // not proof that the already finalized failed child was stopped.
             if (!ores_native_actor_scheduler_stop(s.scheduler, s.sibling))
                 ++s.unexpected;
+            // A host lifecycle STOP can close its own supervisor from inside
+            // the admitted CONTROL decision. The effect must still commit.
+            s.process->close();
+            try {
+                auto forged = result;
+                forged.notice.actor_id = s.sibling.actor_slot;
+                bool rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(forged);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
+                // A forged cancellation/normal STOP terminal may never
+                // acknowledge the PANIC-only source STOP disposition.
+                forged = result;
+                forged.notice.native_terminal_kind = ORES_NATIVE_CONTROL_CANCELLED;
+                rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(forged);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
+                forged = result;
+                forged.notice.native_terminal_kind = ORES_NATIVE_CONTROL_STOPPED;
+                rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(forged);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
+                auto stopped = s.bridge->acknowledge_finalized_stop(result);
+                if (stopped.phase !=
+                        oreslang::runtime::SupervisorChildRegistry::Phase::stopped
+                    || stopped.actor.actor_slot != s.child.actor_slot
+                    || stopped.actor.generation != s.child.generation
+                    || stopped.incarnation != result.notice.logical_incarnation
+                    || stopped.child.logical_child_id != result.notice.logical_child_id)
+                    ++s.unexpected;
+                rejected = false;
+                try {
+                    (void) s.bridge->acknowledge_finalized_stop(result);
+                } catch (const std::logic_error&) {
+                    rejected = true;
+                }
+                if (!rejected) ++s.unexpected;
+            } catch (...) {
+                ++s.unexpected;
+            }
             ++s.decisions;
             {
                 std::lock_guard<std::mutex> guard(s.mutex);
@@ -136,8 +224,31 @@ int main() {
         });
 
     s.bridge = std::make_unique<NativeSupervisorPanicBridge>(
-        s.scheduler, s.parent, s.process);
+        s.scheduler, s.parent, s.process, s.children);
+    check(s.bridge->trusted_child_registry() == s.children,
+          "panic bridge and verified lifecycle policy do not share registry");
+    {
+        bool rejected = false;
+        try {
+            auto foreign = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
+                9999, s.parent.scheduler_domain);
+            NativeSupervisorPanicBridge invalid{
+                s.scheduler, s.parent, s.process, foreign};
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        check(rejected, "panic bridge accepted a foreign-owner child registry");
+    }
     s.bridge->register_child(s.child);
+    s.bridge->register_child(s.sibling); // This child exits normally via STOP.
+    check(s.bridge->registered_children() == 2,
+          "child generations were not tracked for terminal notification");
+    check(s.children->tracked_children() == 2,
+          "shared host registry did not receive bridge child admissions");
+    check(!s.bridge->retire_normally_finalized_child(s.sibling),
+          "active child registration retired before physical finalization");
+    check(s.bridge->registered_children() == 2,
+          "premature normal-exit retirement mutated registrations");
     OresNativeActorTerminalFailure premature{
         ORES_NATIVE_CONTROL_PANIC, s.child, 37, 20261011
     };
@@ -166,6 +277,14 @@ int main() {
           "supervisor guest policy ran on child actor's carrier");
     check(s.process->callback_active() && s.process->resolved() == 0,
           "supervisor await lost logical single-flight lease");
+    // Callback entry is not the same as a completed suspension. resume()
+    // deliberately rejects early completion until the policy relinquishes
+    // its CONTROL carrier; avoid a scheduler-dependent false timeout here.
+    const auto suspend_deadline = std::chrono::steady_clock::now() + 5s;
+    while (!s.process->suspended()
+            && std::chrono::steady_clock::now() < suspend_deadline)
+        std::this_thread::yield();
+    check(s.process->suspended(), "native guest policy never suspended");
     const std::uint64_t epoch = s.process->current_epoch();
     check(epoch != 0, "supervisor await generation missing");
     OresNativeActorTerminalFailure forged{
@@ -200,17 +319,45 @@ int main() {
     while (s.process->resolved() != 1 && std::chrono::steady_clock::now() < deadline)
         std::this_thread::yield();
 
+    check(s.committed_generation.load() == epoch,
+          "native STOP committed with a stale or missing turn generation");
     check(s.unexpected.load() == 0, "native panic bridge invariant violated");
     check(s.control_events.load() == 1 && s.policy_calls.load() == 1
           && s.decisions.load() == 1,
           "terminal failure delivered or resolved more than once");
+    check(s.bridge->registered_children() == 1,
+          "terminal child replay registration was not consumed");
     check(s.bridge->accepted() == 1 && s.bridge->rejected() == 3,
           "native supervisor bridge replay/forgery accounting drift");
-    check(s.process->resolved() == 1 && s.process->healthy(),
-          "supervisor process did not commit exactly one decision");
+    check(!ores_native_actor_scheduler_publish_failure(
+                  s.scheduler, s.parent, replay),
+          "native scheduler published a duplicate terminal failure generation");
+    check(s.process->resolved() == 1 && !s.process->healthy()
+          && s.process->undelivered() == 0,
+          "self-closing supervisor lost or duplicated a committed decision");
     check(ores_native_actor_scheduler_poll_done(s.scheduler, s.child)
           && ores_native_actor_scheduler_poll_done(s.scheduler, s.sibling),
           "finalized child or stopped sibling is still executing");
+    check(!s.bridge->retire_normally_finalized_child(s.child),
+          "failed child's terminal registration was reused");
+    auto wrong_generation = s.sibling;
+    ++wrong_generation.generation;
+    check(!s.bridge->retire_normally_finalized_child(wrong_generation),
+          "stale or future generation retired a different child's registration");
+    check(s.bridge->retire_normally_finalized_child(s.sibling),
+          "normally finalized sibling did not retire its registration");
+    OresNativeActorTerminalFailure suppressed{
+        ORES_NATIVE_CONTROL_PANIC, s.sibling, 99, 123
+    };
+    check(!ores_native_actor_scheduler_publish_failure(
+                  s.scheduler, s.parent, suppressed),
+          "clean-exit seal permitted a late terminal failure");
+    check(!s.bridge->retire_normally_finalized_child(s.sibling),
+          "normal child registration was retired twice");
+    check(s.bridge->registered_children() == 0,
+          "normally finalized child left an orphan registration");
+    check(s.bridge->tracked_logical_children() == 1,
+          "normal child did not retire or terminal child lost its STOP record");
 
     check(ores_native_actor_scheduler_stop(s.scheduler, s.parent),
           "parent supervisor lane could not stop");
@@ -226,6 +373,773 @@ int main() {
     s.process->close();
     s.control->close();
 
+    // A lifecycle effect that closes its own supervisor and then throws
+    // has unknown commit status. It must not be replayed or marked resolved;
+    // the deferred close must still finish and account for the lost notice.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::shared_ptr<SupervisorProcess> throwing;
+        std::atomic<unsigned> attempts{0};
+        throwing = std::make_shared<SupervisorProcess>(
+            2207, 51, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return SupervisorProcess::Directive::stop;
+            },
+            [&](const SupervisorProcess::Resolution&) {
+                ++attempts;
+                throwing->close();
+                throw std::runtime_error("ambiguous lifecycle side effect");
+            });
+        throwing->accept(SupervisorFailureNotice{
+            2207, 51, 1, 1, std::nullopt, "panic"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (throwing->undelivered() == 0
+               && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(attempts.load() == 1, "throwing lifecycle sink retried");
+        check(throwing->resolved() == 0,
+              "throwing lifecycle sink was falsely committed");
+        check(throwing->undelivered() == 1 && throwing->pending() == 0,
+              "self-close failed to account for and clear abandoned notice");
+        check(!throwing->callback_active() && !throwing->healthy(),
+              "self-closing failed supervisor retained an active lease");
+        bool rejected = false;
+        try {
+            throwing->accept(SupervisorFailureNotice{
+                2207, 51, 2, 1, std::nullopt, "late"});
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        check(rejected, "late CONTROL was accepted after failing self-close");
+        throwing->close();
+        check(throwing->undelivered() == 2,
+              "closing twice double-counted an already-accounted notice");
+        control->close();
+    }
+
+    // A decision callback may request self-close before it returns.
+    // That request must fence *new* CONTROL admission immediately, even
+    // though the current authorized effect has not committed yet.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::shared_ptr<SupervisorProcess> process;
+        std::atomic<unsigned> rejected{0};
+        process = std::make_shared<SupervisorProcess>(
+            5507, 55, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return SupervisorProcess::Directive::stop;
+            },
+            [&](const SupervisorProcess::Resolution&) {
+                process->close();
+                if (process->healthy()) {
+                    throw std::runtime_error("self-close still reports healthy");
+                }
+                try {
+                    process->accept(SupervisorFailureNotice{
+                        5507, 55, 2, 1, std::nullopt, "late after close"});
+                } catch (const std::logic_error&) {
+                    ++rejected;
+                }
+            });
+        process->accept(SupervisorFailureNotice{
+            5507, 55, 1, 1, std::nullopt, "first"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (process->resolved() == 0
+                && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(rejected.load() == 1 && process->resolved() == 1,
+              "native reentrant close admitted another CONTROL notice");
+        check(process->undelivered() == 1 && process->pending() == 0,
+              "native close request lost rejected CONTROL accounting");
+        control->close();
+    }
+
+    // Terminal policy failure must release its lease and discard retained
+    // owned notice data without making an ambiguous lifecycle decision.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        auto process = std::make_shared<SupervisorProcess>(
+            3307, 53, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                throw std::runtime_error("policy failed");
+            },
+            [](const SupervisorProcess::Resolution&) {
+                throw std::runtime_error("failed policy reached lifecycle sink");
+            });
+        process->accept(SupervisorFailureNotice{
+            3307, 53, 1, 1, std::nullopt, "policy failure"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (process->undelivered() == 0
+                && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(process->undelivered() == 1 && process->pending() == 0,
+              "native terminal failure retained a CONTROL notice");
+        check(!process->callback_active() && !process->healthy(),
+              "native terminal failure retained logical lease");
+        process->close();
+        check(process->undelivered() == 1,
+              "native close double-counted failed notification");
+        control->close();
+    }
+
+    // Closing a suspended hook invalidates its logical lease immediately.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        std::atomic<unsigned> entered{0};
+        auto process = std::make_shared<SupervisorProcess>(
+            4407, 54, 2, control->adapter(),
+            [&](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                ++entered;
+                return std::nullopt;
+            },
+            [](const SupervisorProcess::Resolution&) {
+                throw std::runtime_error("closed supervisor reached lifecycle sink");
+            });
+        process->accept(SupervisorFailureNotice{
+            4407, 54, 1, 1, std::nullopt, "suspend"});
+        auto until = std::chrono::steady_clock::now() + 5s;
+        while (entered.load() == 0 && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(entered.load() == 1 && process->callback_active(),
+              "suspended native callback never acquired its logical lease");
+        const auto suspend_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!process->suspended()
+                && std::chrono::steady_clock::now() < suspend_deadline)
+            std::this_thread::yield();
+        check(process->suspended(), "native close test never reached suspension");
+        const auto epoch = process->current_epoch();
+        check(epoch != 0, "suspended native callback lost generation");
+        process->close();
+        check(!process->callback_active() && process->pending() == 0,
+              "native close retained suspended logical lease or notice");
+        check(process->undelivered() == 1 && !process->healthy(),
+              "native close misaccounted abandoned continuation");
+        check(!process->resume(epoch, SupervisorProcess::Directive::restart),
+              "stale native callback resumed after close");
+        control->close();
+    }
+
+
+    // A thrown host CONTROL callback must retire every queued owned notice
+    // without replaying the handler or leaving a phantom pending event.
+    {
+        auto control = std::make_shared<SupervisorControlScheduler>(1, 8);
+        auto lane = std::make_shared<oreslang::runtime::SupervisorFailureControl>(
+            3307, 3);
+        std::mutex gate_mutex;
+        std::condition_variable gate;
+        bool entered = false;
+        bool release = false;
+        std::atomic<unsigned> calls{0};
+        lane->install(
+            [&](const SupervisorFailureNotice&) {
+                ++calls;
+                std::unique_lock<std::mutex> lock(gate_mutex);
+                entered = true;
+                gate.notify_all();
+                if (!gate.wait_for(lock, 5s, [&] { return release; }))
+                    throw std::runtime_error("CONTROL test timed out");
+                throw std::runtime_error("CONTROL callback failed");
+            },
+            control->adapter());
+        lane->publish(SupervisorFailureNotice{
+            3307, 53, 1, 1, std::nullopt, "first failure"});
+        {
+            std::unique_lock<std::mutex> lock(gate_mutex);
+            check(gate.wait_for(lock, 5s, [&] { return entered; }),
+                  "CONTROL callback never started");
+        }
+        lane->publish(SupervisorFailureNotice{
+            3307, 53, 2, 1, std::nullopt, "pending failure"});
+        check(lane->pending() == 2, "queued CONTROL notices were not retained");
+        {
+            std::lock_guard<std::mutex> lock(gate_mutex);
+            release = true;
+        }
+        gate.notify_all();
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (lane->healthy() && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        check(calls.load() == 1, "failed CONTROL callback was replayed");
+        check(lane->undelivered() == 2 && lane->pending() == 0,
+              "failed CONTROL callback retained queued notice payloads");
+        lane->publish(SupervisorFailureNotice{
+            3307, 53, 3, 1, std::nullopt, "late failure"});
+        check(lane->undelivered() == 3 && lane->pending() == 0,
+              "late failure was accepted onto a permanently failed lane");
+        control->close();
+    }
+
+
+    // A direct/synchronous adapter is forbidden for CONTROL admission.
+    // Reject the callback before execution and discard its owned envelope.
+    {
+        auto lane = std::make_shared<oreslang::runtime::SupervisorFailureControl>(
+            4407, 1);
+        std::atomic<unsigned> called{0};
+        lane->install(
+            [&](const SupervisorFailureNotice&) { ++called; },
+            [](std::function<void()> fn) {
+                fn(); // Illegal inline attempt: enqueue guard suppresses work.
+                return true;
+            });
+        lane->publish(SupervisorFailureNotice{
+            4407, 54, 1, 1, std::nullopt, "inline not allowed"});
+        check(called.load() == 0, "inline CONTROL callback executed");
+        check(!lane->healthy() && lane->undelivered() == 1
+              && lane->pending() == 0,
+              "inline CONTROL rejection retained a pending notice");
+    }
+
+
+    // A process itself must also fail admission if the enqueue adapter
+    // rejected the CONTROL turn. No caller may mistake that for success.
+    {
+        std::atomic<unsigned> policies{0};
+        auto process = std::make_shared<SupervisorProcess>(
+            5507, 55, 2,
+            [](std::function<void()> fn) {
+                fn(); // Illegal same-thread invocation must be suppressed.
+                return true;
+            },
+            [&](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                ++policies;
+                return SupervisorProcess::Directive::stop;
+            },
+            [](const SupervisorProcess::Resolution&) {
+                throw std::runtime_error("inline process committed a lifecycle effect");
+            });
+        bool rejected = false;
+        try {
+            process->accept(SupervisorFailureNotice{
+                5507, 55, 1, 1, std::nullopt, "direct process"});
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        check(rejected && policies.load() == 0,
+              "failed CONTROL process dispatch was reported as accepted");
+        check(process->undelivered() == 1 && process->pending() == 0
+              && !process->callback_active() && !process->healthy(),
+              "rejected CONTROL process dispatch retained its notice or lease");
+    }
+
+    // Even an unadmitted terminal failure remains classified as a failure:
+    // parent shutdown is not permission to erase the child's registration.
+    {
+        auto* abandoned = ores_native_actor_scheduler_open_typed_control(
+            2, 1, 2, unused_message, nullptr, unused_failure, nullptr);
+        check(abandoned != nullptr, "abandoned CONTROL scheduler startup failed");
+        auto parent = ores_native_actor_scheduler_spawn(abandoned, 0);
+        auto child = ores_native_actor_scheduler_spawn(abandoned, 1);
+        check(parent.scheduler_domain && child.scheduler_domain,
+              "abandoned CONTROL actors failed to spawn");
+        check(ores_native_actor_scheduler_stop(abandoned, child),
+              "terminal child did not stop");
+        check(ores_native_actor_scheduler_wait_done(abandoned, child),
+              "terminal child was not physically finalized");
+        check(ores_native_actor_scheduler_stop(abandoned, parent),
+              "parent did not retire");
+        check(!ores_native_actor_scheduler_publish_failure(
+                      abandoned, parent,
+                      OresNativeActorTerminalFailure{
+                          ORES_NATIVE_CONTROL_PANIC, child, 77, 99
+                      }),
+              "terminal event was delivered to a closed parent");
+        check(!ores_native_actor_scheduler_seal_normal_exit(abandoned, child),
+              "rejected panic was reclassified as a normal exit");
+        ores_native_actor_scheduler_retire(abandoned);
+        check(ores_native_actor_scheduler_drain(abandoned),
+              "abandoned CONTROL scheduler did not drain");
+        check(ores_native_actor_scheduler_try_destroy(abandoned),
+              "abandoned CONTROL scheduler teardown failed");
+    }
+
+    // True scheduler-backed RESTART admission and shutdown fencing. The
+    // replacement must be physically READY, not just a fresh actor number.
+    for (int mode = 0; mode < 11; ++mode) {
+        auto* runtime = ores_native_actor_scheduler_open_typed_control(
+            3, 1, 2, unused_message, nullptr, unused_failure, nullptr);
+        check(runtime != nullptr, "restart proof scheduler startup failed");
+        const auto supervisor = ores_native_actor_scheduler_spawn(runtime, 0);
+        const auto dying = ores_native_actor_scheduler_spawn(runtime, 1);
+        const auto replacement = ores_native_actor_scheduler_spawn_unpublished(runtime, 2);
+        check(supervisor.scheduler_domain && dying.scheduler_domain
+                  && replacement.scheduler_domain, "restart fixture spawn failed");
+        auto control = std::make_shared<SupervisorControlScheduler>(2, 16);
+        auto children = std::make_shared<oreslang::runtime::SupervisorChildRegistry>(
+            9107, supervisor.scheduler_domain);
+        auto process = std::make_shared<SupervisorProcess>(
+            9107, supervisor.scheduler_domain, 2, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return std::nullopt;
+            },
+            [](const SupervisorProcess::Resolution&) {});
+        auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
+            runtime, supervisor, process, children);
+        const auto child = children->register_child(dying);
+        check(ores_native_actor_scheduler_stop(runtime, dying)
+                  && ores_native_actor_scheduler_wait_done(runtime, dying),
+              "old actor did not physically finalize before restart");
+        children->finalized(child.child, dying, 1);
+        const auto ticket = children->begin_restart(child.child, dying, 1);
+        check(!ores_native_actor_scheduler_send(runtime, replacement, 42)
+                  && !ores_native_actor_scheduler_submit(
+                      runtime, static_cast<size_t>(replacement.actor_slot), 42),
+              "unpublished replacement accepted mail before logical commit");
+        bool rejected = false;
+        try {
+            (void) bridge->admit_verified_replacement(
+                ticket, OresNativeActorRef{
+                    supervisor.scheduler_domain, replacement.actor_slot,
+                    replacement.generation + 1});
+        } catch (const std::exception&) { rejected = true; }
+        check(rejected, "bridge accepted forged scheduler generation as READY");
+        if (mode == 0) {
+            const auto committed = bridge->admit_verified_replacement(
+                ticket, replacement);
+            check(ores_native_actor_scheduler_send(runtime, replacement, 42),
+                  "logically committed replacement remains unroutable");
+            check(committed.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::active
+                      && committed.incarnation == 2,
+                  "native scheduler-backed RESTART failed to publish next incarnation");
+            check(bridge->registered_children() == 1,
+                  "replacement was published without its panic-routing index");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "replacement did not physically finalize after commit");
+            const OresNativeActorTerminalFailure panic_notice{
+                ORES_NATIVE_CONTROL_PANIC, replacement, 19, 219
+            };
+            check(!bridge->on_panic(OresNativeActorRef{
+                       supervisor.scheduler_domain, supervisor.actor_slot,
+                       supervisor.generation + 1}, panic_notice),
+                  "forged supervisor callback incarnation reached CONTROL");
+            // This fixture uses the legacy slot-index callback ABI.
+            // The legacy overload is permitted only for legacy schedulers.
+            check(bridge->on_panic(
+                      static_cast<std::size_t>(supervisor.actor_slot),
+                      panic_notice),
+                  "legacy callback did not route on a legacy scheduler");
+            bridge->fence_restart_publication();
+        } else if (mode == 1) {
+            children->stage_replacement(ticket, replacement);
+            rejected = false;
+            try { (void) children->abort_restart(ticket); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected, "live actor restart was aborted without cleanup");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "replacement did not physically terminate");
+            const auto restored = bridge->abort_cleaned_replacement(ticket, replacement);
+            check(restored.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "native restart cleanup did not restore finalized old child");
+            bridge->fence_restart_publication();
+            rejected = false;
+            try { (void) children->begin_restart(child.child, dying, 1); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected, "closed bridge reopened restart admission");
+        } else if (mode == 2) {
+            // Closing CONTROL while the bridge remains alive must fence the
+            // replacement even though the physical scheduler actor is READY.
+            process->close();
+            rejected = false;
+            try { (void) bridge->admit_verified_replacement(ticket, replacement); }
+            catch (const std::logic_error&) { rejected = true; }
+            check(rejected, "closed supervisor published a READY replacement");
+            check(children->snapshot(child.child).phase
+                      == oreslang::runtime::SupervisorChildRegistry::Phase::restarting,
+                  "closed CONTROL changed pending RESTART reservation");
+            check(bridge->registered_children() == 0,
+                  "failed closed admission registered an uncommitted actor");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "rejected replacement did not physically clean up");
+            check(children->abort_restart(ticket).phase
+                      == oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "closed supervisor could not release unspawned claim");
+        } else if (mode == 3) {
+            // Stronger scheduler-backed scenario: a physical candidate was
+            // spawned and admitted, then the supervisor closed BEFORE logical
+            // publication. Cleanup must precede abort, and no message may
+            // enter its unpublished lane at any point.
+            children->stage_replacement(ticket, replacement);
+            children->acknowledge_replacement_admission(
+                ticket, replacement, [&] {
+                    return ores_native_actor_scheduler_poll_ready(runtime, replacement);
+                });
+            check(!ores_native_actor_scheduler_send(runtime, replacement, 42),
+                  "pre-publication replacement accepted external message");
+            process->close();
+            bridge->fence_restart_publication();
+            rejected = false;
+            try { (void) bridge->admit_verified_replacement(ticket, replacement); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected && bridge->registered_children() == 0,
+                  "shutdown published an already admitted replacement");
+            rejected = false;
+            try { (void) children->abort_restart(ticket); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected, "shutdown aborted a still-live replacement");
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "shutdown replacement could not physically clean up");
+            // Aborting a failed candidate must still work after CONTROL
+            // shutdown, but the bridge must NOT revive a hidden physical
+            // generation after its parent supervisor is already closed.
+            bool post_close_recycle_rejected = false;
+            try {
+                (void) bridge->abort_recycle_and_admit_verified(
+                    ticket, replacement);
+            } catch (const std::logic_error&) {
+                post_close_recycle_rejected = true;
+            }
+            const auto restored = children->snapshot(child.child);
+            check(post_close_recycle_rejected
+                      && restored.phase ==
+                          oreslang::runtime::SupervisorChildRegistry::Phase::finalized
+                      && ores_native_actor_scheduler_poll_done(runtime, replacement),
+                  "closed CONTROL either revived a candidate or lost safe abort");
+            check(!ores_native_actor_scheduler_poll_published(runtime, replacement)
+                      && !ores_native_actor_scheduler_send(runtime, replacement, 42),
+                  "shutdown leaked an externally routable replacement");
+            const auto transitions = children->committed_transitions();
+            unsigned closed = 0, cleanup = 0, aborts = 0, commits = 0;
+            for (const auto& event : transitions) {
+                const std::string operation(event.operation);
+                if (operation == "restart.close") ++closed;
+                if (operation == "restart.cleanup-verified") ++cleanup;
+                if (operation == "restart.commit") ++commits;
+                if (operation == "restart.abort") {
+                    ++aborts;
+                    check(event.replacement.has_value()
+                              && event.replacement->actor_slot == replacement.actor_slot
+                              && event.replacement->generation == replacement.generation,
+                          "shutdown abort did not name cleaned physical incarnation");
+                }
+            }
+            check(closed == 1 && cleanup == 1 && aborts == 1 && commits == 0,
+                  "shutdown RESTART journal violated cleanup-before-abort");
+            std::puts("NATIVE_SUPERVISOR_RESTART_SHUTDOWN_E2E_PASS admitted=1 closed=1 cleaned=1 aborted=1 committed=0");
+        } else if (mode == 4) {
+            // The host owns the COMPLETE recycle + logical admission + physical
+            // publication transaction. No raw live hidden ref escapes.
+            children->stage_replacement(ticket, replacement);
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                    && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "abandoned physical candidate was not fully stopped");
+            const auto committed =
+                bridge->abort_recycle_and_admit_verified(ticket, replacement);
+            const auto reused = committed.actor;
+            check(committed.phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::active
+                      && committed.incarnation == 2
+                      && reused.scheduler_domain == replacement.scheduler_domain
+                      && reused.actor_slot == replacement.actor_slot
+                      && reused.generation == replacement.generation + 1,
+                  "atomic recycled replacement did not publish fresh identity");
+            check(!ores_native_actor_scheduler_send(runtime, replacement, 77)
+                      && !ores_native_actor_scheduler_poll_done(runtime, replacement)
+                      && !ores_native_actor_scheduler_submit(
+                           runtime, static_cast<size_t>(replacement.actor_slot), 88),
+                  "stale reference or index leaked after recycled commit");
+            check(ores_native_actor_scheduler_send(runtime, reused, 99),
+                  "new recycled incarnation did not accept typed ActorRef mail");
+            check(ores_native_actor_scheduler_stop(runtime, reused)
+                      && ores_native_actor_scheduler_wait_done(runtime, reused),
+                  "published replacement did not physically terminate");
+            bridge->fence_restart_publication();
+            std::puts("NATIVE_SUPERVISOR_RECYCLED_RESTART_PASS old_gen=1 new_gen=2 cleanup=1 admitted=1");
+        } else if (mode == 5 || mode == 6 || mode == 9 || mode == 10) {
+            // Deterministic close at BOTH handoff seams, with full CONTROL
+            // closure (modes 5/6) or independent registry-fence-only closure
+            // (modes 9/10):
+            // (5) after physical recycling but before next logical ticket,
+            // (6) after ticket but before native admission.
+            // The host transaction must stop+DONE the newly-live hidden
+            // generation and abort any new logical permit before failing.
+            children->stage_replacement(ticket, replacement);
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "pre-race abandoned candidate did not reach DONE");
+            std::atomic<bool> at_handoff{false}, close_finished{false};
+            std::atomic<bool> rejected{false}, committed{false};
+            auto block_at_handoff = [&] {
+                at_handoff.store(true, std::memory_order_release);
+                while (!close_finished.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+            };
+            std::thread recycler([&] {
+                try {
+                    auto published = bridge->abort_recycle_and_admit_verified(
+                        ticket, replacement,
+                        (mode == 5 || mode == 9) ? std::function<void()>(block_at_handoff)
+                                  : std::function<void()>(),
+                        (mode == 6 || mode == 10) ? std::function<void()>(block_at_handoff)
+                                  : std::function<void()>());
+                    committed.store(published.phase ==
+                        oreslang::runtime::SupervisorChildRegistry::Phase::active);
+                } catch (const std::exception&) {
+                    rejected.store(true);
+                }
+            });
+            std::thread closer([&] {
+                while (!at_handoff.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                bridge->fence_restart_publication();
+                if (mode == 5 || mode == 6) process->close();
+                close_finished.store(true, std::memory_order_release);
+            });
+            recycler.join();
+            closer.join();
+            const auto hidden = OresNativeActorRef{
+                replacement.scheduler_domain, replacement.actor_slot,
+                replacement.generation + 1};
+            check(rejected.load() && !committed.load()
+                      && children->snapshot(child.child).phase ==
+                          oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "close-raced transaction committed or stranded logical RESTART");
+            check(ores_native_actor_scheduler_poll_done(runtime, hidden)
+                      && !ores_native_actor_scheduler_poll_ready(runtime, hidden)
+                      && !ores_native_actor_scheduler_poll_published(runtime, hidden)
+                      && !ores_native_actor_scheduler_send(runtime, hidden, 95)
+                      && !ores_native_actor_scheduler_send(runtime, replacement, 96),
+                  "close-raced transaction leaked an executable hidden actor");
+            bool rejected_new_ticket = false;
+            try { (void) children->begin_restart(child.child, dying, 1); }
+            catch (const std::logic_error&) { rejected_new_ticket = true; }
+            check(rejected_new_ticket, "raced close reopened logical RESTART");
+            auto events = children->committed_transitions();
+            unsigned aborts = 0, commits = 0;
+            for (const auto& event : events) {
+                if (std::string_view(event.operation) == "restart.abort") ++aborts;
+                if (std::string_view(event.operation) == "restart.commit") ++commits;
+            }
+            check(aborts == ((mode == 5 || mode == 9) ? 1U : 2U) && commits == 0,
+                  "close-raced replacement lacked exactly-once ticket rollback");
+            std::puts(mode == 9
+                ? "NATIVE_RECYCLE_REGISTRY_FENCE_PRE_RESERVE_PASS done=1 orphan=0"
+                : mode == 10
+                ? "NATIVE_RECYCLE_REGISTRY_FENCE_PRE_ADMIT_PASS done=1 orphan=0"
+                : mode == 5
+                ? "NATIVE_RECYCLE_CLOSE_BEFORE_RESERVE_PASS done=1 orphan=0"
+                : "NATIVE_RECYCLE_CLOSE_BEFORE_ADMISSION_PASS done=1 orphan=0");
+        } else {
+            // Throw independently of CONTROL close to exercise rollback of
+            // a newly-created physical actor on an arbitrary host exception.
+            // Both the pre-ticket and post-ticket seams must release DONE.
+            children->stage_replacement(ticket, replacement);
+            check(ores_native_actor_scheduler_stop(runtime, replacement)
+                      && ores_native_actor_scheduler_wait_done(runtime, replacement),
+                  "throw-injection old candidate was not physically DONE");
+            auto injected_failure = [] {
+                throw std::runtime_error("intentional native RESTART injection");
+            };
+            bool threw = false;
+            try {
+                (void) bridge->abort_recycle_and_admit_verified(
+                    ticket, replacement,
+                    mode == 7 ? std::function<void()>(injected_failure)
+                              : std::function<void()>(),
+                    mode == 8 ? std::function<void()>(injected_failure)
+                              : std::function<void()>());
+            } catch (const std::runtime_error&) { threw = true; }
+            const auto hidden = OresNativeActorRef{
+                replacement.scheduler_domain, replacement.actor_slot,
+                replacement.generation + 1};
+            check(threw
+                      && ores_native_actor_scheduler_poll_done(runtime, hidden)
+                      && !ores_native_actor_scheduler_poll_published(runtime, hidden)
+                      && children->snapshot(child.child).phase ==
+                          oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "injected host exception leaked a hidden candidate or permit");
+            // Unlike the close case, a healthy supervisor must remain able
+            // to claim a clean fresh logical ticket after rollback.
+            const auto retry = children->begin_restart(child.child, dying, 1);
+            check(children->abort_restart(retry).phase ==
+                      oreslang::runtime::SupervisorChildRegistry::Phase::finalized,
+                  "injected failure stranded a new logical RESTART reservation");
+            bridge->fence_restart_publication();
+            std::puts(mode == 7
+                ? "NATIVE_RECYCLE_THROW_BEFORE_RESERVE_PASS done=1 orphan=0"
+                : "NATIVE_RECYCLE_THROW_BEFORE_ADMISSION_PASS done=1 orphan=0");
+        }
+        bridge.reset();
+        process->close();
+        control->close();
+        ores_native_actor_scheduler_retire(runtime);
+        check(ores_native_actor_scheduler_drain(runtime)
+                  && ores_native_actor_scheduler_try_destroy(runtime),
+              "native restart proof scheduler teardown failed");
+    }
+
+    // A copied exact ActorRef plus a queued scheduler receipt is not enough
+    // to steal CONTROL delivery. The actual native worker must own the
+    // matching typed PANIC callback before the bridge may claim the receipt.
+    {
+        struct CallbackContext {
+            NativeSupervisorPanicBridge* bridge = nullptr;
+            OresNativeActorScheduler* scheduler = nullptr;
+            OresNativeActorRef parent{}, child{};
+            std::atomic<bool> wrong_carrier_rejected{false};
+            std::atomic<bool> wrong_carrier_done{false};
+            std::atomic<bool> entered{false};
+            std::atomic<bool> release{false};
+            std::atomic<bool> accepted{false};
+            std::atomic<bool> forged_rejected{false};
+            std::atomic<bool> finished{false};
+        } state;
+        auto* identity_scheduler =
+            ores_native_actor_scheduler_open_identity_control(
+                3, 2, 2,
+                [](void* raw, OresNativeActorRef, std::uint64_t payload) {
+                    auto& state = *static_cast<CallbackContext*>(raw);
+                    if (payload != 901) return;
+                    OresNativeTerminalReceipt stolen{};
+                    state.wrong_carrier_rejected.store(
+                        !ores_native_actor_scheduler_claim_delivered_terminal_receipt(
+                            state.scheduler, state.parent, state.child, &stolen),
+                        std::memory_order_release);
+                    state.wrong_carrier_done.store(true, std::memory_order_release);
+                },
+                nullptr,
+                [](void* raw, OresNativeActorRef parent,
+                   OresNativeActorTerminalFailure failure) {
+                    auto& callback = *static_cast<CallbackContext*>(raw);
+                    callback.entered.store(true, std::memory_order_release);
+                    while (!callback.release.load(std::memory_order_acquire))
+                        std::this_thread::yield();
+                    auto forged = failure;
+                    forged.failure_code++;
+                    callback.forged_rejected.store(
+                        !callback.bridge->on_panic(parent, forged),
+                        std::memory_order_release);
+                    callback.accepted.store(
+                        callback.bridge->on_panic(parent, failure),
+                        std::memory_order_release);
+                    callback.finished.store(true, std::memory_order_release);
+                },
+                &state);
+        check(identity_scheduler != nullptr,
+              "identity-mode bridge scheduler startup failed");
+        const auto parent = ores_native_actor_scheduler_spawn(
+            identity_scheduler, 0);
+        const auto child = ores_native_actor_scheduler_spawn(
+            identity_scheduler, 1);
+        const auto second_child = ores_native_actor_scheduler_spawn(
+            identity_scheduler, 2);
+        check(parent.scheduler_domain && child.scheduler_domain
+                  && second_child.scheduler_domain,
+              "identity-mode bridge actors unavailable");
+        auto control = std::make_shared<SupervisorControlScheduler>(2, 16);
+        auto children = std::make_shared<
+            oreslang::runtime::SupervisorChildRegistry>(
+                9917, parent.scheduler_domain);
+        auto process = std::make_shared<SupervisorProcess>(
+            9917, parent.scheduler_domain, 4, control->adapter(),
+            [](const SupervisorFailureNotice&)
+                    -> std::optional<SupervisorProcess::Directive> {
+                return std::nullopt;
+            },
+            [](const SupervisorProcess::Resolution&) {});
+        auto bridge = std::make_unique<NativeSupervisorPanicBridge>(
+            identity_scheduler, parent, process, children);
+        state.bridge = bridge.get();
+        state.scheduler = identity_scheduler;
+        state.parent = parent;
+        state.child = child;
+        bridge->register_child(child);
+        bridge->register_child(second_child);
+        check(ores_native_actor_scheduler_stop(identity_scheduler, child)
+                  && ores_native_actor_scheduler_wait_done(
+                         identity_scheduler, child),
+              "identity child never physically finalized");
+        const OresNativeActorTerminalFailure failure{
+            ORES_NATIVE_CONTROL_PANIC, child, 811, 912
+        };
+        check(ores_native_actor_scheduler_publish_failure(
+                  identity_scheduler, parent, failure),
+              "identity-mode fixture could not record terminal PANIC");
+        const auto entered_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!state.entered.load(std::memory_order_acquire)
+               && std::chrono::steady_clock::now() < entered_deadline)
+            std::this_thread::sleep_for(1ms);
+        const bool entered = state.entered.load(std::memory_order_acquire);
+        if (!entered) state.release.store(true, std::memory_order_release);
+        check(entered, "physical PANIC callback was never dispatched");
+        // Scheduler worker is intentionally blocked inside its CONTROL
+        // callback. A different host thread still cannot use its receipt.
+        OresNativeTerminalReceipt stolen{};
+        check(!ores_native_actor_scheduler_claim_delivered_terminal_receipt(
+                  identity_scheduler, parent, child, &stolen)
+                  && !bridge->on_panic(parent, failure)
+                  && bridge->registered_children() == 2,
+              "off-carrier host stole pending terminal PANIC");
+        // A DATA callback in another actor of the SAME scheduler is not the
+        // parent CONTROL callback; sharing a scheduler worker pool is never
+        // a substitute for exact callback-event authority.
+        check(ores_native_actor_scheduler_send(
+                  identity_scheduler, second_child, 901),
+              "competing scheduler DATA actor was not admitted");
+        const auto other_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!state.wrong_carrier_done.load(std::memory_order_acquire)
+               && std::chrono::steady_clock::now() < other_deadline)
+            std::this_thread::sleep_for(1ms);
+        check(state.wrong_carrier_done.load(std::memory_order_acquire)
+                  && state.wrong_carrier_rejected.load(std::memory_order_acquire)
+                  && bridge->registered_children() == 2,
+              "same-scheduler unrelated DATA carrier borrowed PANIC authority");
+        check(!bridge->on_panic(
+                  static_cast<std::size_t>(parent.actor_slot), failure),
+              "slot-only callback bypassed identity-mode PANIC boundary");
+        check(!bridge->on_panic(OresNativeActorRef{
+                  parent.scheduler_domain, parent.actor_slot,
+                  parent.generation + 1}, failure),
+              "forged parent generation bypassed PANIC boundary");
+        state.release.store(true, std::memory_order_release);
+        const auto finished_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!state.finished.load(std::memory_order_acquire)
+               && std::chrono::steady_clock::now() < finished_deadline)
+            std::this_thread::sleep_for(1ms);
+        check(state.finished.load(std::memory_order_acquire)
+                  && state.forged_rejected.load(std::memory_order_acquire)
+                  && state.accepted.load(std::memory_order_acquire)
+                  && bridge->registered_children() == 1,
+              "exact PANIC carrier did not retain one-use delivery authority");
+        check(!bridge->on_panic(parent, failure),
+              "duplicate identity-mode PANIC replay was accepted");
+        check(ores_native_actor_scheduler_stop(identity_scheduler, second_child)
+                  && ores_native_actor_scheduler_wait_done(
+                         identity_scheduler, second_child)
+                  && ores_native_actor_scheduler_stop(identity_scheduler, parent)
+                  && ores_native_actor_scheduler_wait_done(identity_scheduler, parent),
+              "retired-parent probe failed physical DONE prerequisites");
+        const auto before_reject = bridge->registered_children();
+        check(before_reject == 1
+                  && !bridge->on_panic(parent, OresNativeActorTerminalFailure{
+                      ORES_NATIVE_CONTROL_PANIC, second_child, 813, 914})
+                  && bridge->registered_children() == before_reject,
+              "stale retired parent callback consumed an active child identity");
+        bridge->fence_restart_publication();
+        bridge.reset();
+        process->close();
+        control->close();
+        ores_native_actor_scheduler_retire(identity_scheduler);
+        check(ores_native_actor_scheduler_drain(identity_scheduler)
+                  && ores_native_actor_scheduler_try_destroy(identity_scheduler),
+              "identity-mode bridge scheduler teardown failed");
+        std::puts("NATIVE_SUPERVISOR_IDENTITY_PANIC_FENCE_PASS"
+                  " slot_only=0 forged=0 exact=1 replay=0 off_carrier=0 other_carrier=0");
+    }
+
     std::puts("NATIVE_SUPERVISOR_BRIDGE_PASS typed=1 exclusive=1"
-              " await=1 replay=0 native_stop=1");
+              " await=1 replay=0 native_stop=1 throwing_self_close=1"
+              " terminal_cleanup=1 suspended_close=1");
 }

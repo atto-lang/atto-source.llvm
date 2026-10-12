@@ -143,6 +143,20 @@ struct Program {
     std::vector<Function> functions;
 };
 
+// Explicit opt-in native source-to-CONTROL slice. General parse_program()
+// still rejects supervisor declarations until the complete compiler lowering
+// and type/effect system are available. A STOP plan is immutable source data.
+struct StopOnlySupervisor {
+    std::string name;
+    std::string module;
+    // True only when the source passes its own typed Failure binder to STOP.
+    // This does not expose an arbitrary ActorRef or stable logical child ID.
+    bool explicitly_bound_failure = false;
+    // Restricted projection of the current typed Failure only.
+    bool targets_logical_child = false;
+};
+StopOnlySupervisor parse_stop_only_supervisor(std::string_view source);
+
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32 and source-level await/suspension.
