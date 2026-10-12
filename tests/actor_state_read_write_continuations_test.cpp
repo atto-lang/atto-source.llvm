@@ -38,7 +38,7 @@ int main() {
     CHECK(bridge.request(bridge.incarnation(), 4, Mode::Read).status == Status::Ready);
     CHECK(bridge.request(bridge.incarnation(), 5, Mode::Write).status == Status::Queued);
     CHECK(bridge.request(bridge.incarnation(), 6, Mode::Read).status == Status::Queued);
-    bridge.cancel_queued(bridge.incarnation(), 5);
+    bridge.cancel_pending(bridge.incarnation(), 5);
     messages = bridge.pending_notifications();
     CHECK(messages.size() == 2);
     CHECK(messages[0].continuation_id == 5 && messages[0].status == Status::Cancelled);
@@ -49,6 +49,31 @@ int main() {
     CHECK(bridge.acknowledge({bridge.incarnation(), 6, Status::Ready}));
     bridge.complete(bridge.incarnation(), 4);
     bridge.complete(bridge.incarnation(), 6);
+
+    // READY-but-not-delivered tickets remain cancellable: waiting CONTROL
+    // admission is not evidence a guest callback has begun.
+    Bridge undelivered;
+    CHECK(undelivered.request(undelivered.incarnation(), 1, Mode::Read).status == Status::Ready);
+    CHECK(undelivered.request(undelivered.incarnation(), 2, Mode::Write).status == Status::Queued);
+    CHECK(undelivered.request(undelivered.incarnation(), 3, Mode::Read).status == Status::Queued);
+    undelivered.complete(undelivered.incarnation(), 1);
+    CHECK(undelivered.pending_notifications().size() == 1);
+    CHECK(!undelivered.admitted(undelivered.incarnation(), 2, Mode::Write));
+    undelivered.cancel_pending(undelivered.incarnation(), 2);
+    auto pending_cancel = undelivered.pending_notifications();
+    CHECK(pending_cancel.size() == 2);
+    CHECK(pending_cancel[0].continuation_id == 2
+          && pending_cancel[0].status == Status::Cancelled);
+    CHECK(pending_cancel[1].continuation_id == 3
+          && pending_cancel[1].status == Status::Ready);
+    CHECK(undelivered.acknowledge(pending_cancel[0]));
+    CHECK(undelivered.acknowledge(pending_cancel[1]));
+    CHECK(undelivered.admitted(undelivered.incarnation(), 3, Mode::Read));
+    bool active_rejected = false;
+    try { undelivered.cancel_pending(undelivered.incarnation(), 3); }
+    catch (const std::logic_error&) { active_rejected = true; }
+    CHECK(active_rejected);
+    undelivered.complete(undelivered.incarnation(), 3);
 
     // Cancellation races a queued wake: stale receipts cannot authorize work.
     CHECK(bridge.request(bridge.incarnation(), 7, Mode::Read).status == Status::Ready);
@@ -86,7 +111,7 @@ int main() {
     for (std::uint64_t id = 2;
          id <= Bridge::max_outstanding_continuations; ++id) {
         CHECK(bounded.request(bounded.incarnation(), id, Mode::Write).status == Status::Queued);
-        bounded.cancel_queued(bounded.incarnation(), id);
+        bounded.cancel_pending(bounded.incarnation(), id);
     }
     CHECK(bounded.pending_notifications().size() ==
           Bridge::max_outstanding_continuations - 1);
