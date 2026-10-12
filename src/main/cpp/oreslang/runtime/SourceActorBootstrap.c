@@ -148,6 +148,12 @@ static uint64_t pipeline_issue_id(_Atomic uint64_t* counter) {
 __attribute__((weak))
 void oreslang_source_actor_test_before_pipeline_publish(void* actor,
                                                          unsigned direction);
+/* Deterministic fault injection on the caller's scheduler-issued TLS
+ * ancestry, before acquiring group.mutex. No hook executes under the
+ * publication/cancellation linearization monitor. Testing-only symbol. */
+__attribute__((weak))
+void oreslang_source_actor_test_corrupt_causal_parent(
+    uint64_t* active_parent, unsigned direction);
 #endif
 static _Atomic uint64_t next_actor_id = 4100;
 static void check_invariant(int condition, const char* predicate, int line) {
@@ -750,6 +756,10 @@ static int source_send_binary_unlocked(SourceActor* actor,
     if (pipeline_route && oreslang_source_actor_test_before_pipeline_publish)
         oreslang_source_actor_test_before_pipeline_publish(
             (void*)(uintptr_t)actor->id, direction);
+    if (pipeline_route && direction != 0
+            && oreslang_source_actor_test_corrupt_causal_parent)
+        oreslang_source_actor_test_corrupt_causal_parent(
+            &active_pipeline_message_id, direction);
 #endif
     if (pipeline_route) group_lock();
     /* Root ownership is a single atomic publication decision. Validate the
