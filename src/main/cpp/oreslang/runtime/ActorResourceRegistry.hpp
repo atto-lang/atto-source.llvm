@@ -37,6 +37,8 @@ public:
         // Includes failures whose diagnostic text could not be allocated.
         std::size_t failures = 0;
         std::size_t attempted = 0;
+        // Skipped allocations stay quarantined after unsafe revocation failure.
+        std::size_t skipped = 0;
     };
 
     explicit ActorResourceRegistry(std::uint64_t actor_id,
@@ -99,10 +101,10 @@ public:
             pending.swap(entries_);
         }
         Result result{Reclaim::complete, 0, {}};
-        for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+        const auto invoke = [&result](Entry& resource) {
             ++result.attempted;
             try {
-                it->close();
+                resource.close();
                 ++result.closed;
             } catch (const std::exception& e) {
                 ++result.failures;
@@ -110,6 +112,23 @@ public:
             } catch (...) {
                 ++result.failures;
                 append_error(result, "unknown closer failure");
+            }
+        };
+        // Revoke I/O, timers and FFI callbacks before freeing ANY arena.
+        // Even if registrations are out of dependency order, a late callback
+        // must never be able to touch an already released native allocation.
+        for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+            if (it->kind != Kind::native_allocation) invoke(*it);
+        }
+        if (result.failures == 0) {
+            for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+                if (it->kind == Kind::native_allocation) invoke(*it);
+            }
+        } else {
+            // Unknown revocation outcome. Quarantine allocation ownership
+            // rather than risk UAF. The supervisor records terminal failure.
+            for (const auto& resource : pending) {
+                if (resource.kind == Kind::native_allocation) ++result.skipped;
             }
         }
         // A throwing revoker might leave a live socket, native loan or FFI
