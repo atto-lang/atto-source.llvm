@@ -93,16 +93,26 @@ if(BUILD_TESTING)
         --diagnostic "duplicate switch default")
     oreslang_contract_test(reject_value_switch_malformed_case value-switch-malformed-case.ores
         --diagnostic "malformed dispatch integer separator")
-    oreslang_contract_test(reject_source_value_match_default_first value-match-default-first.ores
-        --diagnostic "unreachable match arm after wildcard")
-    oreslang_contract_test(reject_source_value_match_default_first_miss value-match-default-first-miss.ores
-        --diagnostic "match has no default/else keyword")
+    oreslang_contract_test(source_value_match_default_first value-match-default-first.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_default_first_miss value-match-default-first-miss.ores
+        --ir "dispatch.collected.value")
     oreslang_contract_test(reject_value_match_duplicate_case value-match-duplicate-case.ores
         --diagnostic "duplicate dispatch integer case")
-    oreslang_contract_test(reject_source_value_match_bare_default_first value-match-bare-default-first.ores
-        --diagnostic "match has no default/else keyword")
-    oreslang_contract_test(reject_source_value_match_on_default_first value-match-on-default-first.ores
-        --diagnostic "match has no default/else keyword")
+    oreslang_contract_test(source_value_match_bare_default_first value-match-bare-default-first.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_value_match_on_default_first value-match-on-default-first.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_typed_match_ret_int typed-match-ret-int.ores
+        --ir "dispatch.collected.value")
+    oreslang_contract_test(source_typed_do_match_ret_int typed-do-match-ret-int.ores
+        --ir "do_match")
+    oreslang_contract_test(reject_value_match_duplicate_alias value-match-duplicate-alias.ores
+        --diagnostic "duplicate match default")
+    oreslang_contract_test(reject_typed_match_non_int typed-match-ret-string.ores
+        --diagnostic "native match supports only ret=int")
+    oreslang_contract_test(reject_typed_do_match_no_fallback typed-do-match-nonexhaustive.ores
+        --diagnostic "non-exhaustive do match<ret=int>")
     oreslang_contract_test(reject_value_match_duplicate_default value-match-duplicate-default.ores
         --diagnostic "duplicate match default")
     oreslang_contract_test(reject_value_switch_grouped_duplicate value-switch-grouped-duplicate.ores
@@ -165,6 +175,12 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_match_wildcard_miss value-match-wildcard-miss.ores
             --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_value_match_return value-match-return.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_match_wildcard_first value-match-default-first.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_match_default_first_miss value-match-default-first-miss.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_match_default_first value-match-bare-default-first.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_match_on_default_first value-match-on-default-first.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_typed_match_ret_int typed-match-ret-int.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_typed_do_match_ret_int typed-do-match-ret-int.ores --run 42 --clang "${ORE_CLANG}")
 
 
 

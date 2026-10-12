@@ -412,6 +412,21 @@ private:
         const auto offset = token_.offset;
         const bool is_match = accept("match");
         if (!is_match) require("switch");
+        // Until non-scalar ABI/effect support lands, the native compiler
+        // accepts the shared typed-match syntax only for i64/int results.
+        bool typed_match_result = false;
+        if (is_match && accept("<")) {
+            (void)accept("ret"); // match<int> is accepted shorthand.
+            if (token_.text == "=") {
+                if (token_.text != "=") fail("malformed match return contract");
+                advance();
+            } else if (token_.text != "int") {
+                fail("native match supports only ret=int");
+            }
+            if (!accept("int")) fail("native match supports only ret=int");
+            require(">");
+            typed_match_result = true;
+        }
         auto expr = make_expression(
                 is_match ? Expression::Kind::Match : Expression::Kind::Switch, offset);
         expr->left = expression();
@@ -422,17 +437,16 @@ private:
         while (token_.text != "end" && token_.kind != Kind::End) {
             Expression::Arm arm;
             if (is_match) {
-                // Canonical match is source ordered. Unlike switch default,
-                // an 'on _' arm claims the remainder of the match and makes
-                // any following concrete arm unreachable.
-                if (accept("default"))
-                    fail("match has no default/else keyword; use on _");
-                require("on");
-                (void)accept("is");
-                if (accept("_")) arm.fallback = true;
-                else if (accept("default"))
-                    fail("match has no default/else keyword; use on _");
-                else arm.cases.push_back(parse_dispatch_case());
+                // A designated default is fallback-only regardless of its
+                // source location. Explicit patterns remain source-ordered.
+                // The Java/GraalVM parser accepts all three fallback aliases.
+                if (accept("default")) arm.fallback = true;
+                else {
+                    require("on");
+                    (void)accept("is");
+                    if (accept("_") || accept("default")) arm.fallback = true;
+                    else arm.cases.push_back(parse_dispatch_case());
+                }
             } else {
                 if (accept("default")) arm.fallback = true;
                 else {
@@ -446,13 +460,10 @@ private:
                     } while (accept(","));
                 }
             }
-            // Match wildcards are source-ordered and terminal. A switch
-            // default is an order-independent fallback; keep the policies
-            // separate even though both lower through a fallback arm.
+            // A second designated fallback is always invalid. It does not
+            // make later explicit cases unreachable: those are compared first.
             if (fallback && arm.fallback)
                 fail(is_match ? "duplicate match default" : "duplicate switch default");
-            if (is_match && fallback)
-                fail("unreachable match arm after wildcard");
             if (arm.fallback) fallback = true;
             for (const auto number : arm.cases) {
                 if (++total_cases > 256)
@@ -477,9 +488,9 @@ private:
             if (expr->arms.size() > 256) fail("dispatch arm count exceeds 256");
         }
         require("end");
-        if (fallback && !is_match) {
-            // Switch alone has a designated, order-independent fallback.
-            // Ordered match retains exactly its original source arm order.
+        if (fallback) {
+            // Preserve concrete source order, but test the designated
+            // fallback only after all concrete patterns/cases, on BOTH forms.
             auto default_arm = std::find_if(expr->arms.begin(), expr->arms.end(),
                 [](const Expression::Arm& arm) { return arm.fallback; });
             if (default_arm + 1 != expr->arms.end())
@@ -488,6 +499,11 @@ private:
         if (expr->arms.empty()) fail("match/switch needs at least one arm");
         if (!procedural && !fallback)
             fail("non-exhaustive value match/switch: add catch-all");
+        if (procedural && typed_match_result) {
+            if (!fallback) fail("non-exhaustive do match<ret=int>");
+            for (const auto& arm : expr->arms)
+                if (!arm.value) fail("do match<ret=int> requires every arm to return int");
+        }
         return expr;
     }
 
