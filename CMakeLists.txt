@@ -103,6 +103,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-gpu-fence-test tests/gpu_buffer_fence_test.cpp)
     target_include_directories(oreslang-gpu-fence-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-gpu-fence-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
