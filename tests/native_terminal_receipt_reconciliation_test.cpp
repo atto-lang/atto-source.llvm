@@ -279,6 +279,84 @@ int main() {
                 "raced terminal receipt was consumed twice");
         shutdown(scheduler);
     }
+    // Recovery also binds the NEW physical parent's publication to the
+    // one-use claim under the scheduler mutex, not a prior readiness snapshot.
+    for (unsigned attempt = 0; attempt < 50; ++attempt) {
+        auto* scheduler = ores_native_actor_scheduler_open_identity_control(
+            2, 2, 2, data, nullptr, panic, nullptr);
+        require(scheduler != nullptr, "recovered-parent race scheduler unavailable");
+        const auto parent = ores_native_actor_scheduler_spawn(scheduler, 0);
+        const auto child = ores_native_actor_scheduler_spawn(scheduler, 1);
+        expect_done(scheduler, child);
+        expect_done(scheduler, parent);
+        const OresNativeActorTerminalFailure failure{
+            ORES_NATIVE_CONTROL_PANIC, child, 915, 670
+        };
+        require(!ores_native_actor_scheduler_publish_failure(
+                    scheduler, parent, failure),
+                "stopped original parent accepted terminal failure");
+        require(ores_native_actor_scheduler_seal_normal_exit(scheduler, parent),
+                "original stopped parent could not seal normal");
+        const auto recovered =
+            ores_native_actor_scheduler_recycle_normal_done(scheduler, parent);
+        require(recovered.generation == parent.generation + 1,
+                "replacement parent generation absent");
+        OresNativeRestartLease lease{};
+        require(ores_native_actor_scheduler_acquire_restart_lease(
+                    scheduler, recovered, &lease)
+                  && ores_native_actor_scheduler_publish_restart_lease(
+                    scheduler, lease)
+                  && ores_native_actor_scheduler_release_restart_lease(
+                    scheduler, lease), "replacement parent not published");
+        OresNativeTerminalReceipt forged{};
+        require(!ores_native_actor_scheduler_claim_recovered_parent_terminal_receipt(
+                    scheduler, parent, OresNativeActorRef{
+                        recovered.scheduler_domain, recovered.actor_slot,
+                        recovered.generation + 1}, child, &forged),
+                "forged replacement-parent generation claimed a PANIC");
+        std::atomic<bool> start{false}, won{false};
+        OresNativeTerminalReceipt claimed{};
+        std::thread claimant([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            won.store(ores_native_actor_scheduler_claim_recovered_parent_terminal_receipt(
+                scheduler, parent, recovered, child, &claimed) != 0);
+        });
+        std::thread stopper([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            (void) ores_native_actor_scheduler_stop(scheduler, recovered);
+        });
+        start.store(true, std::memory_order_release);
+        claimant.join();
+        stopper.join();
+        require(ores_native_actor_scheduler_wait_done(scheduler, recovered),
+                "replacement parent STOP did not physically finish");
+        OresNativeTerminalReceipt after{};
+        require(ores_native_actor_scheduler_terminal_receipt(
+                    scheduler, parent, child, &after),
+                "recovered-parent STOP erased terminal evidence");
+        if (won.load()) {
+            require(after.status == ORES_NATIVE_TERMINAL_RECEIPT_CLAIMED
+                    && claimed.nonce != 0,
+                    "pre-STOP recovered claim lost its exact token");
+        } else {
+            require(after.status == ORES_NATIVE_TERMINAL_RECEIPT_RECORDED,
+                    "STOP-first recovered claim prematurely consumed evidence");
+            require(!ores_native_actor_scheduler_claim_recovered_parent_terminal_receipt(
+                        scheduler, parent, recovered, child, &claimed),
+                    "post-STOP recovered callback bypassed publication fence");
+            require(ores_native_actor_scheduler_claim_terminal_receipt(
+                        scheduler, parent, child, &claimed),
+                    "STOP-first claim lost quarantined recovery evidence");
+        }
+        require(!ores_native_actor_scheduler_claim_terminal_receipt(
+                    scheduler, parent, child, &forged),
+                "terminal evidence admitted two recovery claimants");
+        shutdown(scheduler);
+    }
+    std::puts("NATIVE_RECOVERED_PARENT_STOP_RACE_PASS iterations=50");
+
     std::puts("NATIVE_LIVE_PARENT_CLAIM_STOP_RACE_PASS iterations=100");
 
     std::puts("NATIVE_TERMINAL_RECEIPT_RECONCILE_PASS"
