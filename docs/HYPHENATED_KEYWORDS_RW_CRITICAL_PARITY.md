@@ -234,14 +234,19 @@ read->read and write->read, until reentrancy and cross-primitive lock-order
 proofs are implemented. These are future target semantics above, not
 claims of existing behavior.
 
-Isolated exact-Git-blob verification of the hardened admission
-algorithm passed on a private funded runner:
-[run #38322404843](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38322404843).
-The workflow checked the current gate Git blob
-`aca6f8a24f151f0cc8b2c517740cbeee6c90b0e9`, compiled
-`CriticalRwGate` with **test-only** `OresFuture`/scheduler adapters,
-and exercised FIFO cohorts, writer exclusion, bounded shutdown,
-cancelled-writer liveness and 400 cancellation/grant races.
-It is **not** evidence for production `OresFuture` integration,
-full GraalVM or LLVM guest execution, compiler effect checking,
-supervisor generation fencing, sanitizer coverage, or ready-to-merge status.
+Exact-Git-blob validation of the hardened RW admission substrate passed
+on a private funded runner:
+[run #38323495940](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38323495940).
+The workflow checked exact production Git blobs of
+`CriticalRwGate` `b594da55830eafffe9cc35c5a8a41f271e150ae9`,
+`OresFuture` `121a739016cab93072371564fc93290b06825196`,
+`OresScheduler`, `Awaitable` and `MixedInteropBridge`.
+It compiled these together with a **test-only ActorRuntime shim** and
+exercised FIFO cohorts, writer exclusion, bounded readers/queue,
+cancelled-writer liveness, 400 cancellation/grant races, 16,000 seeded
+state transitions, scheduler single-carrier nonparking, cancellation
+of a waiting task, and rejection of blocking pending Future reads on
+scheduler carriers. The actual actor runtime and full Java build were
+**not** part of this isolated test. No full guest compiler effect checking,
+Graal Native Image/AOT, LLVM guest parity, formal proof, or ready-to-merge
+status is claimed.
