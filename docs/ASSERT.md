@@ -2,7 +2,8 @@
 
 > **LLVM status:** This is a source/API contract, not an executable native
 > standard library. The example below currently runs on Java/GraalVM only.
-> Native imports and assertion/trap lowering are deliberately rejected.
+> Canonical import declarations now parse into a sealed native AST, but LLVM
+> code generation deliberately rejects unresolved imports and assertion/trap lowering.
 
 Import the source-owned module with `import module Assert from "std/assert";`.
 
