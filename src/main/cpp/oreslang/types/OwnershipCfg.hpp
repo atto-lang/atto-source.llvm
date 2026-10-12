@@ -29,6 +29,14 @@ struct PlaceState {
     std::set<std::uint64_t> shared_loan_ids;
     std::optional<std::uint64_t> exclusive_loan_id;
 
+    // Preserve legacy three-field construction under -Werror while making
+    // the new identity fields explicit and safely default-initialized.
+    PlaceState(ValueMask state = kUninitialized, unsigned shared = 0,
+            bool exclusive = false, std::set<std::uint64_t> sharedIds = {},
+            std::optional<std::uint64_t> exclusiveId = std::nullopt)
+        : possible(state), shared_loans(shared), exclusive_loan(exclusive),
+          shared_loan_ids(std::move(sharedIds)), exclusive_loan_id(exclusiveId) {}
+
     bool operator==(const PlaceState& rhs) const {
         return possible == rhs.possible &&
             shared_loans == rhs.shared_loans &&
@@ -50,6 +58,11 @@ struct Operation {
     // Optional explicit lexical loan identity; absent borrow IDs derive from
     // the original CFG operation site, not the active traversal order.
     std::optional<std::uint64_t> loan_id;
+
+    Operation() = default;
+    Operation(Kind operation, std::string key,
+            std::optional<std::uint64_t> provenance = std::nullopt)
+        : kind(operation), place(std::move(key)), loan_id(provenance) {}
 };
 
 struct BasicBlock {
