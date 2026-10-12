@@ -36,9 +36,10 @@ class GuestEvidenceTests(unittest.TestCase):
             CONTEXT_VALID.replace("domain=77 generation=1", "domain=0 generation=1"),
             CONTEXT_VALID.replace("message=102 parent=101", "message=102 parent=101 forged=yes"),
             CONTEXT_VALID.replace("flow=90 message=103", "flow=0 message=103"),
+            CONTEXT_VALID + ("forged" * 40000),
         ]
         for case in bad_transcripts:
-            with self.subTest(case=case[-96:]), self.assertRaises(AssertionError):
+            with self.subTest(case=case[-96:]), self.assertRaises(ValueError):
                 verify_three_actor_flow_context(case)
 
     def test_complete_compiled_guest_summary(self):
@@ -51,7 +52,7 @@ class GuestEvidenceTests(unittest.TestCase):
             VALID.replace("forward=2", "forward=1"),
             VALID.replace("backward=2", "backward=1"),
         ]:
-            with self.subTest(transcript=transcript[-65:]), self.assertRaises(AssertionError):
+            with self.subTest(transcript=transcript[-65:]), self.assertRaises(ValueError):
                 verify_three_actor_pipeline_stderr(transcript)
 
     def test_three_distinct_finalizers_with_correct_values(self):
@@ -65,7 +66,28 @@ class GuestEvidenceTests(unittest.TestCase):
             VALID.replace("active=0", "active=1"),
             VALID.replace("carriers=4", "carriers=0"),
         ]:
-            with self.subTest(transcript=transcript[-65:]), self.assertRaises(AssertionError):
+            with self.subTest(transcript=transcript[-65:]), self.assertRaises(ValueError):
+                verify_three_actor_pipeline_stderr(transcript)
+
+    def test_physical_completion_and_stop_receipts_are_strictly_ordered(self):
+        lines = VALID.splitlines()
+        mutations = [
+            "\n".join([*lines[1:4], lines[0], lines[4]]) + "\n",
+            "\n".join([lines[0], lines[4], *lines[1:4]]) + "\n",
+            "\n".join([lines[0], lines[2], lines[1], *lines[3:]]) + "\n",
+        ]
+        for transcript in mutations:
+            with self.subTest(transcript=transcript), self.assertRaises(ValueError):
+                verify_three_actor_pipeline_stderr(transcript)
+
+    def test_disguised_failure_and_oversized_input_fail_closed(self):
+        for transcript in [
+            VALID + "logger: SOURCE_PIPELINE_FAILURE code=7\n",
+            VALID + "SOURCE_ACTOR_INVARIANT_FAILURE in diagnostic data\n",
+            VALID + ("ignored-" * 20000),
+            "",
+        ]:
+            with self.subTest(trailer=transcript[-65:]), self.assertRaises(ValueError):
                 verify_three_actor_pipeline_stderr(transcript)
 
     def test_terminal_failure_is_incompatible_with_success(self):
@@ -74,7 +96,7 @@ class GuestEvidenceTests(unittest.TestCase):
             "SOURCE_PIPELINE_TERMINAL_STATUS code=7",
             "SOURCE_ACTOR_INVARIANT_FAILURE",
         ]:
-            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
                 verify_three_actor_pipeline_stderr(VALID + marker + "\n")
 
 if __name__ == "__main__":
