@@ -91,6 +91,11 @@ int main(void) {
     require(!ores_native_actor_scheduler_is_current_actor(s.scheduler, s.refs[0]));
     require(ores_native_actor_scheduler_send(s.scheduler, s.refs[0], 42));
     await_flag(&s.first_started);
+    // An external producer, even while this actor is executing elsewhere,
+    // must not inherit the actor's thread-local execution authority.
+    require(!ores_native_actor_scheduler_is_current_carrier(s.scheduler));
+    require(!ores_native_actor_scheduler_is_current_actor(s.scheduler, s.refs[0]));
+    require(!ores_native_actor_scheduler_is_current_actor(s.scheduler, s.refs[1]));
 
     // CONTROL for the same actor must wait; another actor's CONTROL can run.
     require(ores_native_actor_scheduler_publish_control(s.scheduler, s.refs[0], 77));
