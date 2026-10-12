@@ -120,6 +120,52 @@ int main() {
     };
     assert(rejected([&] { verify(loan_join); }));
 
+    // Equal loan counts are not equal loan *identities*. A release at the
+    // join is invalid when the two branches borrowed at different sites.
+    Graph foreign_loan_join;
+    foreign_loan_join.entry = {{"x", cell(kOwned)}};
+    foreign_loan_join.blocks = {
+        {{}, {1, 2}},
+        {{{Kind::BorrowShared, "x"}}, {3}},
+        {{{Kind::BorrowShared, "x"}}, {3}},
+        {{{Kind::ReleaseShared, "x"}, {Kind::Move, "x"}}, {}}
+    };
+    assert(rejected([&] { verify(foreign_loan_join); }));
+
+    // By contrast, a single common lexical loan can flow through two
+    // branches and be released at their join without false conflicts.
+    Graph common_loan_join;
+    common_loan_join.entry = {{"x", cell(kOwned)}};
+    common_loan_join.blocks = {
+        {{{Kind::BorrowShared, "x"}}, {1, 2}},
+        {{}, {3}},
+        {{}, {3}},
+        {{{Kind::ReleaseShared, "x"}, {Kind::Move, "x"}}, {}}
+    };
+    verify(common_loan_join);
+
+    // Explicit tokens are checked for release authenticity as well.
+    Graph foreign_release;
+    foreign_release.entry = {{"x", cell(kOwned)}};
+    foreign_release.blocks = {
+        {{{Kind::BorrowShared, "x", 101}, {Kind::ReleaseShared, "x", 102}}, {}}
+    };
+    assert(rejected([&] { verify(foreign_release); }));
+    foreign_release.blocks[0].operations[1].loan_id = 101;
+    verify(foreign_release);
+
+    // Two simultaneously borrowed shared loans need explicit release IDs.
+    Graph anonymous_release;
+    anonymous_release.entry = {{"x", cell(kOwned)}};
+    anonymous_release.blocks = {
+        {{{Kind::BorrowShared, "x", 1}, {Kind::BorrowShared, "x", 2},
+          {Kind::ReleaseShared, "x"}}, {}}
+    };
+    assert(rejected([&] { verify(anonymous_release); }));
+    anonymous_release.blocks[0].operations[2].loan_id = 1;
+    anonymous_release.blocks[0].operations.push_back({Kind::ReleaseShared, "x", 2});
+    verify(anonymous_release);
+
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
     Graph maybe_drop;
