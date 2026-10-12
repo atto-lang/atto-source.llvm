@@ -130,6 +130,8 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    // Parsed contract only: bool ABI is not admitted by native LLVM codegen.
+    bool returns_bool = false;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
