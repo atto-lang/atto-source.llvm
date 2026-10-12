@@ -340,13 +340,21 @@ public:
         if (candidate != replacements_.end()
             && candidate->second.phase != ReplacementPhase::cleaned)
             throw std::logic_error("replacement physical cleanup required before abort");
+        // Preserve the actual cleaned physical incarnation in the journal.
+        // Never dereference candidate after erasing replacements_: the
+        // iterator is invalidated, and losing this identity would conceal
+        // cleanup/abort correlation from the runtime refinement trace.
+        const std::optional<OresNativeActorRef> discarded =
+            candidate == replacements_.end()
+            ? std::nullopt
+            : std::optional<OresNativeActorRef>{candidate->second.actor};
         auto& stored = children_.at(permit.child.logical_child_id);
         stored.phase = Phase::finalized;
         if (candidate != replacements_.end())
             staged_slots_.erase(candidate->second.actor.actor_slot);
         replacements_.erase(permit.child.logical_child_id);
         pending_restarts_.erase(permit.child.logical_child_id);
-        record_transition("restart.abort", stored, permit.nonce);
+        record_transition("restart.abort", stored, permit.nonce, 0, discarded);
         return stored;
     }
 
