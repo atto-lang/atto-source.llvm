@@ -67,7 +67,7 @@ int main() {
 
         const std::array<std::string_view, 7> invalid{{
             std::string_view{}, "unknown", "state", "state.READ",
-            "state.read ", "PANIC", std::string_view{"panic\\0extra", 11}
+            "state.read ", "PANIC", std::string_view{"panic\0extra", 11}
         }};
         for (std::string_view spelling : invalid) {
             bool rejected = false;
