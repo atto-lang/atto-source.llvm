@@ -266,6 +266,27 @@ are opaque and cannot be serialized by untrusted actors to acquire authority.
   nonblocking waiter completion. The previous fixed two-child TLC model does
   not prove correctness of the variable-length chain or failure API.
 
+## Verified maximum linear chain and sanitizer failures
+
+- The native LLVM test `source-actor-pipeline-sixteen-stage.ores` builds and
+  executes **16 distinct guest-defined actors**, preserving the same canonical
+  two-variant nominal typed mailbox contract. It transmits **15 typed DATA
+  messages forward and 15 typed Result messages backward**, joins and stops
+  every stage, and verifies final source result **32**.
+- [Exact-source funded run #38196727362](https://github.com/zed-pkg-test/java-app/actions/runs/38196727362)
+  passed the 16-stage guest compiler/IR and **15 native executions**, plus the
+  previous 2/3/4-stage success cases, runtime replay rejection, missing-hop
+  failure, wrong result, cancellation, and sanitizer gates.
+- The separate ASan/UBSan step exercises **2- and 4-stage success** and
+  **missing-reply, wrong-result, cancellation, and wrong-ingress-replay**
+  terminal paths. This provides sampled resource-safety evidence, *not* an
+  exhaustive proof of absence of data races or leaks in arbitrary schedules.
+- This is the **full supported bounded linear single-flow slice**, not a
+  full production pipeline language: arbitrary typed payload containers,
+  multi-flow correlation, graph fan-out/fan-in, Future backpressure,
+  cancellation during in-flight await, producer-capability teardown and
+  restart/ABA invariants remain release blockers.
+
 ## Current admission status
 
 Java/GraalVM now admits compiler-checked `self.forward` and `self.backward`
