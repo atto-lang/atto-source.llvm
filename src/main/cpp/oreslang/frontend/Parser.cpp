@@ -176,7 +176,7 @@ public:
             } else {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept("transform-pipe")) {
+                else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
                 } else fail("expected 'module', 'class' or 'actor'");
@@ -191,7 +191,7 @@ public:
                 }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept("transform-pipe")) {
+                else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
                 } else fail("expected 'class' or 'actor'");
@@ -831,6 +831,21 @@ private:
 
     bool accept(std::string_view text) {
         if (token_.text != text) return false;
+        advance();
+        return true;
+    }
+
+    // Parse the role only after 'define'. A plain transform-pipe expression
+    // must still lex as identifier, minus, identifier.
+    bool accept_transform_pipe_modifier() {
+        if (token_.text != "transform") return false;
+        const auto start = token_.offset;
+        advance();
+        if (token_.text != "-" || token_.offset != start + 9)
+            fail("expected contiguous transform-pipe actor modifier");
+        advance();
+        if (token_.text != "pipe" || token_.offset != start + 10)
+            fail("expected contiguous transform-pipe actor modifier");
         advance();
         return true;
     }
