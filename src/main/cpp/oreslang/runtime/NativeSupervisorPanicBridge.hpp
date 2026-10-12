@@ -58,21 +58,38 @@ public:
     /** The host must register exactly the current generation of each child. */
     void register_child(OresNativeActorRef child) {
         if (!valid(child) || child.scheduler_domain != parent_.scheduler_domain
-                || child.actor_slot == parent_.actor_slot
-                || !ores_native_actor_scheduler_poll_published(scheduler_, child))
-            throw std::invalid_argument("foreign, stale or stopped child");
-        std::lock_guard<std::mutex> lock(mutex_);
-        const Key key{child.actor_slot, child.generation};
-        if (registered_.count(key) != 0)
-            throw std::logic_error("child generation already registered");
-        const auto snapshot = child_registry_->register_child(child);
-        try {
-            registered_.emplace(key, snapshot);
-        } catch (...) {
-            child_registry_->detach_active(snapshot.child, child,
-                                          snapshot.incarnation);
-            throw;
-        }
+                || child.actor_slot == parent_.actor_slot)
+            throw std::invalid_argument("foreign or invalid initial child");
+        // Initial registration has the same physical and CONTROL close race
+        // as RESTART: a readiness observation alone is insufficient.
+        process_->with_healthy_restart_transaction([&] {
+            OresNativeRestartLease lease{};
+            if (!ores_native_actor_scheduler_acquire_registration_lease(
+                    scheduler_, child, &lease))
+                throw std::invalid_argument("child was not scheduler-published");
+            struct LeaseScope {
+                OresNativeActorScheduler* scheduler;
+                OresNativeRestartLease lease;
+                ~LeaseScope() {
+                    if (!ores_native_actor_scheduler_release_restart_lease(
+                            scheduler, lease)) std::terminate();
+                }
+            } lease_scope{scheduler_, lease};
+            if (!ores_native_actor_scheduler_poll_published(scheduler_, parent_))
+                throw std::logic_error("supervisor parent physically retired");
+            std::lock_guard<std::mutex> guard(mutex_);
+            const Key key{child.actor_slot, child.generation};
+            if (registered_.count(key) != 0)
+                throw std::logic_error("child generation already registered");
+            const auto snapshot = child_registry_->register_child(child);
+            try {
+                registered_.emplace(key, snapshot);
+            } catch (...) {
+                child_registry_->detach_active(snapshot.child, child,
+                                               snapshot.incarnation);
+                throw;
+            }
+        });
     }
 
     /**
