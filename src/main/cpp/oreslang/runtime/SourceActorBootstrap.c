@@ -20,6 +20,16 @@
 
 #define SOURCE_MAX_VARIANTS 64u
 #define SOURCE_PIPELINE_MAX_STAGES 16u
+enum {
+    SOURCE_PIPELINE_OK = 0,
+    SOURCE_PIPELINE_INVALID_ROUTE = 1,
+    SOURCE_PIPELINE_BAD_PHASE = 2,
+    SOURCE_PIPELINE_REJECTED_MAIL = 3,
+    SOURCE_PIPELINE_MISSING_HOP = 4,
+    SOURCE_PIPELINE_TIMEOUT = 5,
+    SOURCE_PIPELINE_WRONG_RESULT = 6,
+    SOURCE_PIPELINE_CANCELLED = 7
+};
 #define SOURCE_PRODUCER_CLOSED (UINT64_C(1) << 63)
 #define SOURCE_PRODUCER_COUNT (SOURCE_PRODUCER_CLOSED - 1)
 
@@ -78,6 +88,8 @@ typedef struct {
     int pipeline_done;
     int64_t pipeline_result;
     atomic_int pipeline_phase; /* 0..(2*(count-1)+1) */
+    atomic_int pipeline_failure;
+    atomic_int pipeline_root_sent;
     SourceActor* pipeline_stages[SOURCE_PIPELINE_MAX_STAGES];
     size_t pipeline_count;
     atomic_uint_fast64_t pipeline_forward_count;
@@ -111,6 +123,21 @@ static void check_invariant(int condition, const char* predicate, int line) {
 #define ensure(expr) check_invariant((expr), #expr, __LINE__)
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
+/* Actor workers may signal failure, but never synchronously tear down peers
+ * or terminate the process. Only the host-main waiter performs teardown. */
+static void pipeline_fail(int code) {
+    if (code <= 0) return;
+    int expected = SOURCE_PIPELINE_OK;
+    if (!atomic_compare_exchange_strong_explicit(
+            &group.pipeline_failure, &expected, code,
+            memory_order_acq_rel, memory_order_acquire)) return;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr, "SOURCE_PIPELINE_FAILURE code=%d\n", code);
+#endif
+    group_lock();
+    ensure(pthread_cond_broadcast(&group.pipeline_completed) == 0);
+    group_unlock();
+}
 
 static SourceActor* lookup(size_t index) {
     ensure(index < SOURCE_GROUP_SLOTS);
@@ -658,6 +685,8 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
     group.pipeline_done = 0;
     group.pipeline_result = 0;
     atomic_store_explicit(&group.pipeline_phase, 0, memory_order_release);
+    atomic_store_explicit(&group.pipeline_failure, 0, memory_order_release);
+    atomic_store_explicit(&group.pipeline_root_sent, 0, memory_order_release);
     group_unlock();
 }
 /* Retain old C embedding ABI; the compiler uses the general ordered route. */
@@ -717,10 +746,18 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
     else if (direction == 2 && index > 0
         && active_pipeline_ingress == (index + 1 == count ? 1 : 2))
         expected_phase = (int)(2 * (count - 1) - index);
-    ensure(expected_phase >= 0);
-    ensure(atomic_compare_exchange_strong_explicit(
+    if (expected_phase < 0) {
+        pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
+        return;
+    }
+    if (atomic_load_explicit(&group.pipeline_failure, memory_order_acquire))
+        return;
+    if (!atomic_compare_exchange_strong_explicit(
         &group.pipeline_phase, &expected_phase, expected_phase + 1,
-        memory_order_acq_rel, memory_order_acquire));
+        memory_order_acq_rel, memory_order_acquire)) {
+        pipeline_fail(SOURCE_PIPELINE_BAD_PHASE);
+        return;
+    }
     const SourceVariantContract* contract = &actor->variants[variant];
     ensure(contract->owned_enum_name && contract->declared_tag
         && strcmp(contract->value.shape, "T[S,I,I]") == 0);
@@ -751,7 +788,8 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
         atomic_fetch_add_explicit(&group.pipeline_backward_count, 1,
                                   memory_order_acq_rel);
     }
-    ensure(source_send_binary(target, wire, at, (uint8_t)direction));
+    if (!source_send_binary(target, wire, at, (uint8_t)direction))
+        pipeline_fail(SOURCE_PIPELINE_REJECTED_MAIL);
 }
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
     SourceActor* actor = source;
@@ -836,7 +874,8 @@ void oreslang_source_actor_stop(void* opaque) {
 #endif
     group.actors[slot] = NULL;
     if (instance == group.pipeline_source) {
-        ensure(group.pipeline_done);
+        ensure(group.pipeline_done ||
+            atomic_load_explicit(&group.pipeline_failure, memory_order_acquire) != 0);
         group.pipeline_source = NULL;
         for (size_t i = 0; i < group.pipeline_count; ++i) {
             group.pipeline_stages[i] = NULL;
