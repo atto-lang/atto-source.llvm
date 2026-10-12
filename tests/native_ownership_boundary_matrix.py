@@ -9,6 +9,24 @@ compiler = sys.argv[1]
 # Deliberately exercise source forms even though their native lowering does
 # not exist. Zero emitted IR is as important as the failing process status.
 cases = {
+    "suspends borrowed callable": (
+        "suspends fnc read(borrow int x): int { return x; }",
+        "native suspends declaration requires suspension-aware borrow checking"),
+    "critical callable": (
+        "critical fnc read(borrow int x): int { return x; }",
+        "native critical declaration requires compiler lowering"),
+    "copy cannot box borrowed reference": (
+        "fnc read(int x): int { return rt copy (rt borrow x); }",
+        "borrowed reference may only be passed"),
+    "share cannot box borrowed reference": (
+        "fnc read(int x): int { return rt share (rt borrow x); }",
+        "borrowed reference may only be passed"),
+    "public owned qualifier": (
+        "pub fnc main(): int { const value: owned int = 42; return 0; }",
+        "experimental owned int requires"),
+    "requires no_alloc cannot be an unchecked promise": (
+        "fnc read(int x): int requires no_alloc { return x; }",
+        "native requires clause awaits verified"),
     "await": ("pub fnc main(): int { return await next; }", "native async/channel/select boundary unsupported"),
     "async fnc": ("pub async fnc main(): int { return 42; }", "native actor/async declaration"),
     "actor fnc": ("actor fnc main(): int { return 42; }", "native actor/async declaration"),
