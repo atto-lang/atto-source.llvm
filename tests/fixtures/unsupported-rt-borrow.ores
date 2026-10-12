@@ -1,1 +1,1 @@
-pub fnc main(): int { return rt borrow owner; }
+pub fnc main(int owner): int { return rt borrow owner; }
