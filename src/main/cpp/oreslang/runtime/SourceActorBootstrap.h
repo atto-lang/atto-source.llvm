@@ -8,7 +8,13 @@ extern "C" {
 #endif
 /* Restricted compiler-generated source-actor bootstrap: a pointer to the
  * generated constructor and fixed number of actor-owned i64 fields.
- * Returns an opaque host-owned ref; it is not a guest scalar/capability.
+ * Returned void* values are NON-DEREFERENCEABLE, monotonically-issued
+ * 64-bit actor ID capabilities (supported native targets have >=64-bit
+ * pointers). Never cast the returned value to a SourceActor* or inspect it.
+ * Every public lookup validates the live registry identity under its lock.
+ * A freed actor and a later actor reusing its scheduler slot cannot share a
+ * capability. The scheduler-owned actor ref separately binds domain/slot/
+ * generation. Handles must not be serialized as authority.
  * Source stop is only permitted from trusted zero-argument main, not an
  * actor carrier. Later await must use scheduler-admitted continuations.
  */
@@ -38,8 +44,9 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
  *
  * Wire bytes belong to the admitted callback only. Decode into actor-owned
  * storage before retaining data beyond the turn. Configuration and stop
- * require trusted single-owner lifecycle; all producers must be fenced
- * before stopping/freeing the opaque actor handle.
+ * require trusted single-owner lifecycle; public DATA producers may race
+ * trusted stop safely: a registry lookup pins a producer lease before
+ * teardown can free its actor.
  */
 typedef int64_t (*OresSourceActorWireMessage)(
     OresActorI64Heap*, uint64_t domain, uint64_t epoch,
@@ -47,8 +54,8 @@ typedef int64_t (*OresSourceActorWireMessage)(
 void* oreslang_source_actor_spawn_wire(
     OresSourceActorInit initializer, OresSourceActorWireMessage on_wire,
     uint64_t fields, const OresMp2Contract* compiler_owned_contract);
-/* Returns 1 on admission, 0 for malformed frame, full actor DATA mailbox
- * or stopped actor (not a stale-pointer-safe handle). Caller retains ownership of input bytes.
+/* Returns 1 on admission, 0 for malformed frame, full mailbox, stopped or
+ * stale/fabricated actor capability. Caller retains input-byte ownership.
  * Registered wire actors cannot use scalar source_actor_send.
  */
 int oreslang_source_actor_send_wire(
@@ -70,10 +77,12 @@ int oreslang_source_actor_send_wire(
  * queue saturation; it never dispatches by payload-shape guessing. The
  * registered ordinal is independent of the declared enum wire tag.
  *
- * Trusted stop closes producer admission and waits for already-entered
- * source send calls before releasing contracts. Callers must still fence
- * *new* calls to opaque actor pointers before teardown starts: there is no
- * stale-pointer-safe ref-counted guest handle ABI yet.
+ * Trusted stop closes admission and waits for already-entered source DATA
+ * calls before releasing contracts. Public send_wire/send_variant take the
+ * registry lock and acquire their producer lease before dereferencing any
+ * actor; callers may retain or attempt to use stale capabilities, which
+ * reject instead of touching reclaimed actor memory. This is still a
+ * restricted trusted-main bootstrap, not a general guest Future<T> ABI.
  */
 typedef int64_t (*OresSourceActorVariantMessage)(
     OresActorI64Heap*, uint64_t domain, uint64_t epoch,
