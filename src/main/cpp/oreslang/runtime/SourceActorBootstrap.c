@@ -708,6 +708,43 @@ void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
     }
     ensure(source_send_binary(target, wire, at, (uint8_t)direction));
 }
+/*
+ * Closed, source-compiled directional transport for a nested enum value.
+ * LLVM emits immutable, fully qualified MessagePack bytes. The runtime
+ * authenticates the requested output variant against the actor's sealed
+ * domain before recipient-owned snapshot and typed validation; never
+ * forward a borrowed guest object or select a schema from caller input.
+ */
+void oreslang_source_actor_pipeline_emit_variant(
+    uint64_t direction, uint64_t variant, const uint8_t* wire, uint64_t length) {
+    SourceActor* actor = active_pipeline_actor;
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC
+        && (direction == 1 || direction == 2)
+        && variant < actor->variant_count && wire
+        && length >= 40 && length <= ORES_MP2_MAX_BYTES);
+    SourceActor* target = direction == 1 ? actor->downstream : actor->upstream;
+    ensure(target && target->magic == SOURCE_ACTOR_MAGIC
+        && variant < target->variant_count);
+    const SourceVariantContract* from = &actor->variants[variant];
+    const SourceVariantContract* to = &target->variants[variant];
+    ensure(from->owned_enum_name && to->owned_enum_name
+        && strcmp(from->owned_enum_name, to->owned_enum_name) == 0
+        && from->declared_tag == to->declared_tag
+        && strcmp(from->value.schema_id, to->value.schema_id) == 0
+        && strcmp(from->value.shape, to->value.shape) == 0);
+    size_t selected = 0;
+    ensure(source_select_variant(actor, wire, (size_t)length, &selected)
+        && selected == (size_t)variant);
+    /* source_send_binary reserves, copies, validates and enqueues. No
+     * actor memory is ever shared across the directional edge. */
+    ensure(source_send_binary(target, wire, (size_t)length, (uint8_t)direction));
+    if (direction == 1)
+        atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
+                                  memory_order_acq_rel);
+    else
+        atomic_fetch_add_explicit(&group.pipeline_backward_count, 1,
+                                  memory_order_acq_rel);
+}
 void oreslang_source_actor_pipeline_expect(void* source, int64_t expected) {
     SourceActor* actor = source;
     ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC);
