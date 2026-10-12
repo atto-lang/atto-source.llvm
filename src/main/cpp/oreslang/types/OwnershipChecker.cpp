@@ -326,9 +326,15 @@ void validate_i64_ownership(const Program& program) {
                 check_value(*stmt.expression, state, functions);
                 recv.moved_fields.erase(stmt.field);
             } else if (stmt.kind == Statement::Kind::Call) {
-                if (stmt.expression->kind != Expression::Kind::Call)
+                if (stmt.expression->kind == Expression::Kind::ModuleCall) {
+                    // A sealed module call is a checked effectful invocation,
+                    // but cannot borrow an untracked module namespace owner.
+                    check_value(*stmt.expression, state, functions);
+                } else if (stmt.expression->kind == Expression::Kind::Call) {
+                    check_call(*stmt.expression, state, functions);
+                } else {
                     throw std::runtime_error("invalid native call statement");
-                check_call(*stmt.expression, state, functions);
+                }
             } else {
                 throw std::runtime_error("ownership violation: unsupported conditional arm effect");
             }
@@ -387,7 +393,10 @@ void validate_i64_ownership(const Program& program) {
             for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
                 const Statement& cleanup = **it;
                 if (cleanup.receiver.empty()) {
-                    check_call(*cleanup.expression, path, functions);
+                    if (cleanup.expression->kind == Expression::Kind::ModuleCall)
+                        check_value(*cleanup.expression, path, functions);
+                    else
+                        check_call(*cleanup.expression, path, functions);
                     continue;
                 }
                 auto& recv = checked_field(cleanup.receiver, cleanup.field,
