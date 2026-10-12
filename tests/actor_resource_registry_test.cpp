@@ -144,8 +144,8 @@ int main() {
     assert(quarantineResult.attempted == 1);
     assert(quarantineResult.skipped == 1);
     assert(quarantine.quarantined_resources() == 2);
-    assert(!ownerProbe.expired(),
-           "quarantine must retain captured arena ownership until supervisor release");
+    assert(!ownerProbe.expired()
+           && "quarantine must retain captured arena ownership until supervisor release");
     assert(allocationDrops == 0);
     assert(quarantine.try_reclaim().status == Reclaim::failed);
     assert(allocationDrops == 0);
