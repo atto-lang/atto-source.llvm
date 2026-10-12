@@ -38,7 +38,7 @@ general reader-writer lock or async state loans.
 
 ## Evidence
 
-LLVM: [24/24 exact-source native CTests, with Clang ASan/UBSan](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38311796992).
+LLVM: [26/26 exact-source native CTests, with Clang ASan/UBSan](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38312289067).
 
 Java: [23 exact-source JDK25 parser/compiler checks](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38311417501).
 The Java `Ast.ActorStateSpec` records fixed-key state independently from
