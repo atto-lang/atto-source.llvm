@@ -209,6 +209,14 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>"
                 "${ORE_CLANG}"
                 "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_pipeline_root_rejected_frame_keeps_credit
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_pipeline_root_rejected_credit.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_pipeline_root_rejected_frame_keeps_credit
+            PROPERTIES TIMEOUT 45)
         set_tests_properties(native_pipeline_cancel_publication_linearization
             PROPERTIES TIMEOUT 45)
         add_test(NAME native_pipeline_cancel_worker_forward_linearization
