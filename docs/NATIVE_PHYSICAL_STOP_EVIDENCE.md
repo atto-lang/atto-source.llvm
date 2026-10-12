@@ -75,3 +75,26 @@ suite has **not** been executed by this funded source-subset verification.
    and escalation conformance with TLC/implementation trace refinement.
 
 All three supervisor PRs stay draft until their respective gates are green.
+
+## Opt-in attested source STOP gate
+
+`install_source_supervisor_stop_verified(..., physical_evidence)` now accepts
+an optional host-owned `NativePhysicalStopEvidence` instance. In this opt-in
+mode, the source compiler's STOP decision calls the trusted host sink only
+once, then rereads the exact reservation and requires independently recorded
+physical DONE evidence *before* `record_stop_applied` and `commit_stop`.
+
+If the sink returns normally **without** such evidence, the installer marks
+the reserved STOP UNCERTAIN and fails CONTROL. It never upgrades the
+callback's Boolean/normal return to an applied physical disposition, and it
+never retries the effect. If the sink throws after recording physical DONE,
+an independent reconciler can resolve the original turn without reexecution.
+
+The parameter defaults to null only for compatibility with the existing
+restricted legacy verified STOP adapter; that legacy no-evidence path does
+not constitute an authenticated general guest STOP proof. Production
+physical STOP use should provide the host-owned ledger, and arbitrary
+external effects still require their own authoritative durable evidence.
+
+The funded native test contains an explicit no-attestation scenario that
+returns normally from the host callback but must remain quarantined.
