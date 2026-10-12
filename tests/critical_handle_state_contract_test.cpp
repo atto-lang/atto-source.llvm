@@ -14,6 +14,10 @@ int main() {
     CriticalStateCallback c{};
     c.one_state_parameter = true;
     c.inferred = row(READ);
+    // No compiler-authored lowered mode is an admission failure.
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.state_mode = CriticalStateMode::Read;
     const auto using_rw = row(READ | WRITE);
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::Accept); // unmarked callback is immutable read
@@ -37,6 +41,9 @@ int main() {
             == CriticalStateAdmission::ReadModeCannotWrite);
 
     c.state_mode = CriticalStateMode::Write;
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.callback_critical = true;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::Accept);
     CHECK(admit_critical_handle_state(c, row(WRITE))
