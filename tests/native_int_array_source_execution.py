@@ -44,6 +44,17 @@ POSITIVE = {
   return first.get(0) + 30;
 }
 """, 42, 1),
+    "conditional-arm-mutation": ("""pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  if (a.size == 0) {
+    a.add(21);
+  } else {
+    a.add(99);
+  } fi
+  a.set(0, a.get(0) * 2);
+  return a.get(0);
+}
+""", 42, 1),
     "argument-evaluation": ("""fnc inc(int x): int { return x + 1; }
 pub fnc main(): int {
   let mut Array<int> a = new Array<int>();
@@ -55,6 +66,20 @@ pub fnc main(): int {
 }
 
 NEGATIVE = {
+    "reserved-abi-symbol": ("""fnc oreslang_int_array_get(int x): int {
+  return x;
+}
+pub fnc main(): int { return 42; }
+""", "reserved native Array<int> ABI symbol"),
+    "too-many-owners": ("pub fnc main(): int {\n" +
+        "".join(f"  let mut Array<int> a{i} = new Array<int>();\n" for i in range(65)) +
+        "  return 0;\n}\n", "native Array<int> owner limit exceeded (64)"),
+    "scalar-call-escape": ("""fnc id(int x): int { return x; }
+pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  return id(a);
+}
+""", "Array<int> is non-Copy"),
     "implicit-array-copy": ("""pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  const leaked: int = a;
@@ -170,6 +195,14 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
                 raise AssertionError(
                     f"{name}: native exit={result.returncode}, expected={exit_code}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}")
+        # No arrays are allowed in wasm32 until a bounded guest runtime and
+        # capability ABI are independently implemented; rejection emits no IR.
+        wasm_src = work / "wasm-array.ores"
+        wasm_src.write_text(POSITIVE["add-get-set-size"][0], encoding="utf-8")
+        wasm = run([str(compiler), "--target=wasm32", str(wasm_src)])
+        if wasm.returncode != 1 or wasm.stdout or \
+                b"wasm32 native heap-owned/Array<int> regions are not implemented" not in wasm.stderr:
+            raise AssertionError(f"wasm32 array must reject without IR: {wasm.returncode}, {wasm.stderr!r}")
         for name, (source, diagnostic) in NEGATIVE.items():
             src = work / f"{name}.ores"
             src.write_text(source, encoding="utf-8")
