@@ -45,7 +45,7 @@ bool reserved(std::string_view name) {
         "int", "owned", "declare", "receive", "receive_forward",
         "receive_backward", "transform", "pipe", "forward_messages",
         "backward_messages", "Message", "bool", "string", "state",
-        "critical", "handle_state", "using",
+        "critical", "handle_state", "using", "with",
         "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -468,6 +468,26 @@ private:
             }
             require(":");
             require("int");
+        }
+        // An explicit 'with' clause is an upper bound on effects, not
+        // authority to acquire an actor state loan.
+        if (accept("with")) {
+            value.has_effect_bound = true;
+            if (!actor_method)
+                fail("native restricted with effects require an actor method");
+            do {
+                require("state");
+                require(".");
+                std::string effect = "state.";
+                if (accept("read")) effect += "read";
+                else if (accept("write")) effect += "write";
+                else fail("unsupported actor effect in with clause");
+                if (std::find(value.allowed_effects.begin(),
+                              value.allowed_effects.end(), effect)
+                        != value.allowed_effects.end())
+                    fail("duplicate effect in with clause");
+                value.allowed_effects.push_back(std::move(effect));
+            } while (accept(","));
         }
         require("{");
         bool scalar_local_seen = false;
@@ -1023,6 +1043,16 @@ private:
         return text + "]";
     }
 
+    static bool reads_state_projection(const Expression& e) {
+        if (e.kind == Expression::Kind::Variable
+                && e.name.rfind("@state.", 0) == 0) return true;
+        if (e.left && reads_state_projection(*e.left)) return true;
+        if (e.right && reads_state_projection(*e.right)) return true;
+        for (const auto& arg : e.arguments)
+            if (reads_state_projection(*arg)) return true;
+        return false;
+    }
+
     static bool contains_call(const Expression& e) {
         if (e.kind == Expression::Kind::Call) return true;
         if (e.left && contains_call(*e.left)) return true;
@@ -1481,6 +1511,21 @@ private:
                             if (arm.state_loan) {
                                 if (!actor.state_declared)
                                     throw std::runtime_error("handle_state requires an actor state map");
+                                if (method.has_effect_bound) {
+                                    const auto allowed = [&](std::string_view effect) {
+                                        return std::find(method.allowed_effects.begin(),
+                                            method.allowed_effects.end(), effect)
+                                            != method.allowed_effects.end();
+                                    };
+                                    bool reads = reads_state_projection(*arm.state_loan->result);
+                                    for (const auto& assignment : arm.state_loan->assignments)
+                                        reads = reads || reads_state_projection(*assignment.value);
+                                    if (reads && !allowed("state.read"))
+                                        throw std::runtime_error("with clause omits state.read effect");
+                                    if (!arm.state_loan->assignments.empty()
+                                            && !allowed("state.write"))
+                                        throw std::runtime_error("with clause omits state.write effect");
+                                }
                                 if (arm.state_loan->mode == StateLoan::Mode::Read
                                         && !arm.state_loan->assignments.empty())
                                     throw std::runtime_error(
