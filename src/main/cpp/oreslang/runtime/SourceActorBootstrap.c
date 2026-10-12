@@ -608,18 +608,13 @@ static int source_send_binary_unlocked(SourceActor* actor,
 static int source_send_binary_leased(SourceActor* actor,
                                      const uint8_t* wire, size_t size,
                                      uint8_t direction) {
-    if (actor->upstream || actor->downstream) {
-        if (atomic_load_explicit(&group.pipeline_failure, memory_order_acquire))
-            return 0;
-        if (direction == 0) {
-            int expected = 0;
-            if (actor != group.pipeline_source
-                    || !atomic_compare_exchange_strong_explicit(
-                        &group.pipeline_root_sent, &expected, 1,
-                        memory_order_acq_rel, memory_order_acquire))
-                return 0;
-        }
-    }
+    if ((actor->upstream || actor->downstream)
+            && atomic_load_explicit(&group.pipeline_failure,
+                                    memory_order_acquire) != SOURCE_PIPELINE_OK)
+        return 0;
+    /* Do not claim the single-flow root token yet: malformed/oversized
+     * envelopes, allocation failures and full mailboxes must not consume
+     * it. Admission and root ownership commit share group.mutex below. */
     return source_send_binary_unlocked(actor, wire, size, direction);
 }
 static int source_send_binary(SourceActor* actor,
@@ -703,15 +698,27 @@ static int source_send_binary_unlocked(SourceActor* actor,
             (void*)(uintptr_t)actor->id, direction);
 #endif
     if (pipeline_route) group_lock();
-    int admitted = (!pipeline_route
+    /* Root ownership is a single atomic publication decision. Validate the
+     * live source ID and one-flow token under the SAME mutex as terminal
+     * cancellation and scheduler DATA publication. Competing valid roots
+     * serialize; rejected frames never burn the only token. */
+    const int root_allowed = !pipeline_route || direction != 0
+        || (group.pipeline_source == actor
+            && atomic_load_explicit(&group.pipeline_root_sent,
+                                    memory_order_acquire) == 0);
+    int admitted = root_allowed
+        && (!pipeline_route
             || atomic_load_explicit(&group.pipeline_failure,
                                     memory_order_acquire) == SOURCE_PIPELINE_OK)
         && ores_native_actor_scheduler_send(group.scheduler, actor->ref,
                                              (uint64_t)(uintptr_t)accepted);
     /* A consumer can run on another carrier immediately after enqueue.
-     * Commit the hop count BEFORE releasing the shared publication lock,
-     * otherwise the final receive could complete before the producer count. */
+     * Commit both root admission and directional counts BEFORE releasing
+     * the shared publication lock, otherwise final receive can overtake. */
     if (admitted && pipeline_route) {
+        if (direction == 0)
+            atomic_store_explicit(&group.pipeline_root_sent, 1,
+                                  memory_order_release);
         if (direction == 1)
             atomic_fetch_add_explicit(&group.pipeline_forward_count, 1,
                                       memory_order_acq_rel);
