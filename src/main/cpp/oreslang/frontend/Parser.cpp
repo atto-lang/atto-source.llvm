@@ -333,11 +333,17 @@ private:
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
+        if (token_.text == "critical-read" || token_.text == "critical-write") {
+            fail("native critical-read/write declarations require effect-checked state and scheduler lowering");
+        }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+        if (token_.text == "critical-read" || token_.text == "critical-write") {
+            fail("native critical-read/write declarations require effect-checked state and scheduler lowering");
+        }
         value.name = identifier();
         require("(");
         if (!accept(")")) {
