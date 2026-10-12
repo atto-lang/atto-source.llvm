@@ -5,6 +5,8 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <new>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -12,6 +14,8 @@
 #include <vector>
 
 namespace oreslang::runtime {
+
+class NativeActorResourceQuarantine;
 
 // Trusted native runtime substrate.  No raw resource or callback may be sent
 // across a guest actor boundary.  A registry is owned by one actor incarnation.
@@ -58,6 +62,13 @@ public:
             throw std::invalid_argument("invalid actor resource registry identity/capacity");
         entries_.reserve(max_resources);
     }
+
+    // Releasing a FAILED registry's callback captures can trigger native
+    // RAII reclamation while an unrevoked FFI callback still references them.
+    // Destructor fail-closes by retaining unresolved captures for process
+    // lifetime. The trusted quarantine must explicitly discharge after
+    // externally verified isolate shutdown; a timeout is not sufficient.
+    ~ActorResourceRegistry() noexcept;
 
     ActorResourceRegistry(const ActorResourceRegistry&) = delete;
     ActorResourceRegistry& operator=(const ActorResourceRegistry&) = delete;
@@ -174,6 +185,19 @@ public:
     }
 
 private:
+    friend class NativeActorResourceQuarantine;
+
+    void discharge_after_verified_isolate_shutdown() {
+        std::vector<Entry> released;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            if (phase_ != Phase::failed) return;
+            released.swap(quarantined_);
+        }
+        // Deallocate trusted RAII captures only after a supervisor has
+        // independently proven that no external callback can reach them.
+    }
+
     static void append_error(Result& result, const char* message) noexcept {
         if (result.errors.size() >= 16) return;
         const char* text = message != nullptr ? message : "unknown closer failure";
@@ -228,5 +252,21 @@ private:
     std::unordered_set<std::uint64_t> turns_, loans_, callbacks_;
     Result last_result_{Reclaim::not_retired, 0, {}};
 };
+
+inline ActorResourceRegistry::~ActorResourceRegistry() noexcept {
+    // Do not turn a bounded quarantine overflow into a use-after-free:
+    // destroying the last shared_ptr to a FAILED registry is never
+    // authorization to destroy its captured native arena. Permanently retain
+    // the callbacks until process exit. An allocation failure is fatal rather
+    // than permitting an unsafe destructor to proceed.
+    if (phase_ == Phase::failed && !quarantined_.empty()) {
+        auto* retained = new (std::nothrow) std::vector<Entry>();
+        if (retained == nullptr) std::terminate();
+        retained->swap(quarantined_);
+        // Intentionally leaked in the terminal-failure path. The trusted
+        // quarantine normally calls discharge_after_verified_isolate_shutdown
+        // following actual isolation; tests should discharge mock failures.
+    }
+}
 
 } // namespace oreslang::runtime
