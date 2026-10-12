@@ -2,7 +2,9 @@
 
 #include "oreslang/runtime/ActorStateReadWriteGate.hpp"
 
+#include <atomic>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -32,18 +34,23 @@ public:
     struct Request {
         Status status;
         Mode mode;
+        std::uint64_t incarnation;
     };
     struct Notification {
+        std::uint64_t incarnation;
         std::uint64_t continuation_id;
         Status status;
     };
 
-    ActorStateReadWriteContinuations() = default;
+    ActorStateReadWriteContinuations() : incarnation_(mint_incarnation()) {}
+    [[nodiscard]] std::uint64_t incarnation() const noexcept { return incarnation_; }
     ActorStateReadWriteContinuations(const ActorStateReadWriteContinuations&) = delete;
     ActorStateReadWriteContinuations& operator=(const ActorStateReadWriteContinuations&) = delete;
 
-    [[nodiscard]] Request request(std::uint64_t continuation_id, Mode mode) {
+    [[nodiscard]] Request request(
+            std::uint64_t incarnation, std::uint64_t continuation_id, Mode mode) {
         std::lock_guard<std::mutex> lock(mu_);
+        validate_incarnation(incarnation);
         if (retired_) throw std::logic_error("actor state continuations retired");
         if (continuation_id == 0 || continuation_id <= issued_continuation_) {
             throw std::invalid_argument("continuation identity must increase monotonically");
@@ -65,7 +72,7 @@ public:
             // An immediately admitted caller already holds its receipt.
             it->second.needs_ack = false;
             issued_continuation_ = continuation_id;
-            return {it->second.status, mode};
+            return {it->second.status, mode, incarnation_};
         } catch (...) {
             entries_.erase(it);
             throw;
@@ -74,8 +81,9 @@ public:
 
     // Complete an admitted, scheduler-dispatched actor operation.
     // Queued continuations must be cancelled, not falsely completed.
-    void complete(std::uint64_t continuation_id) {
+    void complete(std::uint64_t incarnation, std::uint64_t continuation_id) {
         std::lock_guard<std::mutex> lock(mu_);
+        validate_incarnation(incarnation);
         auto it = require_entry(continuation_id);
         if (retired_ || it->second.status != Status::Ready
                 || it->second.needs_ack
@@ -88,8 +96,9 @@ public:
     }
 
     // Cancellation of pending admissions does not execute user code.
-    void cancel_queued(std::uint64_t continuation_id) {
+    void cancel_queued(std::uint64_t incarnation, std::uint64_t continuation_id) {
         std::lock_guard<std::mutex> lock(mu_);
+        validate_incarnation(incarnation);
         auto it = require_entry(continuation_id);
         if (retired_ || it->second.status != Status::Queued) {
             throw std::logic_error("only queued actor state admission may be cancelled");
@@ -124,25 +133,28 @@ public:
         std::vector<Notification> pending;
         pending.reserve(entries_.size());
         for (const auto& [id, entry] : entries_) {
-            if (entry.needs_ack) pending.push_back({id, entry.status});
+            if (entry.needs_ack) pending.push_back({incarnation_, id, entry.status});
         }
         return pending;
     }
 
     // Acknowledge only the exact status accepted by CONTROL admission.
     // A stale Ready receipt cannot acknowledge a later Cancelled status.
-    [[nodiscard]] bool acknowledge(std::uint64_t continuation_id, Status accepted) {
+    [[nodiscard]] bool acknowledge(const Notification& accepted) {
         std::lock_guard<std::mutex> lock(mu_);
-        auto it = entries_.find(continuation_id);
+        if (accepted.incarnation != incarnation_) return false;
+        auto it = entries_.find(accepted.continuation_id);
         if (it == entries_.end() || !it->second.needs_ack
-                || it->second.status != accepted) return false;
+                || it->second.status != accepted.status) return false;
         it->second.needs_ack = false;
-        if (accepted == Status::Cancelled) entries_.erase(it);
+        if (accepted.status == Status::Cancelled) entries_.erase(it);
         return true;
     }
 
-    [[nodiscard]] bool admitted(std::uint64_t continuation_id, Mode mode) const {
+    [[nodiscard]] bool admitted(
+            std::uint64_t incarnation, std::uint64_t continuation_id, Mode mode) const {
         std::lock_guard<std::mutex> lock(mu_);
+        if (incarnation != incarnation_) return false;
         auto it = entries_.find(continuation_id);
         return !retired_ && it != entries_.end()
                 && it->second.status == Status::Ready && !it->second.needs_ack
@@ -153,6 +165,25 @@ public:
     [[nodiscard]] std::size_t waiting() const { return gate_.waiting(); }
 
 private:
+    static std::uint64_t mint_incarnation() {
+        auto candidate = next_incarnation_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (candidate == std::numeric_limits<std::uint64_t>::max()) {
+                throw std::overflow_error("actor state incarnation space exhausted");
+            }
+            if (next_incarnation_.compare_exchange_weak(
+                    candidate, candidate + 1, std::memory_order_relaxed)) {
+                return candidate + 1;
+            }
+        }
+    }
+
+    void validate_incarnation(std::uint64_t expected) const {
+        if (!expected || expected != incarnation_) {
+            throw std::invalid_argument("stale or foreign actor state incarnation");
+        }
+    }
+
     struct Entry {
         Gate::Token token;
         Mode mode = Mode::Read;
@@ -183,6 +214,8 @@ private:
         }
     }
 
+    inline static std::atomic<std::uint64_t> next_incarnation_{0};
+    const std::uint64_t incarnation_;
     mutable std::mutex mu_;
     Gate gate_;
     Entries entries_;
