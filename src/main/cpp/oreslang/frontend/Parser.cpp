@@ -157,7 +157,7 @@ bool nonthrowing_protected_read(const Expression& expr) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int)
-        : lexer_(source), token_(lexer_.next()),
+        : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int) {}
 
     Program parse() {
@@ -230,7 +230,14 @@ private:
                 require("int");
                 require("=");
                 field.initializer = expression();
-                accept(";"); // source newline/closing '}' is also valid
+                // Match the Java frontend's optional-semicolon rule: on
+                // the same physical source line two declarations MUST
+                // have an explicit ';'. A newline or closing brace can
+                // delimit them without consuming the next identifier.
+                if (!accept(";") && token_.text != "}"
+                        && !newline_since_previous_token()) {
+                    fail("sealed actor state fields require a semicolon or newline");
+                }
                 state.fields.push_back(std::move(field));
             }
             require("}");
@@ -254,6 +261,11 @@ private:
             field.field_mutable = token_.text == "let";
             advance();
             field.name = identifier();
+            // 'state' is reserved runtime-owned actor storage in BOTH
+            // backends. Legacy scalar actors must not shadow the seal.
+            if (field.name == "state") {
+                fail("actor 'state' is reserved runtime-owned storage");
+            }
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
             require(":");
             require("int");
@@ -1120,7 +1132,17 @@ private:
         }
     }
 
-    void advance() { token_ = lexer_.next(); }
+    [[nodiscard]] bool newline_since_previous_token() const {
+        if (token_.offset < previous_token_end_) return false;
+        return source_.substr(
+            previous_token_end_, token_.offset - previous_token_end_).find('\n')
+                != std::string_view::npos;
+    }
+
+    void advance() {
+        previous_token_end_ = token_.offset + token_.text.size();
+        token_ = lexer_.next();
+    }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "quantum") {
             throw std::runtime_error("native gpu/quantum boundary unsupported: "
@@ -1150,9 +1172,11 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::string_view source_;
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    std::size_t previous_token_end_ = 0;
 };
 
 } // namespace
