@@ -7,6 +7,34 @@ import sys
 import tempfile
 
 
+
+def verify_three_actor_pipeline_stderr(stderr):
+    """Require observed 3-actor guest state, finalizers and physical group close.
+
+    An aggregate marker is NOT a replayable event trace. A trusted CI runner
+    must still build and execute this exact source with its actual native ABI.
+    """
+    lines = stderr.splitlines()
+    marker = "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19"
+    assert lines.count(marker) == 1, "missing or duplicated compiled roundtrip"
+    assert not any(line.startswith((
+        "SOURCE_PIPELINE_FAILURE", "SOURCE_PIPELINE_TERMINAL_STATUS",
+        "SOURCE_ACTOR_INVARIANT_FAILURE"
+    )) for line in lines), "guest pipeline reported terminal failure"
+
+    stop_prefix = "SOURCE_ACTOR_SPAWN_STOP_VERIFIED "
+    stops = [line for line in lines if line.startswith(stop_prefix)]
+    expected = [
+        stop_prefix + "constructor_on_worker=1 released=1 processed=1 last=13",
+        stop_prefix + "constructor_on_worker=1 released=1 processed=2 last=14",
+        stop_prefix + "constructor_on_worker=1 released=1 processed=2 last=19",
+    ]
+    assert stops == expected, "physical actor finalizers/state mismatch"
+    groups = [line for line in lines if line.startswith("SOURCE_ACTOR_GROUP_VERIFIED ")]
+    assert groups == ["SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=3 peak=3 carriers=4"], (
+        "final physical ActorGroup barrier missing or duplicated"
+    )
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -22,6 +50,7 @@ def main():
     parser.add_argument("--source-actor-runtime")
     parser.add_argument("--stderr")
     parser.add_argument("--stderr-count", type=int)
+    parser.add_argument("--pipeline-three-actor-summary", action="store_true")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
@@ -98,6 +127,14 @@ def main():
                 assert result.stderr.count(args.stderr) == args.stderr_count, (
                     f"trial {trial}: {result.stderr}"
                 )
+            if args.pipeline_three_actor_summary:
+                assert pathlib.Path(args.fixture).name == "source-actor-pipeline-bidirectional.ores", (
+                    "three-actor summary gate requires the canonical compiled fixture"
+                )
+                assert args.run == 43 and args.source_actor_runtime, (
+                    "three-actor summary gate requires native compiled actor execution"
+                )
+                verify_three_actor_pipeline_stderr(result.stderr)
 
 
 if __name__ == "__main__":
