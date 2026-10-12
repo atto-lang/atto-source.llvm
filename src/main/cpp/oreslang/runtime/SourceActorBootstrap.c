@@ -104,6 +104,7 @@ typedef struct {
     atomic_int pipeline_failure;
     atomic_int pipeline_root_sent;
     uint64_t pipeline_flow_id; /* identity committed on first root DATA admit */
+    uint64_t pipeline_last_message_id; /* committed causal predecessor */
     SourceActor* pipeline_stages[SOURCE_PIPELINE_MAX_STAGES];
     size_t pipeline_count;
     atomic_uint_fast64_t pipeline_forward_count;
@@ -772,12 +773,36 @@ static int source_send_binary_unlocked(SourceActor* actor,
             : active_pipeline_message_id;
         accepted->destination_domain = actor->ref.scheduler_domain;
         accepted->destination_generation = actor->ref.generation;
-        context_valid = accepted->flow_id != 0 && accepted->message_id != 0
+        /* Every accepted hop is the one successor of the last ADMITTED
+         * message, not merely a nonzero caller-supplied parent. This is the
+         * restricted linear one-flow proof. An actor's physical ingress
+         * context is necessary but not sufficient: a stale earlier turn
+         * cannot fork the route even if it still carries a valid flow ID.
+         *
+         * Both predecessor validation and last-message commit happen under
+         * group.mutex, the same barrier as cancellation and DATA enqueue.
+         * No new worker may read this context before the commit completes. */
+        const int parent_current =
+            accepted->parent_message_id == group.pipeline_last_message_id;
+        const int authorized_source = direction == 0
+            ? active_pipeline_actor == NULL
+                && group.pipeline_source == actor
+                && group.pipeline_last_message_id == 0
+            : active_pipeline_actor != NULL
+                && active_pipeline_actor != actor
+                && active_pipeline_actor->ref.scheduler_domain
+                     == actor->ref.scheduler_domain
+                && (direction == 1
+                    ? active_pipeline_actor->downstream == actor
+                    : direction == 2
+                        && active_pipeline_actor->upstream == actor);
+        context_valid = accepted->flow_id != 0
+            && accepted->message_id != 0
+            && parent_current && authorized_source
             && (direction == 0
                 ? accepted->parent_message_id == 0
                 : accepted->parent_message_id != 0
-                    && accepted->flow_id == group.pipeline_flow_id
-                    && active_pipeline_actor != NULL);
+                    && accepted->flow_id == group.pipeline_flow_id);
     }
     const int admitted = root_allowed && context_valid
         && (!pipeline_route
@@ -791,6 +816,7 @@ static int source_send_binary_unlocked(SourceActor* actor,
     if (admitted && pipeline_route) {
         if (direction == 0)
             group.pipeline_flow_id = accepted->flow_id;
+        group.pipeline_last_message_id = accepted->message_id;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         if (has_admitted_trace) {
             fprintf(stderr,
@@ -912,6 +938,7 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
     }
     group.pipeline_count = count;
     group.pipeline_flow_id = 0;
+    group.pipeline_last_message_id = 0;
     group.pipeline_source = first;
     atomic_store_explicit(&group.pipeline_forward_count, 0, memory_order_release);
     atomic_store_explicit(&group.pipeline_backward_count, 0, memory_order_release);
