@@ -1,0 +1,78 @@
+// Three real source-compiled actors exchange nominal nested MessagePack
+// values in both directions, with no handwritten callbacks.
+define enum Bar as
+    Start = 1
+    Done = 255
+end
+
+define enum Signal as
+    Data: Bar = 1
+    Result: Bar = 2
+end
+
+define pattern PipeMessages as
+    Signal.Data
+    Signal.Result
+end
+
+define actor Source<messages=PipeMessages> as
+    let count: int = 0;
+    receive(Message m) {
+        do match m over {
+            on Signal.Data {
+                count = count + 5;
+                self.forward(Signal.Data(Bar.Done()));
+            }
+            on Signal.Result {
+                count = count + 14;
+            }
+        }
+        return count;
+    }
+end
+
+define actor Transform<messages=PipeMessages> as
+    let value: int = 0;
+    receive(Message m) {
+        do match m over {
+            on Signal.Data {
+                value = value + 10;
+                self.forward(Signal.Data(Bar.Start()));
+            }
+            on Signal.Result {
+                value = value + 1;
+                self.backward(Signal.Result(Bar.Done()));
+            }
+        }
+        return value;
+    }
+end
+
+define actor Sink<messages=PipeMessages> as
+    let value: int = 0;
+    receive(Message m) {
+        do match m over {
+            on Signal.Data {
+                value = value + 13;
+                self.backward(Signal.Result(Bar.Start()));
+            }
+            on Signal.Result {
+                value = value;
+            }
+        }
+        return value;
+    }
+end
+
+pub fnc main(): int {
+    const source = spawn Source();
+    const transform = spawn Transform();
+    const sink = spawn Sink();
+    pipeline(source, transform, sink);
+    source.send(Signal.Data(Bar.Start()));
+    expect_pipeline(source, 19);
+    stop sink;
+    stop transform;
+    stop source;
+    return 43;
+}

@@ -177,6 +177,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_pipeline_actor_wrong_route_direction
         source-actor-pipeline-wrong-direction.ores
         --diagnostic "pipeline route direction is not authorized for actor role")
+    oreslang_contract_test(native_nested_enum_bidirectional_pipeline_ir
+        source-actor-nested-pipeline-bidirectional.ores
+        --ir "oreslang_source_actor_pipeline_emit_variant")
     oreslang_contract_test(native_ir_three_actor_bidirectional_pipeline
         source-actor-pipeline-bidirectional.ores
         --ir "oreslang_source_actor_pipeline_emit_i64")
@@ -184,6 +187,13 @@ if(BUILD_TESTING)
         source-tagged-int-spread-nonexhaustive.ores
         --diagnostic "nonexhaustive tagged receive match")
     if(ORE_CLANG)
+        oreslang_contract_test(native_exec_nested_enum_bidirectional_pipeline
+            source-actor-nested-pipeline-bidirectional.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=19")
         oreslang_contract_test(native_exec_three_actor_bidirectional_pipeline
             source-actor-pipeline-bidirectional.ores
             --run 43 --clang "${ORE_CLANG}"
@@ -256,6 +266,14 @@ if(BUILD_TESTING)
         oreslang_contract_test(source_tagged_int_spread_ir source-tagged-int-spread-dispatch.ores
             --ir "oreslang_source_actor_tagged_i64")
         oreslang_contract_test(native_tagged_int_payload source-tagged-int-payload-dispatch.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 20
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=3 last=23")
+        oreslang_contract_test(source_nested_enum_actor_ir source-tagged-nested-dispatch.ores
+            --ir "oreslang_source_actor_send_variant_checked")
+        oreslang_contract_test(native_nested_enum_actor_guest source-tagged-nested-dispatch.ores
             --run 43 --clang "${ORE_CLANG}" --runs 20
             --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
             --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
@@ -590,6 +608,18 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-messagepack-v2-test PRIVATE Threads::Threads)
     add_test(NAME native_messagepack_v2_owned_actor_dispatch
         COMMAND oreslang-native-messagepack-v2-test)
+    # Production native decoder for Java-compatible finite nominal E(...)
+    # shape descriptors, exercised independently of the compiler encoder.
+    add_executable(oreslang-native-nested-enum-v2-test
+        tests/native_nested_enum_v2_runtime_test.c
+        src/main/cpp/oreslang/runtime/MessagePackActorV2.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-nested-enum-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-nested-enum-v2-test PRIVATE Threads::Threads)
+    add_test(NAME native_nested_enum_v2_owned_decode
+        COMMAND oreslang-native-nested-enum-v2-test)
+
 
     # Compiler-facing source actor ABI: scalar/wire callbacks share one
     # exclusive NativeActorScheduler lane and common actor-owned field heap.
@@ -629,6 +659,8 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-source-nominal-guard-v2-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-source-nominal-guard-v2-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-source-nominal-guard-v2-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING)
     add_test(NAME native_source_actor_pinned_nominal_enum_identity
         COMMAND oreslang-source-nominal-guard-v2-test)
 

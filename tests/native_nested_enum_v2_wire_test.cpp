@@ -42,6 +42,44 @@ int main() {
     mustReject("Foo","Foo.Message1","Foo.Message1");
     mustReject("Foo","Bar.Message1","Bar.Message1");
     mustReject("Missing","Foo.Message1","Bar.Message1");
+    // Non-ASCII names used to have incompatible Java/native shape hashes:
+    // Java US-ASCII replaced invalid chars while LLVM hashed raw UTF-8.
+    mustReject("Föo","Foo.Message1","Bar.Message1");
+    mustReject("Foo","Foo.Message1","Bär.Message1");
+
+    auto renamed = oreslang::parse_program(R"(
+        define enum Bar as Message1 = 1 end
+        define enum Foo as Message1: Bar end
+    )");
+    renamed.enums[0].cases[0].name = "Mässage1";
+    bool rejectedNonAscii = false;
+    try {
+        (void)oreslang::nested_enum_v2::one_level_nullary(
+            renamed,"Foo","Foo.Message1","Bar.Mässage1");
+    } catch(const std::runtime_error&) { rejectedNonAscii = true; }
+    assert(rejectedNonAscii);
+
+    // Native limits include the full closed enum case catalog, not just
+    // bytes of the particular selected variant.
+    auto huge = oreslang::parse_program(R"(
+        define enum Bar as Message1 = 1 end
+        define enum Foo as Message1: Bar end
+    )");
+    for(std::uint32_t i=2; i<=4096; ++i) {
+        oreslang::EnumCase member;
+        member.name = "C" + std::string(243,'z') + std::to_string(i);
+        member.tag = i;
+        huge.enums[0].cases.push_back(std::move(member));
+    }
+    bool rejectedHuge = false;
+    try {
+        (void)oreslang::nested_enum_v2::one_level_nullary(
+            huge,"Foo","Foo.Message1","Bar.Message1");
+    } catch(const std::runtime_error& e) {
+        rejectedHuge = std::string(e.what()).find("descriptor exceeds byte quota")
+                       != std::string::npos;
+    }
+    assert(rejectedHuge);
     std::cout << "NESTED_ENUM_NATIVE_GOLDEN_PASS bytes=" << wire.size() << "\n";
     return 0;
 }
