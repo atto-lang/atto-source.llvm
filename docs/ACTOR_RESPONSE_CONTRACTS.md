@@ -145,3 +145,104 @@ actor stop/restart, stale capabilities, duplicate terminal events, emission afte
 completion and thrown errors. Ensure one terminal event and exact credit release
 without entering consumer guest code recursively on the producer's carrier.
 Java and LLVM must share the same observable contracts.
+
+## Stateful actors and directional ingress
+
+Use the recent actor state contract as the target source model:
+
+```ores
+state { value: int = 0; }
+```
+
+This is a fixed typed schema, not an untyped Map. `value` declares a typed key;
+there is no `key` keyword in the inspected Java parser. The separate dynamic-key
+form is `state: Map<string, int>;`. `self.handle_state(critical |state| -> { ... })`
+is the sealed access path. The capability may not escape; copied scalar results
+may leave the callback. Do not access a bare persistent `value` in receive or
+send/await while relying on a state loan that has escaped its scope. Effect rows
+and actor affinity remain subject to the existing state verifier.
+
+A local increment method can return a scalar snapshot without replying to a
+message. Local method returns, unary receive returns, and emitted stream outputs
+are different operations:
+
+```ores
+increment(): int {
+    return self.handle_state(critical |state| -> {
+        state.value = state.value + 1;
+        return state.value;
+    });
+}
+decrement(): int {
+    return self.handle_state(critical |state| -> {
+        state.value = state.value - 1;
+        return state.value;
+    });
+}
+```
+
+For the tested incrementing data pipeline, use the incoming payload:
+
+```ores
+update_from(int incoming): int {
+    return self.handle_state(critical |state| -> {
+        state.value = incoming + 1;
+        return state.value;
+    });
+}
+```
+
+Merely incrementing each actor's independent counter ignores the incoming
+payload and is a different computation. With update_from, source input 1 becomes
+2, the sink reaches 16, and the reverse traversal reaches 30 at the source.
+
+Proposed runtime-dispatched hooks (not compiler-admitted yet):
+
+| Hook | Scheduler-issued ingress | Typical output |
+| --- | --- | --- |
+| `receive` | Ordinary mailbox/external input | Explicit send, port emission, or an opt-in response |
+| `receive_forward` | Authorized upstream edge carrying a forward delivery | Downstream forward emission |
+| `receive_backward` | Authorized downstream edge carrying a reverse delivery | Upstream backward emission |
+
+The names describe message travel, not an ambiguous actor 'ahead'. Dispatch
+must use runtime routing authority, not a payload tag such as Signal.Result.
+A middle actor may implement all three hooks. They share the actor's normal
+serial/concurrency admission lane; directional hooks do not introduce parallel
+access to state. They are actor entry hooks, not callable public methods that
+allow bypassing mailbox and route checks. Different ports may later declare
+different nominal input patterns.
+
+For a middle stage, the proposed forward hook would be:
+
+```ores
+receive_forward(Message m): void {
+    do match m over {
+        on Signal.Data as n {
+            const output = self.update_from(n);
+            await self.forward(Signal.Data(output));
+        }
+    }
+    return;
+}
+```
+
+Its reverse hook uses the same scoped state helper, then backward(Signal.Result).
+Stage0 receives external Data through receive and returning Result through
+receive_backward. The sink receives forward Data, updates its state, and sends
+Result backward. These callbacks emit zero or many messages; their void return
+only ends execution.
+
+Responding to the request origin remains a separate action. Unconditionally
+responding after both the Data and Result arms would emit two responses for the
+source's two deliveries; that is valid only if intentionally using a stream
+reply contract. For this round-trip example, only the terminal Result handler
+emits the final response through reply.next(output), then reply.complete(). A
+bare receive hook does not acquire a reply capability merely because it received
+a message. self.respond, if retained as a convenience spelling, must require the
+same live correlated capability and cannot mean 'send backward'.
+
+The current fifteen-actor native fixture still uses legacy scalar fields and
+its restricted i64 receive observation ABI. Migrating that executable fixture to
+state callbacks and these directional hooks requires integrating the actual
+state source lowering with pipeline dispatch. This proposal is not evidence
+that either backend executes the combined source syntax yet.
