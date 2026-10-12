@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "oreslang/types/FunctionEffects.hpp"
 
 namespace oreslang {
 
@@ -131,6 +132,8 @@ struct Function {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
+    FunctionEffects declared_effects{};
+    bool has_declared_effects = false;
 };
 
 struct ActorDecl {

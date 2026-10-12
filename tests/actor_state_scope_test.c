@@ -1,10 +1,8 @@
 #include "../src/main/cpp/oreslang/runtime/ActorStateScope.h"
 #include <stdlib.h>
 
-/* Executable Release-mode checks: require() would be elided by -DNDEBUG. */
-static void require(int condition) {
-    if (!condition) abort();
-}
+/* Checks remain active in Release builds. */
+static void require(int condition) { if (!condition) abort(); }
 #include <stdint.h>
 
 int main(void) {

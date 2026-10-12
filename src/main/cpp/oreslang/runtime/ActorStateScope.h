@@ -27,7 +27,8 @@ typedef enum ores_actor_state_result {
     ORES_ACTOR_STATE_REENTRANT = 2, /* different logical continuation */
     ORES_ACTOR_STATE_STALE = 3,
     ORES_ACTOR_STATE_OUT_OF_ORDER = 4,
-    ORES_ACTOR_STATE_LIMIT = 5
+    ORES_ACTOR_STATE_LIMIT = 5,
+    ORES_ACTOR_STATE_BUSY_LOAN = 6
 } ores_actor_state_result;
 
 static inline ores_actor_state_result
@@ -78,6 +79,26 @@ ores_actor_state_leave_continuation(ores_actor_state_scope *scope,
         scope->active = false;
         scope->owner_continuation_id = 0;
     }
+    return ORES_ACTOR_STATE_OK;
+}
+
+/*
+ * A yielding actor may release its scheduler lane ONLY when there are
+ * zero live state-backed access loans. Every loan token has already been
+ * revoked by leave_continuation. The scheduler must separately prove that
+ * no other actor/FFI resource loan spans the suspension and that re-entry
+ * uses a valid actor-incarnation/continuation ticket.
+ *
+ * This is a gate for a trusted scheduler, not permission for arbitrary guest
+ * calls to release actor admission or install forged identities.
+ */
+static inline ores_actor_state_result
+ores_actor_state_ready_to_suspend(const ores_actor_state_scope *scope,
+        uint64_t actor_id) {
+    if (!scope || !actor_id || scope->owner_actor_id != actor_id)
+        return ORES_ACTOR_STATE_WRONG_OWNER;
+    if (scope->active || scope->depth)
+        return ORES_ACTOR_STATE_BUSY_LOAN;
     return ORES_ACTOR_STATE_OK;
 }
 

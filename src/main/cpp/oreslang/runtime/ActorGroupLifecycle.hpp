@@ -184,6 +184,18 @@ public:
      */
     class RuntimeFinalizer final {
     public:
+        /** A physical native drop is forbidden while the manager can still
+         * dispatch any turn or has an admitted/reserved CONTROL continuation.
+         * Detachment publishes a no-new-turns fence. All fields belong to
+         * the ref's shared generation-fenced ticket and survive group close.
+         */
+        bool ready_for_resource_reclamation() const noexcept {
+            return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
+                && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
+                && !ref_.ticket_->control_active.load(std::memory_order_acquire)
+                && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
+        }
+
         bool finalized(std::string failure = "") const {
             return NativeActorGroup::finalized_after_close(
                 ref_, group_id_, std::move(failure));
