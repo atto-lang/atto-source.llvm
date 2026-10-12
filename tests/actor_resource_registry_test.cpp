@@ -42,13 +42,17 @@ int main() {
     assert(registry.try_reclaim().status == Reclaim::busy);
     registry.release_loan(loan);
     auto result = registry.try_reclaim();
-    assert(result.status == Reclaim::complete);
-    assert(result.closed == 3);
+    assert(result.status == Reclaim::failed);
+    assert(registry.phase() == Phase::failed);
+    assert(result.closed == 2);
+    assert(result.attempted == 3);
     assert(result.errors.size() == 1);
     assert(result.failures == 1);
     assert(result.errors[0] == "close failure");
     assert((closed == std::vector<int>{3, 2, 1}));
-    assert(registry.try_reclaim().closed == 3);
+    assert(registry.try_reclaim().status == Reclaim::failed);
+    assert(registry.try_reclaim().closed == 2);
+    assert(registry.try_reclaim().attempted == 3);
     assert(closed.size() == 3);
 
     bool rejected = false;
@@ -96,12 +100,17 @@ int main() {
     boundedErrors.register_resource(Kind::timer, [&] { ++successfulClosers; });
     boundedErrors.retire();
     auto boundedResult = boundedErrors.try_reclaim();
-    assert(boundedResult.status == Reclaim::complete);
+    assert(boundedResult.status == Reclaim::failed);
+    assert(boundedErrors.phase() == Phase::failed);
+    assert(boundedResult.closed == 2);
+    assert(boundedResult.attempted == 3);
     assert(boundedResult.failures == 1);
     assert(boundedResult.errors.size() == 1);
     assert(boundedResult.errors[0].size() == 256);
     assert(successfulClosers == 2);
+    assert(boundedErrors.try_reclaim().status == Reclaim::failed);
     assert(boundedErrors.try_reclaim().failures == 1);
+    assert(successfulClosers == 2);  // terminal failure must never re-close
 
     ActorResourceRegistry concurrent(16, 1, 2);
     std::atomic<int> finishes{0};
@@ -111,6 +120,7 @@ int main() {
     std::thread borrower([&] { concurrent.release_loan(held); });
     borrower.join();
     assert(concurrent.try_reclaim().status == Reclaim::complete);
+    assert(concurrent.phase() == Phase::reclaimed);
     assert(finishes == 1);
 
     // In-flight trusted close must be observed as CLOSING by concurrent
