@@ -2,6 +2,8 @@
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 
 #include <cstdint>
+#include <chrono>
+#include <future>
 #include <stdexcept>
 
 using oreslang::runtime::NativeActorGroup;
@@ -32,6 +34,8 @@ int main() {
     group.close();
     require(group.closed() && group.worker_count() == 0,
             "supervisor retained actor after close");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout,
+            "close fabricated done before native heap loan quiescence");
     require(stop_requests == 1, "supervisor did not request native retirement");
     require(!group.mark_ready(ref), "closed supervisor admitted stale readiness");
     require(ores_actor_i64_heap_try_destroy(heap) == 0,
@@ -40,6 +44,11 @@ int main() {
     ores_actor_i64_heap_release(heap, suspended_loan);
     require(ores_actor_i64_heap_try_destroy(heap) == 1,
             "native actor heap not reclaimable after last loan");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout,
+            "physical free did not require supervisor finalization acknowledgement");
+    require(group.finalized(ref), "supervisor cannot acknowledge physically freed heap");
+    ref.get_done().get();
+    require(!group.finalized(ref), "duplicate physical finalization accepted");
     group.close();
     require(stop_requests == 1, "group requested duplicate actor teardown");
 }

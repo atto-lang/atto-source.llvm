@@ -132,9 +132,12 @@ an integration task, not an assumed property of the current adapter.
 2. `suspend` / `async` callables may yield at compiler-lowered `await`,
    `rt cooperate`, blocking-channel and explicitly resumable safepoints. A
    yielded critical callable keeps its ticket.
-3. Compiler-inserted loop cooperation is suppressed while a critical ticket
-   is held. A future policy to permit it must retain the critical ticket
-   across the handoff and prioritize the continuation consistently.
+3. Compiler-inserted loop cooperation **may** occur while a critical method
+   holds its logical ticket, provided the continuation is resumable and retains
+   the ticket across suspension. This allows other *noncompeting* actor turns
+   while preventing a second owner of the same gate. A strict real-time profile
+   rejects any unbounded path that lacks executable yield-safe boundaries;
+   never suppress fairness indefinitely just because a ticket exists.
 4. An ordinary actor turn remains single-flight; `requestConcurrency` and
    `messageConcurrency` are separate limits. A critical method can narrow
    mutual exclusion even on a concurrently admitted actor.
@@ -143,9 +146,13 @@ an integration task, not an assumed property of the current adapter.
    fails with a diagnostic recommending `suspend critical`. Full seamless
    suspension of synchronous callers needs compiler-generated callsite
    continuations and effect typing, not a JVM thread lock.
-6. Recursive calls and cross-gate cycles need clear deadlock handling. Code
-   must not await another invocation of its own critical gate while holding it.
-   A full wait-for-graph/cycle detector remains a release gate.
+6. **Nested same-continuation** critical calls on the same gate are allowed:
+   they inherit the existing logical ownership and increment lexical depth
+   without enqueueing another ticket. Nested exit decrements depth and only
+   the outermost exit releases the ticket. **Different continuations** cannot
+   reuse that ticket, even when both belong to one actor. Awaiting a second
+   continuation which requires the held gate is a potential deadlock; strict
+   admission needs cycle detection and bounded ticket hold times.
 7. A synchronous critical function calling another suspending function must
    follow the compiler's existing suspension-effect checks, not silently
    turn into an implicitly asynchronous function.
@@ -165,3 +172,19 @@ allocation, source task continuations, cleanup/unwind integration, and
 cross-thread stress testing are still required before enabling `critical`
 declarations. Use the exact-source-tree funded CI mirror when original GitHub
 Actions cannot allocate a runner.
+
+## Distinguish critical invocation tickets from state access loans
+
+A critical method's **logical ticket** can survive a lowered suspension and
+continue excluding competing methods on the same gate. In contrast,
+`handle_state` exposes a **temporary state access loan** which must not survive
+a reentrancy boundary with conflicting state-backed aliases. Nested
+same-continuation `handle_state` callbacks fence the outer loan while the
+inner loan is active, even though both share the enclosing invocation's
+logical ticket. Other actor continuations can run while the critical method
+is suspended if they do not need its held gate; therefore `critical` does
+**not** make the entire actor-state callback a transaction across await.
+
+Effect annotations use proposed `using` and verified requirements use
+proposed `requires`. See [function effects](FUNCTION_EFFECTS_AND_SIGNATURE_QUALIFIERS.md)
+and [reduction regions](REDUCTION_REGION_SCHEDULING.md).
