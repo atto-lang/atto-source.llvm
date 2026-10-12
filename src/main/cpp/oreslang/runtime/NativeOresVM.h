@@ -26,7 +26,9 @@ typedef struct {
     OresNativeActorTaskFn on_message; /* host callback; required */
     OresNativeActorTaskFn on_control; /* optional priority CONTROL callback */
     /* Optional typed terminal-failure handler, serialized on parent's lane.
-     * This is not an actor-local panic catch or an external supervisor pool. */
+     * REQUIRED for supervised child construction in this domain; otherwise
+     * spawn_supervised fails without consuming the requested actor slot.
+     * Not an actor-local panic catch or an external supervisor pool. */
     OresNativeActorPanicFn on_failure;
     void* context;
 } OresNativeVMDomainConfig;
@@ -66,6 +68,10 @@ int ores_native_vm_publish_supervised_failure(
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);
+/* Reject supervisor stop until all its registered direct children have
+ * drained AND their terminal notices have been admitted to priority CONTROL.
+ * VM-wide retirement still drains previously accepted actor work, but it
+ * cannot guarantee undelivered terminal notices without host reconciliation. */
 int ores_native_vm_stop(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 /* External trusted host barriers for compiler-generated linear ActorRef

@@ -12,6 +12,7 @@ struct OresNativeVM {
     OresNativeActorScheduler* schedulers[ORES_NATIVE_VM_DOMAIN_COUNT];
     OresVMSupervisorRegistration* supervisors[ORES_NATIVE_VM_DOMAIN_COUNT];
     size_t actor_slots[ORES_NATIVE_VM_DOMAIN_COUNT];
+    int typed_failure_enabled[ORES_NATIVE_VM_DOMAIN_COUNT];
     size_t workers[ORES_NATIVE_VM_DOMAIN_COUNT];
     /* Metadata-only central CONTROL wake coordinator. No master pthread.
      * This is not the per-actor supervisor mail lane itself. */
@@ -47,6 +48,7 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
             p->actor_slots, sizeof(*vm->supervisors[i]));
         if (!vm->supervisors[i]) goto failed;
         vm->actor_slots[i] = p->actor_slots;
+        vm->typed_failure_enabled[i] = p->on_failure != NULL;
         vm->workers[i] = workers;
     }
     return vm;
@@ -100,7 +102,8 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
     if (!vm || !valid_domain(domain)) return invalid;
     control_lock(vm);
     OresNativeActorRef child = invalid;
-    if (!vm->control_retired && actor_slot < vm->actor_slots[domain]
+    if (!vm->control_retired && vm->typed_failure_enabled[domain]
+        && actor_slot < vm->actor_slots[domain]
         && supervisor.actor_slot != (uint64_t)actor_slot
         && ores_native_actor_scheduler_poll_ready(vm->schedulers[domain], supervisor)) {
         /* Serializes with VM stop/retire. The scheduler atomically rejects a
@@ -174,8 +177,26 @@ int ores_native_vm_stop(
     /* Keep stop ordered against supervised child registration so a child
      * cannot inherit a parent concurrently passing into retirement. */
     control_lock(vm);
-    int ok = !vm->control_retired
-        && ores_native_actor_scheduler_stop(vm->schedulers[domain], ref);
+    int ok = !vm->control_retired;
+    /* A supervisor may stop only after every direct child has physically
+     * drained AND its terminal notice was admitted to the supervisor lane.
+     * Reject early parent retirement rather than silently orphaning a live
+     * child. Every operation here acquires scheduler locks under the same
+     * master -> scheduler ordering as spawn and terminal admission. */
+    if (ok) {
+        for (size_t i = 0; i < vm->actor_slots[domain]; ++i) {
+            const OresVMSupervisorRegistration* child = &vm->supervisors[domain][i];
+            if (same_actor(child->supervisor, ref)
+                && (!child->terminal_published
+                    || !ores_native_actor_scheduler_poll_done(
+                        vm->schedulers[domain], child->child))) {
+                ok = 0;
+                break;
+            }
+        }
+    }
+    if (ok)
+        ok = ores_native_actor_scheduler_stop(vm->schedulers[domain], ref);
     control_unlock(vm);
     return ok;
 }

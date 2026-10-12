@@ -9,10 +9,10 @@
 
 typedef struct {
     OresNativeVM* vm;
-    OresNativeActorRef child;
+    OresNativeActorRef child, grandchild;
     atomic_int holding_parent, release_parent, child_finished;
     atomic_int child_blocked, release_child;
-    atomic_int control_seen, terminal_seen, parent_active, violations;
+    atomic_int control_seen, terminal_seen, grandchild_seen, parent_active, violations;
 } State;
 typedef struct {
     OresNativeVM* vm;
@@ -54,6 +54,15 @@ static void on_control(void* context, size_t actor, uint64_t value) {
 }
 static void on_failure(void* context, size_t parent, OresNativeActorTerminalFailure event) {
     State* s = (State*)context;
+    if (parent == 1) {
+        if (event.kind != ORES_NATIVE_CONTROL_STOPPED
+            || event.child.scheduler_domain != s->grandchild.scheduler_domain
+            || event.child.actor_slot != s->grandchild.actor_slot
+            || event.child.generation != s->grandchild.generation)
+            atomic_fetch_add(&s->violations, 1);
+        atomic_fetch_add(&s->grandchild_seen, 1);
+        return;
+    }
     if (parent != 0 || event.kind != ORES_NATIVE_CONTROL_PANIC
         || event.failure_code != 19 || event.correlation != 7001
         || event.child.scheduler_domain != s->child.scheduler_domain
@@ -112,12 +121,29 @@ int main(void) {
     OresNativeActorRef grandchild = ores_native_vm_spawn_supervised(
         vm, ORES_NATIVE_VM_MAIN, 2, s->child);
     check(grandchild.scheduler_domain);
+    s->grandchild = grandchild;
     actual = ores_native_vm_supervisor_of(vm, ORES_NATIVE_VM_MAIN, grandchild);
     check(actual.actor_slot == 1 && actual.generation == s->child.generation);
     OresNativeActorRef unsupervised = ores_native_vm_spawn(vm, ORES_NATIVE_VM_MAIN, 3);
     check(unsupervised.scheduler_domain);
     check(!ores_native_vm_supervisor_of(vm, ORES_NATIVE_VM_MAIN, unsupervised).scheduler_domain);
     check(ores_native_vm_started_carriers(vm, ORES_NATIVE_VM_MAIN) == 0);
+    /* A parent with a live child cannot retire and discard its supervisor
+     * obligation, even though both actors currently have zero carriers. */
+    check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
+    check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, s->child));
+    /* Complete the grandchild's terminal notice before the child itself
+     * exits; the child is its sole authoritative failure recipient. */
+    check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, grandchild));
+    check(ores_native_vm_poll_done(vm, ORES_NATIVE_VM_MAIN, grandchild));
+    OresNativeActorTerminalFailure grandchild_failure = {
+        ORES_NATIVE_CONTROL_STOPPED, grandchild, 0, 7002
+    };
+    check(ores_native_vm_publish_supervised_failure(
+        vm, ORES_NATIVE_VM_MAIN, grandchild_failure));
+    until(&s->grandchild_seen, 1);
+    check(!ores_native_vm_publish_supervised_failure(
+        vm, ORES_NATIVE_VM_MAIN, grandchild_failure));
 
     OresNativeActorTerminalFailure failure = {
         ORES_NATIVE_CONTROL_PANIC, s->child, 19, 7001
@@ -130,6 +156,7 @@ int main(void) {
     check(ores_native_vm_try_send(vm, ORES_NATIVE_VM_MAIN, s->child, 20)
         == ORES_NATIVE_SEND_ACCEPTED);
     until(&s->child_blocked, 1);
+    check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(!ores_native_vm_poll_done(vm, ORES_NATIVE_VM_MAIN, s->child));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
     atomic_store(&s->release_child, 1);
@@ -137,6 +164,8 @@ int main(void) {
     /* The stopped child is still on a carrier until its turn ends. The
      * official VM publication must only succeed after poll_done. */
     check(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, s->child));
+    /* DONE alone is insufficient: the child still owes terminal CONTROL. */
+    check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(ores_native_vm_publish_control(vm, ORES_NATIVE_VM_MAIN, parent, 21));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_SHARED, failure));
@@ -159,7 +188,6 @@ int main(void) {
     check(atomic_load(&admitted) == 1);
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
     until(&s->terminal_seen, 1);
-    check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, grandchild));
     check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, unsupervised));
     check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(ores_native_vm_stop(vm, ORES_NATIVE_VM_SHARED, foreign));
@@ -169,7 +197,26 @@ int main(void) {
     check(ores_native_vm_close(vm));
     check(atomic_load(&s->control_seen) == 1);
     check(atomic_load(&s->terminal_seen) == 1);
+    check(atomic_load(&s->grandchild_seen) == 1);
     check(atomic_load(&s->violations) == 0);
+
+    /* Domains without a typed terminal handler must reject supervised
+     * construction BEFORE consuming the child actor slot. */
+    cfg.domains[ORES_NATIVE_VM_MAIN].on_failure = NULL;
+    OresNativeVM* no_handler = ores_native_vm_open(&cfg);
+    check(no_handler != NULL);
+    OresNativeActorRef root = ores_native_vm_spawn(no_handler, ORES_NATIVE_VM_MAIN, 0);
+    check(root.scheduler_domain != 0);
+    check(!ores_native_vm_spawn_supervised(
+        no_handler, ORES_NATIVE_VM_MAIN, 1, root).scheduler_domain);
+    /* Failed supervised construction did not consume the slot. */
+    OresNativeActorRef free_slot = ores_native_vm_spawn(
+        no_handler, ORES_NATIVE_VM_MAIN, 1);
+    check(free_slot.scheduler_domain != 0);
+    check(ores_native_vm_started_carriers(no_handler, ORES_NATIVE_VM_MAIN) == 0);
+    check(ores_native_vm_stop(no_handler, ORES_NATIVE_VM_MAIN, free_slot));
+    check(ores_native_vm_stop(no_handler, ORES_NATIVE_VM_MAIN, root));
+    check(ores_native_vm_close(no_handler));
     printf("NATIVE_VM_TYPED_SUPERVISOR_PASS domains=4 once=1 quiescent=1\n");
     return 0;
 }
