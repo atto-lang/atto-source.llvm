@@ -10,12 +10,19 @@
 #include <cassert>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 using oreslang::runtime::ActorResourceRegistry;
 using Kind = ActorResourceRegistry::Kind;
 using Reclaim = ActorResourceRegistry::Reclaim;
 using Phase = ActorResourceRegistry::Phase;
+
+static_assert(!std::is_default_constructible_v<ActorResourceRegistry::Ticket>);
+static_assert(!std::is_aggregate_v<ActorResourceRegistry::Ticket>);
+static_assert(!std::is_constructible_v<ActorResourceRegistry::Ticket,
+        std::uint64_t, std::uint64_t, std::uint64_t,
+        ActorResourceRegistry::Activity>);
 
 int main() {
     ActorResourceRegistry registry(15, 7, 4);
