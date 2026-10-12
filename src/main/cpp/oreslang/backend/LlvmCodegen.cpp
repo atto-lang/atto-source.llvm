@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -65,6 +66,20 @@ std::string emit_verified_llvm_ir(const Program& source) {
     llvm::LLVMContext context;
     llvm::Module module("oreslang-source", context);
     llvm::IntegerType* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* ptr = llvm::Type::getInt8PtrTy(context);
+    llvm::FunctionCallee heapOpen = module.getOrInsertFunction(
+            "oreslang_owned_i64_region_open",
+            llvm::FunctionType::get(ptr, {i64}, false));
+    llvm::FunctionCallee heapNew = module.getOrInsertFunction(
+            "oreslang_owned_i64_region_new",
+            llvm::FunctionType::get(ptr, {ptr, i64}, false));
+    llvm::FunctionCallee heapDrop = module.getOrInsertFunction(
+            "oreslang_owned_i64_region_drop",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr, ptr}, false));
+    llvm::FunctionCallee heapClose = module.getOrInsertFunction(
+            "oreslang_owned_i64_region_close",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false));
+
     std::unordered_map<std::string, llvm::Function*> declarations;
 
     // Declare all functions first, enabling forward calls and recursion.
@@ -88,27 +103,47 @@ std::string emit_verified_llvm_ir(const Program& source) {
             parameters.emplace(fn.parameters[index], &arg);
             ++index;
         }
-        // Lexical scalar locals are stack-owned. Every slot becomes live
-        // only after its initializer has been evaluated; all slots leave
-        // lifetime before return in reverse declaration order. The generated
-        // IR has no tracing-GC statepoints and calls no heap collector.
+        // Scalar locals are either stack owned ('int') or explicitly backed
+        // by a bounded native lexical heap region ('owned int'). The latter
+        // has one region per function activation. This is not yet an actor
+        // heap that survives between mailbox turns.
+        struct OwnedSlot { llvm::Value* address; bool heap; };
         std::unordered_map<std::string, llvm::Value*> locals;
-        std::vector<llvm::Value*> lifetimeSlots;
+        std::vector<OwnedSlot> slots;
+        const auto heapCount = std::count_if(
+                fn.locals.begin(), fn.locals.end(),
+                [](const LocalBinding& item) { return item.heap_owned; });
+        llvm::Value* region = nullptr;
+        if (heapCount != 0) {
+            region = builder.CreateCall(heapOpen, {
+                    llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(heapCount))
+            }, "actor.owned.lexical.region");
+        }
         for (const auto& local : fn.locals) {
-            llvm::Value* init = lower(*local.initializer, builder, i64,
-                                      parameters, locals, declarations);
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
-                                                     local.name + ".owned");
-            builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(i64, 8));
-            builder.CreateStore(init, slot);
-            locals.emplace(local.name, slot);
-            lifetimeSlots.push_back(slot);
+            llvm::Value* initial = lower(*local.initializer, builder, i64,
+                                         parameters, locals, declarations);
+            llvm::Value* address = nullptr;
+            if (local.heap_owned) {
+                address = builder.CreateCall(heapNew, {region, initial},
+                                             local.name + ".native.owned");
+            } else {
+                address = builder.CreateAlloca(i64, nullptr, local.name + ".stack.owned");
+                builder.CreateLifetimeStart(address, llvm::ConstantInt::get(i64, 8));
+                builder.CreateStore(initial, address);
+            }
+            locals.emplace(local.name, address);
+            slots.push_back({address, local.heap_owned});
         }
         llvm::Value* result = lower(*fn.result, builder, i64, parameters,
                                     locals, declarations);
-        for (auto iter = lifetimeSlots.rbegin(); iter != lifetimeSlots.rend(); ++iter) {
-            builder.CreateLifetimeEnd(*iter, llvm::ConstantInt::get(i64, 8));
+        for (auto iter = slots.rbegin(); iter != slots.rend(); ++iter) {
+            if (iter->heap) {
+                builder.CreateCall(heapDrop, {region, iter->address});
+            } else {
+                builder.CreateLifetimeEnd(iter->address, llvm::ConstantInt::get(i64, 8));
+            }
         }
+        if (region != nullptr) builder.CreateCall(heapClose, {region});
         builder.CreateRet(result);
     }
 
@@ -118,8 +153,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
         errors.flush();
         throw std::runtime_error("invalid generated LLVM module: " + diagnostics);
     }
-    // Strict no-tracing-GC admission. The current backend emits stack-local
-    // scalars only. Any future lowering must explicitly prove that its new
+    // Strict no-tracing-GC admission. The current backend emits stack-local scalars and an audited
+    // bounded native i64 region.  Any future lowering must explicitly prove that its new
     // native calls cannot invoke a collector or allocate managed objects.
     // Reject indirect/unknown external calls by default.
     for (const llvm::Function& function : module) {
@@ -138,7 +173,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 if (target->isDeclaration()) {
                     const std::string name = target->getName().str();
                     if (name.rfind("llvm.lifetime.start", 0) != 0
-                            && name.rfind("llvm.lifetime.end", 0) != 0) {
+                            && name.rfind("llvm.lifetime.end", 0) != 0
+                            && name != "oreslang_owned_i64_region_open"
+                            && name != "oreslang_owned_i64_region_new"
+                            && name != "oreslang_owned_i64_region_drop"
+                            && name != "oreslang_owned_i64_region_close") {
                         throw std::runtime_error("LLVM strict no-GC rejects unverified external call '" + name + "'");
                     }
                 }

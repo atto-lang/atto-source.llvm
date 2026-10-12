@@ -41,7 +41,7 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "self", "true", "false", "null", "obj", "arr",
-        "int"
+        "int", "owned"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -160,6 +160,9 @@ private:
             advance();
             binding.name = identifier();
             require(":");
+            // 'owned int' is a heap-owned scalar, intentionally explicit.
+            // It never decays into the ordinary alloca-backed int type.
+            binding.heap_owned = accept("owned");
             require("int");
             require("=");
             binding.initializer = expression();

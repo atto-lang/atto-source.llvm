@@ -26,6 +26,7 @@ struct Expression {
 struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
+    bool heap_owned = false;
     std::size_t offset = 0;
 };
 
