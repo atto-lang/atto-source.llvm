@@ -50,6 +50,12 @@ struct OresNativeActorScheduler {
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
+/* Bound to the actual, dequeued typed wake for this physical actor turn.
+ * Actor identity alone does not authorize impersonating a different inbox
+ * kind or continuation. Both values are reset before releasing the claim.
+ */
+static _Thread_local int executing_state_wake_valid;
+static _Thread_local OresNativeActorStateWake executing_state_wake;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
@@ -148,10 +154,15 @@ static void* carrier(void* raw) {
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
         executing_claim = execution_claim;
         executing = s;
+        executing_state_wake_valid = kind == 1;
+        executing_state_wake = kind == 1
+                ? state_wake : (OresNativeActorStateWake){0};
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (kind == 2) s->control_callback(s->context, i, payload);
         else if (kind == 1) s->state_wake_callback(s->context, i, state_wake);
         else s->callback(s->context, i, payload);
+        executing_state_wake_valid = 0;
+        executing_state_wake = (OresNativeActorStateWake){0};
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
         executing = NULL;
@@ -580,6 +591,20 @@ int ores_native_actor_scheduler_is_current_actor(
     // An active callback pins its scheduler/lane; only the authority mutex
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
+}
+/* The scheduler certifies the exact dequeued STATE-WAKE envelope only
+ * during its own physical actor callback. A DATA/SUPERVISOR/PANIC callback
+ * on this same actor has a valid actor execution claim but MUST NOT gain
+ * state wake authority by supplying a fabricated notification.
+ */
+int ores_native_actor_scheduler_is_current_state_wake(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        OresNativeActorStateWake wake) {
+    return s && executing == s && executing_state_wake_valid
+        && executing_state_wake.incarnation == wake.incarnation
+        && executing_state_wake.continuation_id == wake.continuation_id
+        && executing_state_wake.status == wake.status
+        && ores_native_actor_scheduler_is_current_actor(s, actor);
 }
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     if (!s) return 0;
