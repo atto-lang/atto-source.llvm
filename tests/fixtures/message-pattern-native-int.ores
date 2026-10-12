@@ -3,7 +3,7 @@ declare type match Numbers as
 end
 define actor Worker<messages=Numbers> as
     let total: int = 0;
-    receive(Message m) {
+    receive(Numbers m) {
         total = total + 1;
         return total;
     }

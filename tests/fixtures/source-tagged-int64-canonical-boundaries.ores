@@ -15,7 +15,7 @@ end
 define actor Accumulator<messages=NumberMail> as
     let total: int = 0;
 
-    receive(Message m) {
+    receive(NumberMail m) {
         do match m over {
             on Numbers.Add as n { total = total + n; }
             on Numbers.Sub as n { total = total - n; }

@@ -10,7 +10,7 @@ end
 
 define actor Source<messages=PipeMessages> as
     let value: int = 0;
-    receive(Message m) {
+    receive(PipeMessages m) {
         do match m over {
             on Signal.Data as n {
                 value = value + n;
@@ -23,7 +23,7 @@ define actor Source<messages=PipeMessages> as
 end
 define actor TransformA<messages=PipeMessages> as
     let value: int = 0;
-    receive(Message m) {
+    receive(PipeMessages m) {
         do match m over {
             on Signal.Data as n {
                 value = n * 2;
@@ -39,7 +39,7 @@ define actor TransformA<messages=PipeMessages> as
 end
 define actor TransformB<messages=PipeMessages> as
     let value: int = 0;
-    receive(Message m) {
+    receive(PipeMessages m) {
         do match m over {
             on Signal.Data as n {
                 value = n + 4;
@@ -55,7 +55,7 @@ define actor TransformB<messages=PipeMessages> as
 end
 define actor Sink<messages=PipeMessages> as
     let value: int = 0;
-    receive(Message m) {
+    receive(PipeMessages m) {
         do match m over {
             on Signal.Data as n {
                 value = n + 3;

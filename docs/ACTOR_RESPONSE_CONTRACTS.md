@@ -78,27 +78,17 @@ the actor turn.
 
 ## Ordinary message actors and pipeline callbacks
 
-An ordinary `define actor` has `receive(Message m): void`. It may explicitly send
+An ordinary `define actor` declares its inbox domain and uses
+`receive(InboxMessages m): void`. It may explicitly send
 zero or more messages to typed actor refs or emit onto an owned output port. It
 has no implicit request/reply relationship. An actor-level subscription is a
 long-lived event stream, distinct from a response stream associated with one
 request; a runtime-issued output-port handle carries its callbacks.
 
-Pipeline callbacks describe routing, not RPC replies. Proposed handler shape:
+Pipeline callbacks describe routing, not RPC replies.
 
-```ores
-receive(Message m, PipeOutput<Signal> pipe): void {
-    do match m over {
-        on Signal.Data as n {
-            await pipe.forward(Signal.Data(n + 1));
-        }
-        on Signal.Result as n {
-            await pipe.backward(Signal.Result(n + 1));
-        }
-    }
-    return;
-}
-```
+See the explicit transform role and directional-domain example below.
+
 
 A handler may call forward/backward zero or many times per input. Forward selects
 an authorized outgoing edge; backward follows an authorized ingress/reverse
@@ -215,7 +205,7 @@ different nominal input patterns.
 For a middle stage, the proposed forward hook would be:
 
 ```ores
-receive_forward(Message m): void {
+receive_forward(PipeForwardMessages m): void {
     do match m over {
         on Signal.Data as n {
             const output = self.update_from(n);
@@ -246,3 +236,69 @@ its restricted i64 receive observation ABI. Migrating that executable fixture to
 state callbacks and these directional hooks requires integrating the actual
 state source lowering with pipeline dispatch. This proposal is not evidence
 that either backend executes the combined source syntax yet.
+
+## Explicit pipe roles and directional message domains
+
+The selected transform declaration is:
+
+```ores
+define transform pipe actor Stage1<
+    forward_messages=PipeForwardMessages,
+    backward_messages=PipeBackwardMessages
+> as
+    // Scoped state, methods, and both required directional hooks.
+end
+```
+
+Each `define match pattern` denotes a nominal closed message domain whose
+inhabitants are the listed enum variants. A receive parameter uses that domain
+name directly: `receive_forward(PipeForwardMessages m): void` and
+`receive_backward(PipeBackwardMessages m): void`. No generic `Message` placeholder
+or implicit per-actor type substitution appears in new source syntax.
+
+Compiler obligations for a transform pipe actor:
+
+- Both directional domains are declared, known match-pattern types.
+- Exactly one receive_forward and exactly one receive_backward hook exist;
+  neither can be static. Their parameter domain is exactly the declared domain
+  for that direction; their result is void. State helpers may return copied
+  scalars without establishing a reply contract.
+- Missing, duplicate or mismatched directional hooks are compile errors.
+  Ordinary receive cannot satisfy either hook. An ordinary actor is rejected
+  as a pipe stage; the role is not inferred merely from method names.
+- Match arms are checked against the hook's domain, including exhaustiveness.
+  For these definitions, Signal.Result is rejected in the forward hook and
+  Signal.Data in the backward hook.
+- self.forward checks the forward output domain; self.backward checks the
+  backward output domain. Routing methods remain sealed, actor-affine intrinsics.
+- Pipeline construction validates role ordering and both directed edges at
+  every adjacency: A.forward_output -> B.forward_input, and
+  B.backward_output -> A.backward_input. The initial version requires matching
+  nominal domains, not merely equal int payload types or a structural wire shape.
+- Runtime dispatch is based on pinned routing/ingress authority, never on an
+  enum tag supplied by guest code. Ordinary send cannot masquerade as a pipe
+  directional delivery.
+
+For a source/readable endpoint there is no upstream pipe ingress; it emits
+forward and receives backward, plus optional external receive/on_start input.
+For a sink/writable endpoint there is no downstream pipe ingress; it receives
+forward and may emit backward. Transform stages require both ingress hooks.
+Response streams to a caller remain separate correlated capabilities, not
+implicit replies from every directional delivery.
+
+The two-domain shorthand uses the same forward domain for forward input/output
+and the same backward domain for backward input/output. It permits transformations
+of values and variant selection within those domains. A stage that changes
+nominal message types needs four explicit port domains in a subsequent extension:
+forward_in, forward_out, backward_in, backward_out. Do not hide this restriction
+by allowing untyped Message values or unchecked output coercions.
+
+Implementation status: the native bootstrap's old receive(Message m) was a
+parser special case whose domain came from the actor's messages declaration.
+Its executable single-domain fixtures now use receive(DeclaredDomain m), and
+wrong parameter domains/Message placeholders reject before IR emission. This
+removes the hidden alias; it does not implement the proposed role syntax, two
+independent domains, scoped-state lowering or directional hook dispatch. Those
+require AST, type admission, runtime codec/port tables and compiler lowering to
+be integrated across backends. The stateful role example is a design artifact,
+not a new executable fifteen-stage test.

@@ -358,7 +358,7 @@ private:
             fail("actor requires at least one scalar field");
         while (token_.text == "fnc" || token_.text == "routine"
                || token_.text == "pub" || token_.text == "receive") {
-            value.methods.push_back(function(true));
+            value.methods.push_back(function(true, value.messages_type));
         }
         if (value.methods.empty()) fail("actor requires at least one read-only method");
         if (braced) require("}");
@@ -383,7 +383,7 @@ private:
         return name;
     }
 
-    Function function(bool actor_method = false) {
+    Function function(bool actor_method = false, const std::string& message_type = "") {
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
@@ -397,7 +397,9 @@ private:
         }
         require("(");
         if (value.is_receiver) {
-            require("Message");
+            if (message_type.empty() || token_.text != message_type)
+                fail("receive parameter type must match declared message domain '" + message_type + "'");
+            require(message_type);
             value.parameters.push_back(identifier());
             require(")");
         } else {
@@ -1161,7 +1163,7 @@ private:
                 const auto count = std::count_if(actor.methods.begin(), actor.methods.end(),
                     [](const Function& f) { return f.is_receiver; });
                 if (count != 1)
-                    throw std::runtime_error("typed actor requires exactly one receive(Message m)");
+                    throw std::runtime_error("typed actor requires exactly one receive with its declared message domain");
                 if (std::any_of(actor.methods.begin(), actor.methods.end(),
                     [](const Function& f) { return f.name == "on_message"; }))
                     throw std::runtime_error(

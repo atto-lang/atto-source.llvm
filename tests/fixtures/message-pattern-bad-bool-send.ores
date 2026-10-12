@@ -1,6 +1,6 @@
 declare type match Signals as bool end
 define actor Foo<messages=Signals> as
-    receive(Message m) { }
+    receive(Signals m) { }
 end
 pub fnc main(): int {
     const worker = spawn Foo();

@@ -260,6 +260,11 @@ if(BUILD_TESTING)
         set_tests_properties(native_pipeline_cancel_worker_forward_linearization
             PROPERTIES TIMEOUT 45)
     endif()
+    foreach(bad_receive_type domain-mismatch message-placeholder)
+        oreslang_contract_test(reject_receive_${bad_receive_type}
+            source-actor-receive-${bad_receive_type}-reject.ores
+            --diagnostic "receive parameter type must match declared message domain")
+    endforeach()
     oreslang_contract_test(canonical_match_pattern_first_declaration
         source-actor-match-pattern-first.ores)
     oreslang_contract_test(reject_legacy_define_pattern

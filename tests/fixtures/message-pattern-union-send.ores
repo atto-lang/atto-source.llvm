@@ -5,7 +5,7 @@ declare type match Patterns as
     List[bool]
 end
 define actor Foo<messages=Patterns> as
-    receive(Message m) { }
+    receive(Patterns m) { }
 end
 pub fnc main(): int {
     const worker = spawn Foo();

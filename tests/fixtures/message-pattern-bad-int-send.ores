@@ -1,6 +1,6 @@
 declare type match Numbers as int end
 define actor Foo<messages=Numbers> as
-    receive(Message m) { }
+    receive(Numbers m) { }
 end
 pub fnc main(): int {
     const worker = spawn Foo();

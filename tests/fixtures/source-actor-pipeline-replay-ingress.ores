@@ -14,7 +14,7 @@ end
 
 define actor Source<messages=PipeMessages> as
     let count: int = 0;
-    receive(Message m) {
+    receive(PipeMessages m) {
         do match m over {
             on Signal.Data as n {
                 count = count + n;
@@ -33,7 +33,7 @@ end
 
 define actor Transform<messages=PipeMessages> as
     let value: int = 0;
-    receive(Message m) {
+    receive(PipeMessages m) {
         do match m over {
             on Signal.Data as n {
                 value = n * 2;
@@ -50,7 +50,7 @@ end
 
 define actor Sink<messages=PipeMessages> as
     let value: int = 0;
-    receive(Message m) {
+    receive(PipeMessages m) {
         do match m over {
             on Signal.Data as n {
                 value = n + 3;
