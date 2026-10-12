@@ -325,6 +325,14 @@ if(BUILD_TESTING)
         --diagnostic "actor state reference cannot escape handle_state callback")
     # using state.read is an immutable scoped loan, using
     # state.write(critical ...) is an exclusive scoped state transaction.
+    # A read capability must not emit any write-capable heap call.
+    # IR absence checks remain live even when Python runs with -O.
+    oreslang_contract_test(native_ir_using_read_no_mutation
+        actor-using-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_ir_using_write_has_mutation
+        actor-using-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
     foreach(mode read write)
         oreslang_contract_test(native_ir_actor_using_${mode}
             actor-using-${mode}-positive.ores
@@ -338,6 +346,16 @@ if(BUILD_TESTING)
                 --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
         endif()
     endforeach()
+    if(ORE_CLANG)
+        foreach(mode read write)
+            oreslang_contract_test(native_asan_using_${mode}_pipeline
+                source-actor-pipeline-fifteen-using-${mode}.ores
+                --run 43 --clang "${ORE_CLANG}" --sanitize
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+        endforeach()
+    endif()
     oreslang_contract_test(reject_actor_using_read_mut
         actor-using-read-mut-reject.ores
         --diagnostic "using state.read cannot mutate state")
