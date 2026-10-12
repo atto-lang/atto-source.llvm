@@ -2,6 +2,7 @@
 #include "oreslang/runtime/ActorHeapRetirementProof.hpp"
 #include "oreslang/runtime/BoundedMpscQueue.hpp"
 #include "oreslang/runtime/BoundedSpscQueue.hpp"
+#include "oreslang/runtime/ActorHeap.hpp"
 #include "oreslang/runtime/ParkingSignal.hpp"
 #include <atomic>
 #include <array>
@@ -63,6 +64,11 @@ struct CarrierStats {
 class HungryCarrier final {
     struct ProducerGate;
 public:
+    using NativeHeap = ActorHeap<64, 256>;
+    // Available only while executing on the actor's carrier.
+    // Do not retain across actor termination.
+    static NativeHeap* active_heap() noexcept;
+
     // Handles hold an independent shared lifetime gate. They may be copied,
     // sent to other native producer threads and survive carrier destruction.
     // Creation/copy can allocate or refcount; pre-create them before realtime
@@ -156,6 +162,7 @@ private:
     bool pin_cpu() noexcept;
 
     void* actor_state_;
+    NativeHeap actor_heap_; // separate native heap for each dedicated carrier
     ActorHandler handler_;
     void* broker_state_;
     BrokerOperation operation_;
