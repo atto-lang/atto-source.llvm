@@ -240,6 +240,55 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     pthread_cond_signal(&s->ready);
     return 1;
 }
+/*
+ * A stopped unpublished candidate is the only incarnation whose physical
+ * slot can currently be recycled: it never entered a callback and cannot
+ * have delivered a terminal PANIC. Reuse is atomic with STOP and admissions
+ * under the publication gate; old ActorRefs fail matching() afterwards.
+ * The full published-actor recycling protocol requires generation-bearing
+ * native callback ABI and separate supervisor retirement proofs.
+ */
+OresNativeActorRef ores_native_actor_scheduler_recycle_unpublished_done(
+    OresNativeActorScheduler* s, OresNativeActorRef old) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s || owned_restart_lease == s) return missing;
+    if (pthread_mutex_lock(&s->restart_publication_gate) != 0) abort();
+    lock(s);
+    int allowed = !s->retired && matching(s, old);
+    if (allowed) {
+        ActorLane* a = &s->actors[old.actor_slot];
+        allowed = a->retired && !a->published
+            && !a->active && !a->queued && !a->has_control
+            && !a->failure_attempted && !a->failure_published
+            && a->restart_lease_nonce == 0 && a->generation < UINT64_MAX;
+        if (allowed) {
+            /* Empty all transport and classification state before bumping
+             * generation. No physical mailbox datum survives an incarnation. */
+            a->head = 0;
+            a->tail = 0;
+            a->control_payload = 0;
+            a->control_is_failure = 0;
+            a->failure = (OresNativeActorTerminalFailure){0};
+            a->failure_attempted = 0;
+            a->failure_published = 0;
+            a->normal_exit_sealed = 0;
+            a->restart_lease_nonce = 0;
+            a->restart_lease_owner = (pthread_t){0};
+            for (size_t j = 0; j < s->per_actor_capacity; ++j)
+                a->messages[j] = 0;
+            a->generation++;
+            a->retired = 0;
+            a->spawned = 1;
+            a->published = 0;
+            missing = (OresNativeActorRef){
+                s->domain, old.actor_slot, a->generation
+            };
+        }
+    }
+    unlock(s);
+    if (pthread_mutex_unlock(&s->restart_publication_gate) != 0) abort();
+    return missing;
+}
 /* A replacement must use the unpublished variant so neither ref-based
  * send nor legacy index submit can bypass the bridge's identity commit. */
 static OresNativeActorRef spawn_internal(
@@ -349,7 +398,16 @@ int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
                                        size_t i, uint64_t message) {
     if (!s) return 0;
     lock(s);
-    int ok = enqueue_locked(s, i, message);
+    /* This legacy API carries only a slot index. It cannot distinguish
+     * an obsolete caller after a slot's first physical reincarnation.
+     * Fail closed; generation-aware callers MUST use send(ActorRef). */
+    int ok;
+    if (i < s->actor_count && s->actors[i].generation > 1) {
+        if (s->rejected != UINT64_MAX) s->rejected++;
+        ok = 0;
+    } else {
+        ok = enqueue_locked(s, i, message);
+    }
     unlock(s);
     return ok;
 }
