@@ -117,22 +117,43 @@ public:
     explicit HostBuffer(Plan layout) : state_(std::make_shared<State>(layout)) {}
     HostBuffer(const HostBuffer&) = delete;
     HostBuffer& operator=(const HostBuffer&) = delete;
-    HostBuffer(HostBuffer&&) noexcept = default;
-    HostBuffer& operator=(HostBuffer&&) noexcept = default;
+    HostBuffer(HostBuffer&& other) noexcept {
+        std::lock_guard<std::mutex> owner(other.owner_lock_);
+        state_ = std::move(other.state_);
+    }
+    HostBuffer& operator=(HostBuffer&& other) {
+        if (this == &other) return *this;
+        std::scoped_lock owners(owner_lock_, other.owner_lock_);
+        // Never silently drop a live allocation or an outstanding loan.
+        if (state_) {
+            std::lock_guard<std::mutex> state_guard(state_->lock);
+            if (!state_->closed || state_->loans != 0)
+                throw std::logic_error("cannot overwrite live owned host buffer");
+        }
+        state_ = std::move(other.state_);
+        return *this;
+    }
 
     // Return a value: a borrowed reference to the owner-controlled State
     // could otherwise dangle when an owned buffer is moved and released.
     Plan layout() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         if (!state_) throw std::logic_error("buffer moved or closed");
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->closed) throw std::logic_error("buffer moved or closed");
         return state_->layout;
     }
     bool identical_storage(const HostBuffer& other) const noexcept {
+        if (this == &other) {
+            std::lock_guard<std::mutex> owner(owner_lock_);
+            return static_cast<bool>(state_);
+        }
+        std::scoped_lock owners(owner_lock_, other.owner_lock_);
         return state_ && state_ == other.state_;
     }
 
     HostBuffer take() {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->loans != 0) throw std::logic_error("cannot move borrowed buffer");
@@ -141,6 +162,7 @@ public:
     }
 
     ReadLoan borrow_read() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->closed) throw std::logic_error("closed buffer");
@@ -156,6 +178,7 @@ public:
     }
 
     void write(std::uint64_t row, std::uint32_t field, float value) {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->closed || state_->loans) throw std::logic_error("write to closed or borrowed buffer");
@@ -164,6 +187,7 @@ public:
     }
 
     void close() {
+        std::lock_guard<std::mutex> owner(owner_lock_);
         if (!state_) return; // relinquished ownership
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->loans != 0) throw std::logic_error("outstanding read loan");
@@ -172,11 +196,14 @@ public:
 
 private:
     explicit HostBuffer(std::shared_ptr<State> state) : state_(std::move(state)) {}
+    // Caller must hold owner_lock_ before inspecting the handle.
     void active() const {
         if (!state_) throw std::logic_error("buffer moved or closed");
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->closed) throw std::logic_error("buffer moved or closed");
     }
+    // Lock order is owner_lock_ -> State::lock, including owner moves.
+    mutable std::mutex owner_lock_;
     std::shared_ptr<State> state_;
 };
 
