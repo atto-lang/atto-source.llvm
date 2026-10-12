@@ -36,7 +36,9 @@ typedef enum {
     ORES_FLOW_ALREADY_RESERVED = 7,
     ORES_FLOW_BAD_TICKET = 8,
     ORES_FLOW_REJECTED_MAIL = 9,
-    ORES_FLOW_INCOMPLETE = 10
+    ORES_FLOW_INCOMPLETE = 10,
+    ORES_FLOW_BUSY = 11,       /* in-flight publisher; retirement not allowed */
+    ORES_FLOW_REENTRANT = 12   /* callback attempted table API reentry */
 } OresFlowError;
 typedef enum {
     ORES_FLOW_ACTIVE,
@@ -66,9 +68,14 @@ typedef struct {
 } OresFlowSnapshot;
 
 /* A single try_publish must synchronously generation-check and perform
- * nonblocking bounded scheduler DATA admission. It is called with the table
- * mutex held and MUST NOT wait, call flow-table APIs or invoke guest code.
- * The caller owns snapshot/credit cleanup on failure. Return 1 if admitted. */
+ * nonblocking bounded scheduler DATA admission. It holds ONLY the particular
+ * flow's mutex: unrelated flows, opens and cancellations must still progress.
+ * It MUST NOT wait, call flow-table APIs or invoke guest code. Same-table
+ * callback reentry is rejected with ORES_FLOW_REENTRANT, not deadlocked.
+ * No scheduler lock held by another flow may be acquired in reverse order.
+ * The caller owns snapshot/credit cleanup on failure. Return 1 if admitted.
+ * Retire of an in-use flow returns ORES_FLOW_BUSY, not a blocking wait.
+ * IDs remain unique across flow table recreation within the same process. */
 typedef int (*OresFlowTryPublish)(void* ctx, const OresFlowTicket* ticket);
 
 OresFlowTable* ores_flow_table_create(void);
