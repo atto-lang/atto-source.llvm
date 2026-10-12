@@ -916,7 +916,8 @@ private:
 
     static bool contains_callable_invocation(const Expression* expr) {
         if (!expr) return false;
-        if (expr->kind == Expression::Kind::Call) return true;
+        if (expr->kind == Expression::Kind::Call ||
+            expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get()) ||
             contains_callable_invocation(expr->right.get())) return true;
         for (const auto& item : expr->arguments)
@@ -932,7 +933,8 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
-            if (local.heap_owned && !fn.declared_effects.has(FunctionEffect::Alloc))
+            if ((local.heap_owned || local.int_array) &&
+                    !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
             if (contains_callable_invocation(local.initializer.get()))
