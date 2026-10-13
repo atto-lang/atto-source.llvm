@@ -1,3 +1,4 @@
+#define ORESLANG_RW_INTERNAL_TEST_HOOKS 1
 #include "oreslang/runtime/ActorStateReadWriteContinuations.hpp"
 
 #include <stdexcept>
@@ -30,7 +31,7 @@ int main() {
     CHECK(!first.admitted(first.incarnation(), 1, Mode::Write));
     CHECK(first.pending_notifications().size() == 1);
     bool blocked = false;
-    try { first.complete(first.incarnation(), 1); }
+    try { first.complete_undispatched_for_test(first.incarnation(), 1); }
     catch (const std::logic_error&) { blocked = true; }
     CHECK(blocked);
     first.cancel_pending(first.incarnation(), 1);
@@ -48,7 +49,7 @@ int main() {
     CHECK(request_with_control(bridge, 3, Mode::Read).status == Status::Queued);
     CHECK(bridge.pending_notifications().empty());
     CHECK(!bridge.admitted(bridge.incarnation(), 2, Mode::Write));
-    bridge.complete(bridge.incarnation(), 1);
+    bridge.complete_undispatched_for_test(bridge.incarnation(), 1);
     auto messages = bridge.pending_notifications();
     CHECK(messages.size() == 1);
     CHECK(messages[0].continuation_id == 2);
@@ -58,12 +59,12 @@ int main() {
     CHECK(bridge.acknowledge({bridge.incarnation(), 2, Status::Ready}));
     CHECK(bridge.admitted(bridge.incarnation(), 2, Mode::Write));
     CHECK(bridge.pending_notifications().empty());
-    bridge.complete(bridge.incarnation(), 2);
+    bridge.complete_undispatched_for_test(bridge.incarnation(), 2);
     CHECK(bridge.pending_notifications().size() == 1);
     CHECK(bridge.pending_notifications().front().continuation_id == 3);
     CHECK(bridge.acknowledge({bridge.incarnation(), 3, Status::Ready}));
     CHECK(bridge.admitted(bridge.incarnation(), 3, Mode::Read));
-    bridge.complete(bridge.incarnation(), 3);
+    bridge.complete_undispatched_for_test(bridge.incarnation(), 3);
 
     // Cancelling a queued writer publishes one durable terminal receipt.
     CHECK(request_with_control(bridge, 4, Mode::Read).status == Status::Ready);
@@ -78,8 +79,8 @@ int main() {
     CHECK(bridge.acknowledge({bridge.incarnation(), 5, Status::Cancelled}));
     CHECK(!bridge.acknowledge({bridge.incarnation(), 5, Status::Cancelled}));
     CHECK(bridge.acknowledge({bridge.incarnation(), 6, Status::Ready}));
-    bridge.complete(bridge.incarnation(), 4);
-    bridge.complete(bridge.incarnation(), 6);
+    bridge.complete_undispatched_for_test(bridge.incarnation(), 4);
+    bridge.complete_undispatched_for_test(bridge.incarnation(), 6);
 
     // READY-but-not-delivered tickets remain cancellable: waiting CONTROL
     // admission is not evidence a guest callback has begun.
@@ -87,7 +88,7 @@ int main() {
     CHECK(request_with_control(undelivered, 1, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(undelivered, 2, Mode::Write).status == Status::Queued);
     CHECK(request_with_control(undelivered, 3, Mode::Read).status == Status::Queued);
-    undelivered.complete(undelivered.incarnation(), 1);
+    undelivered.complete_undispatched_for_test(undelivered.incarnation(), 1);
     CHECK(undelivered.pending_notifications().size() == 1);
     CHECK(!undelivered.admitted(undelivered.incarnation(), 2, Mode::Write));
     undelivered.cancel_pending(undelivered.incarnation(), 2);
@@ -104,12 +105,12 @@ int main() {
     try { undelivered.cancel_pending(undelivered.incarnation(), 3); }
     catch (const std::logic_error&) { active_rejected = true; }
     CHECK(active_rejected);
-    undelivered.complete(undelivered.incarnation(), 3);
+    undelivered.complete_undispatched_for_test(undelivered.incarnation(), 3);
 
     // Cancellation races a queued wake: stale receipts cannot authorize work.
     CHECK(request_with_control(bridge, 7, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(bridge, 8, Mode::Write).status == Status::Queued);
-    bridge.complete(bridge.incarnation(), 7);
+    bridge.complete_undispatched_for_test(bridge.incarnation(), 7);
     CHECK(bridge.pending_notifications().size() == 1);
     bridge.retire();
     messages = bridge.pending_notifications();
@@ -129,7 +130,7 @@ int main() {
     // A one-way continuation ID avoids stale CONTROL receipt ABA.
     Bridge monotonic;
     CHECK(request_with_control(monotonic, 100, Mode::Read).status == Status::Ready);
-    monotonic.complete(monotonic.incarnation(), 100);
+    monotonic.complete_undispatched_for_test(monotonic.incarnation(), 100);
     rejected = false;
     try { (void)request_with_control(monotonic, 100, Mode::Read); }
     catch (const std::invalid_argument&) { rejected = true; }
@@ -174,14 +175,14 @@ int main() {
     Bridge previous;
     CHECK(request_with_control(previous, 1, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(previous, 2, Mode::Write).status == Status::Queued);
-    previous.complete(previous.incarnation(), 1);
+    previous.complete_undispatched_for_test(previous.incarnation(), 1);
     const auto stale_ready = previous.pending_notifications().front();
 
     Bridge replacement;
     CHECK(previous.incarnation() != replacement.incarnation());
     CHECK(request_with_control(replacement, 1, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(replacement, 2, Mode::Write).status == Status::Queued);
-    replacement.complete(replacement.incarnation(), 1);
+    replacement.complete_undispatched_for_test(replacement.incarnation(), 1);
     const auto current_ready = replacement.pending_notifications().front();
     CHECK(stale_ready.continuation_id == current_ready.continuation_id);
     CHECK(stale_ready.status == current_ready.status);
@@ -190,7 +191,7 @@ int main() {
     CHECK(!replacement.admitted(previous.incarnation(), 2, Mode::Write));
     CHECK(!replacement.admitted(replacement.incarnation(), 2, Mode::Write));
     bool stale_identity_rejected = false;
-    try { replacement.complete(previous.incarnation(), 2); }
+    try { replacement.complete_undispatched_for_test(previous.incarnation(), 2); }
     catch (const std::invalid_argument&) { stale_identity_rejected = true; }
     CHECK(stale_identity_rejected);
     stale_identity_rejected = false;
@@ -199,19 +200,19 @@ int main() {
     CHECK(stale_identity_rejected);
     CHECK(replacement.acknowledge(current_ready));
     CHECK(replacement.admitted(replacement.incarnation(), 2, Mode::Write));
-    replacement.complete(replacement.incarnation(), 2);
+    replacement.complete_undispatched_for_test(replacement.incarnation(), 2);
 
     // Publication observation is retryable and side-effect free.
     Bridge retryable;
     CHECK(request_with_control(retryable, 1, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(retryable, 2, Mode::Write).status == Status::Queued);
-    retryable.complete(retryable.incarnation(), 1);
+    retryable.complete_undispatched_for_test(retryable.incarnation(), 1);
     for (int i = 0; i < 20; ++i) {
         CHECK(retryable.pending_notifications().size() == 1);
         CHECK(!retryable.admitted(retryable.incarnation(), 2, Mode::Write));
     }
     CHECK(retryable.acknowledge({retryable.incarnation(), 2, Status::Ready}));
     CHECK(retryable.admitted(retryable.incarnation(), 2, Mode::Write));
-    retryable.complete(retryable.incarnation(), 2);
+    retryable.complete_undispatched_for_test(retryable.incarnation(), 2);
     return 0;
 }
