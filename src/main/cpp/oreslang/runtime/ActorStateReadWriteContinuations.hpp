@@ -125,6 +125,10 @@ private:
         if (retired_ || it->second.status != Status::Ready
                 || it->second.needs_ack
                 || (require_dispatch && !it->second.dispatched)
+                // Legacy host completion must never release a grant already
+                // claimed by the actor-lane callback. Only the owning
+                // scheduler scope may complete a dispatched continuation.
+                || (!require_dispatch && it->second.dispatched)
                 || !gate_.holds(it->second.token, it->second.mode)) {
             throw std::logic_error("continuation lacks an acknowledged state grant");
         }
