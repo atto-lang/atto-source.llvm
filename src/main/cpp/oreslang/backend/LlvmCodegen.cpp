@@ -125,6 +125,31 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {moves->array_region, handle, args[0]}, "array.get");
+            // Native-only checked operation. The integer is an internal
+            // ABI result, NOT a public guest Result<T,E> type. Ordinary
+            // allocation failures leave this owned array live and continue
+            // through the caller's normal lexical cleanup.
+            if (expr.name == "try_add" && args.size() == 1) {
+                llvm::Value* status = builder.CreateCall(moves->array_add,
+                    {moves->array_region, handle, args[0]}, "array.try_add.status");
+                llvm::BasicBlock* valid = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.try_add.valid",
+                    builder.GetInsertBlock()->getParent());
+                llvm::BasicBlock* invalid = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.try_add.invalid",
+                    builder.GetInsertBlock()->getParent());
+                builder.CreateCondBr(builder.CreateICmpULE(status,
+                    llvm::ConstantInt::get(status->getType(), 2),
+                    "array.try_add.known.status"), valid, invalid);
+                builder.SetInsertPoint(invalid);
+                // ABI version skew or a forged/negative status must never
+                // enter guest arithmetic or be treated as a recoverable
+                // failure. Store the real tag before reverse-order cleanup.
+                builder.CreateStore(status, moves->array_failure_status);
+                builder.CreateBr(moves->resource_failure);
+                builder.SetInsertPoint(valid);
+                return builder.CreateZExt(status, i64, "array.try_add.code");
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {moves->array_region, handle, args[0]}, "array.add.status");
