@@ -1,0 +1,5 @@
+define class Foo as
+    pub static fnc pick(int first): int { return first; }
+    pub static fnc pick(int second): int { return second + 1; }
+end
+pub fnc main(): int { return 0; }
