@@ -98,8 +98,11 @@ ordinary resource exhaustion from ownership corruption.
   output place when allocation or slot admission fails.
 - `try_reserve(region, handle, capacity)` and
   `try_add(region, handle, value)` leave length, previously committed
-  elements, and region reservations unchanged on failure. No-op reserve is
-  always successful. Over-limit size/count/budget returns `LIMIT`;
+  elements, and region reservations unchanged on failure. When geometric
+  growth for `try_add` would exceed the aggregate region budget but one
+  additional element fits, it retries with the exact minimum required
+  capacity. Failed fallback allocation leaves previously committed data
+  unchanged. No-op reserve is always successful. Over-limit size/count/budget returns `LIMIT`;
   exhausted native memory returns `NO_MEMORY`.
 - `try_prepare_many(region, n, out)` acquires up to 64 independent empty
   arrays without publishing any output handle until all acquisitions pass.
@@ -217,7 +220,10 @@ and normal plus ASan+UBSan fault injection at every allocation point.
 
 One owner invokes this ABI serially. It contains no mutexes and is **not**
 safe for multi-threaded shared access; it neither serializes actor turns nor
-implements reader/writer locking. The compiler must prevent shared writable
+implements reader/writer locking. A separate native CTest creates and drops
+arrays concurrently in independent thread-owned regions, then verifies all
+issued process-global tokens are unique; this does not admit shared access
+to one region. The compiler must prevent shared writable
 aliases and an owner move/drop while any loan is live. Actor-state queues
 must still enforce the single-flight execution invariant independently.
 
