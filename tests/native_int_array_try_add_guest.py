@@ -57,7 +57,7 @@ NEGATIVE = {
   const x: int = 3;
   return x.try_add(99);
 }
-""", "native Array<int>"),
+""", "Array<int> mutation requires live let mut owner"),
 }
 
 SHIM = r"""
