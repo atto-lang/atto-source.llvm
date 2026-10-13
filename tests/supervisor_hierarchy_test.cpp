@@ -12,6 +12,8 @@ struct Router final : SupervisorControlTurn::Hooks {
     int panics = 0;
     int escalations = 0;
     int user_turns = 0;
+    SupervisorFailureLane::Kind latest_origin = SupervisorFailureLane::Kind::HostFailure;
+    std::uint32_t latest_origin_code = 0;
 
     SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
         return SupervisorControlTurn::Decision::Escalate;
@@ -19,8 +21,10 @@ struct Router final : SupervisorControlTurn::Hooks {
     SupervisorControlTurn::Decision on_raise(const SupervisorFailureLane::Failure&) override {
         return SupervisorControlTurn::Decision::Escalate;
     }
-    SupervisorControlTurn::Decision on_panic(const SupervisorFailureLane::Failure&) override {
+    SupervisorControlTurn::Decision on_panic(const SupervisorFailureLane::Failure& event) override {
         ++panics;
+        latest_origin = event.origin_kind;
+        latest_origin_code = event.origin_code;
         return acknowledge ? SupervisorControlTurn::Decision::Acknowledge
                            : SupervisorControlTurn::Decision::Escalate;
     }
@@ -36,7 +40,8 @@ struct Router final : SupervisorControlTurn::Hooks {
         // Parent already holds a per-descendant CONTROL reservation. This
         // only queues the event; it must not run the parent's guest hook.
         VERIFY(parent->publish_child(
-            failure.actor, failure.kind, failure.summary, failure.parent_id));
+            failure.actor, failure.kind, failure.summary, failure.parent_id,
+            failure.origin_kind, failure.origin_code));
     }
     bool on_restart(const SupervisorFailureLane::Failure&) override {
         return false;
@@ -60,11 +65,14 @@ int main() {
 
     // Child publishes onto middle's preallocated CONTROL; grandparent's
     // guest code does not execute on the failing child's carrier.
-    VERIFY(middle.publish_child(descendant, Kind::Panic, "panic", "middle"));
+    VERIFY(middle.publish_child(descendant, Kind::Raise, "unhandled raise", "middle",
+                                std::nullopt, 723u));
     VERIFY(middle.urgent());
     VERIFY(grandparent.pending_count() == 0);
     VERIFY(middle.admit_turn(middleHooks, true) == SupervisorControlTurn::Admitted::Control);
     VERIFY(middleHooks.panics == 1);
+    VERIFY(middleHooks.latest_origin == Kind::Raise);
+    VERIFY(middleHooks.latest_origin_code == 723u);
     VERIFY(middleHooks.escalations == 1);
     VERIFY(middleHooks.user_turns == 0);
     VERIFY(middle.reserved_count() == 0);
@@ -75,6 +83,8 @@ int main() {
     VERIFY(grandparent.admit_turn(grandparentHooks, true)
         == SupervisorControlTurn::Admitted::Control);
     VERIFY(grandparentHooks.panics == 1);
+    VERIFY(grandparentHooks.latest_origin == Kind::Raise);
+    VERIFY(grandparentHooks.latest_origin_code == 723u);
     VERIFY(grandparentHooks.escalations == 0);
     VERIFY(grandparent.reserved_count() == 0);
     VERIFY(grandparent.admit_turn(grandparentHooks, true)
