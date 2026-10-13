@@ -104,6 +104,11 @@ uint64_t oreslang_int_array_test_scrubbed_backing_bytes(void);
 void oreslang_int_array_test_corrupt_length(
     OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle,
     uint64_t impossible_length);
+/* Test-only corruption of region aggregate counters; verifies no unsafe
+ * abandonment, quota bypass or new owner publication with forged metadata.
+ */
+void oreslang_int_array_test_corrupt_region_accounting(
+    OresNativeIntArrayRegion* region, uint64_t live, uint64_t reserved);
 #endif
 #ifdef __cplusplus
 }
