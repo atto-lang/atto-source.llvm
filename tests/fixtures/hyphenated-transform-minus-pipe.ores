@@ -1,0 +1,6 @@
+// Contextual transform-pipe must not change ordinary subtraction.
+pub fnc main(): int {
+  const transform: int = 43;
+  const pipe: int = 1;
+  return transform-pipe;
+}

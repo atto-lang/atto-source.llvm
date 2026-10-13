@@ -61,7 +61,8 @@ clang -x ir /tmp/guest.ll -o /tmp/guest
 echo $? # 42
 ```
 
-The CLI currently prints LLVM IR; object output and versioned ABI are not implemented.
+The compiler CLI prints LLVM IR; the AOT driver below links it into a host executable.
+Direct object output and a versioned ABI remain unimplemented.
 
 Unsupported actors, async/await, channels, traits, general heap-allocated classes,
 imports, tuples, recursive/cyclic owned objects, tracing GC, HFT scheduling
@@ -73,3 +74,20 @@ Native I/O API naming: blocking I/O operations will require the `_blocking` suff
 
 See [source parity contract](docs/SOURCE_PARITY.md), [LLVM roadmap](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1),
 and the distinct [Java cyclic graph work](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/474).
+
+## Standalone AOT executable
+
+After building the compiler, compile its supported **host** subset without a JIT:
+
+```sh
+CLANG=clang scripts/compile-aot.sh tests/fixtures/forward-call-main.ores /tmp/ores-app
+/tmp/ores-app
+```
+
+This driver emits verified IR, invokes Clang with `-O2`, and atomically publishes
+an executable. It needs the compiler and Clang only at build time; the output
+requires neither Java nor an Ores interpreter. A failed compile/link preserves
+any existing output. No unsupported source falls back to interpretation.
+This is not a static-linking or cross-compilation guarantee, and it does not
+make Spin compile: imports, actors, channels and async HTTP still require guest
+lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
