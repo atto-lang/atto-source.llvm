@@ -362,7 +362,7 @@ pub fnc main(): int { return 42; }
   shelf.first = 12;
   return 0;
 }
-""", "cannot reassign owned Array<int> class field"),
+""", "Array<int> field requires direct rt take of lexical owner"),
     "forbid-deferred-reassign": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   defer shelf.first = 12;
