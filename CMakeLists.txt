@@ -379,6 +379,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    add_test(NAME native_named_call_lexical_ir_order
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
+    set_tests_properties(native_named_call_lexical_ir_order PROPERTIES TIMEOUT 30)
     if(ORE_CLANG)
         oreslang_contract_test(native_named_call_reordered_guest named-call-reordered-main.ores
             --run 43 --clang "${ORE_CLANG}")
