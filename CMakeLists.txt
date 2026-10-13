@@ -346,6 +346,11 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_with_using_omitted_effect_clause
         actor-with-using-no-effect-reject.ores
         --diagnostic "actor state loan requires with effect declaration")
+    # Reference-valued state maps are not yet lowered as owned LLVM heaps.
+    # Fail closed at the source boundary rather than casting them to i64.
+    oreslang_contract_test(reject_reference_state_result_without_typed_snapshot
+        actor-reference-state-result-unsupported-reject.ores
+        --diagnostic "expected 'int'")
     # Granting a read/write capability is an effect even when its body does
     # not perform a field operation. Enforce at source admission, not merely
     # via IR read/write detection.
