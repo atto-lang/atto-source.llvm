@@ -137,6 +137,10 @@ static void test_bounded_fairness_cancellation_and_lifetime() {
         MultiActorCarrier carrier(32);
         const auto aId = carrier.register_actor(&a, dispatch, cancel);
         const auto bId = carrier.register_actor(&b, dispatch, cancel);
+        bool duplicate_root = false;
+        try { (void)carrier.register_actor(&b, dispatch, cancel); }
+        catch (const std::invalid_argument&) { duplicate_root = true; }
+        REQUIRE(duplicate_root);
         ActorState unused[6];
         for (auto& st : unused) {
             st.evidence = &evidence;
