@@ -1,0 +1,9 @@
+define class Counter as
+  pub let int value = 3;
+end
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  let mut Array<int> values = new Array<int>();
+  try { defer c.value = values.size; throw 43; }
+  catch (err) { return c.value; } finally { }
+}
