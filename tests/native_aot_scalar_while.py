@@ -12,8 +12,11 @@ def main():
     ap.add_argument("--clang", required=True)
     ap.add_argument("--cxx", required=True)
     ap.add_argument("--source-root", required=True)
+    ap.add_argument("--sanitize", action="store_true")
     args = ap.parse_args()
     root = Path(args.source_root).resolve()
+    sanitizer = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+                 if args.sanitize else [])
     source = root / "tests/fixtures/native-rt-aot-counter.ores"
     negative = root / "tests/fixtures/native-rt-aot-bad-update.ores"
     program = subprocess.run([args.compiler, str(source)], check=False,
@@ -37,11 +40,11 @@ def main():
         obj = tmp / "guest.o"
         exe = tmp / "guest"
         ir.write_text(program.stdout)
-        llvm = subprocess.run([args.clang, "-O3", "-x", "ir", "-c", str(ir),
+        llvm = subprocess.run([args.clang, "-O3", *sanitizer, "-x", "ir", "-c", str(ir),
                                "-o", str(obj)], check=False,
                               capture_output=True, text=True, timeout=30)
         assert llvm.returncode == 0, llvm.stderr
-        linked = subprocess.run([args.cxx, "-std=c++17", "-O3", "-DNDEBUG",
+        linked = subprocess.run([args.cxx, "-std=c++17", "-O3", "-DNDEBUG", *sanitizer,
                                  "-Wall", "-Wextra", "-Wpedantic", "-Werror",
                                  "-I", str(root / "src/main/cpp"),
                                  str(root / "tests/native_aot_scalar_while_harness.cpp"),
@@ -60,7 +63,7 @@ def main():
         scheduler_obj = tmp / "scheduler.o"
         native = subprocess.run(
             [args.clang, "-std=c11", "-O2", "-DNDEBUG", "-pthread",
-             "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+             *sanitizer, "-Wall", "-Wextra", "-Wpedantic", "-Werror",
              "-I", str(root / "src/main/cpp"), "-c", str(native_runtime),
              "-o", str(scheduler_obj)],
             check=False, capture_output=True, text=True, timeout=30,
@@ -69,7 +72,7 @@ def main():
         one_carrier = tmp / "one-carrier"
         linked = subprocess.run(
             [args.cxx, "-std=c++17", "-O3", "-DNDEBUG", "-pthread",
-             "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+             *sanitizer, "-Wall", "-Wextra", "-Wpedantic", "-Werror",
              "-I", str(root / "src/main/cpp"),
              str(root / "tests/native_aot_scalar_while_carrier.cpp"),
              str(obj), str(scheduler_obj), "-o", str(one_carrier)],
@@ -80,6 +83,30 @@ def main():
                                   capture_output=True, text=True, timeout=10)
         assert executed.returncode == 0, executed.stderr
         assert "AOT_NATIVE_ONE_CARRIER_TWO_ACTOR_FAIRNESS_PASS" in executed.stdout
+        overflow_src = root / "tests/fixtures/native-rt-aot-overflow.ores"
+        overflow = subprocess.run([args.compiler, str(overflow_src)], check=False,
+                                  capture_output=True, text=True, timeout=20)
+        assert overflow.returncode == 0, overflow.stderr
+        overflow_ir = tmp / "overflow.ll"
+        overflow_obj = tmp / "overflow.o"
+        overflow_exe = tmp / "overflow"
+        overflow_ir.write_text(overflow.stdout)
+        compiled = subprocess.run(
+            [args.clang, "-O3", *sanitizer, "-x", "ir", "-c", str(overflow_ir),
+             "-o", str(overflow_obj)],
+            check=False, capture_output=True, text=True, timeout=30)
+        assert compiled.returncode == 0, compiled.stderr
+        linked = subprocess.run(
+            [args.cxx, "-std=c++17", "-O3", "-DNDEBUG", *sanitizer,
+             "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+             str(root / "tests/native_aot_scalar_while_overflow.cpp"),
+             str(overflow_obj), "-o", str(overflow_exe)],
+            check=False, capture_output=True, text=True, timeout=30)
+        assert linked.returncode == 0, linked.stderr
+        executed = subprocess.run([str(overflow_exe)], check=False,
+                                  capture_output=True, text=True, timeout=10)
+        assert executed.returncode == 0, executed.stderr
+        assert "AOT_I64_OVERFLOW_PARITY_PASS" in executed.stdout
 
 
 if __name__ == "__main__":
