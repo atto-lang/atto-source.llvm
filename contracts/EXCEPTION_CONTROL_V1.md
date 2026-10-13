@@ -74,6 +74,36 @@ Exit status 2 remains reserved for invalid CLI invocation; do not overload it to
 
 Retain the shared host precedence lattice: `HostFatal/ProcessExit > Cancelled > Panic > Raise > Throw > Return`, with the **existing explicit-process-exit chronological exception** above. This ranking selects the primary failure when simultaneous failures coexist. The later actor/task/root *boundary normalization* of unhandled throw/raise into panic is a separate mandatory step. On equal priority retain the first failure as primary. Preserve later failures and bounded source breadcrumbs as secondary metadata. Do not carry raw Throwable/C++ exception pointers, mutable guest state, or arbitrary actor-owned objects across domains. Unknown effect tags, allocation failure on CONTROL delivery, stale generation, and exhaustion of failure slots must fail closed.
 
+## October 12 hardening: panic-only actor CONTROL and retained cause codes
+
+The actor-terminal CONTROL delivery boundary is **mandatory and idempotent**:
+`Throw(code)` -> `Panic(origin=Throw, originCode=code)`;
+`Raise(code)` -> `Panic(origin=Raise, originCode=code)`;
+`Panic(code)` -> `Panic(origin=Panic, originCode=code)`.
+Supervisor escalation must forward the existing terminal kind, origin kind and
+origin code without reclassifying it or replacing it with a new generic panic.
+The immutable diagnostic message is bounded; numeric codes are unsigned 32-bit.
+No actor-owned error object, Java Throwable or C++ exception pointer may cross
+CONTROL; structured diagnostics must be copied before actor reclamation.
+
+The source actor may execute eligible `on_throw`/`on_raise` at most before
+terminalization. The supervisor cannot receive a naked terminal `Throw` or
+`Raise` even if an internal caller bypasses the higher-level bridge and
+publishes directly to the CONTROL queue. Unknown tags, contradictory
+terminal/origin pairs and invalid error-code ranges must fail closed without
+consuming the reserved slot. Valid duplicate publications remain idempotent.
+Cancellation and host-fatal control remain distinct from guest Panic.
+
+The Java `ExceptionBoundaryPolicy` and native
+`RootFailureBoundary.hpp` helpers encode the **same normalization rule** for
+a non-actor task/root boundary but are currently pure policy helpers. Native
+`EffectSupervisorBridge`, `SupervisorControlTurn`, and
+`SupervisorFailureLane` now apply actor-boundary panic normalization;
+this does **not** imply that Java `ActorRuntime`, Java
+`LinkedProgramRunner`, or either source compiler has been wired to the
+typed exceptional-effect ABI. No source parity claim is permitted until
+end-to-end fixtures pass on identical source and binaries.
+
 ## Required source-level parity release gates
 
 - Typed signature/effect inference: unannotated local inference, exported upper bounds, trait and function-value substitution, typed catch mismatch, dynamic/FFI unknown effect rejection.
