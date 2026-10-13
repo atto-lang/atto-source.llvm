@@ -19,6 +19,22 @@ struct EventHandler : Lane::Handler {
     void on_host_failure(const Lane::Failure&) override { observed.push_back(Lane::Kind::HostFailure); }
 };
 
+struct ProcessExitHooks : oreslang::SupervisorControlTurn::Hooks {
+    using Turn = oreslang::SupervisorControlTurn;
+    int host_failures = 0;
+    Turn::Decision on_throw(const Lane::Failure&) override { return Turn::Decision::Acknowledge; }
+    Turn::Decision on_raise(const Lane::Failure&) override { return Turn::Decision::Acknowledge; }
+    Turn::Decision on_panic(const Lane::Failure&) override { return Turn::Decision::Acknowledge; }
+    Turn::Decision on_cancel(const Lane::Failure&) override { return Turn::Decision::Acknowledge; }
+    Turn::Decision on_host_failure(const Lane::Failure&) override {
+        ++host_failures;
+        return Turn::Decision::Acknowledge;
+    }
+    void on_escalate(const Lane::Failure&) override {}
+    bool on_restart(const Lane::Failure&) override { return false; }
+    void on_user_turn() override {}
+};
+
 int main() {
     using Bridge = oreslang::EffectSupervisorBridge;
     Lane lane(7);
@@ -92,5 +108,24 @@ int main() {
     CHECK(process_exit->summary == "actor attempted process exit");
     lane.ack(key(8));
     CHECK(lane.reserved_count() == 0);
+
+    // Exercise the scheduler-facing overload too. Child publication may only
+    // enqueue CONTROL; the parent callback must execute later on its own
+    // single-flight scheduler admission, never inline in publish_terminal.
+    oreslang::SupervisorControlTurn turn(1);
+    const auto child = key(9);
+    turn.reserve_child(child);
+    ProcessExitHooks hooks;
+    CHECK(Bridge::publish_terminal(turn, child,
+                                   {EffectKind::ProcessExit, 0u},
+                                   "process exit from child"));
+    CHECK(hooks.host_failures == 0);
+    CHECK(turn.pending_count() == 1);
+    CHECK(turn.urgent());
+    CHECK(turn.admit_turn(hooks, false) ==
+          oreslang::SupervisorControlTurn::Admitted::Control);
+    CHECK(hooks.host_failures == 1);
+    CHECK(!turn.urgent());
+    CHECK(turn.reserved_count() == 0);
     return 0;
 }
