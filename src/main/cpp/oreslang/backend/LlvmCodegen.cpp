@@ -589,9 +589,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         static_cast<unsigned>(i), binding.name + "." + item.name);
                     llvm::Value* initial = nullptr;
                     if (item.int_array) {
-                        if (!binding.new_class)
-                            throw std::runtime_error("native Array<int> class move needs owned transfer");
-                        initial = new_checked_array(binding.name + "." + item.name);
+                        if (binding.new_class) {
+                            initial = new_checked_array(binding.name + "." + item.name);
+                        } else {
+                            // Unique whole-class rt take: transfer the token
+                            // into the new owner and disarm the original.
+                            // No fallible allocation occurs during the move.
+                            llvm::Value* previous = field_storage.at(
+                                field_key(binding.move_source, item.name));
+                            initial = builder.CreateLoad(i64, previous,
+                                binding.move_source + "." + item.name + ".move.handle");
+                            builder.CreateStore(initial, address);
+                            builder.CreateStore(llvm::ConstantInt::get(i64, 0), previous);
+                        }
                         owned_fields.push_back(field_key(binding.name, item.name));
                     } else {
                         initial = binding.new_class
@@ -600,7 +610,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                                 field_storage.at(field_key(binding.move_source, item.name)),
                                 binding.move_source + "." + item.name + ".take");
                     }
-                    builder.CreateStore(initial, address);
+                    if (!item.int_array || binding.new_class)
+                        builder.CreateStore(initial, address);
                     staged_fields.emplace_back(field_key(binding.name, item.name), address);
                 }
                 for (const auto& field : staged_fields)
@@ -779,8 +790,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         llvm::Value* address = field_storage.at(*fld);
                         llvm::Value* handle = builder.CreateLoad(i64, address,
                             *fld + ".drop.handle");
+                        // Whole-class moves clear the source field to zero.
+                        // Skip disarmed places, otherwise the trusted runtime
+                        // correctly treats drop(0) as a fatal invalid handle.
+                        llvm::BasicBlock* do_drop = llvm::BasicBlock::Create(
+                            context, *fld + ".drop.live", function);
+                        llvm::BasicBlock* after_drop = llvm::BasicBlock::Create(
+                            context, *fld + ".drop.next", function);
+                        builder.CreateCondBr(builder.CreateICmpNE(handle,
+                            llvm::ConstantInt::get(i64, 0)), do_drop, after_drop);
+                        builder.SetInsertPoint(do_drop);
                         builder.CreateCall(arrayDrop, {array_region, handle});
                         builder.CreateStore(llvm::ConstantInt::get(i64, 0), address);
+                        builder.CreateBr(after_drop);
+                        builder.SetInsertPoint(after_drop);
                     }
                     // llvm.lifetime.end is not a source-level destructor.
                     builder.CreateLifetimeEnd(it->address,

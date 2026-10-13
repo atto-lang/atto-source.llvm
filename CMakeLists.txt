@@ -28,6 +28,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only fairness budget; not evidence of compiled Oreslang suspension.
+    add_executable(oreslang-native-reduction-quantum-test
+        tests/native_cooperation_quantum_test.cpp)
+    target_include_directories(oreslang-native-reduction-quantum-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-reduction-quantum-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_reduction_quantum_watchdog_host_only
+        COMMAND oreslang-native-reduction-quantum-test)
+    set_tests_properties(native_reduction_quantum_watchdog_host_only
+        PROPERTIES TIMEOUT 15)
+
     # Native Array<int> substrate, independent of source-level admission.
     # Invalid operations must abort even in Release/NDEBUG.
     add_executable(oreslang-native-int-array-region-test
