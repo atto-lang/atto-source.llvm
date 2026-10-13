@@ -53,6 +53,7 @@ struct RegionMoveLowering {
     // Values exactly match OresNativeIntArrayStatus; not a guest Result yet.
     llvm::Value* array_failure_status = nullptr;
     const std::unordered_map<std::string, llvm::Value*>* owned_failure_handles = nullptr;
+    const std::unordered_map<std::string, std::string>* class_owners = nullptr;
 };
 
 // Only a lexical named array or a direct class-owned array field is legal.
@@ -114,6 +115,26 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
+            // The frontend reuses receiver-call syntax for arrays and
+            // scalar-class methods. The ownership verifier proved the
+            // method's exact class type and call-scoped borrow mode.
+            if (moves && moves->class_owners && expr.left &&
+                    expr.left->kind == Expression::Kind::Variable) {
+                const auto cls = moves->class_owners->find(expr.left->name);
+                if (cls != moves->class_owners->end()) {
+                    const auto slot = native_function_slot(
+                        native_class_method_name(cls->second, expr.name),
+                        expr.arguments.size() + 1);
+                    llvm::Function* callee = functions.at(slot);
+                    std::vector<llvm::Value*> actuals;
+                    actuals.push_back(storage.at(expr.left->name));
+                    for (const auto& arg : expr.arguments)
+                        actuals.push_back(lower(*arg, builder, i64, storage,
+                                                field_storage, functions, moves));
+                    return builder.CreateCall(callee, actuals,
+                        callee->getReturnType()->isVoidTy() ? "" : "method.call");
+                }
+            }
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
             llvm::Value* handle = builder.CreateLoad(i64,
@@ -583,6 +604,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             region = builder.CreateCall(regionOpen,
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
+        std::unordered_map<std::string, std::string> class_owners;
+        for (const auto& param : fn.parameters)
+            if (!param.class_name.empty())
+                class_owners.emplace(param.name, param.class_name);
+        for (const auto& binding : fn.locals)
+            if (!binding.class_name.empty())
+                class_owners.emplace(binding.name, binding.class_name);
         std::unordered_set<std::string> array_names;
         std::unordered_set<std::string> array_field_keys;
         std::size_t array_owner_count = 0;
@@ -662,7 +690,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
-            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles};
+            &array_field_keys, array_failure, array_failure_status,
+            &owned_failure_handles, &class_owners};
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");

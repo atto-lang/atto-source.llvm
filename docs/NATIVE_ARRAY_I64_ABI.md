@@ -276,6 +276,51 @@ test includes whole-class move chains, guarded returns, fresh later
 allocations, stale source/duplicate move/immutable destination rejection,
 and normal plus ASan+UBSan fault injection at every allocation point.
 
+## Native scalar-class instance-method admission
+
+The LLVM frontend now recognizes a bounded source class instance-method slice
+for classes owning **only scalar int fields**:
+
+```oreslang
+define class Counter as
+  let int total = 0;
+  pub get() -> int { return self.total; }
+  pub method increment(mut self)(int delta) -> int {
+    self.total = self.total + delta;
+    return self.total;
+  }
+end
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  c.increment(41);
+  return c.get() + 1;
+}
+```
+
+A bare method identifier, the explicit `method` marker, and legacy
+instance `fnc` parse into a class-qualified compiler symbol. Its name
+contains a character unavailable to source identifiers, preventing a guest
+free function from colliding with a generated method. The LLVM ABI uses the
+existing pointer-to-struct borrowed parameter for an implicit `self`;
+`get()` loans the receiver shared and `increment(mut self)(int)` loans it
+exclusively. Borrowing is synchronous and call-scoped: the owner cannot be
+moved or reused through a conflicting loan during the invocation.
+
+Calls require a **named class owner**, exact method+explicit-argument arity
+and matching class identity. A mutable method rejects immutable or shared
+receivers. Shared methods cannot mutate the class. Void methods may be called
+as effects but never as values. The CFG verifier models an implicit whole
+class loan through its tracked scalar field places. Ordinary source-level
+`self` in free functions remains an unbound-name error.
+
+**Fail-closed boundary:** class methods whose owning class contains any
+`Array<int>` field are rejected before IR. Borrowing array-owning class
+storage across a function boundary requires region-provenance and cleanup
+authority propagation absent from this slice. Additional bool/Option/method
+control flow, constructor parameters, actor methods and native queue member
+functions remain future milestones. The exact six linked queue fixtures
+still must reject with their pinned diagnostics until parity is complete.
+
 ## Restricted direct Array<int> field ownership moves
 
 A synchronous, straight-line native function may transfer a live lexical

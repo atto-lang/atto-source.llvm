@@ -138,8 +138,17 @@ struct ScalarWhileLoop {
     std::int64_t upper_bound = 0;
 };
 
+// Internal class-method slots are intentionally impossible as source names
+// because they contain the '$' character. This prevents spoofing the ABI.
+inline std::string native_class_method_name(const std::string& cls,
+                                            const std::string& method) {
+    return "__oreslang_class_" + cls + "$" + method;
+}
+
 struct Function {
     std::string name;
+    std::string class_method_owner; // empty for free functions
+    bool class_method_mutable = false;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
