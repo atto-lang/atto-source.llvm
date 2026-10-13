@@ -511,8 +511,6 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
-                // Nested conditionals and finally actions must not hide an
-                // unsupported scheduler suspension behind an ordinary AST.
                 if (token_.text == "while" || token_.text == "for" ||
                         token_.text == "loop") {
                     fail("native realtime source loop requires verified LLVM continuation lowering");
@@ -572,7 +570,6 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
-            // The native scalar code generator has no resumable stack/PC.
             if (token_.text == "while" || token_.text == "for" ||
                     token_.text == "loop") {
                 fail("native realtime source loop requires verified LLVM continuation lowering");
@@ -755,7 +752,6 @@ private:
                                                value.actor_stops.size() - 1});
                 continue;
             }
-            // Fail before IR emission, never create a fake synchronous yield.
             if (token_.text == "rt") {
                 advance();
                 if (token_.text == "cooperate") {
@@ -1119,9 +1115,28 @@ private:
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
-            // Compiler-owned ABI imports must never be shadowed by a guest.
+            // Compiler-owned ABI imports and generated exports may be
+            // inserted before source function definitions. LLVM silently
+            // renames duplicate Function::Create symbols (e.g. abort.1),
+            // which would disconnect source identity from the actual linker
+            // symbol. Reject unqualified native/wasm symbols *before* IR.
+            // Module-qualified names are emitted as module.name and do not
+            // collide at the ELF/Wasm symbol boundary.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (program.module.empty()) {
+                const bool runtime_symbol =
+                    fn.name == "abort" ||
+                    fn.name == "__oreslang_guest_main" ||
+                    fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                    fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                    fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
+                if (runtime_symbol)
+                    throw std::runtime_error("reserved native runtime ABI symbol '" +
+                        fn.name + "'");
+            }
             if (std::count_if(fn.locals.begin(), fn.locals.end(),
                     [](const LocalBinding& local) { return local.int_array; }) > 64)
                 throw std::runtime_error("native Array<int> owner limit exceeded (64)");

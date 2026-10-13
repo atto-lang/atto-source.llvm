@@ -155,6 +155,47 @@ static void quota_failure_unchanged(void) {
     oreslang_int_array_region_close(r);
 }
 
+/* Regression: geometric growth must not report quota exhaustion while an
+ * additional element fits. A failed fallback allocation must leave the old
+ * length/data unchanged and a later successful append must use the last
+ * reserved element of region quota. */
+static void quota_edge_append_and_rollback(void) {
+    OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+    OresNativeIntArrayHandle a = oreslang_int_array_new(r);
+    check(oreslang_int_array_try_reserve(r, a, 4) == ORES_NATIVE_ARRAY_OK);
+    for (int i = 0; i < 4; ++i)
+        check(oreslang_int_array_try_add(r, a, 10 + i) == ORES_NATIVE_ARRAY_OK);
+
+    const uint64_t capacities[4] = {65536, 65536, 65536, 65531};
+    OresNativeIntArrayHandle fillers[4];
+    for (int i = 0; i < 4; ++i) {
+        fillers[i] = oreslang_int_array_new(r);
+        check(oreslang_int_array_try_reserve(r, fillers[i], capacities[i]) ==
+              ORES_NATIVE_ARRAY_OK);
+    }
+    /* 4 + 3*65536 + 65531 = 262143: exactly one element is free. */
+    fail_on_attempt(0);
+    check(oreslang_int_array_try_add(r, a, 99) == ORES_NATIVE_ARRAY_NO_MEMORY);
+    check(oreslang_int_array_length(r, a) == 4);
+    for (int i = 0; i < 4; ++i)
+        check(oreslang_int_array_get(r, a, (uint64_t)i) == 10 + i);
+    reset_injection();
+
+    check(oreslang_int_array_try_add(r, a, 99) == ORES_NATIVE_ARRAY_OK);
+    check(oreslang_int_array_length(r, a) == 5);
+    check(oreslang_int_array_get(r, a, 4) == 99);
+    check(oreslang_int_array_try_add(r, a, 100) == ORES_NATIVE_ARRAY_LIMIT);
+    check(oreslang_int_array_length(r, a) == 5);
+
+    oreslang_int_array_drop(r, fillers[0]);
+    check(oreslang_int_array_try_add(r, a, 100) == ORES_NATIVE_ARRAY_OK);
+    check(oreslang_int_array_get(r, a, 5) == 100);
+    for (int i = 3; i >= 1; --i)
+        oreslang_int_array_drop(r, fillers[i]);
+    oreslang_int_array_drop(r, a);
+    oreslang_int_array_region_close(r);
+}
+
 /* Four already-published fields remain unchanged while four replacement
  * arrays are staged. Every one of the eight resource operations (4 logical
  * slots + 4 physical backing buffers) must roll back, including after the
@@ -288,6 +329,7 @@ int main(void) {
     opening_and_single_owner_failures();
     prepare_rollback_and_commit();
     quota_failure_unchanged();
+    quota_edge_append_and_rollback();
     filled_preparation_allocation_edge_matrix();
 #if defined(__unix__) || defined(__APPLE__)
     for (int i = 0; i < 6; ++i) must_abort_on_invalid_transaction(i);

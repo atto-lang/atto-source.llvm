@@ -55,6 +55,25 @@ POSITIVES = {
 """, 42, 2),
     # Exact admitted boundary: four independently constructed classes, each
     # owning sixteen arrays. This tests all 64 handles and reverse-order drop.
+    # Move all sixty-four live owners without creating a sixty-fifth token.
+    # The per-function source owner bound remains 64, not the number of
+    # class variable names or transfer operations.
+    "exact-64-owned-array-move": ("""define class Slot16 as
+""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+             for i in range(16)) + """end
+pub fnc main(): int {
+  let mut Slot16 a = new Slot16();
+  let mut Slot16 b = new Slot16();
+  let mut Slot16 c = new Slot16();
+  let mut Slot16 d = new Slot16();
+  let mut Slot16 a2 = rt take(a);
+  let mut Slot16 b2 = rt take(b);
+  let mut Slot16 c2 = rt take(c);
+  let mut Slot16 d2 = rt take(d);
+  d2.f15.add(42);
+  return d2.f15.get(0);
+}
+""", 42, 64),
     "exact-64-owned-array-limit": ("""define class Slot16 as
 """ + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
              for i in range(16)) + """end
@@ -137,6 +156,29 @@ pub fnc main(): int {
 """, 42, 2),
 }
 NEGATIVES = {
+    # C runtime and compiler-generated ABI entrypoints are externally linked
+    # before guest function definitions. Never let LLVM silently rename one
+    # to '.1' and create an untracked or incorrectly typed symbol.
+    **{
+        "forbid-runtime-symbol-" + symbol: (
+            CLASS + "fnc " + symbol + "(): int { return 42; }\n"
+            + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  return shelf.number;
+}
+""",
+            "reserved native runtime ABI symbol"
+        )
+        for symbol in (
+            "abort",
+            "__oreslang_guest_main",
+            "oreslang_owned_i64_region_drop",
+            "ores_actor_i64_heap_field_read",
+            "oreslang_source_actor_send",
+            "oreslang_actor_Worker_init",
+            "oreslang_wasm_actor_init",
+        )
+    },
     "class-allocation-must-declare-alloc": (CLASS + """pub fnc main(): int using state.read {
   let mut Shelf shelf = new Shelf();
   return shelf.number;
