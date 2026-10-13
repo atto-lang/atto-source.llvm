@@ -27,6 +27,7 @@ struct LocalOwnership {
     std::unordered_set<std::string> class_fields;
     std::unordered_set<std::string> class_array_fields;
     std::unordered_set<std::string> class_fixed_fields;
+    std::unordered_set<std::string> class_public_fields;
     // Primitive i64 class fields can be moved and later restored by a write.
     std::unordered_set<std::string> moved_fields;
 };
@@ -51,6 +52,13 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
     if (found == locals.end() || found->second.class_name.empty() ||
             found->second.class_fields.count(field) == 0)
         throw std::runtime_error("unknown class field or receiver at byte " + std::to_string(offset));
+    // No instance methods exist in the bounded native class subset. All
+    // compiled field access is from a free function, not the declaring class.
+    // Private fields must therefore never be projected through such a value.
+    if (!found->second.class_public_fields.count(field))
+        throw std::runtime_error("ownership violation: private class field '" +
+                                 found->second.class_name + "." + field +
+                                 "' is not accessible at byte " + std::to_string(offset));
     if (found->second.moved)
         throw std::runtime_error("ownership violation: use-after-move class field at byte " +
                                  std::to_string(offset));
@@ -74,6 +82,8 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
     auto& owner = it->second;
     const bool valid = field.empty() ? owner.int_array :
         !owner.class_name.empty() && owner.class_array_fields.count(field);
+    if (!field.empty() && valid && !owner.class_public_fields.count(field))
+        reject(receiver, "ownership violation: private class field is not accessible");
     if (!valid || (!field.empty() && owner.moved_fields.count(field))) {
         if (field.empty())
             reject(receiver, write
@@ -360,16 +370,19 @@ void validate_i64_ownership(const Program& program) {
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fixed_fields;
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_public_fields;
     for (const auto& cls : program.classes) {
-        std::unordered_set<std::string> fields, arrays, fixed;
+        std::unordered_set<std::string> fields, arrays, fixed, published;
         for (const auto& field : cls.fields) {
             fields.insert(field.name);
             if (field.int_array) arrays.insert(field.name);
             if (field.fixed_binding) fixed.insert(field.name);
+            if (field.public_member) published.insert(field.name);
         }
         class_fields.emplace(cls.name, std::move(fields));
         class_arrays.emplace(cls.name, std::move(arrays));
         class_fixed_fields.emplace(cls.name, std::move(fixed));
+        class_public_fields.emplace(cls.name, std::move(published));
     }
     for (const auto& function : program.functions) {
         Locals locals;
@@ -394,6 +407,7 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
                 entry.class_fixed_fields = class_fixed_fields.at(param.class_name);
+                entry.class_public_fields = class_public_fields.at(param.class_name);
             }
             locals.emplace(param.name, std::move(entry));
         }
@@ -447,6 +461,7 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.class_fixed_fields = class_fixed_fields.at(binding.class_name);
+                entry.class_public_fields = class_public_fields.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
@@ -464,6 +479,7 @@ void validate_i64_ownership(const Program& program) {
                         std::to_string(binding.offset));
                 entry.class_fields = source.class_fields;
                 entry.class_fixed_fields = source.class_fixed_fields;
+                entry.class_public_fields = source.class_public_fields;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
