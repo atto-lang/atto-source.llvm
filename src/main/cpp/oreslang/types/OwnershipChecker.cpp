@@ -1,6 +1,8 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -10,6 +12,8 @@
 #include <vector>
 
 namespace oreslang {
+
+// Select a callable by name+explicit-arity before validating loan/type contracts.
 namespace {
 
 using Mode = Parameter::Mode;
@@ -19,11 +23,13 @@ struct LocalOwnership {
     Mode mode = Mode::Value;
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
+    bool int_array = false; // Non-copy lexical array; no borrows or escapes.
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
     std::unordered_set<std::string> class_fields;
+    std::unordered_set<std::string> class_array_fields;
     // Primitive i64 class fields can be moved and later restored by a write.
     std::unordered_set<std::string> moved_fields;
 };
@@ -54,6 +60,41 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
     return found->second;
 }
 
+// An array handle is never an i64 source value; resolve its owned place.
+LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool write) {
+    const Expression* root = &receiver;
+    std::string field;
+    if (root->kind == Expression::Kind::Field && root->left &&
+            root->left->kind == Expression::Kind::Variable) {
+        field = root->name;
+        root = root->left.get();
+    } else if (root->kind != Expression::Kind::Variable) {
+        reject(receiver, "native Array<int> operation requires a named owned array place");
+    }
+    auto it = locals.find(root->name);
+    if (it == locals.end())
+        reject(receiver, "native Array<int> operation requires a live owner");
+    if (it->second.moved)
+        reject(receiver, "ownership violation: use-after-move Array<int> owner");
+    auto& owner = it->second;
+    const bool valid = field.empty() ? owner.int_array :
+        !owner.class_name.empty() && owner.class_array_fields.count(field);
+    if (!valid || (!field.empty() && owner.moved_fields.count(field))) {
+        if (field.empty())
+            reject(receiver, write
+                ? "ownership violation: Array<int> mutation requires live let mut owner"
+                : "native Array<int> operation requires a live array owner");
+        reject(receiver, "native Array<int> operation requires an owned Array<int> place");
+    }
+    if (owner.mode != Mode::Value)
+        reject(receiver, "ownership violation: Array<int> cannot be accessed through a borrowed class");
+    if (owner.exclusive_loan || (write && owner.shared_loans))
+        reject(receiver, "ownership violation: Array<int> conflicts with active class loan");
+    if (write && !owner.mutable_owner)
+        reject(receiver, "ownership violation: Array<int> mutation requires live let mut owner");
+    return owner;
+}
+
 struct Loan {
     std::string name;
     bool exclusive = false;
@@ -73,6 +114,8 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (!expr.left || expr.left->kind != Expression::Kind::Variable)
         reject(expr, "native borrow requires an addressable named int parameter");
     LocalOwnership& source = local(*expr.left, locals);
+    if (source.int_array)
+        reject(expr, "ownership violation: native Array<int> cannot be borrowed or escaped");
     // A borrowed parameter has a caller-held lifetime and already carries
     // provenance to addressable i64 storage. A nested call can temporarily
     // reborrow that same storage, but it cannot strengthen a shared borrow
@@ -104,7 +147,7 @@ void release(const Loan& loan, Locals& locals) {
 }
 
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
-    const auto found = functions.find(expr.name);
+    const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
     if (found == functions.end())
         reject(expr, "internal ownership error: unresolved function");
     const auto& parameters = found->second->parameters;
@@ -145,12 +188,33 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 reject(expr, "use of explicitly moved int '" + expr.name + "'");
             if (source.exclusive_loan)
                 reject(expr, "read conflicts with active mutable borrow of '" + expr.name + "'");
+            if (source.int_array)
+                reject(expr, "ownership violation: native Array<int> is non-Copy and cannot escape");
             if (!source.class_name.empty())
                 reject(expr, "ownership violation: class is non-Copy; use an explicit borrow");
             return;
         }
         case Expression::Kind::Field: {
+            if (expr.name == "size" && expr.left &&
+                    expr.left->kind == Expression::Kind::Field) {
+                array_owner(*expr.left, locals, false);
+                return;
+            }
+            if (expr.left && expr.left->kind == Expression::Kind::Variable) {
+                const auto found = locals.find(expr.left->name);
+                if (found != locals.end() && found->second.int_array) {
+                    if (found->second.moved)
+                        reject(expr, "ownership violation: use-after-move Array<int> owner");
+                    if (expr.name != "size")
+                        reject(expr, "ownership violation: only Array<int>.size is readable");
+                    return;
+                }
+            }
+            if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                reject(expr, "native nested field requires owned Array<int>.size");
             const auto& source = checked_field(expr.left->name, expr.name, expr.offset, locals);
+            if (source.class_array_fields.count(expr.name))
+                reject(expr, "ownership violation: Array<int> field is non-Copy and cannot escape");
             if (source.moved_fields.count(expr.name) != 0)
                 reject(expr, "ownership violation: use-after-move class field '" +
                     expr.left->name + "." + expr.name + "'");
@@ -181,6 +245,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 source.moved = true;
             } else if (expr.left->kind == Expression::Kind::Field) {
                 const Expression& field = *expr.left;
+                // Nested array.size and other projections are not direct
+                // owned class field places for destructive rt take.
+                if (!field.left || field.left->kind != Expression::Kind::Variable)
+                    reject(expr, "native rt take requires a direct named class field");
                 LocalOwnership& source = checked_field(
                     field.left->name, field.name, field.offset, locals);
                 if (source.mode != Mode::Value)
@@ -197,8 +265,17 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             check_value(*expr.right, locals, functions);
             return;
+        case Expression::Kind::ArrayCall: {
+            if (!expr.left)
+                reject(expr, "native Array<int> operation requires a named owner");
+            array_owner(*expr.left, locals, false);
+            if (expr.name != "get" || expr.arguments.size() != 1)
+                reject(expr, "native Array<int> expression supports only get(index)");
+            check_value(*expr.arguments[0], locals, functions);
+            return;
+        }
         case Expression::Kind::Call:
-            if (functions.at(expr.name)->returns_void)
+            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
@@ -234,9 +311,49 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Call:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
+        case Expression::Kind::ArrayCall:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
     }
     reject(expr, "unsupported guarded condition");
+}
+
+// Only primitive stack int reads are safe in the initial caught-throw CFG.
+// A syntactically pure Array<int>.size or heap-owned int read still invokes
+// native runtime functions and therefore lacks a nonthrowing proof.
+void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
+                                   const Functions& functions) {
+    switch (expr.kind) {
+        case Expression::Kind::Integer:
+            return;
+        case Expression::Kind::Variable: {
+            const auto& place = local(expr, locals);
+            if (place.heap_owned || place.int_array || !place.class_name.empty())
+                reject(expr, "native caught throw scalar read requires stack i64");
+            check_value(expr, locals, functions);
+            return;
+        }
+        case Expression::Kind::Field: {
+            if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                reject(expr, "native caught throw scalar read requires direct named field");
+            const auto& place = local(*expr.left, locals);
+            if (place.heap_owned || place.int_array ||
+                    place.class_array_fields.count(expr.name))
+                reject(expr, "native caught throw scalar read requires stack i64");
+            check_value(expr, locals, functions);
+            return;
+        }
+        case Expression::Kind::Negate:
+            check_caught_throw_scalar_read(*expr.left, locals, functions);
+            return;
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            check_caught_throw_scalar_read(*expr.left, locals, functions);
+            check_caught_throw_scalar_read(*expr.right, locals, functions);
+            return;
+        default:
+            reject(expr, "native caught throw scalar read cannot call, move or borrow");
+    }
 }
 
 } // namespace
@@ -244,12 +361,17 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
 void validate_i64_ownership(const Program& program) {
     Functions functions;
     for (const auto& function : program.functions)
-        functions.emplace(function.name, &function);
+        functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     for (const auto& cls : program.classes) {
-        std::unordered_set<std::string> fields;
-        for (const auto& field : cls.fields) fields.insert(field.name);
+        std::unordered_set<std::string> fields, arrays;
+        for (const auto& field : cls.fields) {
+            fields.insert(field.name);
+            if (field.int_array) arrays.insert(field.name);
+        }
         class_fields.emplace(cls.name, std::move(fields));
+        class_arrays.emplace(cls.name, std::move(arrays));
     }
     for (const auto& function : program.functions) {
         Locals locals;
@@ -257,6 +379,8 @@ void validate_i64_ownership(const Program& program) {
             if (!param.class_name.empty()) {
                 if (!class_fields.count(param.class_name))
                     throw std::runtime_error("unknown parameter class '" + param.class_name + "'");
+                if (!class_arrays.at(param.class_name).empty())
+                    throw std::runtime_error("ownership violation: Array<int> class cannot be borrowed or passed as a parameter");
                 if (param.mode == Mode::Value)
                     throw std::runtime_error("ownership violation: by-value class parameter '" +
                         param.name + "' requires exclusive borrow or proven move/drop lowering");
@@ -268,17 +392,33 @@ void validate_i64_ownership(const Program& program) {
             // Do not silently confer that mutability on const local bindings.
             entry.mutable_owner = param.mode == Mode::Value;
             entry.class_name = param.class_name;
-            if (!param.class_name.empty()) entry.class_fields = class_fields.at(param.class_name);
+            if (!param.class_name.empty()) {
+                entry.class_fields = class_fields.at(param.class_name);
+                entry.class_array_fields = class_arrays.at(param.class_name);
+            }
             locals.emplace(param.name, std::move(entry));
         }
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
+            entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
             entry.class_name = binding.class_name;
-            if (binding.new_class) {
+            if (binding.int_array) {
+                if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
+                    throw std::runtime_error("invalid native Array<int> owner");
+            } else if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
+                entry.class_array_fields = class_arrays.at(binding.class_name);
+                if (!entry.class_array_fields.empty() && !binding.owner_mutable)
+                    throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
+                // Transfer the whole class's unique array-owned places, not
+                // individual fields. A source with moved fields or live
+                // borrows is rejected below before any IR is generated.
+                if (!class_arrays.at(binding.class_name).empty() &&
+                        !binding.owner_mutable)
+                    throw std::runtime_error("ownership violation: moved Array<int> class requires let mut owner");
                 const auto found = locals.find(binding.move_source);
                 if (found == locals.end() || found->second.class_name != binding.class_name)
                     throw std::runtime_error("ownership violation: class move type mismatch at byte " +
@@ -290,6 +430,7 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: class move requires live unborrowed owner at byte " +
                         std::to_string(binding.offset));
                 entry.class_fields = source.class_fields;
+                entry.class_array_fields = source.class_array_fields;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
@@ -297,6 +438,13 @@ void validate_i64_ownership(const Program& program) {
             locals.emplace(binding.name, std::move(entry));
         }
         std::vector<const Statement*> deferred_effects;
+        // Provenance for an array field is tracked as a single compile-time
+        // shadow handle in this first native slice. Branch-specific moves
+        // require phi ownership slots, so reject the entire mixed case.
+        const bool conditional_effects = std::any_of(function.statements.begin(),
+            function.statements.end(), [](const Statement& stmt) {
+                return stmt.kind == Statement::Kind::Conditional;
+            });
         auto check_effect = [&](const Statement& stmt, Locals& state) {
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const LocalBinding& local = *stmt.branch_local;
@@ -307,8 +455,50 @@ void validate_i64_ownership(const Program& program) {
                 state.emplace(local.name, LocalOwnership{});
                 return;
             }
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                const auto found = state.find(stmt.receiver);
+                if (found == state.end() || found->second.class_name.empty())
+                    throw std::runtime_error("ownership violation: filled array commit requires named class owner");
+                auto& recv = found->second;
+                if (recv.class_array_fields.size() != 4)
+                    throw std::runtime_error("ownership violation: filled array commit requires exactly four owned Array<int> fields");
+                if (recv.mode != Mode::Value || !recv.mutable_owner ||
+                        recv.moved || !recv.moved_fields.empty() ||
+                        recv.exclusive_loan || recv.shared_loans != 0)
+                    throw std::runtime_error("ownership violation: filled array commit requires live exclusive mutable whole class");
+                if (conditional_effects)
+                    throw std::runtime_error("ownership violation: filled array commit requires straight-line ownership CFG");
+                // Evaluate every input as a pure scalar before allocation.
+                // Calls, borrows and moves cannot be hidden in length/fills.
+                check_pure_guard(*stmt.array_commit_length, state, functions);
+                if (stmt.array_commit_values.size() != 4)
+                    throw std::runtime_error("invalid compiler-owned filled array commit arity");
+                for (const auto& v : stmt.array_commit_values)
+                    check_pure_guard(*v, state, functions);
+                return;
+            }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
+                if (recv.class_array_fields.count(stmt.field)) {
+                    const Expression& move = *stmt.expression;
+                    if (move.kind != Expression::Kind::Take || !move.left ||
+                            move.left->kind != Expression::Kind::Variable)
+                        reject(move, "ownership violation: Array<int> field requires direct rt take of lexical owner");
+                    if (conditional_effects)
+                        reject(move, "native Array<int> field move requires straight-line ownership CFG");
+                    if (recv.mode != Mode::Value || !recv.mutable_owner ||
+                            recv.exclusive_loan || recv.shared_loans != 0)
+                        reject(move, "ownership violation: Array<int> destination requires exclusive let mut class");
+                    LocalOwnership& src = local(*move.left, state);
+                    if (!src.int_array || src.mode != Mode::Value ||
+                            !src.mutable_owner || src.moved ||
+                            src.exclusive_loan || src.shared_loans != 0)
+                        reject(move, "ownership violation: Array<int> field transfer requires live unique lexical source");
+                    // The old field is released only during the verified
+                    // infallible native handle swap; the source becomes dead.
+                    src.moved = true;
+                    return;
+                }
                 if (recv.mode == Mode::Borrow)
                     throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
                 if (recv.mode == Mode::Value && !recv.mutable_owner)
@@ -318,9 +508,21 @@ void validate_i64_ownership(const Program& program) {
                 check_value(*stmt.expression, state, functions);
                 recv.moved_fields.erase(stmt.field);
             } else if (stmt.kind == Statement::Kind::Call) {
-                if (stmt.expression->kind != Expression::Kind::Call)
+                const Expression& call = *stmt.expression;
+                if (call.kind == Expression::Kind::ArrayCall) {
+                    if (!call.left)
+                        reject(call, "native Array<int> mutation requires a named owner");
+                    array_owner(*call.left, state, true);
+                    const std::size_t arity = call.name == "add" ? 1 :
+                                              call.name == "set" ? 2 : 0;
+                    if (!arity || call.arguments.size() != arity)
+                        reject(call, "native Array<int> effect supports only add(value) or set(index,value)");
+                    for (const auto& arg : call.arguments) check_value(*arg, state, functions);
+                } else if (call.kind == Expression::Kind::Call) {
+                    check_call(call, state, functions);
+                } else {
                     throw std::runtime_error("invalid native call statement");
-                check_call(*stmt.expression, state, functions);
+                }
             } else {
                 throw std::runtime_error("ownership violation: unsupported conditional arm effect");
             }
@@ -384,16 +586,42 @@ void validate_i64_ownership(const Program& program) {
                 }
                 auto& recv = checked_field(cleanup.receiver, cleanup.field,
                                            cleanup.offset, path);
+                if (recv.class_array_fields.count(cleanup.field))
+                    throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
                 if (recv.mode == Mode::Borrow)
                     throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
                 if (recv.mode == Mode::Value && !recv.mutable_owner)
                     throw std::runtime_error("ownership violation: class mutation requires let mut owner");
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
-                check_value(*cleanup.expression, path, functions);
+                if (function.caught_throw_value)
+                    check_caught_throw_scalar_read(*cleanup.expression, path, functions);
+                else
+                    check_value(*cleanup.expression, path, functions);
                 recv.moved_fields.erase(cleanup.field);
             }
         };
+        if (function.caught_throw_value) {
+            // Type-check payload before unwind; each scoped field cleanup
+            // is verified at its LIFO execution point.
+            check_caught_throw_scalar_read(*function.caught_throw_value, locals, functions);
+            for (auto it = function.caught_throw_defers.rbegin();
+                 it != function.caught_throw_defers.rend(); ++it) {
+                const auto& effect = *it;
+                auto& recv = checked_field(effect.receiver, effect.field,
+                                           effect.offset, locals);
+                if (recv.class_array_fields.count(effect.field))
+                    throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
+                if (recv.mode == Mode::Borrow || (recv.mode == Mode::Value && !recv.mutable_owner))
+                    throw std::runtime_error("ownership violation: caught throw defer requires mutable receiver");
+                if (recv.exclusive_loan || recv.shared_loans)
+                    throw std::runtime_error("ownership violation: caught throw defer conflicts with active borrow");
+                check_caught_throw_scalar_read(*effect.expression, locals, functions);
+                recv.moved_fields.erase(effect.field);
+            }
+            if (!locals.emplace(function.catch_binding, LocalOwnership{}).second)
+                throw std::runtime_error("native caught throw binding shadows live local");
+        }
         const Locals cfg_entry = locals;
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the
@@ -405,7 +633,12 @@ void validate_i64_ownership(const Program& program) {
             check_value(*guard.result, taken, functions);
             check_deferred_exit(taken);
         }
-        if (function.result) check_value(*function.result, locals, functions);
+        if (function.result) {
+            if (function.caught_throw_value)
+                check_caught_throw_scalar_read(*function.result, locals, functions);
+            else
+                check_value(*function.result, locals, functions);
+        }
         check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
         // field-sensitive fixed-point verifier. This currently models the
@@ -441,10 +674,27 @@ void validate_i64_ownership(const Program& program) {
                 operations.push_back({object ? OpKind::ReadObject : OpKind::Read, expr.name});
                 return;
             }
+            if (expr.kind == Expression::Kind::ArrayCall) {
+                const std::string place = expr.left->kind == Expression::Kind::Field
+                    ? expr.left->left->name + "." + expr.left->name : expr.left->name;
+                operations.push_back({OpKind::Read, place});
+                for (const auto& arg : expr.arguments)
+                    add_effects(*arg, operations);
+                return;
+            }
             if (expr.kind == Expression::Kind::Field) {
+                if (expr.left && expr.left->kind == Expression::Kind::Field &&
+                        expr.name == "size") {
+                    operations.push_back({OpKind::Read,
+                        expr.left->left->name + "." + expr.left->name});
+                    return;
+                }
                 if (!expr.left || expr.left->kind != Expression::Kind::Variable)
                     reject(expr, "native CFG requires named field receiver");
-                operations.push_back({OpKind::Read, expr.left->name + "." + expr.name});
+                const auto owner = cfg_entry.find(expr.left->name);
+                operations.push_back({OpKind::Read,
+                    owner != cfg_entry.end() && owner->second.int_array
+                        ? expr.left->name : expr.left->name + "." + expr.name});
                 return;
             }
             if (expr.kind == Expression::Kind::Take && expr.left) {
