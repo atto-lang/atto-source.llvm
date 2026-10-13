@@ -109,3 +109,18 @@ contract are in
 [the Java memory model](https://github.com/ores-truffle-oreslang/oreslang-source.java/blob/audit/hybrid-gc-bounded-fallback-20261010/docs/HYBRID_MEMORY_MANAGEMENT.md).
 
 **No general-purpose zero-GC Oreslang program can be certified yet.**
+
+## Callback and reentry hardening (2026-10-13)
+
+OwnedHeap callbacks retain an independent allocation and borrow admission until
+the callback returns or throws. Resetting the caller's lease inside with() cannot
+admit drop, close, or a mutable alias. Concurrent callbacks on one mutable lease
+are rejected. The callback pin uses existing shared slot ownership and adds no
+separate heap allocation. Handle move/reset operations require external serialization.
+
+EpochArena with() similarly pins the epoch independently of its external Ref.
+Construction, reset, and destruction are separate admission states: constructors
+cannot reenter allocation/reset/close before accounting commits, and destructors
+cannot reopen storage while physical reclamation runs. Construction exceptions
+clear the gate without consuming capacity; callback exceptions discharge pins.
+These are host primitive lifetime guards, not a source-compiler escape proof.

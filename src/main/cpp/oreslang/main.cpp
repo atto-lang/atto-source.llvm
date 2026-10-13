@@ -10,12 +10,18 @@
 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
+    bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
     bool target_seen = false;
     const char* path = nullptr;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--experimental-owned-int") {
+        if (arg == "--experimental-rt-scalar-loop") {
+            if (experimental_rt_scalar_loop) {
+                std::cerr << "duplicate rt scalar loop option\n"; return 2;
+            }
+            experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
         } else if (arg.rfind("--target=", 0) == 0) {
@@ -42,7 +48,7 @@ int main(int argc, char** argv) {
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown] [--experimental-owned-int] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -60,7 +66,10 @@ int main(int argc, char** argv) {
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
-        auto ast = oreslang::parse_program(text, experimental_owned_int);
+        if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
+            throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
+        auto ast = oreslang::parse_program(text, experimental_owned_int,
+                                           experimental_rt_scalar_loop);
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target);
         return 0;
     } catch (const std::exception& error) {

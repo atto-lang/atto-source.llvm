@@ -179,6 +179,26 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
         throw std::invalid_argument("spin window exceeds 100 ms maximum");
 }
 
+HungryCarrier::HungryCarrier(void* actor_state, ActorHandlerV2 handler,
+                             void* broker_state, BrokerOperation operation,
+                             Options options)
+    : actor_state_(actor_state), handler_v2_(handler), broker_state_(broker_state),
+      operation_(operation), options_(options),
+      producer_gate_(std::make_shared<ProducerGate>(this)) {
+    if (!handler_v2_ || !operation_)
+        throw std::invalid_argument("actor and I/O function pointers required");
+    if ((options_.supervisor_control == nullptr) !=
+        (options_.supervisor_hooks == nullptr))
+        throw std::invalid_argument("supervisor CONTROL lane requires typed hooks");
+    if (options_.require_exclusive_core || options_.require_strict_no_gc ||
+        options_.require_hard_realtime)
+        throw std::invalid_argument("strict CPU/GC/RT profile is not certified or implemented");
+    if (!std::atomic<std::size_t>::is_always_lock_free)
+        throw std::invalid_argument("lock-free atomic indexes unavailable");
+    if (options_.spin_before_park.count() < 0 || options_.spin_before_park.count() > 100000)
+        throw std::invalid_argument("spin window exceeds 100 ms maximum");
+}
+
 HungryCarrier::~HungryCarrier() noexcept {
     // A self-destructing worker would close eventfds and free queues while
     // the thread is still accessing them. Fail closed rather than UAF.
@@ -301,7 +321,8 @@ CarrierStats HungryCarrier::stats() const noexcept {
             stale_.load(std::memory_order_acquire),
             failures_.load(std::memory_order_acquire),
             thread_tag_.load(std::memory_order_acquire),
-            abandoned_on_stop_.load(std::memory_order_acquire)};
+            abandoned_on_stop_.load(std::memory_order_acquire),
+            cooperations_.load(std::memory_order_acquire)};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -322,16 +343,33 @@ bool HungryCarrier::pin_cpu() noexcept {
 #endif
 }
 
-void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t result) noexcept {
+void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
     // Only actor handler execution may access this heap. Suspension does not
     // invalidate its handles; broker callbacks have no such capability.
     tls_actor_heap = &actor_heap_;
-    const auto step = handler_(actor_state_, message, resumed, result);
+    const auto step = handler_v2_ != nullptr
+        ? handler_v2_(actor_state_, message, cause, result)
+        : handler_(actor_state_, message, cause == ResumeCause::io, result);
     tls_actor_heap = nullptr;
     if (stop_.load(std::memory_order_acquire)) return;
     if (step.kind == StepKind::done) {
+        cooperating_ = false;
         completed_.fetch_add(1, std::memory_order_release);
+        return;
+    }
+    if (step.kind == StepKind::cooperate) {
+        // CPU handoff is not IO and not logical turn completion. Do not admit
+        // subsequent user envelopes while this frame is runnable. A V1
+        // callback MUST NOT get an invented 'resumed=true' CPU wakeup.
+        if (!handler_v2_ || pending_ || step.value != 0 || step.delay_ms != 0) {
+            failures_.fetch_add(1, std::memory_order_relaxed);
+            request_stop();
+            return;
+        }
+        current_ = message;
+        cooperating_ = true;
+        cooperations_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     if (step.kind != StepKind::await_io || pending_ ||
@@ -340,6 +378,7 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
         request_stop();
         return;
     }
+    cooperating_ = false;
     ++generation_;
     // Only one logical operation is inflight with serial non-reentrancy.
     // Queue memory is preallocated; no owned actor pointer crosses threads.
@@ -364,7 +403,7 @@ void HungryCarrier::wait_actor() noexcept {
     const auto ready = [this] {
         return (options_.supervisor_control != nullptr
                     && options_.supervisor_control->urgent())
-               || (!pending_ && has_input_ready())
+               || (cooperating_ || (!pending_ && has_input_ready()))
                || (pending_ && results_.has_ready())
                || stop_.load(std::memory_order_acquire);
     };
@@ -421,13 +460,19 @@ void HungryCarrier::actor_loop() noexcept {
                 }
                 pending_ = false;
                 io_done_.fetch_add(1, std::memory_order_release);
-                run_handler(current_, true, c.value);
+                run_handler(current_, ResumeCause::io, c.value);
                 continue;
             }
         } else {
+            // CPU continuation precedes another envelope for this same actor.
+            // Parent CONTROL is dispatched at the top of every physical turn.
+            if (cooperating_) {
+                run_handler(current_, ResumeCause::cpu, 0);
+                continue;
+            }
             ActorMessage m;
             if (pop_next_input(m)) {
-                run_handler(m, false, 0);
+                run_handler(m, ResumeCause::initial, 0);
                 continue;
             }
         }

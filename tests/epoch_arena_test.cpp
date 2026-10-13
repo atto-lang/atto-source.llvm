@@ -121,7 +121,69 @@ static void test_auto_drop_at_arena_destruction() {
           "actor arena destruction missed resources");
 }
 
+using GuardedArena = EpochArena<1024, 8>;
+struct ReentrantConstructor {
+    int value = 42;
+    ReentrantConstructor(GuardedArena& arena, int& denied) {
+        try { auto nested = arena.emplace<int>(7); }
+        catch (const std::logic_error&) { ++denied; }
+        try { arena.reset(); } catch (const std::logic_error&) { ++denied; }
+        try { arena.close(); } catch (const std::logic_error&) { ++denied; }
+    }
+    ~ReentrantConstructor() noexcept = default;
+};
+struct ReentrantDestructor {
+    GuardedArena* arena;
+    int* denied;
+    ReentrantDestructor(GuardedArena& a, int& n) noexcept : arena(&a), denied(&n) {}
+    ~ReentrantDestructor() noexcept {
+        try { auto nested = arena->emplace<int>(7); }
+        catch (const std::logic_error&) { ++*denied; }
+        try { arena->reset(); } catch (const std::logic_error&) { ++*denied; }
+    }
+};
+
+static void test_constructor_and_destructor_reentry_fail_closed() {
+    GuardedArena arena;
+    int denied = 0;
+    auto value = arena.emplace<ReentrantConstructor>(arena, denied);
+    check(denied == 3 && arena.live_objects() == 1 && arena.live_refs() == 1,
+          "constructor reentry corrupted arena state");
+    value.with([](auto& x) { check(x.value == 42, "nested constructor overwrote outer storage"); });
+    value.reset();
+    arena.reset();
+    // The existing throwing-constructor test also verifies the guard clears
+    // on exceptional construction before the next successful allocation.
+    int destructor_denied = 0;
+    {
+        GuardedArena dying;
+        auto owned = dying.emplace<ReentrantDestructor>(dying, destructor_denied);
+        owned.reset();
+    }
+    check(destructor_denied == 2, "destructor reentry bypassed reclamation fence");
+}
+
+static void test_callback_pin_survives_external_ref_reset() {
+    GuardedArena arena;
+    std::vector<int> drops;
+    auto value = arena.emplace<Resource>(drops, 73);
+    must_throw([&] {
+        value.with([&](Resource& resource) {
+            value.reset();
+            must_throw([&] { arena.reset(); }, "active arena callback admitted reset");
+            must_throw([&] { arena.close(); }, "active arena callback admitted close");
+            check(drops.empty() && resource.id == 73, "arena callback lost object lifetime");
+            throw std::runtime_error("callback failure");
+        });
+    }, "arena callback exception swallowed");
+    check(arena.live_refs() == 0, "exceptional arena callback leaked its pin");
+    arena.reset();
+    check(drops == std::vector<int>({73}), "arena callback pin delayed or duplicated drop");
+}
+
 int main() {
+    test_callback_pin_survives_external_ref_reset();
+    test_constructor_and_destructor_reentry_fail_closed();
     test_reverse_destructors_and_epoch_reuse();
     test_exception_and_capacity();
     test_borrow_transfer_and_delayed_reset();

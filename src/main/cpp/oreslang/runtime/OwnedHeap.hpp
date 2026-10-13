@@ -22,6 +22,9 @@ namespace oreslang::runtime {
 // Borrow leases MUST NOT escape source lifetimes once the borrow checker is
 // lowered to native code. They deliberately keep the allocation alive as a
 // defense-in-depth fallback; they are not a cycle collector.
+// Moving/resetting the same Owned/Borrow handle requires external serialization.
+// Independently held leases share protected slot admission; with() retains its
+// own callback pin, and one mutable lease cannot run overlapping callbacks.
 class OwnedHeap final {
     struct State final {
         explicit State(std::size_t limit) : byte_limit(limit) {}
@@ -55,6 +58,8 @@ class OwnedHeap final {
         mutable std::mutex borrow_mutex;
         std::size_t readers = 0;
         bool writer = false;
+        std::size_t active_read_callbacks = 0;
+        bool active_write_callback = false;
         std::optional<T> value;
 
         template<class... Args>
@@ -70,10 +75,14 @@ class OwnedHeap final {
 
         void acquire(bool exclusive) {
             std::lock_guard<std::mutex> guard(borrow_mutex);
-            if (writer || (exclusive && readers != 0))
+            if (writer || active_write_callback || (exclusive && (readers != 0 || active_read_callbacks != 0)))
                 throw std::logic_error("conflicting owned heap borrow");
             if (exclusive) writer = true;
-            else ++readers;
+            else {
+                if (readers == std::numeric_limits<std::size_t>::max())
+                    throw std::overflow_error("owned heap reader count exhausted");
+                ++readers;
+            }
         }
 
         void relinquish(bool exclusive) noexcept {
@@ -82,9 +91,32 @@ class OwnedHeap final {
             else --readers;
         }
 
+        // A callback has its own lifetime/borrow admission. Resetting the
+        // external lease during with() must not admit reclamation or aliases.
+        void enter_callback(bool exclusive) {
+            std::lock_guard<std::mutex> guard(borrow_mutex);
+            if (exclusive) {
+                if (!writer || active_write_callback || active_read_callbacks != 0)
+                    throw std::logic_error("conflicting owned heap callback");
+                active_write_callback = true;
+            } else {
+                if (writer || active_write_callback || readers == 0)
+                    throw std::logic_error("conflicting owned heap callback");
+                if (active_read_callbacks == std::numeric_limits<std::size_t>::max())
+                    throw std::overflow_error("owned heap callback count exhausted");
+                ++active_read_callbacks;
+            }
+        }
+
+        void leave_callback(bool exclusive) noexcept {
+            std::lock_guard<std::mutex> guard(borrow_mutex);
+            if (exclusive) active_write_callback = false;
+            else --active_read_callbacks;
+        }
+
         void require_unborrowed() const {
             std::lock_guard<std::mutex> guard(borrow_mutex);
-            if (readers != 0 || writer)
+            if (readers != 0 || writer || active_read_callbacks != 0 || active_write_callback)
                 throw std::logic_error("cannot drop an actively borrowed value");
         }
     };
@@ -128,11 +160,17 @@ public:
 
         template<class Fn>
         void with(Fn&& fn) const {
-            if (!slot_) throw std::logic_error("borrow lease is empty");
+            auto slot = slot_;
+            if (!slot) throw std::logic_error("borrow lease is empty");
+            slot->enter_callback(Mutable);
+            struct CallbackPin {
+                std::shared_ptr<Slot<T>> slot;
+                ~CallbackPin() noexcept { slot->leave_callback(Mutable); }
+            } pin{std::move(slot)};
             if constexpr (Mutable) {
-                std::forward<Fn>(fn)(*slot_->value);
+                std::forward<Fn>(fn)(*pin.slot->value);
             } else {
-                std::forward<Fn>(fn)(static_cast<const T&>(*slot_->value));
+                std::forward<Fn>(fn)(static_cast<const T&>(*pin.slot->value));
             }
         }
     };

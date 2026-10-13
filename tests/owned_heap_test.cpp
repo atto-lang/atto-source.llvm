@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <future>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -161,7 +162,66 @@ static void test_separate_heap_accounting_and_stress() {
     concurrent.close();
 }
 
+static void test_callback_owns_independent_read_lifetime() {
+    std::atomic<int> drops{0};
+    OwnedHeap heap(sizeof(Counter));
+    auto owner = heap.make<Counter>(drops, 23);
+    auto lease = owner.borrow();
+    lease.with([&](const Counter& value) {
+        lease.reset();
+        must_throw([&] { owner.drop(); }, "callback reset admitted early drop");
+        must_throw([&] { (void)owner.borrow_mut(); }, "active read callback admitted mutable alias");
+        owner = {};
+        check(drops == 0 && value.value == 23, "callback lost allocation lifetime");
+        must_throw([&] { heap.close(); }, "active callback lost heap retirement fence");
+    });
+    check(drops == 1 && heap.stats().live_objects == 0, "callback pin leaked allocation");
+    heap.close();
+}
+
+static void test_mutable_callback_reset_and_exception_cleanup() {
+    OwnedHeap heap(sizeof(int));
+    auto owner = heap.make<int>(7);
+    auto lease = owner.borrow_mut();
+    must_throw([&] {
+        lease.with([&](int& value) {
+            lease.reset();
+            must_throw([&] { (void)owner.borrow(); }, "mutable callback admitted read alias");
+            must_throw([&] { (void)owner.borrow_mut(); }, "mutable callback admitted write alias");
+            must_throw([&] { owner.drop(); }, "mutable callback admitted destruction");
+            value = 42;
+            throw std::runtime_error("callback failure");
+        });
+    }, "callback exception swallowed");
+    auto next = owner.borrow_mut();
+    next.with([](int& value) { check(value == 42, "callback exception corrupted value"); });
+    next.reset();
+    owner.drop();
+    heap.close();
+}
+
+static void test_same_mutable_lease_cannot_run_callbacks_concurrently() {
+    OwnedHeap heap(sizeof(int));
+    auto owner = heap.make<int>(7);
+    auto lease = owner.borrow_mut();
+    std::promise<void> entered, release;
+    auto ready = release.get_future().share();
+    std::thread first([&] { lease.with([&](int&) { entered.set_value(); ready.wait(); }); });
+    entered.get_future().wait();
+    bool denied = false;
+    try { lease.with([](int&) {}); } catch (const std::logic_error&) { denied = true; }
+    release.set_value();
+    first.join();
+    check(denied, "same mutable lease admitted concurrent callbacks");
+    lease.reset();
+    owner.drop();
+    heap.close();
+}
+
 int main() {
+    test_callback_owns_independent_read_lifetime();
+    test_mutable_callback_reset_and_exception_cleanup();
+    test_same_mutable_lease_cannot_run_callbacks_concurrently();
     test_deterministic_drops_and_moves();
     test_constructor_failure_and_quota_rollback();
     test_host_borrow_lease_survives_early_owner_destruction();

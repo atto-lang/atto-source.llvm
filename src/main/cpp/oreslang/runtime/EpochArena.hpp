@@ -34,6 +34,7 @@ class EpochArena final {
     std::uint64_t generation_ = 1;
     bool retired_ = false;
     bool reclaiming_ = false;
+    bool constructing_ = false;
 
     void assert_live(std::uint64_t generation) const {
         if (generation != generation_ || retired_ || reclaiming_)
@@ -89,8 +90,17 @@ public:
         template<class Fn>
         void with(Fn&& action) const {
             if (!arena_) throw std::logic_error("empty actor-epoch reference");
-            arena_->assert_live(generation_);
-            std::forward<Fn>(action)(*value_);
+            auto* arena = arena_;
+            auto* value = value_;
+            arena->assert_live(generation_);
+            if (arena->pins_ == std::numeric_limits<std::size_t>::max())
+                throw std::overflow_error("actor epoch pin count exhausted");
+            ++arena->pins_;
+            struct CallbackPin {
+                EpochArena* arena;
+                ~CallbackPin() noexcept { arena->release_pin(); }
+            } pin{arena};
+            std::forward<Fn>(action)(*value);
         }
     };
 
@@ -100,7 +110,7 @@ public:
                       "arena object destructors must be noexcept");
         static_assert(alignof(T) <= alignof(std::max_align_t),
                       "overaligned arena types require a dedicated allocator");
-        if (retired_ || reclaiming_)
+        if (retired_ || reclaiming_ || constructing_)
             throw std::logic_error("actor epoch not accepting allocations");
         if (count_ == MaxObjects)
             throw std::bad_alloc();
@@ -119,6 +129,11 @@ public:
         // Only commit accounting after construction succeeds. A constructor
         // failure leaves the arena cursor and destructor stack unchanged.
         void* location = reinterpret_cast<void*>(aligned);
+        constructing_ = true;
+        struct ConstructionGuard {
+            bool& constructing;
+            ~ConstructionGuard() noexcept { constructing = false; }
+        } guard{constructing_};
         T* value = ::new (location) T(std::forward<Args>(args)...);
         records_[count_++] = Record{location, [](void* p) noexcept {
             static_cast<T*>(p)->~T();
@@ -138,8 +153,8 @@ public:
     // All external I/O/continuation references must be represented by leases;
     // source lifetime checks are responsible for preventing untracked escapes.
     void reset() {
-        if (retired_ || reclaiming_)
-            throw std::logic_error("actor epoch is retired or reclaiming");
+        if (retired_ || reclaiming_ || constructing_)
+            throw std::logic_error("actor epoch is retired, reclaiming or constructing");
         if (pins_ != 0)
             throw std::logic_error("cannot reclaim actor epoch with live references");
         if (generation_ == std::numeric_limits<std::uint64_t>::max())
@@ -164,8 +179,10 @@ public:
     ~EpochArena() noexcept {
         // A dangling Ref would otherwise call release_pin on dead arena
         // storage. Fail closed instead of silently introducing a UAF.
-        if (pins_ != 0 || reclaiming_) std::terminate();
+        if (pins_ != 0 || reclaiming_ || constructing_) std::terminate();
         if (!retired_) {
+            reclaiming_ = true;
+            retired_ = true;
             while (count_ > 0) {
                 const Record record = records_[--count_];
                 record.drop(record.location);
