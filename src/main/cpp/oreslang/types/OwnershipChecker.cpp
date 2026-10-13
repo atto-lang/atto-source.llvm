@@ -200,7 +200,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (expr.left && expr.left->kind == Expression::Kind::Variable) {
                 const auto found = locals.find(expr.left->name);
                 if (found != locals.end() && found->second.int_array) {
-                    if (expr.name != "size" || found->second.moved)
+                    if (found->second.moved)
+                        reject(expr, "ownership violation: use-after-move Array<int> owner");
+                    if (expr.name != "size")
                         reject(expr, "ownership violation: only Array<int>.size is readable");
                     return;
                 }
