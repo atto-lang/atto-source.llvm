@@ -153,6 +153,22 @@ bool native_pure_scalar_tree(const Expression& expr) {
     return false;
 }
 
+// Constructor initializers are evaluated eagerly while the object is
+// still private. Admit only total, side-effect-free i64 syntax over parameters;
+// no calls, field projections, moves, loans, array operations or suspension.
+bool native_constructor_scalar_tree(const Expression& expr) {
+    using Kind = Expression::Kind;
+    if (expr.kind == Kind::Integer || expr.kind == Kind::Variable) return true;
+    if (expr.kind == Kind::Negate)
+        return expr.left && native_constructor_scalar_tree(*expr.left);
+    if (expr.kind == Kind::Add || expr.kind == Kind::Subtract
+            || expr.kind == Kind::Multiply)
+        return expr.left && expr.right
+            && native_constructor_scalar_tree(*expr.left)
+            && native_constructor_scalar_tree(*expr.right);
+    return false;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int)
@@ -279,15 +295,40 @@ private:
         // No nested class, arbitrary initializer, method, or pointer escape.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            const bool public_member = accept("pub");
             if (token_.text == "constructor") {
-                fail("native class constructors and constructor-parameter field initializers require checked initialization lowering");
+                if (result.explicit_constructor)
+                    fail("native class may declare only one scalar constructor");
+                result.explicit_constructor = true;
+                advance();
+                require("(");
+                std::unordered_set<std::string> parameters;
+                if (!accept(")")) {
+                    do {
+                        if (result.constructor_parameters.size() == 16)
+                            fail("native scalar constructor parameter limit exceeded (16)");
+                        require("int");
+                        std::string name = identifier();
+                        if (!parameters.insert(name).second)
+                            fail("duplicate native constructor parameter '" + name + "'");
+                        result.constructor_parameters.push_back(std::move(name));
+                    } while (accept(","));
+                    require(")");
+                }
+                require("{");
+                if (accept("return")) require(";");
+                require("}");
+                // Native currently accepts a pure initializer-only constructor
+                // body. Field initialization is ordered and never sees self.
+                if (token_.text != "end")
+                    fail("native scalar constructor must be the last class member");
+                continue;
             }
+            if (result.explicit_constructor)
+                fail("native scalar constructor must be the last class member");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
-            if (token_.text == "constructor") {
-                fail("native class constructors and constructor-parameter field initializers require checked initialization lowering");
-            }
+            (void)public_member;
             // Bounded native subset: fixed scalar slots and mutable owned
             // Array<int> handles. General object/member lowering remains
             // unsupported, and must fail before LLVM IR is generated.
@@ -336,14 +377,26 @@ private:
                 if (!accept(":") && !accept("="))
                     fail(fixed ? "final class field requires declaration-site initializer" :
                                  "class field requires declaration-site initializer");
-                if (token_.kind != Kind::Integer)
-                    fail("class field requires i64 literal initializer");
-                field.initial = integer_literal();
+                field.initializer_expression = expression();
+                if (!native_constructor_scalar_tree(*field.initializer_expression))
+                    fail("native class field initializer requires pure scalar constructor parameters or integers");
             }
             require(";");
             result.fields.push_back(std::move(field));
         }
         if (result.fields.empty()) fail("native class requires at least one field");
+        // Validate parameter provenance here, before any native IR is built.
+        std::unordered_set<std::string> initializer_names(
+            result.constructor_parameters.begin(), result.constructor_parameters.end());
+        for (const auto& field : result.fields) {
+            if (field.int_array && result.explicit_constructor)
+                fail("native owned Array<int> constructor requires checked failure cleanup");
+            if (!field.initializer_expression) continue;
+            if (!result.explicit_constructor
+                    && field.initializer_expression->kind != Expression::Kind::Integer)
+                fail("native nonliteral class field initializer requires explicit scalar constructor");
+            validate_expression(*field.initializer_expression, initializer_names, {});
+        }
         require("end");
         return result;
     }
@@ -461,7 +514,12 @@ private:
                     const std::string ctor = identifier();
                     if (ctor != binding.class_name) fail("class constructor type mismatch");
                     require("(");
-                    require(")");
+                    if (!accept(")")) {
+                        do {
+                            binding.constructor_arguments.push_back(expression());
+                        } while (accept(","));
+                        require(")");
+                    }
                     binding.new_class = true;
                 } else {
                     require("rt");
