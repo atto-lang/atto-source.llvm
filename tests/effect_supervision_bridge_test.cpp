@@ -78,5 +78,19 @@ int main() {
     } catch (const std::invalid_argument&) { invalid = true; }
     CHECK(invalid && lane.pending_count() == 0);
     lane.retire_gracefully(key(7));
+
+    // ProcessExit is a valid effect but not a graceful actor Return.
+    // Route it to the reserved CONTROL failure lane instead of throwing an
+    // unknown-effect exception or silently stranding the parent reservation.
+    lane.reserve(key(8));
+    CHECK(Bridge::publish_terminal(lane, key(8),
+                                   {EffectKind::ProcessExit, 0u},
+                                   "actor attempted process exit"));
+    auto process_exit = lane.poll();
+    CHECK(process_exit.has_value());
+    CHECK(process_exit->kind == Lane::Kind::HostFailure);
+    CHECK(process_exit->summary == "actor attempted process exit");
+    lane.ack(key(8));
+    CHECK(lane.reserved_count() == 0);
     return 0;
 }
