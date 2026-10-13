@@ -70,16 +70,107 @@ static void erase_bytes(void* data, size_t count) {
     for (size_t i = 0; i < count; ++i) bytes[i] = 0;
 }
 
+/* Only backing storage is counted: metadata wiping does not prove old
+ * realloc buffers were scrubbed. This audit hook is test-only.
+ */
+#ifdef ORESLANG_NATIVE_TEST_ALLOC_FAILURE
+static _Atomic uint64_t test_scrubbed_backing_bytes = 0;
+void oreslang_int_array_test_reset_scrubbed_backing_bytes(void) {
+    atomic_store_explicit(&test_scrubbed_backing_bytes, 0, memory_order_relaxed);
+}
+uint64_t oreslang_int_array_test_scrubbed_backing_bytes(void) {
+    return atomic_load_explicit(&test_scrubbed_backing_bytes, memory_order_relaxed);
+}
+#endif
+
+static void erase_backing_storage(int64_t* values, uint64_t capacity) {
+    const size_t bytes = (size_t)capacity * sizeof(int64_t);
+    erase_bytes(values, bytes);
+#ifdef ORESLANG_NATIVE_TEST_ALLOC_FAILURE
+    const volatile unsigned char* view = (const volatile unsigned char*)values;
+    for (size_t i = 0; i < bytes; ++i)
+        if (view[i] != 0) fail_closed();
+    atomic_fetch_add_explicit(&test_scrubbed_backing_bytes, (uint64_t)bytes,
+                              memory_order_relaxed);
+#endif
+}
+
+/* The fast handle lookup validates its own slot; ownership-changing
+ * operations additionally validate the *entire* region. Otherwise forged
+ * aggregate counters can make close() free the region with live backing
+ * buffers still allocated (and never zeroized), or make a new allocation
+ * return a misleading ordinary quota status.
+ *
+ * Scan at create/reserve/drop/staging/close boundaries, not at each get/set,
+ * to retain constant-time hot-path element access.
+ */
+static void validate_region_accounting(const OresNativeIntArrayRegion* region) {
+    if (!region || region->live_count > MAX_ARRAY_SLOTS ||
+            region->reserved_elements > REGION_ELEMENT_BUDGET) fail_closed();
+    uint64_t live = 0;
+    uint64_t reserved = 0;
+    for (size_t i = 0; i < MAX_ARRAY_SLOTS; ++i) {
+        const IntArraySlot* slot = &region->arrays[i];
+        if (slot->token == 0) {
+            if (slot->values || slot->capacity || slot->length)
+                fail_closed(); /* No abandoned backing allocation. */
+            continue;
+        }
+        if (slot->token == UINT64_MAX || slot->capacity > MAX_ARRAY_ELEMENTS ||
+                slot->length > slot->capacity ||
+                (slot->values == NULL) != (slot->capacity == 0))
+            fail_closed();
+        ++live;
+        /* capacity is at most 65536, so the bounded sum cannot overflow. */
+        reserved += slot->capacity;
+        if (reserved > REGION_ELEMENT_BUDGET) fail_closed();
+    }
+    if (live != region->live_count || reserved != region->reserved_elements)
+        fail_closed();
+}
+
+/* Check the entire invariant before *any* use, including a no-op
+ * reservation, a read and an append that would otherwise index into values.
+ * This validates internal trusted metadata, not a guest-supplied pointer.
+ */
 static IntArraySlot* require_slot(OresNativeIntArrayRegion* region,
                                   OresNativeIntArrayHandle handle) {
     if (!region || handle == 0 || handle == UINT64_MAX) fail_closed();
+    if (region->live_count == 0 || region->live_count > MAX_ARRAY_SLOTS ||
+            region->reserved_elements > REGION_ELEMENT_BUDGET) fail_closed();
     for (size_t i = 0; i < MAX_ARRAY_SLOTS; ++i) {
         IntArraySlot* slot = &region->arrays[i];
-        if (slot->token == handle) return slot;
+        if (slot->token == handle) {
+            if (slot->length > slot->capacity ||
+                    slot->capacity > MAX_ARRAY_ELEMENTS ||
+                    slot->capacity > region->reserved_elements ||
+                    (slot->values == NULL) != (slot->capacity == 0))
+                fail_closed();
+            return slot;
+        }
     }
     fail_closed();
     return NULL;
 }
+
+#ifdef ORESLANG_NATIVE_TEST_ALLOC_FAILURE
+/* Test-only invalid metadata injector: the real compiler cannot reach this. */
+void oreslang_int_array_test_corrupt_length(
+        OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle,
+        uint64_t impossible_length) {
+    require_slot(region, handle)->length = impossible_length;
+}
+
+/* Test-only corruption; never expose mutation of these private counters
+ * to guest source or production builds.
+ */
+void oreslang_int_array_test_corrupt_region_accounting(
+        OresNativeIntArrayRegion* region, uint64_t live, uint64_t reserved) {
+    if (!region) fail_closed();
+    region->live_count = live;
+    region->reserved_elements = reserved;
+}
+#endif
 
 OresNativeIntArrayStatus oreslang_int_array_try_region_open(
         OresNativeIntArrayRegion** out_region) {
@@ -102,11 +193,13 @@ OresNativeIntArrayRegion* oreslang_int_array_region_open(void) {
 OresNativeIntArrayStatus oreslang_int_array_try_new(
         OresNativeIntArrayRegion* region, OresNativeIntArrayHandle* out_handle) {
     if (!region || !out_handle) fail_closed();
-    if (region->live_count > MAX_ARRAY_SLOTS) fail_closed();
+    validate_region_accounting(region);
     if (region->live_count == MAX_ARRAY_SLOTS) return ORES_NATIVE_ARRAY_LIMIT;
     for (size_t i = 0; i < MAX_ARRAY_SLOTS; ++i) {
         IntArraySlot* slot = &region->arrays[i];
         if (slot->token == 0) {
+            if (slot->length || slot->capacity || slot->values)
+                fail_closed(); /* Never reuse dirty/partially retired slots. */
             /* Logical slot acquisition counts as an allocation for the test
              * injector. On failure, metadata and out_handle stay untouched.
              */
@@ -134,6 +227,7 @@ OresNativeIntArrayStatus oreslang_int_array_try_reserve(
         OresNativeIntArrayRegion* region,
         OresNativeIntArrayHandle handle, uint64_t capacity) {
     IntArraySlot* slot = require_slot(region, handle);
+    validate_region_accounting(region);
     if (capacity > MAX_ARRAY_ELEMENTS || capacity > SIZE_MAX / sizeof(int64_t))
         return ORES_NATIVE_ARRAY_LIMIT;
     if (capacity <= slot->capacity) return ORES_NATIVE_ARRAY_OK;
@@ -142,10 +236,20 @@ OresNativeIntArrayStatus oreslang_int_array_try_reserve(
     if (additional > REGION_ELEMENT_BUDGET - region->reserved_elements)
         return ORES_NATIVE_ARRAY_LIMIT;
     if (test_injected_allocation_failure()) return ORES_NATIVE_ARRAY_NO_MEMORY;
-    int64_t* grown = (int64_t*)realloc(slot->values,
-                                      (size_t)capacity * sizeof(int64_t));
+
+    /* realloc() may free a relocated buffer without clearing its former
+     * contents. Allocate/copy/scrub/free explicitly so growth never leaves
+     * live guest data in a discarded allocator block. calloc also keeps
+     * unused slots zeroed, and failure leaves the old owner untouched.
+     */
+    int64_t* grown = (int64_t*)calloc((size_t)capacity, sizeof(int64_t));
     if (!grown) return ORES_NATIVE_ARRAY_NO_MEMORY;
-    for (uint64_t i = slot->capacity; i < capacity; ++i) grown[i] = 0;
+    for (uint64_t i = 0; i < slot->length; ++i)
+        grown[i] = slot->values[i];
+    if (slot->values) {
+        erase_backing_storage(slot->values, slot->capacity);
+        free(slot->values);
+    }
     region->reserved_elements += additional;
     slot->capacity = capacity;
     slot->values = grown;
@@ -212,10 +316,11 @@ void oreslang_int_array_set(OresNativeIntArrayRegion* region,
 void oreslang_int_array_drop(OresNativeIntArrayRegion* region,
                             OresNativeIntArrayHandle handle) {
     IntArraySlot* slot = require_slot(region, handle);
+    validate_region_accounting(region);
     if (!region->live_count || slot->capacity > region->reserved_elements)
         fail_closed();
     if (slot->values) {
-        erase_bytes(slot->values, (size_t)slot->capacity * sizeof(int64_t));
+        erase_backing_storage(slot->values, slot->capacity);
         free(slot->values);
     }
     region->reserved_elements -= slot->capacity;
@@ -231,8 +336,7 @@ OresNativeIntArrayStatus oreslang_int_array_try_prepare_many(
         OresNativeIntArrayRegion* region, uint64_t n,
         OresNativeIntArrayHandle* out) {
     if (!region || (n && !out)) fail_closed();
-    if (region->live_count > MAX_ARRAY_SLOTS ||
-            region->reserved_elements > REGION_ELEMENT_BUDGET) fail_closed();
+    validate_region_accounting(region);
     if (n > MAX_ARRAY_SLOTS ||
             n > MAX_ARRAY_SLOTS - region->live_count)
         return ORES_NATIVE_ARRAY_LIMIT;
@@ -263,8 +367,7 @@ OresNativeIntArrayStatus oreslang_int_array_try_prepare_filled_many(
         const uint64_t lengths[], const int64_t values[],
         OresNativeIntArrayHandle out[]) {
     if (!region || (n && (!lengths || !values || !out))) fail_closed();
-    if (region->live_count > MAX_ARRAY_SLOTS ||
-            region->reserved_elements > REGION_ELEMENT_BUDGET) fail_closed();
+    validate_region_accounting(region);
     if (n > MAX_ARRAY_SLOTS - region->live_count)
         return ORES_NATIVE_ARRAY_LIMIT;
 
@@ -350,7 +453,8 @@ void oreslang_int_array_commit_many(
 }
 
 void oreslang_int_array_region_close(OresNativeIntArrayRegion* region) {
-    if (!region || region->live_count || region->reserved_elements)
+    validate_region_accounting(region);
+    if (region->live_count || region->reserved_elements)
         fail_closed();
     erase_bytes(region, sizeof(*region));
     free(region);

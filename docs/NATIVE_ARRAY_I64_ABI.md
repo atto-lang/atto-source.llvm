@@ -78,6 +78,32 @@ storage. The token is **not** a cryptographic capability or authorization
 credential. A handle is only valid with its original region while the slot
 remains live. All element reads/writes are bounds-checked. No element pointer
 escapes. Destroying an array zeroizes all reserved storage before freeing it.
+Growth likewise allocates a fresh zero-filled buffer, copies live elements,
+and scrubs the entire old capacity **before** freeing the old buffer (rather
+than relying on `realloc`, which may release the old block without wiping).
+A failed growth leaves existing values, length and reservation metadata
+unchanged. The test-only backing-storage scrub counter verifies each growth
+and final destruction, separately from metadata wiping.
+
+Every live-handle operation first validates the internal slot invariants:
+`length <= capacity <= 65,536`, the capacity fits the region reservation
+accounting, and backing storage is present exactly when capacity is nonzero.
+This includes no-op `try_reserve`, `try_add` without growth, reads, writes
+and destruction; corrupt metadata triggers a process abort rather than being
+treated as quota exhaustion or successful access. Recycled slots must have
+fully cleared metadata. Test-only corrupted-length injection verifies the
+fail-closed behavior in child processes on each access path; it is unavailable
+in production runtime builds.
+
+Owner-creation, reservation, destruction, bulk staging and region close also
+reconcile the aggregate `live_count` and `reserved_elements` counters with
+all 64 actual slot records. Inactive slots must have zero tokens, capacities,
+lengths **and** null backing pointers. Inconsistent accounting aborts before
+any new handle is issued, storage is resized/dropped, or a region is freed.
+This is especially important on `region_close`: trusting falsified zero
+counters would otherwise abandon live backing allocations without zeroizing
+them. The bounded scan is not performed on hot-path element reads/writes.
+Seven test-only poisoned-counter death tests exercise these boundaries.
 Closing a region requires every owned array to have been dropped.
 
 Invalid inputs, exhaustion, stale/cross-region handles, allocation failure
@@ -102,7 +128,7 @@ ordinary resource exhaustion from ownership corruption.
   growth for `try_add` would exceed the aggregate region budget but one
   additional element fits, it retries with the exact minimum required
   capacity. Failed fallback allocation leaves previously committed data
-  unchanged. No-op reserve is always successful. Over-limit size/count/budget returns `LIMIT`;
+  unchanged. No-op reserve on an internally consistent live owner is always successful. Over-limit size/count/budget returns `LIMIT`;
   exhausted native memory returns `NO_MEMORY`.
 - `try_prepare_many(region, n, out)` acquires up to 64 independent empty
   arrays without publishing any output handle until all acquisitions pass.
@@ -215,6 +241,44 @@ nested borrows and actor-owned arrays remain fail closed. The transaction
 test includes whole-class move chains, guarded returns, fresh later
 allocations, stale source/duplicate move/immutable destination rejection,
 and normal plus ASan+UBSan fault injection at every allocation point.
+
+## Restricted direct Array<int> field ownership moves
+
+A synchronous, straight-line native function may transfer a live lexical
+`let mut Array<int>` owner into an exclusively held mutable class field:
+
+```oreslang
+let mut Shelf shelf = new Shelf();
+let mut Array<int> staged = new Array<int>();
+staged.add(42);
+shelf.first = rt take(staged);
+return shelf.first.get(0);
+```
+
+This is an **infallible owner-handle transfer**, not a copy.
+The compiler verifies a live, uniquely mutable class destination and
+a direct named, live, unborrowed lexical `Array<int>` source. It drops
+the superseded destination owner, zeroes its original failure-cleanup
+shadow, transfers the incoming opaque handle and disarms the lexical
+source slot. The incoming array's original shadow remains the cleanup
+authority if any **later** checked resource allocation fails; normal
+exit drops each current owner exactly once. Shadow provenance is also
+propagated across whole-class `rt take` transfers.
+
+Implicit copies, scalar sources, second moves, stale lexical reads,
+borrowed destinations and conditional transfers are rejected before IR.
+Branch-dependent ownership phi slots are not yet implemented; this
+first field-move slice is restricted to straight-line code, with
+deferred field moves remaining unsupported. Four sequential field
+assignments are **not** an atomic four-owner transaction. Full linked
+queue initialization still requires batch preparation, a single
+`commit_many` and publishing `ready` only after successful commit.
+
+Source-compiled Linux regression tests cover repeated field replacement,
+replacements on previously moved classes and precise no-IR negatives.
+Deterministic allocation failures *after* a replacement must destroy the
+superseded handle and remaining live owners exactly once; Clang
+ASan+UBSan runs the same compiler-generated guest programs.
 
 ## Native/runtime linker symbol admission
 

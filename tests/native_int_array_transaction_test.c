@@ -72,6 +72,43 @@ static void opening_and_single_owner_failures(void) {
     oreslang_int_array_region_close(region);
 }
 
+/* Growth must preserve every element, wipe old capacity before free,
+ * and leave both the data and scrub counter untouched when allocation
+ * fails. NDEBUG does not disable any of these assertions.
+ */
+static void backing_growth_scrub_and_failure_atomicity(void) {
+    OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+    OresNativeIntArrayHandle a = oreslang_int_array_new(r);
+    const int64_t values[4] = {INT64_MIN, INT64_MAX, 0, -91};
+    for (int i = 0; i < 4; ++i)
+        check(oreslang_int_array_try_add(r, a, values[i]) == ORES_NATIVE_ARRAY_OK);
+
+    oreslang_int_array_test_reset_scrubbed_backing_bytes();
+    check(oreslang_int_array_try_reserve(r, a, 8) == ORES_NATIVE_ARRAY_OK);
+    check(oreslang_int_array_test_scrubbed_backing_bytes() == 4 * sizeof(int64_t));
+    for (int i = 0; i < 4; ++i)
+        check(oreslang_int_array_get(r, a, (uint64_t)i) == values[i]);
+
+    fail_on_attempt(0);
+    check(oreslang_int_array_try_reserve(r, a, 16) == ORES_NATIVE_ARRAY_NO_MEMORY);
+    check(oreslang_int_array_test_scrubbed_backing_bytes() == 4 * sizeof(int64_t));
+    check(oreslang_int_array_length(r, a) == 4);
+    for (int i = 0; i < 4; ++i)
+        check(oreslang_int_array_get(r, a, (uint64_t)i) == values[i]);
+    reset_injection();
+
+    check(oreslang_int_array_try_reserve(r, a, 16) == ORES_NATIVE_ARRAY_OK);
+    check(oreslang_int_array_test_scrubbed_backing_bytes() == 12 * sizeof(int64_t));
+    check(oreslang_int_array_try_reserve(r, a, 9) == ORES_NATIVE_ARRAY_OK);
+    check(oreslang_int_array_test_scrubbed_backing_bytes() == 12 * sizeof(int64_t));
+    for (int i = 0; i < 4; ++i)
+        check(oreslang_int_array_get(r, a, (uint64_t)i) == values[i]);
+
+    oreslang_int_array_drop(r, a);
+    check(oreslang_int_array_test_scrubbed_backing_bytes() == 28 * sizeof(int64_t));
+    oreslang_int_array_region_close(r);
+}
+
 static void prepare_rollback_and_commit(void) {
     OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
     OresNativeIntArrayHandle survivor = oreslang_int_array_new(r);
@@ -282,6 +319,95 @@ static void filled_preparation_allocation_edge_matrix(void) {
 }
 
 #if defined(__unix__) || defined(__APPLE__)
+static void must_abort_on_corrupt_array_metadata(int kind) {
+    pid_t pid = fork();
+    check(pid >= 0);
+    if (pid == 0) {
+        struct rlimit no_core = {0, 0};
+        (void)setrlimit(RLIMIT_CORE, &no_core);
+        reset_injection();
+        OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+        OresNativeIntArrayHandle a = oreslang_int_array_new(r);
+        check(oreslang_int_array_try_add(r, a, 17) == ORES_NATIVE_ARRAY_OK);
+        /* capacity is 4; length=5 must fail before the requested operation
+         * returns an apparently successful no-op or accesses values[5].
+         */
+        oreslang_int_array_test_corrupt_length(r, a, 5);
+        if (kind == 0)
+            (void)oreslang_int_array_try_reserve(r, a, 1);
+        else if (kind == 1)
+            (void)oreslang_int_array_try_add(r, a, 22);
+        else if (kind == 2)
+            (void)oreslang_int_array_length(r, a);
+        else if (kind == 3)
+            (void)oreslang_int_array_get(r, a, 0);
+        else if (kind == 4)
+            oreslang_int_array_set(r, a, 0, 33);
+        else if (kind == 5)
+            oreslang_int_array_drop(r, a);
+        else
+            abort();
+        _exit(0);
+    }
+    int status = 0;
+    check(waitpid(pid, &status, 0) == pid);
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+/* A corrupted region counter must NEVER permit close() to abandon live
+ * sensitive buffers, or an allocation/drop to proceed on forged accounting.
+ * A child that returns normally proves the invariant was not enforced.
+ */
+static void must_abort_on_corrupt_region_accounting(int kind) {
+    pid_t pid = fork();
+    check(pid >= 0);
+    if (pid == 0) {
+        struct rlimit no_core = {0, 0};
+        (void)setrlimit(RLIMIT_CORE, &no_core);
+        reset_injection();
+        OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+        OresNativeIntArrayHandle a = oreslang_int_array_new(r);
+        check(oreslang_int_array_try_add(r, a, 17) == ORES_NATIVE_ARRAY_OK);
+        if (kind == 0) {
+            /* This used to allow region_close to free only the region
+             * struct, leaking the allocated array buffer without wiping.
+             */
+            oreslang_int_array_test_corrupt_region_accounting(r, 0, 0);
+            oreslang_int_array_region_close(r);
+        } else if (kind == 1) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            OresNativeIntArrayHandle next = 0;
+            (void)oreslang_int_array_try_new(r, &next);
+        } else if (kind == 2) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            (void)oreslang_int_array_try_reserve(r, a, 4);
+        } else if (kind == 3) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 2, 4);
+            OresNativeIntArrayHandle next = 0;
+            (void)oreslang_int_array_try_prepare_many(r, 1, &next);
+        } else if (kind == 4) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 2, 4);
+            const uint64_t lengths[1] = {1};
+            const int64_t values[1] = {42};
+            OresNativeIntArrayHandle next = 0;
+            (void)oreslang_int_array_try_prepare_filled_many(
+                r, 1, lengths, values, &next);
+        } else if (kind == 5) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 2, 4);
+            oreslang_int_array_drop(r, a);
+        } else if (kind == 6) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            (void)oreslang_int_array_try_reserve(r, a, 8);
+        } else {
+            abort();
+        }
+        _exit(0);
+    }
+    int status = 0;
+    check(waitpid(pid, &status, 0) == pid);
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
 static void must_abort_on_invalid_transaction(int kind) {
     pid_t pid = fork();
     check(pid >= 0);
@@ -327,12 +453,15 @@ static void must_abort_on_invalid_transaction(int kind) {
 
 int main(void) {
     opening_and_single_owner_failures();
+    backing_growth_scrub_and_failure_atomicity();
     prepare_rollback_and_commit();
     quota_failure_unchanged();
     quota_edge_append_and_rollback();
     filled_preparation_allocation_edge_matrix();
 #if defined(__unix__) || defined(__APPLE__)
     for (int i = 0; i < 6; ++i) must_abort_on_invalid_transaction(i);
+    for (int i = 0; i < 6; ++i) must_abort_on_corrupt_array_metadata(i);
+    for (int i = 0; i < 7; ++i) must_abort_on_corrupt_region_accounting(i);
 #endif
     return 0;
 }

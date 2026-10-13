@@ -1140,18 +1140,15 @@ private:
             if (std::count_if(fn.locals.begin(), fn.locals.end(),
                     [](const LocalBinding& local) { return local.int_array; }) > 64)
                 throw std::runtime_error("native Array<int> owner limit exceeded (64)");
-            // Selection is exclusively (name, number of explicit arguments).
-            // Types, return type and receiver analysis do not distinguish slots.
-            // Native entrypoints retain the single main() ABI contract.
-            if (fn.name == "main" && functions.count("main")) {
+            // Overload identity is strictly name and explicit argument count.
+            // Parameter types, borrow modes and returns cannot select a slot.
+            if (fn.name == "main" && functions.count("main"))
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
-            }
-            if (!functions[fn.name].insert(fn.parameters.size()).second) {
+            if (!functions[fn.name].insert(fn.parameters.size()).second)
                 throw std::runtime_error("function '" + fn.name + "' already has arity "
-                                         + std::to_string(fn.parameters.size())
-                                         + "; parameter and return types do not select overloads at byte "
-                                         + std::to_string(fn.offset));
-            }
+                    + std::to_string(fn.parameters.size()) +
+                    "; parameter and return types do not select overloads at byte " +
+                    std::to_string(fn.offset));
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) {
                 if (!params.insert(param.name).second) {

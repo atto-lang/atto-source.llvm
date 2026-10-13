@@ -93,6 +93,22 @@ void oreslang_int_array_test_set_next_token(uint64_t token);
  * 1 fails the attempt after that, and so forth; never compiled in production.
  */
 void oreslang_int_array_test_fail_after(int64_t attempts);
+/* Test-only audit counter for backing-buffer bytes wiped before release.
+ * It excludes metadata wiping and resets without modifying owners.
+ */
+void oreslang_int_array_test_reset_scrubbed_backing_bytes(void);
+uint64_t oreslang_int_array_test_scrubbed_backing_bytes(void);
+/* Deliberately corrupt one valid live array's metadata for child-process
+ * fail-closed tests. Not linked into production or exposed to Oreslang.
+ */
+void oreslang_int_array_test_corrupt_length(
+    OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle,
+    uint64_t impossible_length);
+/* Test-only corruption of region aggregate counters; verifies no unsafe
+ * abandonment, quota bypass or new owner publication with forged metadata.
+ */
+void oreslang_int_array_test_corrupt_region_accounting(
+    OresNativeIntArrayRegion* region, uint64_t live, uint64_t reserved);
 #endif
 #ifdef __cplusplus
 }

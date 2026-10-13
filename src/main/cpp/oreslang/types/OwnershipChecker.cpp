@@ -1,7 +1,8 @@
-#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -11,13 +12,12 @@
 #include <vector>
 
 namespace oreslang {
+
+// Select a callable by name+explicit-arity before validating loan/type contracts.
 namespace {
 
 using Mode = Parameter::Mode;
 using Functions = std::unordered_map<std::string, const Function*>;
-
-// Ownership checking must use the same unambiguous selector as LLVM lowering.
-// Neither parameter types nor returns participate in overload selection.
 
 struct LocalOwnership {
     Mode mode = Mode::Value;
@@ -203,7 +203,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (expr.left && expr.left->kind == Expression::Kind::Variable) {
                 const auto found = locals.find(expr.left->name);
                 if (found != locals.end() && found->second.int_array) {
-                    if (expr.name != "size" || found->second.moved)
+                    if (found->second.moved)
+                        reject(expr, "ownership violation: use-after-move Array<int> owner");
+                    if (expr.name != "size")
                         reject(expr, "ownership violation: only Array<int>.size is readable");
                     return;
                 }
@@ -436,6 +438,13 @@ void validate_i64_ownership(const Program& program) {
             locals.emplace(binding.name, std::move(entry));
         }
         std::vector<const Statement*> deferred_effects;
+        // Provenance for an array field is tracked as a single compile-time
+        // shadow handle in this first native slice. Branch-specific moves
+        // require phi ownership slots, so reject the entire mixed case.
+        const bool conditional_effects = std::any_of(function.statements.begin(),
+            function.statements.end(), [](const Statement& stmt) {
+                return stmt.kind == Statement::Kind::Conditional;
+            });
         auto check_effect = [&](const Statement& stmt, Locals& state) {
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const LocalBinding& local = *stmt.branch_local;
@@ -448,8 +457,26 @@ void validate_i64_ownership(const Program& program) {
             }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
-                if (recv.class_array_fields.count(stmt.field))
-                    throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
+                if (recv.class_array_fields.count(stmt.field)) {
+                    const Expression& move = *stmt.expression;
+                    if (move.kind != Expression::Kind::Take || !move.left ||
+                            move.left->kind != Expression::Kind::Variable)
+                        reject(move, "ownership violation: Array<int> field requires direct rt take of lexical owner");
+                    if (conditional_effects)
+                        reject(move, "native Array<int> field move requires straight-line ownership CFG");
+                    if (recv.mode != Mode::Value || !recv.mutable_owner ||
+                            recv.exclusive_loan || recv.shared_loans != 0)
+                        reject(move, "ownership violation: Array<int> destination requires exclusive let mut class");
+                    LocalOwnership& src = local(*move.left, state);
+                    if (!src.int_array || src.mode != Mode::Value ||
+                            !src.mutable_owner || src.moved ||
+                            src.exclusive_loan || src.shared_loans != 0)
+                        reject(move, "ownership violation: Array<int> field transfer requires live unique lexical source");
+                    // The old field is released only during the verified
+                    // infallible native handle swap; the source becomes dead.
+                    src.moved = true;
+                    return;
+                }
                 if (recv.mode == Mode::Borrow)
                     throw std::runtime_error("ownership violation: cannot mutate through shared class borrow");
                 if (recv.mode == Mode::Value && !recv.mutable_owner)
