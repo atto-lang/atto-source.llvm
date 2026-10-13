@@ -26,6 +26,12 @@ std::atomic<std::int64_t> FakeClock::nanos{0};
 std::atomic<int> FakeClock::reads{0};
 
 using Quantum = oreslang::runtime::BasicSourceCooperationQuantum<FakeClock>;
+// A quantum must never be value-copied when a SourceTask resumes on a new
+// carrier: that would reset or duplicate its fairness and watchdog history.
+static_assert(!std::is_copy_constructible_v<Quantum>, "quantum must be task-owned");
+static_assert(!std::is_copy_assignable_v<Quantum>, "quantum must not be reassigned");
+static_assert(!std::is_move_constructible_v<Quantum>, "continuation must retain one quantum");
+static_assert(!std::is_move_assignable_v<Quantum>, "quantum must not migrate separately");
 static_assert(std::is_same_v<decltype(std::declval<Quantum>().completedBackedgesThisDispatch()), std::uint64_t>,
               "per-dispatch reductions must not wrap at 32 bits");
 static_assert(oreslang::runtime::detail::saturatingBackedgeSuccessor(
