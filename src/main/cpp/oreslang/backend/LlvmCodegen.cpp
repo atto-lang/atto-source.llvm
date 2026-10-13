@@ -498,6 +498,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         std::size_t next_array_shadow = 0;
         std::vector<llvm::Value*> heap_failure_slots;
         std::unordered_map<std::string, llvm::Value*> owned_failure_handles;
+        // Maps each currently live source-level owner place to the token
+        // shadow assigned at its original allocation. Moving an owner
+        // changes the place, never the token or its failure cleanup authority.
+        std::unordered_map<std::string, llvm::Value*> array_failure_places;
         if (array_owner_count) {
             array_handle_shadows = builder.CreateAlloca(i64,
                 llvm::ConstantInt::get(i64, array_owner_count), "array.failure.owners");
@@ -540,6 +544,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::Value* address = builder.CreateGEP(i64, array_handle_shadows,
                 llvm::ConstantInt::get(i64, next_array_shadow++),
                 label + ".failure.owner");
+            array_failure_places.emplace(label, address);
             llvm::Value* status = builder.CreateCall(arrayNew,
                 {array_region, address}, label + ".array.create.status");
             llvm::BasicBlock* proceed = llvm::BasicBlock::Create(
@@ -591,6 +596,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                                 binding.move_source + "." + item.name + ".move.handle");
                             builder.CreateStore(initial, address);
                             builder.CreateStore(llvm::ConstantInt::get(i64, 0), previous);
+                            array_failure_places.emplace(field_key(binding.name, item.name),
+                                array_failure_places.at(field_key(binding.move_source, item.name)));
                         }
                         owned_fields.push_back(field_key(binding.name, item.name));
                     } else {
@@ -639,10 +646,36 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
             if (effect.kind == Statement::Kind::FieldWrite) {
-                llvm::Value* updated = lower(*effect.expression, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                builder.CreateStore(updated, field_storage.at(
-                    field_key(effect.receiver, effect.field)));
+                const std::string target = field_key(effect.receiver, effect.field);
+                if (array_field_keys.count(target)) {
+                    // OwnershipChecker admitted only straight-line direct
+                    // rt take(local) into an exclusively owned mutable field.
+                    // Both handles are already live in this private region.
+                    const Expression& move = *effect.expression;
+                    if (move.kind != Expression::Kind::Take || !move.left ||
+                            move.left->kind != Expression::Kind::Variable)
+                        throw std::runtime_error("unverified native array field move");
+                    const std::string& source = move.left->name;
+                    llvm::Value* original = field_storage.at(target);
+                    llvm::Value* lexical = storage.at(source);
+                    llvm::Value* incoming = builder.CreateLoad(i64, lexical,
+                        source + ".transfer.owner");
+                    llvm::Value* obsolete = builder.CreateLoad(i64, original,
+                        target + ".replaced.owner");
+                    // No allocation can occur between destruction and swap.
+                    // The original allocation's failure shadow must also be
+                    // disarmed before later checked array calls may fail.
+                    builder.CreateCall(arrayDrop, {array_region, obsolete});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0),
+                        array_failure_places.at(target));
+                    builder.CreateStore(incoming, original);
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), lexical);
+                    array_failure_places[target] = array_failure_places.at(source);
+                } else {
+                    llvm::Value* updated = lower(*effect.expression, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    builder.CreateStore(updated, field_storage.at(target));
+                }
             } else if (effect.kind == Statement::Kind::Call) {
                 lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
             } else {
@@ -752,8 +785,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 if (it->int_array) {
                     llvm::Value* handle = builder.CreateLoad(i64,
                         it->address, it->name + ".array.drop.handle");
+                    // A lexical rt take disarms its previous owner slot.
+                    // Reject duplicate drops of moved handles by skipping 0.
+                    llvm::BasicBlock* do_drop = llvm::BasicBlock::Create(
+                        context, it->name + ".array.drop.live", function);
+                    llvm::BasicBlock* after_drop = llvm::BasicBlock::Create(
+                        context, it->name + ".array.drop.next", function);
+                    builder.CreateCondBr(builder.CreateICmpNE(handle,
+                        llvm::ConstantInt::get(i64, 0)), do_drop, after_drop);
+                    builder.SetInsertPoint(do_drop);
                     builder.CreateCall(arrayDrop, {array_region, handle});
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0), it->address);
+                    builder.CreateBr(after_drop);
+                    builder.SetInsertPoint(after_drop);
                 } else if (it->heap_owned) {
                     llvm::Value* flag = owned_live_flags.at(it->name);
                     llvm::Value* live = builder.CreateLoad(builder.getInt1Ty(), flag,

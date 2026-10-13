@@ -232,6 +232,44 @@ test includes whole-class move chains, guarded returns, fresh later
 allocations, stale source/duplicate move/immutable destination rejection,
 and normal plus ASan+UBSan fault injection at every allocation point.
 
+## Restricted direct Array<int> field ownership moves
+
+A synchronous, straight-line native function may transfer a live lexical
+`let mut Array<int>` owner into an exclusively held mutable class field:
+
+```oreslang
+let mut Shelf shelf = new Shelf();
+let mut Array<int> staged = new Array<int>();
+staged.add(42);
+shelf.first = rt take(staged);
+return shelf.first.get(0);
+```
+
+This is an **infallible owner-handle transfer**, not a copy.
+The compiler verifies a live, uniquely mutable class destination and
+a direct named, live, unborrowed lexical `Array<int>` source. It drops
+the superseded destination owner, zeroes its original failure-cleanup
+shadow, transfers the incoming opaque handle and disarms the lexical
+source slot. The incoming array's original shadow remains the cleanup
+authority if any **later** checked resource allocation fails; normal
+exit drops each current owner exactly once. Shadow provenance is also
+propagated across whole-class `rt take` transfers.
+
+Implicit copies, scalar sources, second moves, stale lexical reads,
+borrowed destinations and conditional transfers are rejected before IR.
+Branch-dependent ownership phi slots are not yet implemented; this
+first field-move slice is restricted to straight-line code, with
+deferred field moves remaining unsupported. Four sequential field
+assignments are **not** an atomic four-owner transaction. Full linked
+queue initialization still requires batch preparation, a single
+`commit_many` and publishing `ready` only after successful commit.
+
+Source-compiled Linux regression tests cover repeated field replacement,
+replacements on previously moved classes and precise no-IR negatives.
+Deterministic allocation failures *after* a replacement must destroy the
+superseded handle and remaining live owners exactly once; Clang
+ASan+UBSan runs the same compiler-generated guest programs.
+
 ## Native/runtime linker symbol admission
 
 Compiler-owned C runtime imports and generated exports must not share an
