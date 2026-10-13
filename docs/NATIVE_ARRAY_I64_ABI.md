@@ -94,12 +94,51 @@ treated as quota exhaustion or successful access. Recycled slots must have
 fully cleared metadata. Test-only corrupted-length injection verifies the
 fail-closed behavior in child processes on each access path; it is unavailable
 in production runtime builds.
+
+Owner-creation, reservation, destruction, bulk staging, transactional
+commit (including an empty commit), and region close also reconcile the aggregate `live_count` and `reserved_elements` counters with
+all 64 actual slot records. Inactive slots must have zero tokens, capacities,
+lengths **and** null backing pointers. Inconsistent accounting aborts before
+any new handle is issued, storage is resized/dropped, or a region is freed.
+This is especially important on `region_close`: trusting falsified zero
+counters would otherwise abandon live backing allocations without zeroizing
+them. The bounded scan is not performed on hot-path element reads/writes.
+Nine test-only poisoned-counter death tests exercise these boundaries,
+including a commit into an empty destination and a zero-count commit.
+The full scan occurs before any transaction owner slot can be published.
 Closing a region requires every owned array to have been dropped.
 
 Invalid inputs, exhaustion, stale/cross-region handles, allocation failure
 and region-close-with-live-owners abort deliberately. This is a low-level
 compiler-only contract analogous to `NativeOwnedI64Region`, not a recoverable
-guest `Result` API. The eventual lowering must supply error/unwind and drop
+guest `Result` API.
+
+The LLVM compiler now retains the *exact checked status* in a compiler-owned
+i32 slot on every native region-open, owner-create and `Array<int>.add`
+resource-failure edge. Only `LIMIT=1` and `NO_MEMORY=2` are admitted into
+their separately named post-cleanup terminal blocks; an unexpected status
+also terminates. The status is saved **before** the shared reverse-order
+owner destruction and region closure, so later typed error propagation
+cannot confuse the cause with cleanup effects. All three terminal blocks
+currently `abort`: returning normally would expose destroyed owners.
+The compiler's validated LIMIT and NO_MEMORY blocks now call a dedicated
+`oreslang_int_array_unhandled_resource_failure(uint32_t status)` ABI
+**after** reverse owner drops and region close; the failed region-open path
+also calls it after independent region cleanup. The ABI is allocation-free,
+non-returning and accepts only the two defined recoverable resource status
+tags, rejecting any other tag as an invariant failure. This provides a
+typed, value-only terminal error handoff that native test wrappers can
+observe without touching guest-owned data. It is not a catch frame or
+supervisor mailbox delivery: the current runtime still aborts, and no guest
+frame resumes. Tests verify exact LIMIT vs NO_MEMORY identity and zero
+double-drop/leaks *before* the terminal handoff.
+
+These status blocks are **not** yet source-visible `throw`, `trap`,
+`Option` or `Result` semantics. The eventual lowering must supply a
+well-defined typed guest exception/unwind handler and error-payload lifetime,
+and must not accidentally catch `raise` or `panic`.
+
+The eventual lowering must supply error/unwind and drop
 glue when the full Oreslang language semantics demand it.
 
 ## Recoverable internal resource API and staging contract
@@ -297,6 +336,74 @@ exception handling, typed array allocation recovery or actor supervisor
 delivery. The checked resource failure cleanup continues to use trusted
 `abort` after exact-once destruction until typed error propagation is
 implemented.
+
+## Compiler-owned four-array filled transaction
+
+The LLVM compiler exposes one deliberately restricted source statement for
+classes with **exactly four** exclusively owned `Array<int>` fields:
+
+```oreslang
+define class QueueStorage as
+  let mut Array<int> previous = new Array<int>();
+  let mut Array<int> following = new Array<int>();
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> occupied = new Array<int>();
+  let int ready = 0;
+end
+pub fnc main(): int {
+  let mut QueueStorage q = new QueueStorage();
+  rt array_commit_filled(q, 8, -1, -1, 0, 0);
+  q.ready = 1;
+  return 42;
+}
+```
+
+The compiler recognizes `rt array_commit_filled(owner, length, v0, v1, v2,
+v3);` as a **statement intrinsic**, not a guest-callable function. The four
+destination fields are selected in **class declaration order**, not by
+field name. A native ownership pass requires a live exclusively mutable
+whole-class owner (no loans, partial moves or aliases) and four owned
+array fields. Length and fill expressions must be pure scalar
+expressions: no calls, `rt take`, or borrows. Conditional/deferred
+transactions are not admitted until branch-sensitive cleanup is proven.
+A declared `using` effect signature must include `alloc`.
+
+All inputs are evaluated *before* allocation. The compiler reserves four
+additional initialized-zero owner shadows, calls the trusted runtime
+`try_prepare_filled_many` once, and branches on its actual status. On
+success it emits exactly one `commit_many`, which validates all
+destination/source slots before changing any and never allocates.
+Because `commit_many` disarms each staged source slot, the compiler
+must **restore the hidden cleanup shadow** from each published
+destination handle immediately after commit returns. It then zeros the
+obsolete owner shadows; the new shadows remain the sole cleanup
+authority if a later checked operation fails. Missing this restoration
+would leak committed owners and abort when closing a live region.
+The user's `ready` scalar may be published only after commit.
+
+On a staging failure, the runtime rolls back all partially prepared
+arrays and leaves both the four destination slots and the staged-output
+slots unchanged. The compiler records the `LIMIT` or `NO_MEMORY` status
+and runs its pre-existing exact-once cleanup. That cleanup currently
+**aborts after releasing resources**; it does NOT offer recoverable guest
+`throw`, `trap` or `Result` handling. This is single-owner serialized
+atomic publication, not synchronization across concurrent threads.
+
+At length 65536, four replacement arrays reserve exactly 262144 elements,
+the entire per-region budget, so initialization succeeds only if old
+destination arrays reserve no elements and no other arrays consume the
+budget. A second fully populated 65536-element replacement cannot stage
+in the same region: it fails with `LIMIT` and cannot publish a partial
+replacement. Separate staging regions and ownership transfer across
+regions remain unsupported.
+
+The exact source -> LLVM -> Clang test gates include normal and
+ASan+UBSan execution at length 65536, repeated smaller transactions,
+transactions after a whole-class move, invalid syntax and ownership
+rejection without IR, and deterministic fault injection at all handle
+and backing-buffer allocation points. The native queue's exact source
+requires additional method, bool, loop and Option support, so its
+strict fail-closed fixtures remain enabled.
 
 ## Ownership and concurrency
 

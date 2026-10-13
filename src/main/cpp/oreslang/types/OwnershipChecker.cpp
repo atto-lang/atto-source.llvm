@@ -1,4 +1,5 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
 
 #include <algorithm>
@@ -11,6 +12,8 @@
 #include <vector>
 
 namespace oreslang {
+
+// Select a callable by name+explicit-arity before validating loan/type contracts.
 namespace {
 
 using Mode = Parameter::Mode;
@@ -144,7 +147,7 @@ void release(const Loan& loan, Locals& locals) {
 }
 
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
-    const auto found = functions.find(expr.name);
+    const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
     if (found == functions.end())
         reject(expr, "internal ownership error: unresolved function");
     const auto& parameters = found->second->parameters;
@@ -272,7 +275,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             return;
         }
         case Expression::Kind::Call:
-            if (functions.at(expr.name)->returns_void)
+            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
@@ -358,7 +361,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 void validate_i64_ownership(const Program& program) {
     Functions functions;
     for (const auto& function : program.functions)
-        functions.emplace(function.name, &function);
+        functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     for (const auto& cls : program.classes) {
@@ -450,6 +453,28 @@ void validate_i64_ownership(const Program& program) {
                         std::to_string(local.offset));
                 check_value(*local.initializer, state, functions);
                 state.emplace(local.name, LocalOwnership{});
+                return;
+            }
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                const auto found = state.find(stmt.receiver);
+                if (found == state.end() || found->second.class_name.empty())
+                    throw std::runtime_error("ownership violation: filled array commit requires named class owner");
+                auto& recv = found->second;
+                if (recv.class_array_fields.size() != 4)
+                    throw std::runtime_error("ownership violation: filled array commit requires exactly four owned Array<int> fields");
+                if (recv.mode != Mode::Value || !recv.mutable_owner ||
+                        recv.moved || !recv.moved_fields.empty() ||
+                        recv.exclusive_loan || recv.shared_loans != 0)
+                    throw std::runtime_error("ownership violation: filled array commit requires live exclusive mutable whole class");
+                if (conditional_effects)
+                    throw std::runtime_error("ownership violation: filled array commit requires straight-line ownership CFG");
+                // Evaluate every input as a pure scalar before allocation.
+                // Calls, borrows and moves cannot be hidden in length/fills.
+                check_pure_guard(*stmt.array_commit_length, state, functions);
+                if (stmt.array_commit_values.size() != 4)
+                    throw std::runtime_error("invalid compiler-owned filled array commit arity");
+                for (const auto& v : stmt.array_commit_values)
+                    check_pure_guard(*v, state, functions);
                 return;
             }
             if (stmt.kind == Statement::Kind::FieldWrite) {

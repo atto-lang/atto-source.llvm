@@ -796,7 +796,27 @@ private:
                 continue;
             }
             if (token_.text == "rt") {
+                const auto intrinsic_offset = token_.offset;
                 advance();
+                if (accept("array_commit_filled")) {
+                    // Restricted, compiler-only transaction over four
+                    // owned array fields in declaration order.
+                    Statement effect;
+                    effect.kind = Statement::Kind::ArrayCommitFilled;
+                    effect.offset = intrinsic_offset;
+                    require("(");
+                    effect.receiver = identifier();
+                    require(",");
+                    effect.array_commit_length = expression();
+                    for (std::size_t i = 0; i < 4; ++i) {
+                        require(",");
+                        effect.array_commit_values.push_back(expression());
+                    }
+                    require(")");
+                    require(";");
+                    value.statements.push_back(std::move(effect));
+                    continue;
+                }
                 if (token_.text == "cooperate") {
                     throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
@@ -1059,7 +1079,7 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::size_t>& functions) {
+                                    const std::unordered_map<std::string, std::unordered_set<std::size_t>>& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1078,7 +1098,7 @@ private:
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
-                if (found == functions.end() || found->second != expr.arguments.size()) {
+                if (found == functions.end() || found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
                                              + expr.name + "' at byte "
                                              + std::to_string(expr.offset));
@@ -1141,9 +1161,20 @@ private:
                 throw std::runtime_error(
                     "using effects require transitive call summaries");
         }
-        for (const auto& stmt : fn.statements)
+        for (const auto& stmt : fn.statements) {
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
+                    !fn.declared_effects.has(FunctionEffect::Alloc))
+                throw std::runtime_error("filled array commit violates using signature without alloc");
             if (contains_callable_invocation(stmt.expression.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                if (contains_callable_invocation(stmt.array_commit_length.get()))
+                    throw std::runtime_error("filled array commit requires pure scalar length");
+                for (const auto& item : stmt.array_commit_values)
+                    if (contains_callable_invocation(item.get()))
+                        throw std::runtime_error("filled array commit requires pure scalar fills");
+            }
+        }
         for (const auto& guard : fn.early_returns)
             if (contains_callable_invocation(guard.lhs.get()) ||
                 contains_callable_invocation(guard.rhs.get()) ||
@@ -1159,7 +1190,7 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
-        std::unordered_map<std::string, std::size_t> functions;
+        std::unordered_map<std::string, std::unordered_set<std::size_t>> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
             // Compiler-owned ABI imports and generated exports may be
@@ -1187,10 +1218,15 @@ private:
             if (std::count_if(fn.locals.begin(), fn.locals.end(),
                     [](const LocalBinding& local) { return local.int_array; }) > 64)
                 throw std::runtime_error("native Array<int> owner limit exceeded (64)");
-            if (!functions.emplace(fn.name, fn.parameters.size()).second) {
-                throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
-                                         + std::to_string(fn.offset));
-            }
+            // Overload identity is strictly name and explicit argument count.
+            // Parameter types, borrow modes and returns cannot select a slot.
+            if (fn.name == "main" && functions.count("main"))
+                throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
+            if (!functions[fn.name].insert(fn.parameters.size()).second)
+                throw std::runtime_error("function '" + fn.name + "' already has arity "
+                    + std::to_string(fn.parameters.size()) +
+                    "; parameter and return types do not select overloads at byte " +
+                    std::to_string(fn.offset));
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) {
                 if (!params.insert(param.name).second) {
@@ -1279,6 +1315,15 @@ private:
                     for (const auto& action : stmt.else_statements)
                         check_statement_names(action, else_names);
                     // Neither arm's lexical locals escape into the parent scope.
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                    if (!names.count(stmt.receiver))
+                        throw std::runtime_error("unknown array commit class receiver '" +
+                            stmt.receiver + "'");
+                    validate_expression(*stmt.array_commit_length, names, functions);
+                    for (const auto& item : stmt.array_commit_values)
+                        validate_expression(*item, names, functions);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {

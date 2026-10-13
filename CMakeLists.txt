@@ -931,7 +931,34 @@ if(BUILD_TESTING)
         set_tests_properties(native_pinned_actor_heap_suspend_cancel_quiescence PROPERTIES TIMEOUT 30)
     endif()
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
-    oreslang_contract_test(reject_duplicates duplicate-function.ores --diagnostic "duplicate function")
+    oreslang_contract_test(reject_duplicates duplicate-function.ores
+        --diagnostic "already has arity 0")
+    oreslang_contract_test(reject_same_arity_different_names native-name-arity-duplicate.ores
+        --diagnostic "already has arity 1")
+    # Audit canonical name+arity selection through the ownership checker,
+    # not merely LLVM symbol generation. No type/mode scoring or loan escapes.
+    oreslang_contract_test(native_name_arity_conflicting_loans native-name-arity-conflicting-loans.ores
+        --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_name_arity_nested_loan_conflict native-name-arity-nested-loan-conflict.ores
+        --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_name_arity_mode_mismatch native-name-arity-borrow-mode-mismatch.ores
+        --diagnostic "borrow mode does not match borrowed parameter")
+    oreslang_contract_test(native_name_arity_borrow_mode_duplicate native-name-arity-duplicate-borrow-modes.ores
+        --diagnostic "already has arity 1")
+    oreslang_contract_test(native_name_arity_main_overload_reject native-name-arity-overloaded-main.ores
+        --diagnostic "main cannot be overloaded")
+    oreslang_contract_test(native_name_arity_gap_reject native-name-arity-gap-reject.ores
+        --diagnostic "wrong call arity")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_compiled_name_arity_overloads
+            native-name-arity-overloads.ores
+            --ir "pick\$arity0" --run 24 --clang "${ORE_CLANG}")
+        set_tests_properties(native_compiled_name_arity_overloads PROPERTIES TIMEOUT 60)
+        oreslang_contract_test(native_compiled_name_arity_borrow_abi
+            native-name-arity-borrow-execute.ores
+            --ir "read\$arity1" --run 41 --clang "${ORE_CLANG}")
+        set_tests_properties(native_compiled_name_arity_borrow_abi PROPERTIES TIMEOUT 60)
+    endif()
     oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
@@ -1405,4 +1432,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_versioned_state_logical_races
         PROPERTIES TIMEOUT 20)
     set_tests_properties(native_actor_state_scope_nested_loan_fencing PROPERTIES TIMEOUT 20)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(oreslang-refreshed-control-data-lane-test tests/native_actor_control_data_lane_test.cpp)
+    target_include_directories(oreslang-refreshed-control-data-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-refreshed-control-data-lane-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-refreshed-control-data-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME refreshed_actor_control_data_lane COMMAND oreslang-refreshed-control-data-lane-test)
+    set_tests_properties(refreshed_actor_control_data_lane PROPERTIES TIMEOUT 30)
 endif()
