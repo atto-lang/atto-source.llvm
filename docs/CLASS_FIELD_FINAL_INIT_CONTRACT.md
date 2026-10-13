@@ -58,3 +58,11 @@ owned `Array<int>` initialization path. It preserves fixed/mut field metadata
 and rejects assignment and destructive take of fixed fields in the native
 ownership checker before IR. General class members, arbitrary expressions,
 constructor parameters, methods and broad heap class support remain unsupported.
+
+## Native fail-closed constructor admission
+
+Native LLVM does not lower ordinary class constructors or
+constructor-parameter member initialization. Unqualified constructor
+and visibility-qualified pub constructor declarations are rejected
+with a specific checked-initialization-lowering diagnostic before IR.
+CTest negative fixtures cover both. This is not constructor parity.
