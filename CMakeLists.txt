@@ -308,6 +308,48 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_transform_endpoint_last
         transform-pipe-sink-role-reject.ores
         --diagnostic "transform pipe actor must be an interior pipeline stage")
+
+    # Ordinary method-state callbacks are compiled to actor-affine native
+    # entrypoints, not user-callable actor methods or forged public refs.
+    oreslang_contract_test(native_ir_actor_method_state_read
+        actor-method-state-read.ores
+        --ir "oreslang_actor_Counter_current"
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_ir_actor_method_state_write
+        actor-method-state-write.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_ir_actor_method_write_only_no_read
+        actor-method-state-write-only.ores
+        --ir "oreslang_actor_Counter_reset"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    oreslang_contract_test(reject_actor_method_state_no_effects
+        actor-method-state-no-effects-reject.ores
+        --diagnostic "actor state method requires explicit with effects")
+    oreslang_contract_test(reject_actor_method_read_mutation
+        actor-method-state-read-mutation-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_actor_method_underdeclared_read
+        actor-method-state-underdeclared-reject.ores
+        --diagnostic "state.read operation not permitted by with effects")
+    oreslang_contract_test(reject_actor_method_state_suspend
+        actor-method-state-suspend-reject.ores
+        --diagnostic "state read/write loan cannot suspend or nest")
+    oreslang_contract_test(reject_actor_method_state_escape
+        actor-method-state-escape-reject.ores
+        --diagnostic "actor state reference cannot escape handle_state callback")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_actor_method_state_heap
+            actor-method-state-runtime.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+        oreslang_contract_test(native_asan_actor_method_state_heap
+            actor-method-state-runtime.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3 --sanitize
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+    endif()
+
     # Canonical fixed-key state is the only actor-owned data declaration.
     oreslang_contract_test(reject_actor_direct_method_write
         actor-direct-method-write-reject.ores
