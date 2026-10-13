@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Imported Assert is source-owned but still unlinked. This parser/ownership
+    # test explicitly does not claim guest std/assert execution.
+    add_executable(oreslang-assert-import-parser-test
+        tests/native_assert_import_parser_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-assert-import-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-assert-import-parser-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_canonical_import_parser
+        COMMAND oreslang-assert-import-parser-test)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
@@ -441,6 +454,10 @@ if(BUILD_TESTING)
         --diagnostic "native floating division unsupported")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
         --diagnostic "native integer remainder unsupported")
+    oreslang_contract_test(reject_unadmitted_core_assert_import
+        unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
+    oreslang_contract_test(reject_unadmitted_nested_core_assert_import
+        unsupported-core-assert-nested-import.ores --diagnostic "native module imports must precede declarations")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
