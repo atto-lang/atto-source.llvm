@@ -15,8 +15,11 @@ annotation AST, `@FromJson`, derivation, attribute macros, `macro_rules!`, or ty
 procedural macros. The native lexer/parser rejects those source forms; this is
 intentional, not evidence of parity. `tests/annotation_macro_aot_admission_matrix.py`
 asserts that representative annotations/macros are rejected with nonzero status,
-no LLVM IR on stdout, and a diagnostic under both host and wasm32 targets. It
-also checks that attribute-shaped source comments remain inert.
+no LLVM IR on stdout, **no unexpected generated files** in an isolated
+working directory, and a diagnostic under both host and wasm32 targets. It
+also checks that attribute-shaped source comments remain inert and that
+ordinary unannotated typed functions/calls still emit valid `main` and helper
+functions (including the certified wasm32 target triple).
 
 ## Required future implementation (shared contract)
 
@@ -43,5 +46,6 @@ For each newly supported attribute, replace its negative fixture with positive
 native execution and equivalence checks on both backends. Do not delete a
 negative fixture until a corresponding positive compile-and-run gate exists.
 
-Related Java/GraalVM work: [macro PR #473](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/473)
-and [discarded annotation guard PR #762](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/762).
+Related Java/GraalVM integration: [AOT macro and annotation PR #771](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/771).
+Artifact admission contract: [PR #777](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/777).
+All current-source CI gates remain blocked until real runner jobs execute.
