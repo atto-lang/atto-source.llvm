@@ -41,12 +41,17 @@ public:
     struct Failure {
         ActorKey actor;
         Kind kind;
+        // Original pre-promotion effect. Terminal actor Throw/Raise is delivered
+        // as Panic, but the supervisor still receives typed provenance.
+        Kind origin_kind;
         std::string summary;
         std::string parent_id;
 
         Failure(ActorKey actor, Kind kind, std::string summary,
-                std::string parent_id = {})
+                std::string parent_id = {},
+                std::optional<Kind> origin = std::nullopt)
             : actor(std::move(actor)), kind(kind),
+              origin_kind(origin.value_or(kind)),
               summary(std::move(summary)), parent_id(std::move(parent_id)) {}
     };
 
@@ -77,7 +82,8 @@ public:
 
     bool publish(Failure failure) {
         return publish_preallocated(failure.actor, failure.kind,
-                                    failure.summary, failure.parent_id);
+                                    failure.summary, failure.parent_id,
+                                    failure.origin_kind);
     }
 
     /**
@@ -87,7 +93,8 @@ public:
      */
     bool publish_preallocated(const ActorKey& actor, Kind kind,
                               std::string_view summary,
-                              std::string_view parent_id = {}) {
+                              std::string_view parent_id = {},
+                              std::optional<Kind> origin = std::nullopt) {
         std::lock_guard<std::mutex> lock(mu_);
         Slot& slot = require(actor);
         if (slot.has_event) return false;
@@ -98,7 +105,18 @@ public:
             case Kind::Cancel: case Kind::HostFailure: break;
             default: throw std::invalid_argument("invalid supervisor failure kind");
         }
+        const Kind original = origin.value_or(kind);
+        switch (original) {
+            case Kind::Throw: case Kind::Raise: case Kind::Panic:
+            case Kind::Cancel: case Kind::HostFailure: break;
+            default: throw std::invalid_argument("invalid supervisor origin kind");
+        }
+        if (original != kind && !(kind == Kind::Panic
+                && (original == Kind::Throw || original == Kind::Raise))) {
+            throw std::invalid_argument("invalid supervisor terminal/origin pair");
+        }
         slot.kind = kind;
+        slot.origin_kind = original;
         store_utf8(slot.summary, slot.summary_length, summary);
         store_utf8(slot.parent_id, slot.parent_length, parent_id);
         slot.has_event = true;
@@ -117,7 +135,8 @@ public:
         // queued and no in-flight message becomes inaccessible.
         Failure failure{*slot->actor, slot->kind,
             std::string(slot->summary.data(), slot->summary_length),
-            std::string(slot->parent_id.data(), slot->parent_length)};
+            std::string(slot->parent_id.data(), slot->parent_length),
+            slot->origin_kind};
         unlink_head();
         slot->in_flight = true;
         return failure;
@@ -181,6 +200,7 @@ private:
     struct Slot {
         const ActorKey* actor = nullptr;
         Kind kind = Kind::HostFailure;
+        Kind origin_kind = Kind::HostFailure;
         std::array<char, 512> summary{};
         std::array<char, 128> parent_id{};
         std::size_t summary_length = 0;
