@@ -192,6 +192,80 @@ static void test_bounded_fairness_cancellation_and_lifetime() {
     REQUIRE(!expired.try_send({1, 1}, {999, 0}));
     REQUIRE(!expired.request_cancel({1, 1}));
 }
+struct BusyHost {
+    std::atomic<int> initials{0}, resumes{0}, cancels{0}, thread_errors{0};
+    std::atomic<std::uint64_t> tag{0};
+};
+static MultiActorCarrier::Outcome always_cooperate(
+        void* ptr, MultiActorCarrier::Message,
+        MultiActorCarrier::Cause cause, std::uint64_t fuel) noexcept {
+    auto& s = *static_cast<BusyHost*>(ptr);
+    const auto tag = static_cast<std::uint64_t>(
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    std::uint64_t unset = 0;
+    (void)s.tag.compare_exchange_strong(unset, tag);
+    if (s.tag.load() != tag || fuel != 32) s.thread_errors.fetch_add(1);
+    if (cause == MultiActorCarrier::Cause::initial)
+        s.initials.fetch_add(1);
+    else if (cause == MultiActorCarrier::Cause::cpu_resume)
+        s.resumes.fetch_add(1);
+    else s.thread_errors.fetch_add(1);
+    return MultiActorCarrier::Outcome::cooperate;
+}
+static void busy_cancel(void* ptr, MultiActorCarrier::Message,
+                        bool had_active) noexcept {
+    auto& s = *static_cast<BusyHost*>(ptr);
+    const auto tag = static_cast<std::uint64_t>(
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    if (tag != s.tag.load() || !had_active)
+        s.thread_errors.fetch_add(1);
+    s.cancels.fetch_add(1);
+}
+static void test_saturation_and_concurrent_cancel() {
+    BusyHost busy;
+    MultiActorCarrier carrier(32);
+    const auto ticket = carrier.register_actor(&busy, always_cooperate, busy_cancel);
+    auto producer = carrier.producer();
+    carrier.start();
+    REQUIRE(producer.try_send(ticket, {1, 0}));
+    REQUIRE(until([&] { return busy.initials.load() == 1; }, 2s));
+    // Until the active turn completes, NONE of these 64 later messages may
+    // reenter the actor. A saturated mailbox cannot block cancellation.
+    for (std::uint64_t n = 2; n <= 65; ++n)
+        REQUIRE(producer.try_send(ticket, {n, 0}));
+    REQUIRE(!producer.try_send(ticket, {66, 0}));
+    REQUIRE(busy.initials.load() == 1);
+    REQUIRE(until([&] { return busy.resumes.load() >= 32; }, 2s));
+
+    // Multiple producers racing with cancellation may only publish through
+    // the bounded mutex gate; successful admissions remain accounted once.
+    std::atomic<bool> release{false};
+    std::atomic<int> successes{0};
+    std::thread producers[4];
+    for (auto& thread : producers) {
+        thread = std::thread([&] {
+            while (!release.load()) std::this_thread::yield();
+            for (int i = 0; i != 100; ++i)
+                if (producer.try_send(ticket, {1000 + static_cast<std::uint64_t>(i), 0}))
+                    successes.fetch_add(1);
+        });
+    }
+    release.store(true);
+    REQUIRE(producer.request_cancel(ticket));
+    for (auto& thread : producers) thread.join();
+    REQUIRE(!producer.try_send(ticket, {999, 0}));
+    REQUIRE(until([&] { return carrier.actor_stats(ticket).retired; }, 2s));
+    REQUIRE(busy.cancels.load() == 1);
+    REQUIRE(busy.thread_errors.load() == 0);
+    REQUIRE(busy.initials.load() == 1);
+    REQUIRE(successes.load() == 0);
+    carrier.join();
+    const auto stats = carrier.stats();
+    REQUIRE(stats.accepted == 65);
+    REQUIRE(stats.completed == 0 && stats.abandoned == 65);
+    REQUIRE(stats.cancelled_active == 1 && stats.protocol_failures == 0);
+    REQUIRE(stats.worker_thread_tag == busy.tag.load());
+}
 static void test_bad_fuel_and_start_constraints() {
     for (std::uint64_t n : {0ULL, 513ULL}) {
         bool invalid = false;
@@ -215,6 +289,7 @@ static void test_bad_fuel_and_start_constraints() {
 }
 int main() {
     test_bad_fuel_and_start_constraints();
+    test_saturation_and_concurrent_cancel();
     test_bounded_fairness_cancellation_and_lifetime();
     std::puts("TWO_COMPILED_ACTORS_ONE_REAL_CARRIER_PASS");
     return 0;
