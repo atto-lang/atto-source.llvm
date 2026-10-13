@@ -119,6 +119,16 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {moves->array_region, handle, args[0]}, "array.get");
+            // Explicitly recoverable native-only operation. Unlike add(),
+            // the caller observes OK=0, LIMIT=1 or NO_MEMORY=2 as a scalar
+            // status and may decide whether to return or continue. The
+            // owned array stays live and normal function cleanup runs.
+            // Never turn checked resource failure into an invalid handle.
+            if (expr.name == "try_add" && args.size() == 1) {
+                llvm::Value* status = builder.CreateCall(moves->array_add,
+                    {moves->array_region, handle, args[0]}, "array.try_add.status");
+                return builder.CreateZExt(status, i64, "array.try_add.code");
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {moves->array_region, handle, args[0]}, "array.add.status");

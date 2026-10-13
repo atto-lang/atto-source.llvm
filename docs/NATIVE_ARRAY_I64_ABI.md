@@ -243,6 +243,33 @@ The pre-existing `native_int_array_llvm_abi` test instead uses
 lowering. The same pinned sources are mirrored onto a funded private runner
 for real LLVM 18 compilation when repository Actions minutes are exhausted.
 
+## Native-only recoverable `try_add` scalar status (draft)
+
+The LLVM compiler now admits `array.try_add(value)` **only as a scalar int
+expression** on a mutable, uniquely owned local or a directly named
+class-owned `Array<int>` field. It returns the trusted ABI code: **0** for
+success, **1** for capacity/region quota exhaustion and **2** for native
+allocation failure. A failed append leaves length and committed values
+unchanged; the array owner remains live, and normal lexical cleanup still
+drops it exactly once. This does not recover earlier region-open or
+array-construction failures, which still clean up and abort.
+
+`try_add` is forbidden as a bare statement to avoid silently discarding
+errors. Function `using` declarations continue to reject unresolved
+transitive calls. Array borrowing, moves, escaped handles, suspension,
+`wasm32`, exception edges and unsupported receivers remain rejected.
+
+**This is a deliberately narrow native ABI-proving bridge**, not a public
+typed `Result<void, ArrayError>` or a cross-backend Oreslang language
+contract. The integer codes must not be silently promoted to stable language
+API without a coordinated typed-result proposal and Java parity.
+
+The `native_int_array_try_add_guest` CTests compile actual Oreslang source
+through LLVM, link against Clang and the checked C ABI, inject append OOM,
+verify return code and unchanged length, and require exact one-drop/one-close
+cleanup. They also reject malformed arity, invalid receivers and status
+discarding with specific diagnostics and zero LLVM IR.
+
 ## Required compiler follow-ups
 
 1. Complete class/actor-lifetime regions and *recoverable* transactional

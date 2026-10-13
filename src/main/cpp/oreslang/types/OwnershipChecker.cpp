@@ -260,9 +260,13 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
-            array_owner(*expr.left, locals, false);
-            if (expr.name != "get" || expr.arguments.size() != 1)
-                reject(expr, "native Array<int> expression supports only get(index)");
+            // try_add mutates the receiver but cannot expose its opaque
+            // ownership handle. A bare try_add statement stays forbidden:
+            // callers must inspect/return the explicit status.
+            array_owner(*expr.left, locals, expr.name == "try_add");
+            if ((expr.name != "get" && expr.name != "try_add") ||
+                    expr.arguments.size() != 1)
+                reject(expr, "native Array<int> expression supports only get(index) or try_add(value)");
             check_value(*expr.arguments[0], locals, functions);
             return;
         }

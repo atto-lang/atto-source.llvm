@@ -120,6 +120,28 @@ if(BUILD_TESTING)
             native_checked_array_source_failure_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
 
+    # Native-only fallible try_add() scalar status slice. A real guest
+    # compiler-generated call must return status 2 on injected OOM, retain
+    # array state, clean the owner exactly once and never emit partial IR for
+    # rejected ownership/syntax cases. Not general typed Result support.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_int_array_try_add_guest
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_try_add_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_int_array_try_add_guest_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_try_add_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --sanitizers)
+        set_tests_properties(native_int_array_try_add_guest
+            native_int_array_try_add_guest_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+
     # Real native guest class-owned Array<int> fields, independent of the
     # handcrafted ABI fixture and lexical-array-only source admission.
     add_test(NAME native_class_owned_array_source_execution
