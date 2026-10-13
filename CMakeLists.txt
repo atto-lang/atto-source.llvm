@@ -1475,3 +1475,18 @@ if(BUILD_TESTING)
     add_test(NAME refreshed_actor_control_data_lane COMMAND oreslang-refreshed-control-data-lane-test)
     set_tests_properties(refreshed_actor_control_data_lane PROPERTIES TIMEOUT 30)
 endif()
+
+# Compiler-side nominal enum signature policy (host-only). This does NOT
+# admit same-arity guest overloads in native LLVM source or claim runtime parity.
+if(BUILD_TESTING)
+    add_executable(oreslang-nominal-enum-overload-policy-test
+        tests/nominal_enum_overload_policy_test.cpp)
+    target_include_directories(oreslang-nominal-enum-overload-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-nominal-enum-overload-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nominal_enum_overload_static_policy
+        COMMAND oreslang-nominal-enum-overload-policy-test)
+    set_tests_properties(native_nominal_enum_overload_static_policy
+        PROPERTIES TIMEOUT 10)
+endif()
