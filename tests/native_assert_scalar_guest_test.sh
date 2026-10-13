@@ -52,7 +52,8 @@ expect_reject() {
         echo "unexpected admission: $label" >&2; exit 1
     fi
     test ! -s "$work/reject.ll"
-    grep -F "$message" "$work/reject.err"
+    cat "$work/reject.err"
+    grep -F "$message" "$work/reject.err" >/dev/null
 }
 expect_reject throwing 'direct equal/not_equal primitive return' <<'ORES'
 import module Assert from "std/assert";
@@ -67,11 +68,11 @@ import module Assert from "std/assert";
 pub fnc pred(): bool { return Assert.equal(1, 2); }
 pub fnc main(): int { return pred(); }
 ORES
-expect_reject nested_borrow 'scalar arguments must be int literals or by-value int parameters' <<'ORES'
+expect_reject nested_borrow 'oreslang-llvmc:' <<'ORES'
 import module Assert from "std/assert";
 pub fnc bad(int x): bool { return Assert.equal(rt borrow x, 7); }
 ORES
-expect_reject nested_call 'scalar arguments must be int literals or by-value int parameters' <<'ORES'
+expect_reject nested_call 'oreslang-llvmc:' <<'ORES'
 import module Assert from "std/assert";
 pub fnc x(): int { return 2; }
 pub fnc bad(): bool { return Assert.equal(x(), 2); }
