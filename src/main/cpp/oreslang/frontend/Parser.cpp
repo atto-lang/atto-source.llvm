@@ -496,6 +496,22 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
+                // A nested branch, including a finally/cleanup arm, must
+                // enforce the same no-guest-suspension boundary as a top-level
+                // statement. Do not hide an unsupported loop behind a generic
+                // "expected identifier" error, or arm a partial CFG.
+                if (token_.text == "while" || token_.text == "loop" ||
+                        token_.text == "for") {
+                    fail("native realtime source loop requires verified LLVM continuation lowering");
+                }
+                if (token_.text == "rt") {
+                    advance();
+                    if (token_.text == "cooperate") {
+                        throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering");
+                    }
+                    fail("unsupported native runtime operation in conditional arm");
+                }
                 Statement statement;
                 statement.offset = token_.offset;
                 if (finally_scope && (token_.text == "return" ||
