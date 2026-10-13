@@ -405,8 +405,12 @@ void validate_i64_ownership(const Program& program) {
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
-                if (!class_arrays.at(binding.class_name).empty())
-                    throw std::runtime_error("ownership violation: class with Array<int> fields cannot move until owned field transfer lowering");
+                // Transfer the whole class's unique array-owned places, not
+                // individual fields. A source with moved fields or live
+                // borrows is rejected below before any IR is generated.
+                if (!class_arrays.at(binding.class_name).empty() &&
+                        !binding.owner_mutable)
+                    throw std::runtime_error("ownership violation: moved Array<int> class requires let mut owner");
                 const auto found = locals.find(binding.move_source);
                 if (found == locals.end() || found->second.class_name != binding.class_name)
                     throw std::runtime_error("ownership violation: class move type mismatch at byte " +
@@ -418,6 +422,7 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: class move requires live unborrowed owner at byte " +
                         std::to_string(binding.offset));
                 entry.class_fields = source.class_fields;
+                entry.class_array_fields = source.class_array_fields;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
