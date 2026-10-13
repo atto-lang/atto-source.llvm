@@ -920,6 +920,20 @@ if(BUILD_TESTING)
         --diagnostic "already has arity 0")
     oreslang_contract_test(reject_same_arity_different_names native-name-arity-duplicate.ores
         --diagnostic "already has arity 1")
+    # Initial compiled native class-method slice: static functions only.
+    # Instance/self dispatch remains fail-closed until native vtable lowering.
+    oreslang_contract_test(native_class_static_duplicate_arity
+        native-class-static-arity-duplicate.ores
+        --diagnostic "already has arity 1")
+    oreslang_contract_test(native_class_instance_method_failclosed
+        native-class-instance-failclosed.ores
+        --diagnostic "native instance/abstract class methods require self/vtable lowering")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_class_static_overload_executable
+            native-class-static-arity-guest.ores
+            --ir "Foo.pick\\$arity0" --run 24 --clang "${ORE_CLANG}")
+        set_tests_properties(native_class_static_overload_executable PROPERTIES TIMEOUT 60)
+    endif()
     # Audit canonical name+arity selection through the ownership checker,
     # not merely LLVM symbol generation. No type/mode scoring or loan escapes.
     oreslang_contract_test(native_name_arity_conflicting_loans native-name-arity-conflicting-loans.ores
