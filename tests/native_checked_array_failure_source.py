@@ -193,9 +193,9 @@ def verify(compiler, clang, root, sanitizers):
             # Every checked new/add edge must carry the *actual* runtime
             # status into the distinct failure classifier before cleanup.
             # Nonrecoverable paths still abort after exact-once destruction.
-            if (len(re.findall(rb'^\\w[\\w.]*\\.array\\.create\\.failure(?:[0-9]+)?:', ir,
+            if (len(re.findall(rb'^\w[\w.]*\.array\.create\.failure(?:[0-9]+)?:', ir,
                                re.MULTILINE)) != owned or
-                    len(re.findall(rb'^array\\.add\\.error(?:[0-9]+)?:', ir,
+                    len(re.findall(rb'^array\.add\.error(?:[0-9]+)?:', ir,
                                    re.MULTILINE)) != growing):
                 raise AssertionError(f"{label}: lost status-preserving create/add failure edges")
             if ir.count(b"switch i32") != 1:
