@@ -72,7 +72,7 @@ int main() {
     rejects([&] { (void)signature("go", {{Kind::Primitive, "{a:int}"}}, eligibleIds); });
     rejects([&] { (void)signature("go", {{Kind::Enum, ""}}, eligibleIds); });
     rejects([&] { (void)compare(color, signature("other", {
-        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}})); });
+        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}}, eligibleIds)); });
 
     rejects([&] { (void)signature("go", {
         {Kind::Enum, "attacker::Fake"}, {Kind::Primitive, "int"}
