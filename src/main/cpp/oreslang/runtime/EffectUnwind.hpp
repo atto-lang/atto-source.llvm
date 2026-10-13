@@ -15,7 +15,7 @@ namespace oreslang {
  * cleanup substrate for lexical defer/finally and later actor fault reporting.
  */
 enum class EffectKind : std::uint8_t {
-    Return, Throw, Raise, Panic, Cancel, Fatal
+    Return, Throw, Raise, Panic, Cancel, Fatal, ProcessExit
 };
 
 struct EffectStatus {
@@ -29,9 +29,31 @@ constexpr bool native_trap_admits(EffectKind kind) noexcept {
     return kind == EffectKind::Throw;
 }
 
+constexpr bool effect_kind_valid(EffectKind kind) noexcept {
+    switch (kind) {
+        case EffectKind::Return:
+        case EffectKind::Throw:
+        case EffectKind::Raise:
+        case EffectKind::Panic:
+        case EffectKind::Cancel:
+        case EffectKind::Fatal:
+        case EffectKind::ProcessExit:
+            return true;
+    }
+    return false;
+}
+
 constexpr bool effect_is_terminal(EffectKind kind) noexcept {
     return kind == EffectKind::Raise || kind == EffectKind::Panic
-        || kind == EffectKind::Cancel || kind == EffectKind::Fatal;
+        || kind == EffectKind::Cancel || kind == EffectKind::Fatal
+        || kind == EffectKind::ProcessExit;
+}
+
+// FFI/IR consumers may hand in an out-of-range discriminant. Such a value
+// is never an ordinary throw, success, or catchable effect.
+constexpr EffectStatus normalize_effect(EffectStatus status) noexcept {
+    return effect_kind_valid(status.kind) ? status
+        : EffectStatus{EffectKind::Fatal, 0xFFFFFFFDu};
 }
 
 /**
@@ -60,10 +82,12 @@ public:
     // The first terminal effect is authoritative (not the numerically largest
     // kind). A later ordinary cleanup throw supersedes an earlier ordinary
     // throw, preserving the earlier one as secondary diagnostics. This mirrors
-    // the Java/GraalVM cleanup and trap contracts.
+    // the Java/GraalVM cleanup and trap contracts. In particular, a deferred
+    // process exit cannot convert an already-failing ordinary throw into an
+    // apparently successful exit status.
     Summary finish(EffectStatus current = {}) noexcept {
         Summary result{};
-        result.primary = current;
+        result.primary = normalize_effect(current);
         if (finished_) {
             result.primary = {EffectKind::Fatal, 0xFFFFFFFEu};
             return result;
@@ -71,9 +95,11 @@ public:
         finished_ = true;
         while (count_ != 0) {
             Entry cleanup = stack_[--count_];
-            const EffectStatus next = cleanup.callback(cleanup.context);
+            const EffectStatus next = normalize_effect(cleanup.callback(cleanup.context));
             if (next.kind == EffectKind::Return) continue;
-            if (effect_is_terminal(result.primary.kind)) {
+            if (effect_is_terminal(result.primary.kind) ||
+                (result.primary.kind == EffectKind::Throw &&
+                 next.kind == EffectKind::ProcessExit)) {
                 // A later panic/cancellation/fatal cleanup is diagnostic when
                 // an earlier terminal control effect already owns the exit.
                 append_secondary(result, next);
