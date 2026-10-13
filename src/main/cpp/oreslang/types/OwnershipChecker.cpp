@@ -26,6 +26,7 @@ struct LocalOwnership {
     std::string class_name;
     std::unordered_set<std::string> class_fields;
     std::unordered_set<std::string> class_array_fields;
+    std::unordered_set<std::string> class_fixed_fields;
     // Primitive i64 class fields can be moved and later restored by a write.
     std::unordered_set<std::string> moved_fields;
 };
@@ -245,6 +246,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                     field.left->name, field.name, field.offset, locals);
                 if (source.mode != Mode::Value)
                     reject(expr, "ownership violation: cannot take a class field through a borrowed parameter");
+                if (source.class_fixed_fields.count(field.name))
+                    reject(expr, "ownership violation: cannot take final class field");
                 if (source.exclusive_loan || source.shared_loans != 0)
                     reject(expr, "ownership violation: cannot take a class field with active loans");
                 source.moved_fields.insert(field.name);
@@ -356,14 +359,17 @@ void validate_i64_ownership(const Program& program) {
         functions.emplace(function.name, &function);
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_fixed_fields;
     for (const auto& cls : program.classes) {
-        std::unordered_set<std::string> fields, arrays;
+        std::unordered_set<std::string> fields, arrays, fixed;
         for (const auto& field : cls.fields) {
             fields.insert(field.name);
             if (field.int_array) arrays.insert(field.name);
+            if (field.fixed_binding) fixed.insert(field.name);
         }
         class_fields.emplace(cls.name, std::move(fields));
         class_arrays.emplace(cls.name, std::move(arrays));
+        class_fixed_fields.emplace(cls.name, std::move(fixed));
     }
     for (const auto& function : program.functions) {
         Locals locals;
@@ -387,6 +393,7 @@ void validate_i64_ownership(const Program& program) {
             if (!param.class_name.empty()) {
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
+                entry.class_fixed_fields = class_fixed_fields.at(param.class_name);
             }
             locals.emplace(param.name, std::move(entry));
         }
@@ -402,6 +409,7 @@ void validate_i64_ownership(const Program& program) {
             } else if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
+                entry.class_fixed_fields = class_fixed_fields.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
@@ -418,6 +426,7 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: class move requires live unborrowed owner at byte " +
                         std::to_string(binding.offset));
                 entry.class_fields = source.class_fields;
+                entry.class_fixed_fields = source.class_fixed_fields;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
@@ -437,6 +446,8 @@ void validate_i64_ownership(const Program& program) {
             }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
+                if (recv.class_fixed_fields.count(stmt.field))
+                    throw std::runtime_error("ownership violation: cannot reassign final class field");
                 if (recv.class_array_fields.count(stmt.field))
                     throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
                 if (recv.mode == Mode::Borrow)
