@@ -132,6 +132,26 @@ static void authenticated_typed_reply(std::size_t n) {
     check(route.completed_reply()[0] == 0x92,
           "late post-success failure invalidated already-finalized result");
 }
+static void ambiguous_data_publication_is_terminal() {
+    // A trusted scheduler may lose the publication acknowledgement after
+    // issuing a directional claim. It must poison the route, NOT release
+    // credit or presume that DATA was not delivered.
+    auto actors = ids(3);
+    Route route(actors, "domain");
+    route.commit_published(route.claim_root(actors[0], "domain"));
+    auto uncertain = route.claim_directional(
+        actors[0], 0, Route::Direction::Forward, "domain");
+    route.fail();
+    rejected([&] { route.commit_published(uncertain); });
+    rejected([&] { route.reject_prepublication(uncertain); });
+    rejected([&] { route.claim_root(actors[0], "domain"); });
+    rejected([&] { route.claim_directional(
+        actors[0], 0, Route::Direction::Forward, "domain"); });
+    for (auto id : actors) route.physical_done(id, true);
+    check(route.done() == Route::Done::Failed,
+          "ambiguous directional send escaped terminal failure");
+    rejected([&] { route.completed_reply(); });
+}
 static void typed_completion_races_abort() {
     // A source return may race a fatal CONTROL event. Even if the return
     // claims the terminal source phase first, failure before whole-route
@@ -191,6 +211,7 @@ int main() {
     }
     reply_failure_is_not_a_result();
     typed_completion_races_abort();
+    ambiguous_data_publication_is_terminal();
     for (auto n: {1u, 17u}) {
         try { Route invalid(ids(n), "PipeMessages"); }
         catch (const std::invalid_argument&) { continue; }
