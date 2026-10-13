@@ -977,6 +977,14 @@ if(BUILD_TESTING)
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}")
         set_tests_properties(class_native_1_to_16_field_layout_matrix PROPERTIES TIMEOUT 240)
+        # Fixed class-slot lowering: native success, no-IR parser and
+        # ownership rejections. Keep these adjacent to the real LLVM guest gate.
+        oreslang_contract_test(native_class_final_read class-final-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_class_colon_write class-colon-rebindable-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_native_final_write class-final-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_const_alias_write class-final-alias-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_final_take class-final-take-reject.ores --diagnostic "cannot take final class field")
+        oreslang_contract_test(reject_native_final_uninitialized class-final-uninitialized-reject.ores --diagnostic "final class field requires declaration-site initializer")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
