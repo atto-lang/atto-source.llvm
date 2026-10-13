@@ -25,6 +25,17 @@ returns `Option<T>` for synchronous calls and eventually
 `throw`. `Option<Option<T>>` must not flatten. Existing detailed trap
 contract: `docs/TRAP.md` in Java.
 
+## Native compiler exceptional CFG milestone (experimental)
+
+The LLVM frontend now admits one local synchronous `int` throw inside a
+terminal `try`, where a matching `catch` always consumes the thrown scalar.
+Its nonthrowing class-field defers run in LIFO order on dedicated LLVM
+`throw.cleanup` -> `throw.catch` edges, and the existing `finally` path
+runs after the catch-return snapshot. No general source exceptional-effect
+propagation, arbitrary cleanup throws, async unwind or supervisor hook
+lowering is implemented. Java's production parser still rejects the explicit
+`throw` statement; this is **not cross-backend parity**.
+
 ## Bootstrap catch versus trap admission (Java/GraalVM PR #781)
 
 Java distinguishes *explicit recovery* from *silent conversion to None*.

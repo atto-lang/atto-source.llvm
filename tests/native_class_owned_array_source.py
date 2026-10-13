@@ -17,7 +17,163 @@ CLASS = """define class Shelf as
   let mut Array<int> second = new Array<int>();
 end
 """
+FOUR = """define class Four as
+  let mut Array<int> previous = new Array<int>();
+  let mut Array<int> following = new Array<int>();
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> occupied = new Array<int>();
+  let int ready = 0;
+end
+"""
 POSITIVES = {
+    "four-atomic-filled": (FOUR + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 3, -1, -1, 19, 23);
+  q.ready = 1;
+  return q.values.get(0) + q.occupied.get(2);
+}
+""", 42, 4),
+    "four-atomic-filled-repeated": (FOUR + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 3, -1, -1, 10, 10);
+  rt array_commit_filled(q, 4, -1, -1, 21, 21);
+  q.ready = 1;
+  return q.values.get(3) + q.occupied.get(0);
+}
+""", 42, 4),
+    "four-atomic-filled-after-class-move": (FOUR + """pub fnc main(): int {
+  let mut Four original = new Four();
+  let mut Four moved = rt take(original);
+  rt array_commit_filled(moved, 2, -1, -1, 40, 2);
+  moved.ready = 1;
+  return moved.values.get(1) + moved.occupied.get(1);
+}
+""", 42, 4),
+    "four-atomic-filled-at-capacity": (FOUR + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 65536, -1, -1, 21, 21);
+  q.ready = 1;
+  return q.values.get(65535) + q.occupied.get(65535);
+}
+""", 42, 4),
+
+    "replace-one-owned-array-field": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> staged = new Array<int>();
+  shelf.first = rt take(staged);
+  shelf.first.add(42);
+  return shelf.first.get(0);
+}
+""", 42, 3),
+    "replace-both-owned-array-fields": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> p = new Array<int>();
+  let mut Array<int> q = new Array<int>();
+  p.add(19);
+  q.add(23);
+  shelf.first = rt take(p);
+  shelf.second = rt take(q);
+  return shelf.first.get(0) + shelf.second.get(0);
+}
+""", 42, 4),
+    "replace-field-of-moved-class": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Shelf relocated = rt take(shelf);
+  let mut Array<int> new_first = new Array<int>();
+  relocated.first = rt take(new_first);
+  relocated.first.add(42);
+  return relocated.first.get(0);
+}
+""", 42, 3),
+    "replace-field-twice": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> a = new Array<int>();
+  let mut Array<int> b = new Array<int>();
+  shelf.first = rt take(a);
+  shelf.first = rt take(b);
+  shelf.first.add(42);
+  return shelf.first.get(0);
+}
+""", 42, 4),
+    "class-array-whole-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Shelf moved = rt take(shelf);
+  moved.first.add(19);
+  moved.second.add(23);
+  return moved.first.get(0) + moved.second.get(0);
+}
+""", 42, 2),
+    "class-array-chain-moves": (CLASS + """pub fnc main(): int {
+  let mut Shelf original = new Shelf();
+  let mut Shelf middle = rt take(original);
+  let mut Shelf final_owner = rt take(middle);
+  final_owner.first.add(6);
+  final_owner.second.add(36);
+  return final_owner.first.get(0) + final_owner.second.get(0);
+}
+""", 42, 2),
+    "class-array-move-followed-by-allocation": (CLASS + """pub fnc main(): int {
+  let mut Shelf original = new Shelf();
+  let mut Shelf relocated = rt take(original);
+  let mut Shelf new_one = new Shelf();
+  relocated.first.add(10);
+  new_one.first.add(11);
+  relocated.second.add(21);
+  return relocated.first.get(0) + relocated.second.get(0) + new_one.first.get(0);
+}
+""", 42, 4),
+    "class-array-move-guarded-exit": (CLASS + """pub fnc main(): int {
+  let mut Shelf original = new Shelf();
+  let mut Shelf relocated = rt take(original);
+  relocated.first.add(42);
+  if (relocated.first.size == 1) { return relocated.first.get(0); } fi
+  return 2;
+}
+""", 42, 2),
+    # Exact admitted boundary: four independently constructed classes, each
+    # owning sixteen arrays. This tests all 64 handles and reverse-order drop.
+    # Move all sixty-four live owners without creating a sixty-fifth token.
+    # The per-function source owner bound remains 64, not the number of
+    # class variable names or transfer operations.
+    "exact-64-owned-array-move": ("""define class Slot16 as
+""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+             for i in range(16)) + """end
+pub fnc main(): int {
+  let mut Slot16 a = new Slot16();
+  let mut Slot16 b = new Slot16();
+  let mut Slot16 c = new Slot16();
+  let mut Slot16 d = new Slot16();
+  let mut Slot16 a2 = rt take(a);
+  let mut Slot16 b2 = rt take(b);
+  let mut Slot16 c2 = rt take(c);
+  let mut Slot16 d2 = rt take(d);
+  d2.f15.add(42);
+  return d2.f15.get(0);
+}
+""", 42, 64),
+    "exact-64-owned-array-limit": ("""define class Slot16 as
+""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+             for i in range(16)) + """end
+pub fnc main(): int {
+  let mut Slot16 a = new Slot16();
+  let mut Slot16 b = new Slot16();
+  let mut Slot16 c = new Slot16();
+  let mut Slot16 d = new Slot16();
+  d.f15.add(42);
+  return d.f15.get(0);
+}
+""", 42, 64),
+    "class-constructor-effect-alloc": (CLASS + """pub fnc main(): int using alloc {
+  let mut Shelf shelf = new Shelf();
+  return shelf.number + 35;
+}
+""", 42, 2),
+    "direct-scalar-field-write": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.number = 42;
+  return shelf.number;
+}
+""", 42, 2),
     "two-fields": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   shelf.first.add(19);
@@ -77,17 +233,174 @@ POSITIVES = {
 """, 42, 2),
 }
 NEGATIVES = {
+    "reject-batch-two-array-class": (CLASS + """pub fnc main(): int {
+  let mut Shelf q = new Shelf();
+  rt array_commit_filled(q, 4, -1, -1, 0, 0);
+  return 42;
+}
+""", "requires exactly four owned Array<int> fields"),
+    "reject-batch-moved-source": (FOUR + """pub fnc main(): int {
+  let mut Four a = new Four();
+  let mut Four b = rt take(a);
+  rt array_commit_filled(a, 4, -1, -1, 0, 0);
+  return 42;
+}
+""", "requires live exclusive mutable whole class"),
+    "reject-batch-impure-length": (FOUR + """fnc size(): int { return 4; }
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, size(), -1, -1, 0, 0);
+  return 42;
+}
+""", "native guarded condition must be pure"),
+    "reject-batch-impure-fill": (FOUR + """fnc fill(): int { return 0; }
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 4, -1, -1, fill(), 0);
+  return 42;
+}
+""", "native guarded condition must be pure"),
+
+    "reject-copy-into-owned-array-field": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> source = new Array<int>();
+  shelf.first = source;
+  return 42;
+}
+""", "Array<int> field requires direct rt take of lexical owner"),
+    "reject-use-after-array-field-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> source = new Array<int>();
+  shelf.first = rt take(source);
+  return source.size;
+}
+""", "use-after-move"),
+    "reject-duplicate-array-field-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> source = new Array<int>();
+  shelf.first = rt take(source);
+  shelf.second = rt take(source);
+  return 42;
+}
+""", "field transfer requires live unique lexical source"),
+    "reject-nonarray-field-source": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  const n: int = 42;
+  shelf.first = rt take(n);
+  return 42;
+}
+""", "field transfer requires live unique lexical source"),
+    "reject-array-field-transfer-in-diamond": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> staged = new Array<int>();
+  if (shelf.number == 7) {
+    shelf.first = rt take(staged);
+  } else {
+    shelf.number = 9;
+  } fi
+  return 42;
+}
+""", "requires straight-line ownership CFG"),
+    "reject-array-field-transfer-in-defer": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> staged = new Array<int>();
+  defer shelf.first = rt take(staged);
+  return 42;
+}
+""", "cannot reassign owned Array<int> class field"),
+    # C runtime and compiler-generated ABI entrypoints are externally linked
+    # before guest function definitions. Never let LLVM silently rename one
+    # to '.1' and create an untracked or incorrectly typed symbol.
+    **{
+        "forbid-runtime-symbol-" + symbol: (
+            CLASS + "fnc " + symbol + "(): int { return 42; }\n"
+            + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  return shelf.number;
+}
+""",
+            "reserved native runtime ABI symbol"
+        )
+        for symbol in (
+            "abort",
+            "__oreslang_guest_main",
+            "oreslang_owned_i64_region_drop",
+            "ores_actor_i64_heap_field_read",
+            "oreslang_source_actor_send",
+            "oreslang_actor_Worker_init",
+            "oreslang_wasm_actor_init",
+        )
+    },
+    "class-allocation-must-declare-alloc": (CLASS + """pub fnc main(): int using state.read {
+  let mut Shelf shelf = new Shelf();
+  return shelf.number;
+}
+""", "owned allocation violates using signature without alloc"),
+    # Before this guard, nested writes could silently target an unrelated
+    # local object sharing the nested receiver's final field name.
+    "nested-write-colliding-local": ("""define class Bucket as
+  let mut Array<int> items = new Array<int>();
+end
+define class Counter as
+  pub let int size = 1;
+end
+pub fnc main(): int {
+  let mut Bucket bucket = new Bucket();
+  let mut Counter items = new Counter();
+  bucket.items.size = 99;
+  return items.size;
+}
+""", "native field assignment requires direct named class receiver"),
+    "nested-write-no-collision": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.first.size = 42;
+  return shelf.first.size;
+}
+""", "native field assignment requires direct named class receiver"),
+    "nested-actor-send-colliding-local": ("""define class Box as
+  pub let int items = 0;
+end
+define actor Worker as {
+  let total: int = 0;
+  pub on_message(int n): int { return total + n; }
+}
+pub fnc main(): int {
+  const items = spawn Worker();
+  let mut Box box = new Box();
+  box.items.send(5);
+  stop items;
+  return 42;
+}
+""", "native actor send requires direct named ActorRef receiver"),
+    "nested-take-array-size": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  return rt take(shelf.first.size);
+}
+""", "native rt take requires a direct named class field"),
     "immutable-owner": (CLASS + """pub fnc main(): int {
   let Shelf shelf = new Shelf();
   return shelf.number;
 }
 """, "class with Array<int> fields requires let mut owner"),
-    "forbid-move": (CLASS + """pub fnc main(): int {
+    "forbid-reuse-after-move": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   let mut Shelf moved = rt take(shelf);
+  return shelf.first.size;
+}
+""", "use-after-move"),
+    "forbid-duplicate-class-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Shelf first = rt take(shelf);
+  let mut Shelf second = rt take(shelf);
+  return first.number;
+}
+""", "class move requires live unborrowed owner"),
+    "forbid-immutable-move-target": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let Shelf moved = rt take(shelf);
   return moved.number;
 }
-""", "class with Array<int> fields cannot move"),
+""", "moved Array<int> class requires let mut owner"),
     "forbid-borrowed-parameter": (CLASS + """fnc read(borrow Shelf shelf): int {
   return shelf.number;
 }
@@ -116,7 +429,7 @@ pub fnc main(): int { return 42; }
   shelf.first = 12;
   return 0;
 }
-""", "cannot reassign owned Array<int> class field"),
+""", "Array<int> field requires direct rt take of lexical owner"),
     "forbid-deferred-reassign": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   defer shelf.first = 12;
@@ -200,9 +513,11 @@ def check(compiler, clang, source_root, sanitizers):
             if compiled.returncode or compiled.stderr or not compiled.stdout:
                 raise AssertionError(f"{name}: compiler failed: {compiled.stderr!r}")
             ir = compiled.stdout
-            if ir.count(b"call i64 @oreslang_int_array_new(") != count or \
+            if ir.count(b"call i32 @oreslang_int_array_try_new(") != count or \
                     ir.count(b"call void @oreslang_int_array_drop(") < count or \
-                    b"@oreslang_int_array_region_close" not in ir:
+                    b"@oreslang_int_array_region_close" not in ir or \
+                    b"@oreslang_int_array_try_region_open" not in ir or \
+                    b"array.resource.failure:" not in ir:
                 raise AssertionError(f"{name}: missing compiler-generated owned ABI operations")
             if name == "two-fields":
                 a = ir.find(b"shelf.second.drop.handle")
@@ -226,6 +541,26 @@ def check(compiler, clang, source_root, sanitizers):
             if result.returncode != expected or result.stdout or result.stderr:
                 raise AssertionError(f"{name}: incorrect/sanitizer-failed execution: "
                                      f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
+        # The nested-send rejection must not break a legitimate direct
+        # ActorRef.send(...) call. This is a compiler/IR control: the isolated
+        # test runner does not link the actor scheduler runtime.
+        actor_source = work / "direct-actor-send.ores"
+        actor_source.write_text("""define actor Worker as {
+  let total: int = 0;
+  pub on_message(int n): int { return total + n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  stop worker;
+  return 42;
+}
+""", encoding="utf-8")
+        actor_ir = run([str(compiler), str(actor_source)])
+        if actor_ir.returncode or actor_ir.stderr or \
+                b"@oreslang_source_actor_send" not in actor_ir.stdout or \
+                b"@oreslang_actor_Worker_on_message" not in actor_ir.stdout:
+            raise AssertionError("valid direct actor send must still compile to actor ABI IR")
         for name, (src, diagnostic) in NEGATIVES.items():
             source = work / (name + ".ores")
             source.write_text(src, encoding="utf-8")
