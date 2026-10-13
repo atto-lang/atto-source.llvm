@@ -68,8 +68,10 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
         reject(receiver, "native Array<int> operation requires a named owned array place");
     }
     auto it = locals.find(root->name);
-    if (it == locals.end() || it->second.moved)
+    if (it == locals.end())
         reject(receiver, "native Array<int> operation requires a live owner");
+    if (it->second.moved)
+        reject(receiver, "ownership violation: use-after-move Array<int> owner");
     auto& owner = it->second;
     const bool valid = field.empty() ? owner.int_array :
         !owner.class_name.empty() && owner.class_array_fields.count(field);
