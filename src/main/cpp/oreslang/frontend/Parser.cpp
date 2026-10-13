@@ -274,6 +274,10 @@ private:
                 require("int");
                 require("=");
                 field.initializer = expression();
+                // A sealed i64 state initializer must be closed and pure.
+                // Reject captures, calls, loans and effects before the
+                // intentionally disabled executable lowering boundary.
+                validate_native_state_value(*field.initializer, "", {});
                 // Match the Java frontend's optional-semicolon rule: on
                 // the same physical source line two declarations MUST
                 // have an explicit ';'. A newline or closing brace can
