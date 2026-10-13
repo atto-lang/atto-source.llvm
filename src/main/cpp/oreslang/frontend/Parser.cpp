@@ -348,6 +348,9 @@ private:
         CooperativeScalarLoop loop;
         loop.offset = token_.offset;
         require("suspend");
+        if (token_.text != "fnc") {
+            fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+        }
         require("fnc");
         loop.name = identifier();
         require("("); require(")");
