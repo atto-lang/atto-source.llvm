@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "llvm/ADT/Triple.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -12,6 +13,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace oreslang {
@@ -138,6 +140,18 @@ void generate_trap(llvm::Module& module, llvm::StructType* result) {
 std::string emit_native_assert_scalar_llvm_ir_v0() {
     llvm::LLVMContext context;
     llvm::Module module("oreslang.assert.scalar.abi.v0", context);
+    // The C++ ABI is explicitly host-endian and 8-byte aligned. Leaving
+    // LLVM's target triple unspecified permits a consumer to silently lower
+    // pointer-bearing exports for an incompatible native target. Until a
+    // target-specific layout proof exists, fail closed outside tested
+    // little-endian 64-bit native architectures.
+    const llvm::Triple target(llvm::sys::getDefaultTargetTriple());
+    if ((target.getArch() != llvm::Triple::x86_64 &&
+         target.getArch() != llvm::Triple::aarch64) ||
+        !target.isLittleEndian() || sizeof(void*) != 8)
+        throw std::runtime_error(
+            "native Assert scalar ABI v0 requires little-endian x86-64 or AArch64 host");
+    module.setTargetTriple(target.str());
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* i8 = llvm::Type::getInt8Ty(context);
