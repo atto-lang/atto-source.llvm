@@ -79,8 +79,8 @@ def main():
             # remain compilable while unsupported metadata fails closed.
             calls, call_files = invoke(args.compiler, directory,
                                        "typed_calls_" + target,
-                                       "pub fnc add(int a, int b): int { return a + b; }\\n"
-                                       "pub fnc main(): int { return add(20, 22); }\\n",
+                                       "pub fnc add(int a, int b): int { return a + b; }\n"
+                                       "pub fnc main(): int { return add(20, 22); }\n",
                                        target)
             if calls.returncode or "define i64 @main" not in calls.stdout or "define i64 @add" not in calls.stdout:
                 failures.append("typed call control failed for " + target
