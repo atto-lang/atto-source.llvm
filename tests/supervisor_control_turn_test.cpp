@@ -14,13 +14,23 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     bool restart_ok = true;
     bool fail_once = false;
     SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
-        order.push_back("throw"); return next;
+        CHECK(false && "actor terminal Throw may never reach supervisor on_throw");
+        return next;
     }
     SupervisorControlTurn::Decision on_raise(const SupervisorFailureLane::Failure&) override {
-        order.push_back("raise"); return next;
+        CHECK(false && "actor terminal Raise may never reach supervisor on_raise");
+        return next;
     }
     SupervisorControlTurn::Decision on_panic(const SupervisorFailureLane::Failure& f) override {
-        CHECK(f.summary == "panic");
+        CHECK(f.summary == "panic" || f.summary == "throw" || f.summary == "raise");
+        if (f.summary == "throw") {
+            CHECK(f.origin_kind == SupervisorFailureLane::Kind::Throw);
+            CHECK(f.origin_code == 41u);
+        }
+        if (f.summary == "raise") {
+            CHECK(f.origin_kind == SupervisorFailureLane::Kind::Raise);
+            CHECK(f.origin_code == 42u);
+        }
         order.push_back("panic");
         if (fail_once) { fail_once = false; throw std::logic_error("handler failure"); }
         return next;
@@ -51,15 +61,25 @@ int main() {
     lane.reserve_child(third);
 
     CHECK(lane.publish_child(first, Kind::Panic, "panic", "parent"));
-    CHECK(lane.publish_child(second, Kind::Throw, "throw", "parent"));
+    CHECK(lane.publish_child(second, Kind::Throw, "throw", "parent",
+                             std::nullopt, 41u));
     CHECK(!lane.publish_child(first, Kind::Panic, "duplicate"));
     CHECK(lane.urgent());
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
     CHECK(hooks.order == std::vector<std::string>({"panic"}));
     CHECK(lane.urgent());
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
-    CHECK(hooks.order == std::vector<std::string>({"panic", "throw"}));
+    CHECK(hooks.order == std::vector<std::string>({"panic", "panic"}));
     CHECK(!lane.urgent());
+    // A forged origin mismatching a raw child terminal must fail closed.
+    lane.reserve_child(Key{"invalid-origin", 7});
+    bool bad_origin = false;
+    try {
+        (void)lane.publish_child(Key{"invalid-origin", 7},
+                Kind::Throw, "throw", "parent", Kind::Raise, 41u);
+    } catch (const std::invalid_argument&) { bad_origin = true; }
+    CHECK(bad_origin && !lane.urgent());
+    lane.retire_child(Key{"invalid-origin", 7});
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::User);
     CHECK(hooks.order.back() == "user");
 
