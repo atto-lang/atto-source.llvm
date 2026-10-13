@@ -44,8 +44,10 @@ static void roundtrip(std::size_t n) {
         check(c.destination == a[i-1], "wrong upstream recipient");
         route.commit_published(c);
     }
-    rejected([&] { route.complete_source(a[0], 9999); });
-    route.complete_source(a[0], a[1]);
+    rejected([&] { route.complete_source_with_reply(
+        a[0], 9999, "PipeMessages@sha256:abcdef", {0x92, 0xa1, 0x52}); });
+    route.complete_source_with_reply(
+        a[0], a[1], "PipeMessages@sha256:abcdef", {0x92, 0xa1, 0x52});
     rejected([&] { route.claim_root(a[0], "PipeMessages@sha256:abcdef"); });
     route.physical_done(a[0], true);
     check(route.done() == Route::Done::Pending, "source-only DONE falsely completed route");
@@ -73,7 +75,8 @@ static void advance_to(Route& route, const std::vector<std::uint64_t>& a,
             Route::Direction::Backward, domain);
         route.commit_published(claim);
     }
-    if (route.phase() < target) route.complete_source(a[0], a[1]);
+    if (route.phase() < target) route.complete_source_with_reply(
+        a[0], a[1], domain, {0x92, 0xa1, 0x52});
     check(route.phase() == target, "failed to construct requested phase");
 }
 static void physical_done_phase_matrix(std::size_t n) {
@@ -196,12 +199,14 @@ static void reply_failure_is_not_a_result() {
     check(route.done() == Route::Done::Failed, "failure did not abort reply");
     rejected([&] { route.completed_reply(); });
 
-    Route legacy(actors, "domain");
-    advance_to(legacy, actors, 6, "domain");
-    for (auto actor : actors) legacy.physical_done(actor, true);
-    check(legacy.done() == Route::Done::Succeeded,
-          "legacy control-plane route stopped working");
-    rejected([&] { legacy.completed_reply(); });
+    // A payloadless route cannot manufacture whole-route success by
+    // merely advancing to the final backward DATA phase and stopping.
+    Route missing_reply(actors, "domain");
+    advance_to(missing_reply, actors, 2 * actors.size() - 1, "domain");
+    for (auto actor : actors) missing_reply.physical_done(actor, true);
+    check(missing_reply.done() == Route::Done::Failed,
+          "missing nominal source result was accepted as successful DONE");
+    rejected([&] { missing_reply.completed_reply(); });
 }
 int main() {
     for (auto n: {2u, 3u, 4u, 15u, 16u}) {
@@ -270,7 +275,8 @@ int main() {
         check(!route.fenced(a[2]) && route.fenced(a[1]),
               "sink DONE changed surviving transform fence");
         route.commit_published(transform_backward);
-        route.complete_source(a[0], a[1]);
+        route.complete_source_with_reply(
+            a[0], a[1], "closed-domain", {0x92, 0xa1, 0x52});
         route.physical_done(a[1], true);
         route.physical_done(a[0], true);
         check(route.done() == Route::Done::Succeeded,
