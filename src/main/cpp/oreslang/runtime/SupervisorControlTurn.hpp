@@ -4,7 +4,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace oreslang {
@@ -46,13 +48,26 @@ public:
 
     // Invoked on child termination; returns true exactly once per generation.
     // Native scheduler must enqueue an urgent parent admission after true.
+    // This is an actor terminal boundary: raw Throw/Raise are never emitted
+    // as CONTROL event kinds. Preserve their pre-promotion origin for policy.
+    // Already-promoted Panic(origin=Throw/Raise) is allowed on escalation.
     bool publish_child(const SupervisorFailureLane::ActorKey& child,
                        SupervisorFailureLane::Kind kind,
                        std::string_view summary,
                        std::string_view parent_id = {},
-                       std::optional<SupervisorFailureLane::Kind> origin = std::nullopt) {
+                       std::optional<SupervisorFailureLane::Kind> origin = std::nullopt,
+                       std::uint32_t origin_code = 0) {
+        using Kind = SupervisorFailureLane::Kind;
+        if (kind == Kind::Throw || kind == Kind::Raise) {
+            // Mismatched supplied provenance must not be silently rewritten.
+            if (origin && *origin != kind) {
+                throw std::invalid_argument("actor terminal origin contradicts effect");
+            }
+            origin = kind;
+            kind = Kind::Panic;
+        }
         const bool admitted = child_failures_.publish_preallocated(
-            child, kind, summary, parent_id, origin);
+            child, kind, summary, parent_id, origin, origin_code);
         return admitted;
     }
 
