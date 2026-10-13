@@ -370,7 +370,8 @@ if(BUILD_TESTING)
 
     oreslang_contract_test(native_with_using_write_only
         actor-with-using-write-only-positive.ores
-        --ir "call void @ores_actor_i64_heap_field_write")
+        --ir "call void @ores_actor_i64_heap_field_write"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
     oreslang_contract_test(reject_with_direct_handle_read_missing_effect
         actor-with-using-read-outside-bound-reject.ores
         --diagnostic "with clause omits state.read effect")
