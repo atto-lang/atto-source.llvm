@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #define REQUIRE(expression) do { \
@@ -31,6 +32,9 @@ void rejects(const std::function<void()>& action) {
 }
 
 int main() {
+    const std::unordered_set<std::string> eligibleIds{
+        "unit::Color", "unit::Mode", "other::Color"
+    };
     REQUIRE(eligibleEnum({
         {PayloadLayout::Unit, {}},
         {PayloadLayout::Primitive, {"int"}},
@@ -44,14 +48,14 @@ int main() {
     REQUIRE(!eligibleEnum({{PayloadLayout::Primitive, {"int", "bool"}}}));
 
     Signature color = signature("go", {
-        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "int"}});
+        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
     Signature mode = signature("go", {
-        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}});
+        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}}, eligibleIds);
     Signature sameColor = signature("go", {
-        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "int"}});
+        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
     Signature diffPrimitive = signature("go", {
-        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "string"}});
-    Signature arity1 = signature("go", {{Kind::Enum, "unit::Color"}});
+        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "string"}}, eligibleIds);
+    Signature arity1 = signature("go", {{Kind::Enum, "unit::Color"}}, eligibleIds);
 
     REQUIRE(compare(color, mode) == PairStatus::DistinctEnums);
     REQUIRE(compare(color, sameColor) == PairStatus::Same);
@@ -64,15 +68,18 @@ int main() {
     rejects([&] { (void)select({color, mode}, {{0, "unknown::Color"}}); });
     rejects([&] { (void)select({color, mode}, {{2, "unit::Color"}}); });
     rejects([&] { (void)select({color, sameColor}, {{0, "unit::Color"}}); });
-    rejects([&] { (void)signature("go", {{Kind::Primitive, "Unknown"}}); });
-    rejects([&] { (void)signature("go", {{Kind::Primitive, "{a:int}"}}); });
-    rejects([&] { (void)signature("go", {{Kind::Enum, ""}}); });
+    rejects([&] { (void)signature("go", {{Kind::Primitive, "Unknown"}}, eligibleIds); });
+    rejects([&] { (void)signature("go", {{Kind::Primitive, "{a:int}"}}, eligibleIds); });
+    rejects([&] { (void)signature("go", {{Kind::Enum, ""}}, eligibleIds); });
     rejects([&] { (void)compare(color, signature("other", {
         {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}})); });
 
+    rejects([&] { (void)signature("go", {
+        {Kind::Enum, "attacker::Fake"}, {Kind::Primitive, "int"}
+    }, eligibleIds); });
     // Even equal-shaped enums in different modules are distinct symbols.
     Signature imported = signature("go", {
-        {Kind::Enum, "other::Color"}, {Kind::Primitive, "int"}});
+        {Kind::Enum, "other::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
     REQUIRE(compare(color, imported) == PairStatus::DistinctEnums);
 
     // This deliberately exercises only compiler-side keys, NOT LLVM source
