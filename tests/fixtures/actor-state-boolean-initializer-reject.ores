@@ -1,0 +1,6 @@
+define actor Counter as
+    state { value: int = true; }
+    get(): int with state.read {
+        return self.handle_state(|s| -> { return s.value; });
+    }
+end
