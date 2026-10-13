@@ -87,6 +87,21 @@ int main() {
         "define actor Counter as state { value: int = 0; } "
         "pub get(): int { return self.handle_state(critical-write |s| -> s.value); } end",
         "requires a scoped write body");
+    must_reject(
+        "define actor Counter as state { value: int = 0; } "
+        "pub write(): int { return self.handle_state(critical-write |s| -> { "
+        "s.value = external; return s.value; }); } end",
+        "native state-loan effect violation");
+    must_reject(
+        "define actor Counter as state { value: int = 0; } "
+        "pub write(): int { return self.handle_state(critical-write |s| -> { "
+        "s.value = do_work(); return s.value; }); } end",
+        "native state-loan effect violation");
+    must_reject(
+        "define actor Counter as state { value: int = 0; } "
+        "pub write(): int { return self.handle_state(critical-write |s| -> { "
+        "s.value = other.value; return s.value; }); } end",
+        "native state-loan effect violation");
 
     // An ordinary source function must remain unaffected by this new AST.
     auto program = oreslang::parse_program("pub fnc main(): int { return 0; }");
