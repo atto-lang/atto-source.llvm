@@ -103,7 +103,6 @@ private:
         std::array<Actor, max_actors> actors{};
         std::array<std::size_t, max_actors> ready{};
         std::size_t ready_head = 0, ready_size = 0, registered = 0;
-        std::uint64_t next_generation = 1;
         std::uint64_t fuel = default_fuel;
         bool started = false, closing = false, stopped = false;
         Stats counters{};

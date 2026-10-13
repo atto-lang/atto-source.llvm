@@ -1,10 +1,27 @@
 #include "oreslang/runtime/MultiActorCarrier.hpp"
 
+#include <atomic>
 #include <functional>
 #include <stdexcept>
 #include <utility>
 
 namespace oreslang::runtime {
+namespace {
+// Actor tickets must never be valid in two distinct carrier lifetimes.
+// The saturated CAS prevents wraparound reuse (including after UINT64_MAX).
+std::atomic<std::uint64_t> next_global_actor_generation{1};
+std::uint64_t mint_actor_generation() {
+    auto value = next_global_actor_generation.load(std::memory_order_relaxed);
+    for (;;) {
+        if (value == UINT64_MAX)
+            throw std::overflow_error("actor generation namespace exhausted");
+        if (next_global_actor_generation.compare_exchange_weak(
+                value, value + 1, std::memory_order_relaxed,
+                std::memory_order_relaxed))
+            return value;
+    }
+}
+} // namespace
 
 MultiActorCarrier::MultiActorCarrier(std::uint64_t fuel)
     : shared_(std::make_shared<Shared>()) {
@@ -27,8 +44,7 @@ MultiActorCarrier::ActorToken MultiActorCarrier::register_actor(
     std::lock_guard<std::mutex> lock(shared_->mutex);
     if (shared_->started || shared_->closing)
         throw std::logic_error("actor registration after carrier admission");
-    if (shared_->registered == max_actors ||
-            shared_->next_generation == UINT64_MAX)
+    if (shared_->registered == max_actors)
         throw std::overflow_error("multi actor registration capacity exhausted");
     // Never admit two actor identities to exactly the same root state.
     // This is a defense in depth check, NOT an alias/borrow proof for
@@ -36,12 +52,15 @@ MultiActorCarrier::ActorToken MultiActorCarrier::register_actor(
     for (std::size_t i = 0; i < shared_->registered; ++i)
         if (shared_->actors[i].state == state)
             throw std::invalid_argument("duplicate actor state root");
+    // Mint identity before publishing the slot: a ticket from any earlier
+    // carrier in this process cannot accidentally name this actor.
+    const auto generation = mint_actor_generation();
     const std::size_t index = shared_->registered++;
     auto& actor = shared_->actors[index];
     actor.state = state;
     actor.slice = slice;
     actor.cancel = cancel;
-    actor.generation = shared_->next_generation++;
+    actor.generation = generation;
     return {static_cast<std::uint32_t>(index + 1), actor.generation};
 }
 
@@ -242,18 +261,25 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
         const auto outcome = callback(user_state, message, cause, fuel);
         lock.lock();
         ++state->counters.dispatches;
-        // A cancellation or stop that raced a bounded CPU step wins BEFORE
-        // the continuation is requeued, and before any other user callback.
-        if (state->closing || actor.cancel_requested) continue;
+        // A completed guest slice has ALREADY committed its source effects.
+        // Count this logical turn exactly once, even if cancellation/STOP
+        // arrived while the native callback was running. Cancellation then
+        // retires the actor (and discards later envelopes) with no active
+        // frame; it cannot retroactively turn DONE into a canceled frame.
         if (outcome == Outcome::complete) {
             actor.active = false;
             ++actor.completed;
             ++state->counters.completed;
+            if (state->closing || actor.cancel_requested)
+                continue; // process reserved CONTROL before other user work
             if (actor.size && !enqueue(*state, index)) {
                 ++state->counters.protocol_failures;
                 actor.cancel_requested = true;
             }
         } else if (outcome == Outcome::cooperate) {
+            // This continuation is still live. CONTROL wins over requeue,
+            // and owner-thread cancellation must run exactly once.
+            if (state->closing || actor.cancel_requested) continue;
             ++actor.cooperations;
             ++state->counters.cooperations;
             if (!enqueue(*state, index)) {
@@ -261,6 +287,8 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
                 actor.cancel_requested = true;
             }
         } else {
+            // A bogus callback result is a protocol failure even if a
+            // cancellation raced it. Never silently accept invalid IR state.
             ++state->counters.protocol_failures;
             actor.cancel_requested = true;
         }

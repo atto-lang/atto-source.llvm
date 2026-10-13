@@ -308,6 +308,118 @@ static void test_invalid_outcome_fails_closed() {
     REQUIRE(stats.abandoned == 1 && stats.protocol_failures == 1);
     REQUIRE(stats.cancelled_active == 1 && stats.cooperations == 0);
 }
+struct CommitRace {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    std::atomic<int> cancel_calls{0};
+    std::atomic<int> wrong_cleanup{0};
+    std::atomic<std::uint64_t> worker_tag{0};
+};
+static MultiActorCarrier::Outcome finish_during_cancel(
+        void* raw, MultiActorCarrier::Message msg,
+        MultiActorCarrier::Cause cause, std::uint64_t) noexcept {
+    auto& state = *static_cast<CommitRace*>(raw);
+    if (cause != MultiActorCarrier::Cause::initial || msg.sequence != 1)
+        state.wrong_cleanup.fetch_add(1);
+    state.worker_tag.store(static_cast<std::uint64_t>(
+        std::hash<std::thread::id>{}(std::this_thread::get_id())));
+    state.entered.store(true, std::memory_order_release);
+    // Hold precisely one already-running guest callback until CONTROL is
+    // admitted by the producer. This tests the return/commit linearization.
+    while (!state.release.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    return MultiActorCarrier::Outcome::complete;
+}
+static void after_completed_cancel(void* raw, MultiActorCarrier::Message,
+                                   bool had_active) noexcept {
+    auto& state = *static_cast<CommitRace*>(raw);
+    const auto tid = static_cast<std::uint64_t>(
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    if (had_active || tid != state.worker_tag.load(std::memory_order_acquire))
+        state.wrong_cleanup.fetch_add(1);
+    state.cancel_calls.fetch_add(1);
+}
+static void test_complete_beats_racing_control(bool stop_carrier) {
+    CommitRace state;
+    MultiActorCarrier carrier;
+    const auto token = carrier.register_actor(
+        &state, finish_during_cancel, after_completed_cancel);
+    auto sender = carrier.producer();
+    carrier.start();
+    REQUIRE(sender.try_send(token, {1, 0}));
+    REQUIRE(until([&] { return state.entered.load(std::memory_order_acquire); }, 2s));
+    // Later accepted mail is abandoned on cancellation, but the already
+    // finishing slice must commit its logical completion exactly once.
+    REQUIRE(sender.try_send(token, {2, 0}));
+    if (stop_carrier) carrier.request_stop();
+    else REQUIRE(sender.request_cancel(token));
+    state.release.store(true, std::memory_order_release);
+    REQUIRE(until([&] { return carrier.actor_stats(token).retired; }, 2s));
+    REQUIRE(state.cancel_calls.load() == 1);
+    REQUIRE(state.wrong_cleanup.load() == 0);
+    REQUIRE(carrier.actor_stats(token).completed == 1);
+    REQUIRE(!sender.try_send(token, {3, 0}));
+    carrier.join();
+    const auto stats = carrier.stats();
+    REQUIRE(stats.accepted == 2);
+    REQUIRE(stats.completed == 1);
+    REQUIRE(stats.abandoned == 1);
+    REQUIRE(stats.cancelled_active == 0);
+    REQUIRE(stats.cooperations == 0);
+    REQUIRE(stats.dispatches == 1);
+    REQUIRE(stats.protocol_failures == 0);
+    REQUIRE(stats.worker_thread_tag == state.worker_tag.load());
+}
+struct ReplayEvidence {
+    std::atomic<int> completions{0};
+    std::atomic<int> cleanup{0};
+    std::atomic<int> wrong_cleanup{0};
+};
+static MultiActorCarrier::Outcome replay_slice(
+        void* raw, MultiActorCarrier::Message message,
+        MultiActorCarrier::Cause cause, std::uint64_t) noexcept {
+    auto& e = *static_cast<ReplayEvidence*>(raw);
+    if (message.sequence != 1 || cause != MultiActorCarrier::Cause::initial)
+        e.wrong_cleanup.fetch_add(1);
+    e.completions.fetch_add(1);
+    return MultiActorCarrier::Outcome::complete;
+}
+static void replay_cancel(void* raw, MultiActorCarrier::Message,
+                          bool had_active) noexcept {
+    auto& e = *static_cast<ReplayEvidence*>(raw);
+    if (had_active) e.wrong_cleanup.fetch_add(1);
+    e.cleanup.fetch_add(1);
+}
+static void test_tokens_cannot_cross_carrier_lifetimes() {
+    ReplayEvidence one, two;
+    MultiActorCarrier::ActorToken stale;
+    {
+        MultiActorCarrier first;
+        stale = first.register_actor(&one, replay_slice, replay_cancel);
+        first.start();
+        auto writer = first.producer();
+        REQUIRE(writer.try_send(stale, {1, 11}));
+        REQUIRE(until([&] { return first.actor_stats(stale).completed == 1; }, 2s));
+        first.join();
+        REQUIRE(one.completions.load() == 1);
+    }
+    MultiActorCarrier second;
+    const auto fresh = second.register_actor(&two, replay_slice, replay_cancel);
+    REQUIRE(fresh.slot == stale.slot); // same slot but different authority
+    REQUIRE(fresh.generation != stale.generation);
+    second.start();
+    auto writer = second.producer();
+    REQUIRE(!writer.try_send(stale, {1, 11}));
+    REQUIRE(!writer.request_cancel(stale));
+    REQUIRE(writer.try_send(fresh, {1, 11}));
+    REQUIRE(until([&] { return second.actor_stats(fresh).completed == 1; }, 2s));
+    second.join();
+    REQUIRE(two.completions.load() == 1);
+    REQUIRE(one.completions.load() == 1);
+    REQUIRE(two.wrong_cleanup.load() == 0);
+    REQUIRE(second.stats().accepted == 1 && second.stats().completed == 1);
+    REQUIRE(second.stats().protocol_failures == 0);
+}
 static void test_bad_fuel_and_start_constraints() {
     for (std::uint64_t n : {0ULL, 513ULL}) {
         bool invalid = false;
@@ -330,8 +442,11 @@ static void test_bad_fuel_and_start_constraints() {
     carrier.join();
 }
 int main() {
+    test_tokens_cannot_cross_carrier_lifetimes();
     test_bad_fuel_and_start_constraints();
     test_invalid_outcome_fails_closed();
+    test_complete_beats_racing_control(false);
+    test_complete_beats_racing_control(true);
     test_saturation_and_concurrent_cancel();
     test_bounded_fairness_cancellation_and_lifetime();
     std::puts("TWO_COMPILED_ACTORS_ONE_REAL_CARRIER_PASS");
