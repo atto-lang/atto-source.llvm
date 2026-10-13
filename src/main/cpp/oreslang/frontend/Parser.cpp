@@ -160,6 +160,44 @@ bool nonthrowing_protected_read(const Expression& expr) {
            expr.left->kind == Expression::Kind::Variable;
 }
 
+// Proof for the deliberately tiny i64 state callback subset. A write
+// expression may only read its own scalar state fields and perform pure
+// arithmetic. It may not borrow, call, capture outer values, suspend, or
+// expose a state ref. This proof is still NOT permission to lower callbacks.
+void validate_native_state_value(
+        const Expression& expr, const std::string& loan,
+        const std::unordered_set<std::string>& declared_fields) {
+    switch (expr.kind) {
+        case Expression::Kind::Integer:
+            return;
+        case Expression::Kind::Field:
+            if (expr.left && expr.left->kind == Expression::Kind::Variable &&
+                    expr.left->name == loan && declared_fields.count(expr.name))
+                return;
+            break;
+        case Expression::Kind::Negate:
+            if (expr.left) {
+                validate_native_state_value(*expr.left, loan, declared_fields);
+                return;
+            }
+            break;
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            if (expr.left && expr.right) {
+                validate_native_state_value(*expr.left, loan, declared_fields);
+                validate_native_state_value(*expr.right, loan, declared_fields);
+                return;
+            }
+            break;
+        default:
+            break;
+    }
+    throw std::runtime_error(
+        "native state-loan effect violation: captures, calls, borrowed "
+        "references and unknown fields are forbidden");
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int)
@@ -317,6 +355,10 @@ private:
                 }
                 if (!state_names.count(operation.field))
                     fail("unknown sealed actor state field '" + operation.field + "'");
+                if (operation.new_value) {
+                    validate_native_state_value(
+                        *operation.new_value, operation.binding, state_names);
+                }
                 require(")");
                 require(";");
                 require("}");
