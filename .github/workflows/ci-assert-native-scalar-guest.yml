@@ -34,7 +34,7 @@ jobs:
           src/main/cpp/oreslang/types/OwnershipChecker.cpp 2c1e48e7a6e3784cca3a96166abfc30aeb6753fe
           src/main/cpp/oreslang/backend/LlvmCodegen.cpp cc1349fa15bf73f0cdc2cd2f73f9d6af9592b58e
           tests/native_assert_scalar_guest_test.sh 4d4489e9688990f089985a09a67b94305f43038a
-          tests/native_assert_ast_seal_test.cpp e154b1fb0e76623657bc3a07a2bb8ecb9046a69d
+          tests/native_assert_ast_seal_test.cpp 3885cdec56aae3c496cb973d191835d53023af73
           tests/native_assert_import_parser_test.cpp 7cca4533bb0b570f44bb11a1007750af2ef6882b
           HASHES
           echo ASSERT_NATIVE_SCALAR_EXACT_FILES_PASS
