@@ -70,6 +70,13 @@ inline CriticalStateAdmission admit_critical_handle_state(
         return CriticalStateAdmission::InvalidStateCallback;
     }
     if (callback.escapes) return CriticalStateAdmission::CallbackEscape;
+    // A source effect row and a lexical callback alone do not prove that
+    // the actor turn is tied to a scheduler-validated incarnation and
+    // continuation. Require explicit fence evidence before minting a loan.
+    // This flag is trusted lowering metadata, NOT an untrusted guest token:
+    // the caller must independently authenticate the supplied IDs.
+    if (!callback.continuation_generation_fenced)
+        return CriticalStateAdmission::MissingContinuationFence;
     // A broad with row never upgrades a read-only state capability.
     if (mode == CriticalStateMode::Read
             && callback.inferred.has(FunctionEffect::StateWrite)) {
