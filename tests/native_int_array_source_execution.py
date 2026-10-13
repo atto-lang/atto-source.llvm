@@ -5,11 +5,17 @@ Exercises *compiler generated* LLVM IR, NOT the handwritten ABI fixture.
 A negative case must fail before printing any IR.
 """
 import argparse
+import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
 import tempfile
+
+try:
+    import resource
+except ImportError:  # Windows has no RLIMIT_CORE
+    resource = None
 
 
 POSITIVE = {
@@ -64,6 +70,38 @@ pub fnc main(): int {
 }
 """, 42, 1),
 }
+
+# These are *valid Oreslang source programs* that compile successfully but
+# must terminate via the checked native ABI rather than reading/writing memory.
+# The existing C-only region tests are insufficient to establish that the
+# compiler preserves bounds checking in generated LLVM IR.
+NATIVE_ABORT = {
+    "get-from-empty": """pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  return a.get(0);
+}
+""",
+    "get-negative-index": """pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  a.add(7);
+  return a.get(-1);
+}
+""",
+    "get-at-length": """pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  a.add(7);
+  return a.get(1);
+}
+""",
+    "set-at-length": """pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  a.add(7);
+  a.set(1, 9);
+  return 42;
+}
+""",
+}
+
 
 NEGATIVE = {
     "reserved-abi-symbol": ("""fnc oreslang_int_array_get(int x): int {
@@ -195,6 +233,43 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
                 raise AssertionError(
                     f"{name}: native exit={result.returncode}, expected={exit_code}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}")
+        # Invalid native accesses must terminate by the runtime bounds guard,
+        # not by an LLVM miscompile or by ordinary successful process exit.
+        # The ABI deliberately uses SIGABRT for invalid accesses. This is a
+        # source-compiled end-to-end test (unlike the C-only ABI tests).
+        if os.name == "posix":
+            if resource is not None:
+                resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            for name, source in NATIVE_ABORT.items():
+                src = work / f"{name}.ores"
+                src.write_text(source, encoding="utf-8")
+                compiled = run([str(compiler), str(src)])
+                if (compiled.returncode != 0 or compiled.stderr or
+                        not compiled.stdout.startswith(b"; ModuleID")):
+                    raise AssertionError(
+                        f"{name}: bounds-negative guest failed source compilation: "
+                        f"{compiled.returncode} {compiled.stderr!r}")
+                for symbol in (b"@oreslang_int_array_new",
+                               b"@oreslang_int_array_get" if name.startswith("get")
+                               else b"@oreslang_int_array_set"):
+                    if symbol not in compiled.stdout:
+                        raise AssertionError(f"{name}: missing required checked native call")
+                ll = work / f"{name}.ll"
+                ll.write_bytes(compiled.stdout)
+                exe = work / name
+                link = [str(clang), "-O1", "-Wno-override-module", "-std=c11",
+                        "-x", "ir", str(ll), "-x", "c", str(c_runtime),
+                        "-I", str(include), "-o", str(exe)]
+                if sanitized:
+                    link[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+                linked = run(link)
+                if linked.returncode != 0:
+                    raise AssertionError(f"{name}: native link failed: {linked.stderr!r}")
+                guest = run([str(exe)])
+                if guest.returncode != -signal.SIGABRT or guest.stdout:
+                    raise AssertionError(
+                        f"{name}: native guard must SIGABRT, got {guest.returncode}: "
+                        f"stdout={guest.stdout!r}, stderr={guest.stderr[:1500]!r}")
         # No arrays are allowed in wasm32 until a bounded guest runtime and
         # capability ABI are independently implemented; rejection emits no IR.
         wasm_src = work / "wasm-array.ores"
@@ -215,7 +290,8 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
                     f"rc={rejected.returncode}, stdout={rejected.stdout!r}, "
                     f"stderr={rejected.stderr!r}")
     print(f"PASS native source Array<int>: {len(POSITIVE)} executables, "
-          f"{len(NEGATIVE)} no-IR ownership gates"
+          f"{len(NEGATIVE)} no-IR ownership gates, "
+          f"{len(NATIVE_ABORT) if os.name == 'posix' else 0} native abort gates"
           + (" (ASan+UBSan)" if sanitized else ""), flush=True)
 
 
