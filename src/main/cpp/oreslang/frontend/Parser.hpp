@@ -12,7 +12,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, ClassMethodCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -133,8 +133,62 @@ struct ScalarWhileLoop {
     std::int64_t upper_bound = 0;
 };
 
+// Names include '
+    std::unique_ptr<ScalarWhileLoop> scalar_while;
+    std::vector<Parameter> parameters;
+    std::vector<LocalBinding> locals;
+    std::vector<Statement> statements;
+    std::vector<GuardedReturn> early_returns;
+    std::vector<ActorSpawnBinding> actor_spawns;
+    std::vector<ActorSend> actor_sends;
+    std::vector<std::string> actor_stops;
+    std::vector<ActorAction> actor_actions; // source order of send/stop
+    std::vector<ActorFieldWrite> actor_field_writes;
+    bool returns_void = false;
+    // Single-frame native i64 throw; no nested exceptions or suspension.
+    std::unique_ptr<Expression> caught_throw_value;
+    std::string catch_binding;
+    std::vector<Statement> caught_throw_defers;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+    bool exported = false;
+    FunctionEffects declared_effects{};
+    bool has_declared_effects = false;
+};
+
+struct ActorDecl {
+    std::string name;
+    std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
+    Function on_message; // exactly one synchronous pub on_message(int): int
+    std::size_t offset = 0;
+};
+
+struct Program {
+    std::string module;
+    std::vector<ClassDecl> classes;
+    std::vector<ActorDecl> actors;
+    std::vector<Function> functions;
+};
+
+// Parse a constrained native subset: i64 expressions, call-scoped borrows and
+// bounded multi-field i64 classes and trusted, synchronous actor send/stop.
+// Actors remain incompatible with wasm32 and source-level await/suspension.
+Program parse_program(std::string_view source, bool experimental_owned_int = false,
+                      bool experimental_rt_scalar_loop = false);
+
+} // namespace oreslang
+, which cannot occur in guest source identifiers.
+// Instance-method functions live in the same verified synchronous ABI as
+// borrowed class parameters, without exposing a colliding guest symbol.
+inline std::string native_class_method_name(const std::string& cls,
+                                            const std::string& method) {
+    return "__oreslang_class_" + cls + "$" + method;
+}
+
 struct Function {
     std::string name;
+    std::string class_method_owner; // empty for free functions
+    bool class_method_mutable = false;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
