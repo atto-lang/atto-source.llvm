@@ -246,7 +246,16 @@ private:
         if (token_.text == "suspend" || token_.text == "suspends") {
             fail("native suspends actor method requires continuation lowering");
         }
+        // Actor method modifiers have their own admission boundary. Do not
+        // allow the fixed-int actor subset to parse these as method names or
+        // quietly route a read declaration through the legacy write lane.
+        if (token_.text == "critical-read" || token_.text == "critical-write") {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         if (!accept("fnc")) accept("method"); // optional method marker
+        if (token_.text == "critical-read" || token_.text == "critical-write") {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
