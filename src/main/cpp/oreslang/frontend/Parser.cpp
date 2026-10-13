@@ -1246,6 +1246,19 @@ private:
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
                     if (binding.move_class && !params.count(binding.move_source))
                         throw std::runtime_error("unknown class move source '" + binding.move_source + "'");
+                    if (binding.new_class) {
+                        const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                            [&](const ClassDecl& c) { return c.name == binding.class_name; });
+                        if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
+                            throw std::runtime_error("native class constructor argument arity mismatch for '"
+                                                     + cls->name + "'");
+                        for (const auto& argument : binding.constructor_arguments) {
+                            if (!native_constructor_scalar_tree(*argument))
+                                throw std::runtime_error(
+                                    "native scalar constructor argument requires pure integer expression");
+                            validate_expression(*argument, params, functions);
+                        }
+                    }
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }
