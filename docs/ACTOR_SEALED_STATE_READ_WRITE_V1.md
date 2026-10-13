@@ -359,3 +359,25 @@ can be safely entered, suspended or unwound.
 Private exact-source [GCC/Clang ASan/UBSan CI #38330866171](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38330866171)
 passed. This is frontend validation only, NOT compiled Oreslang source
 execution, complete native CTest, or Java/GraalVM parity.
+
+## Re-audit: host-versus-actor retirement race (2026-10-12)
+
+Added a scheduler bridge regression that parks a test-only actor callback on
+a live, claimed read loan while a distinct **host thread** attempts
+`ActorStateReadWriteContinuations::retire()` and `cancel_pending()`.
+Both operations must reject, preserve the active grant, and allow normal
+scheduler-owned scoped completion. Once the guest callback exits and its
+RAII scope releases, quiescent retirement may finish.
+
+The regression tests a genuine cross-thread race rather than exclusively
+calling retirement reentrantly from the actor callback. The test-only spin
+is NOT Oreslang guest code or an accepted production scheduling strategy.
+Physical single-flight guest execution and lifecycle shutdown must still
+be separately proven by a full backend integration.
+
+Previous private GCC/Clang Release/ASan/UBSan runs passed for the prior
+scheduler bridge fixture. The newer cross-thread fixture is **not yet
+execution-verified**: the latest Actions jobs never started steps. Keep
+the draft gate, do not advertise LLVM source-level `Counter` execution,
+and rerun exact-source private C++17/CTest plus cross-backend AOT checks
+when an authorized runner has capacity.
