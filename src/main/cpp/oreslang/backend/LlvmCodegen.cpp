@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -18,6 +19,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace oreslang {
@@ -435,6 +437,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         field_indices.emplace(cls.name, std::move(indices));
     }
 
+    // The compiler currently emits host-target LLVM IR. Do not invent a
+    // universal C ABI for the new exported bool/i1 specialization: Clang's
+    // x86_64 C bool uses zeroext, but AArch64 Linux does not, while Apple
+    // arm64 does. Until proper target-ABI legalization is implemented, admit
+    // only host families whose bool convention has been explicitly checked.
+    const std::string host_triple = llvm::sys::getDefaultTargetTriple();
+    const auto starts = [&](const char* prefix) {
+        return host_triple.compare(0, std::char_traits<char>::length(prefix), prefix) == 0;
+    };
+    const bool host_x86 = starts("x86_64-") || starts("i386-") ||
+                          starts("i486-") || starts("i586-") || starts("i686-");
+    const bool host_arm64 = starts("aarch64-") || starts("arm64-");
+    const bool host_arm64_linux = host_arm64 &&
+                                  host_triple.find("-linux-") != std::string::npos;
+    const bool host_arm64_apple = host_arm64 &&
+                                  host_triple.find("-apple-") != std::string::npos;
+    const bool bool_c_abi_supported = host_x86 || host_arm64_linux ||
+                                      host_arm64_apple;
+    const bool bool_c_abi_zeroext = host_x86 || host_arm64_apple;
+    if (std::any_of(source.functions.begin(), source.functions.end(),
+                    [](const Function& f) { return f.returns_bool; }) &&
+            !bool_c_abi_supported)
+        throw std::runtime_error(
+            "native Assert bool C ABI is not verified for host target: " + host_triple);
+
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
     for (const auto& fn : source.functions) {
@@ -450,8 +477,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             fn.returns_void ? llvm::Type::getVoidTy(context)
                             : (fn.returns_bool ? llvm::Type::getInt1Ty(context) : i64),
             argument_types, false);
-        declarations.emplace(fn.name, llvm::Function::Create(
-            signature, llvm::Function::ExternalLinkage, symbol, module));
+        auto* declaration = llvm::Function::Create(
+            signature, llvm::Function::ExternalLinkage, symbol, module);
+        // For x86 and Apple arm64 this is part of the C/C++ bool ABI, not
+        // a cosmetic optimization hint. Native Linux arm64 omits it.
+        if (fn.returns_bool && bool_c_abi_zeroext)
+            declaration->addRetAttr(llvm::Attribute::ZExt);
+        declarations.emplace(fn.name, declaration);
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(fn.name);
