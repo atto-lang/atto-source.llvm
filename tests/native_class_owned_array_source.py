@@ -233,6 +233,34 @@ pub fnc main(): int {
 """, 42, 2),
 }
 NEGATIVES = {
+    "reject-batch-two-array-class": (CLASS + """pub fnc main(): int {
+  let mut Shelf q = new Shelf();
+  rt array_commit_filled(q, 4, -1, -1, 0, 0);
+  return 42;
+}
+""", "requires exactly four owned Array<int> fields"),
+    "reject-batch-moved-source": (FOUR + """pub fnc main(): int {
+  let mut Four a = new Four();
+  let mut Four b = rt take(a);
+  rt array_commit_filled(a, 4, -1, -1, 0, 0);
+  return 42;
+}
+""", "requires live exclusive mutable whole class"),
+    "reject-batch-impure-length": (FOUR + """fnc size(): int { return 4; }
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, size(), -1, -1, 0, 0);
+  return 42;
+}
+""", "native guarded condition must be pure"),
+    "reject-batch-impure-fill": (FOUR + """fnc fill(): int { return 0; }
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 4, -1, -1, fill(), 0);
+  return 42;
+}
+""", "native guarded condition must be pure"),
+
     "reject-copy-into-owned-array-field": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   let mut Array<int> source = new Array<int>();
