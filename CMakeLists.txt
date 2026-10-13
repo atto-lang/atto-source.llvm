@@ -404,7 +404,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
         --diagnostic "native main() must have zero arguments")
     oreslang_contract_test(native_exit_reject_reserved_symbol exit-reserved-native-symbol.ores
-        --diagnostic "reserved native entrypoint symbol collision")
+        --diagnostic "reserved native runtime ABI symbol")
     oreslang_contract_test(native_exit_reject_unsupported_explicit_exit exit-unsupported-process-exit.ores
         --diagnostic "oreslang-llvmc:")
     oreslang_contract_test(native_exit_reject_unsupported_async_root exit-unsupported-async-main.ores
