@@ -93,18 +93,15 @@ public:
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
-            // Do not legalize '-' in names or reinterpret subtraction. Only
-            // exact whitelisted compound keyword spellings consume a hyphen.
+            // Keep 'critical-read' / 'critical-write' as ordinary
+            // IDENT '-' IDENT tokens. The parser recognizes them *only*
+            // in callable modifier positions: arbitrary expressions must
+            // never lose subtraction because of declaration syntax.
+            // Existing nb-select recognition is intentionally unchanged
+            // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
-            std::string_view second;
-            if (first == "critical") {
-                if (source_.substr(at_, 5) == "-read") second = "read";
-                else if (source_.substr(at_, 6) == "-write") second = "write";
-            } else if (first == "nb" && source_.substr(at_, 7) == "-select") {
-                second = "select";
-            }
-            if (!second.empty()) {
-                const auto end = at_ + 1 + second.size();
+            if (first == "nb" && source_.substr(at_, 7) == "-select") {
+                const auto end = at_ + 7;
                 if (end == source_.size() ||
                         (source_[end] != '-' && !identifier_part(source_[end]))) {
                     at_ = end;
@@ -249,11 +246,11 @@ private:
         // Actor method modifiers have their own admission boundary. Do not
         // allow the fixed-int actor subset to parse these as method names or
         // quietly route a read declaration through the legacy write lane.
-        if (token_.text == "critical-read" || token_.text == "critical-write") {
+        if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (!accept("fnc")) accept("method"); // optional method marker
-        if (token_.text == "critical-read" || token_.text == "critical-write") {
+        if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         method.name = identifier();
@@ -346,18 +343,20 @@ private:
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
+        // Check compound READ/WRITE modes before handling legacy critical,
+        // otherwise declaration parsing could report WRITE-only semantics.
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
-        }
-        if (token_.text == "critical-read" || token_.text == "critical-write") {
-            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (token_.text == "actor" || token_.text == "async" ||
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
-        if (token_.text == "critical-read" || token_.text == "critical-write") {
+        if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = identifier();
@@ -842,6 +841,19 @@ private:
         if (token_.text != text) return false;
         advance();
         return true;
+    }
+
+    // Consult a copy of the scanner rather than merging arithmetic tokens.
+    // The original scanner position and error offset remain unchanged.
+    bool at_unsupported_critical_mode() const {
+        if (token_.text != "critical") return false;
+        Lexer probe = lexer_;
+        const Token dash = probe.next();
+        if (dash.text != "-" || dash.offset != token_.offset + token_.text.size())
+            return false;
+        const Token mode = probe.next();
+        return (mode.text == "read" || mode.text == "write")
+            && mode.offset == dash.offset + 1;
     }
 
     // Parse the role only after 'define'. A plain transform-pipe expression
