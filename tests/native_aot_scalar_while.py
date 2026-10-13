@@ -53,6 +53,34 @@ def main():
         assert executed.returncode == 0, executed.stderr
         assert "AOT_SOURCE_SCALAR_LOOP_RESUMPTION_PASS" in executed.stdout
 
+        # Same compiler-generated IR on the real native actor scheduler:
+        # two actor lanes, one physical carrier, fixed mailbox ordering,
+        # and cancellation through actor A's priority CONTROL callback.
+        native_runtime = root / "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+        scheduler_obj = tmp / "scheduler.o"
+        native = subprocess.run(
+            [args.clang, "-std=c11", "-O2", "-DNDEBUG", "-pthread",
+             "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+             "-I", str(root / "src/main/cpp"), "-c", str(native_runtime),
+             "-o", str(scheduler_obj)],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        assert native.returncode == 0, native.stderr
+        one_carrier = tmp / "one-carrier"
+        linked = subprocess.run(
+            [args.cxx, "-std=c++17", "-O3", "-DNDEBUG", "-pthread",
+             "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+             "-I", str(root / "src/main/cpp"),
+             str(root / "tests/native_aot_scalar_while_carrier.cpp"),
+             str(obj), str(scheduler_obj), "-o", str(one_carrier)],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        assert linked.returncode == 0, linked.stderr
+        executed = subprocess.run([str(one_carrier)], check=False,
+                                  capture_output=True, text=True, timeout=10)
+        assert executed.returncode == 0, executed.stderr
+        assert "AOT_NATIVE_ONE_CARRIER_TWO_ACTOR_FAIRNESS_PASS" in executed.stdout
+
 
 if __name__ == "__main__":
     main()
