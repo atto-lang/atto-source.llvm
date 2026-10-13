@@ -153,19 +153,49 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
     // Preserve the full set of argument loans until the call has completed.
     // Nested calls observe outstanding outer-call loans. Evaluation is
     // strictly left-to-right, matching the LLVM emitter.
+    if (!expr.argument_names.empty() &&
+            expr.argument_names.size() != expr.arguments.size())
+        reject(expr, "invalid native named call argument layout");
+
     std::vector<Loan> loans;
-    for (std::size_t i = 0; i < parameters.size(); ++i) {
+    std::vector<bool> assigned(parameters.size(), false);
+    std::size_t positional = 0;
+    bool named_seen = false;
+    for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
         const Expression& argument = *expr.arguments[i];
-        if (parameters[i].mode == Mode::Value) {
-            if (!parameters[i].class_name.empty())
+        const std::string label = expr.argument_names.empty()
+                ? std::string{} : expr.argument_names[i];
+        std::size_t formal = positional;
+        if (!label.empty()) {
+            named_seen = true;
+            formal = 0;
+            while (formal < parameters.size() &&
+                   parameters[formal].name != label) ++formal;
+            if (formal == parameters.size())
+                reject(argument, "ownership violation: unknown named parameter '" + label + "'");
+        } else {
+            if (named_seen)
+                reject(argument, "ownership violation: positional argument after named argument");
+            ++positional;
+        }
+        if (formal >= parameters.size() || assigned[formal])
+            reject(argument, "ownership violation: duplicate named parameter binding");
+        assigned[formal] = true;
+
+        // Acquire loans in *lexical source order* while using the target
+        // parameter's ownership mode. A later argument must observe earlier
+        // mutable/shared loans even if its formal slot is numerically lower.
+        const Parameter& parameter = parameters[formal];
+        if (parameter.mode == Mode::Value) {
+            if (!parameter.class_name.empty())
                 reject(argument, "ownership violation: by-value class parameters require move/drop lowering");
             check_value(argument, locals, functions);
         } else {
-            // Acquire first so malformed loans preserve the existing
-            // precise diagnostics for temporaries and missing 'rt borrow'.
-            Loan loan = acquire(argument, parameters[i].mode, locals);
+            // Acquire first so malformed loans preserve precise diagnostics
+            // for temporaries and missing explicit 'rt borrow' markers.
+            Loan loan = acquire(argument, parameter.mode, locals);
             const auto& source = locals.at(loan.name);
-            if (source.class_name != parameters[i].class_name)
+            if (source.class_name != parameter.class_name)
                 reject(argument, "ownership violation: borrowed argument type mismatch");
             loans.push_back(std::move(loan));
         }
