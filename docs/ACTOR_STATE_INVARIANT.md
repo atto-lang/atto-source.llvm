@@ -72,3 +72,5 @@ to the new syntax before either draft PR may merge.
 Focused native guest evidence: [41/41 passing CTests with ASan/UBSan](https://github.com/flags-2-env-test/java-app/actions/runs/38343367152), including ordinary-method state execution, multi-key actor persistence and a compiled three-actor typed directional round trip. These results do not certify full-tree or cross-backend parity.
 
 Updated evidence: [46/46 focused native CTests on exact pinned inputs](https://github.com/flags-2-env-test/java-app/actions/runs/38343656495). Includes boolean-loan effect validation and rejection of bool-to-integer use inside callbacks. Full LLVM repository tests and Java/GraalVM parity have not passed as part of this gate.
+
+Updated effect audit: [68/68 focused native CTests](https://github.com/flags-2-env-test/java-app/actions/runs/38348172398). Every restricted LLVM state callback now needs explicit `with` effects; blind tagged writes emit no native field-read call. Typed `int` state initializers and copied scalar results reject boolean literal coercion. Native and sanitized 15-actor tests passed on pinned source inputs. Full CTest and Java parity remain unverified.

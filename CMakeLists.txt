@@ -520,6 +520,23 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_tagged_write_only_illegal_read
         actor-tagged-write-only-read-effect-reject.ores
         --diagnostic "state.read operation not permitted by with effects")
+    # Native guest verification of exact tagged write-only effect discipline.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_tagged_write_only_effects
+            source-tagged-write-only.ores --run 43 --clang "${ORE_CLANG}"
+            --runs 3
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=7")
+        oreslang_contract_test(native_asan_tagged_write_only_effects
+            source-tagged-write-only.ores --run 43 --clang "${ORE_CLANG}"
+            --runs 3 --sanitize
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=7")
+    endif()
     # Function-level 'with' effect upper bound is distinct from scoped
     # 'using' acquisition and sealed handle_state authority.
     foreach(mode read write)

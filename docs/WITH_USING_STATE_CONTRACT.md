@@ -104,9 +104,12 @@ ownership/scheduler proofs.
 
 ## Outstanding release gates
 
-The LLVM restricted source parser still temporarily admits some legacy
-state-bearing receive handlers without an explicit `with` clause. Old
-actor-field fixtures and PRs still need migration. The Java and LLVM
+The LLVM restricted source parser now requires explicit `with` effect
+upper bounds on every ordinary, boolean or tagged state-bearing callback;
+omitting the row is a compile-time error. The positive 15-stage pipeline
+fixtures using `using` or `self.handle_state` have been migrated to
+explicit effect signatures. Other historical actor-field fixtures/PRs
+outside the focused migration inventory may still need work. The Java and LLVM
 branches are independently stacked and must be reconciled without dropping
 actor-state AST metadata or bypassing effect checking. Full-tree
 Maven/JUnit, LLVM CTest, Graal Native Image, actor-runtime guest parity,
@@ -117,3 +120,9 @@ alone.**
 ### Updated native execution milestone (October 12, 2026)
 
 [Funded exact-source LLVM CI #38343367152](https://github.com/flags-2-env-test/java-app/actions/runs/38343367152): **41/41 focused CTests passed**. Restricted guest methods now execute synchronous read/write loans on actor-owned heaps across distinct trusted turns, and the migrated three-actor typed guest roundtrip exercises `self.forward`/`self.backward` with correlated runtime evidence and sanitizers. This does not replace full-tree LLVM CTest, Java/GraalVM Native Image, generalized borrow checking or multi-flow tests; keep draft.
+
+### Native effect and scalar-type audit (2026-10-12)
+
+[Funded exact-source LLVM Actions #38348172398](https://github.com/flags-2-env-test/java-app/actions/runs/38348172398) passed **68/68 selected CTests**, with **68 pinned source/test blobs**. This adds a zero-native-read LLVM IR contract for blind tagged `state.write`, real guest execution and ASan/UBSan for write-only DATA callbacks, negative omission-of-`with` tests, four explicit-effect 15-actor native/sanitizer suites, boolean-literal rejection in all scalar callback shapes, and typed-`int` actor state initializer validation. The previous 46-test migration gate is subsumed in the selected runner set.
+
+**Scope boundary:** These are selected SHA-pinned builds of the native frontend/runtime, not the complete historical repository CTest matrix, LLVM optimized production builds, Java/GraalVM guest parity, AOT/hybrid, or multi-flow scheduling/ownership proofs. PR #244 remains draft.
