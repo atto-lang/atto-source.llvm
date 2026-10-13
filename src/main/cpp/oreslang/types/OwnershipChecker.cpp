@@ -29,6 +29,7 @@ struct LocalOwnership {
     bool exclusive_loan = false;
     std::string class_name;
     std::unordered_set<std::string> class_fields;
+    std::unordered_set<std::string> class_public_fields;
     std::unordered_set<std::string> class_array_fields;
     std::unordered_set<std::string> final_fields;
     // Primitive i64 class fields can be moved and later restored by a write.
@@ -55,6 +56,10 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
     if (found == locals.end() || found->second.class_name.empty() ||
             found->second.class_fields.count(field) == 0)
         throw std::runtime_error("unknown class field or receiver at byte " + std::to_string(offset));
+    if (!found->second.class_public_fields.count(field))
+        throw std::runtime_error("private native class field '" + field +
+            "' cannot be accessed outside its declaring class at byte " +
+            std::to_string(offset));
     if (found->second.moved)
         throw std::runtime_error("ownership violation: use-after-move class field at byte " +
                                  std::to_string(offset));
@@ -80,6 +85,8 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
     auto& owner = it->second;
     const bool valid = field.empty() ? owner.int_array :
         !owner.class_name.empty() && owner.class_array_fields.count(field);
+    if (!field.empty() && !owner.class_public_fields.count(field))
+        reject(receiver, "private native Array<int> class field cannot be accessed externally");
     if (!valid || (!field.empty() && owner.moved_fields.count(field))) {
         if (field.empty())
             reject(receiver, write
@@ -400,16 +407,19 @@ void validate_i64_ownership(const Program& program) {
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_public_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;
     for (const auto& cls : program.classes) {
-        std::unordered_set<std::string> fields, arrays, finals;
+        std::unordered_set<std::string> fields, public_fields, arrays, finals;
         for (const auto& field : cls.fields) {
             fields.insert(field.name);
+            if (field.exported) public_fields.insert(field.name);
             if (field.int_array) arrays.insert(field.name);
             if (field.final_field) finals.insert(field.name);
         }
         class_fields.emplace(cls.name, std::move(fields));
+        class_public_fields.emplace(cls.name, std::move(public_fields));
         class_arrays.emplace(cls.name, std::move(arrays));
         class_finals.emplace(cls.name, std::move(finals));
     }
@@ -434,6 +444,7 @@ void validate_i64_ownership(const Program& program) {
             entry.class_name = param.class_name;
             if (!param.class_name.empty()) {
                 entry.class_fields = class_fields.at(param.class_name);
+                entry.class_public_fields = class_public_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
                 entry.final_fields = class_finals.at(param.class_name);
             }
@@ -450,6 +461,7 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
+                entry.class_public_fields = class_public_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
@@ -472,6 +484,7 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: class move requires live unborrowed owner at byte " +
                         std::to_string(binding.offset));
                 entry.class_fields = source.class_fields;
+                entry.class_public_fields = source.class_public_fields;
                 entry.class_array_fields = source.class_array_fields;
                 entry.final_fields = source.final_fields;
                 source.moved = true;
@@ -505,6 +518,9 @@ void validate_i64_ownership(const Program& program) {
                 auto& recv = found->second;
                 if (recv.class_array_fields.size() != 4)
                     throw std::runtime_error("ownership violation: filled array commit requires exactly four owned Array<int> fields");
+                for (const auto& field : recv.class_array_fields)
+                    if (!recv.class_public_fields.count(field))
+                        throw std::runtime_error("private native class field cannot be written by external array commit");
                 if (recv.mode != Mode::Value || !recv.mutable_owner ||
                         recv.moved || !recv.moved_fields.empty() ||
                         recv.exclusive_loan || recv.shared_loans != 0)

@@ -178,57 +178,50 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (token_.text == "import")
-            fail("native contract imports require a validated cross-unit linker");
-        while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
-            const bool exported = accept("pub");
-            require("define");
+        while (token_.kind != Kind::End && !(wrapped_module && token_.text == "end")) {
+            if (token_.text == "import") fail("native contract imports require a validated cross-unit linker");
+            const bool leading_pub = accept("pub");
+            const bool leading_private = accept("private");
+            const bool defined = accept("define");
+            const bool after_pub = defined && accept("pub");
+            const bool after_private = defined && accept("private");
+            if ((leading_pub && after_pub) || (leading_private && after_private)
+                    || ((leading_pub || after_pub) && (leading_private || after_private)))
+                fail("duplicate/conflicting visibility modifier");
+            const bool exported = leading_pub || after_pub;
             if (accept("contract")) {
                 if (string_client_contract()) program.client_contracts.push_back(client_contract());
                 else program.contracts.push_back(contract());
-                continue;
-            }
-            if (exported) fail("public wrappers outside native client contract subset");
-            if (accept("serial")) {
+            } else if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
-            }
-            if (accept("module")) {
+            } else if (accept("module")) {
+                if (wrapped_module || !program.classes.empty() || !program.actors.empty()
+                        || !program.functions.empty() || !program.cooperative_loops.empty())
+                    fail("native module must be the outer source declaration");
+                if (exported || leading_private || after_private)
+                    fail("native module visibility requires an exported-module ABI");
                 program.module = identifier();
                 if (accept("conforms")) {
                     do program.conforms.push_back(identifier()); while (accept(","));
                 }
                 accept("as");
                 wrapped_module = true;
-            } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
-                    require("actor");
-                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'module', 'class' or 'actor'");
-            }
-            break;
-        }
-        while (token_.kind != Kind::End
-                && !(wrapped_module && token_.text == "end")) {
-            if (token_.text == "import")
-                fail("native contract imports require a validated cross-unit linker");
-            if (accept("define")) {
-                if (accept("serial")) {
-                    require("actor");
-                    fail("native serial actor requires shared HTTP/message lane lowering");
-                }
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
-                    require("actor");
-                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'class' or 'actor'");
-            } else if (token_.text == "suspend") {
+            } else if (accept("class")) {
+                ClassDecl klass = class_declaration();
+                klass.exported = exported;
+                program.classes.push_back(std::move(klass));
+            } else if (accept("actor")) {
+                program.actors.push_back(actor_declaration());
+            } else if (accept_transform_pipe_modifier()) {
+                require("actor");
+                fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+            } else if (!defined && token_.text == "suspend") {
+                if (exported || leading_private) fail("native resumable scalar declaration visibility unsupported");
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
-                program.functions.push_back(function());
+                if (defined) fail("expected module, class, actor or contract after 'define'");
+                program.functions.push_back(function(exported));
             }
         }
         if (wrapped_module) require("end");
@@ -239,15 +232,13 @@ public:
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty() ||
-                 !program.client_contracts.empty() || !program.contracts.empty())) {
+                 !program.client_contracts.empty() || !program.contracts.empty()))
             fail("first AOT continuation slice requires exactly one standalone suspend function");
-        }
         validate(program);
         return program;
     }
 
 private:
-<<<<<<< HEAD
     Token peek_next() const { Lexer lookahead = lexer_; return lookahead.next(); }
     bool string_client_contract() const {
         Lexer lookahead = lexer_;
@@ -449,9 +440,11 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
-            const bool legacy_let = accept("let");
             ClassField field;
+            field.exported = accept("pub");
+            if (accept("private") && field.exported)
+                fail("duplicate/conflicting visibility modifier on class field");
+            const bool legacy_let = accept("let");
             if (!legacy_let) field.final_field = accept("final");
             if (legacy_let && accept("mut")) {
                 require("Array");
@@ -553,10 +546,11 @@ private:
         return loop;
     }
 
-    Function function() {
+    Function function(bool preexported = false) {
         Function value;
         value.offset = token_.offset;
-        value.exported = accept("pub");
+        if (preexported && token_.text == "pub") fail("duplicate visibility modifier");
+        value.exported = preexported || accept("pub");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }

@@ -515,8 +515,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
+        const auto linkage = fn.exported ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
         llvm::Function* declaration = llvm::Function::Create(
-            signature, llvm::Function::ExternalLinkage, symbol, module);
+            signature, linkage, symbol, module);
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args())

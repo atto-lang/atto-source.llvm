@@ -1,0 +1,8 @@
+define class Vault as
+  let int secret = 42;
+end
+pub fnc main(): int {
+  let mut Vault vault = new Vault();
+  vault.secret = 1;
+  return 1;
+}
