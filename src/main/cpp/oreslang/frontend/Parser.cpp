@@ -655,6 +655,10 @@ private:
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
+                // A nested class field such as shelf.worker.send(...) must
+                // never silently resolve to an unrelated actor named worker.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor send requires direct named ActorRef receiver");
                 ActorSend send;
                 send.offset = statement.offset;
                 send.reference = action->left->name;
@@ -667,6 +671,11 @@ private:
                 continue;
             }
             if (action->kind == Expression::Kind::Field && accept("=")) {
+                // Guard the AST shape before extracting the receiver name.
+                // Without this, box.items.size = 7 could accidentally write
+                // a different local object's field, items.size.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native field assignment requires direct named class receiver");
                 statement.kind = Statement::Kind::FieldWrite;
                 statement.receiver = action->left->name;
                 statement.field = action->name;
