@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -905,6 +906,110 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
     }
 
+
+    // First compiler-generated heap continuation: exactly one frame-owned
+    // scalar updated at a committed loop backedge. There is no actor or
+    // scheduler admission here. The host owns the frame and must dispatch
+    // on a single carrier with a strictly bounded fuel allowance.
+    for (const auto& loop : source.cooperative_loops) {
+        if (wasm32_target)
+            throw std::runtime_error("wasm32 resumable source loop is unsupported");
+        auto* i32 = llvm::Type::getInt32Ty(context);
+        const std::string prefix = "oreslang_rt_" + loop.name + "_";
+        auto* frame_type = loan_ptr;
+        auto* initialize = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {frame_type}, false),
+            llvm::Function::ExternalLinkage, prefix + "init", module);
+        auto* resume = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {frame_type, i64}, false),
+            llvm::Function::ExternalLinkage, prefix + "resume", module);
+        auto* cancel = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {frame_type}, false),
+            llvm::Function::ExternalLinkage, prefix + "cancel", module);
+        auto* zero = llvm::ConstantInt::get(i64, 0);
+        auto* one = llvm::ConstantInt::get(i64, 1);
+        auto* two = llvm::ConstantInt::get(i64, 2);
+        auto* max_value = llvm::ConstantInt::getSigned(i64,
+            std::numeric_limits<std::int64_t>::max());
+        auto* max_fuel = llvm::ConstantInt::get(i64, 512);
+        auto* init_value = llvm::ConstantInt::getSigned(i64, loop.initial);
+
+        // INIT: only an uninitialized (zero-tagged) frame can be published.
+        // Reinitializing a cancelled or active frame would resurrect work.
+        {
+            auto* entry = llvm::BasicBlock::Create(context, "entry", initialize);
+            auto* publish = llvm::BasicBlock::Create(context, "publish", initialize);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", initialize);
+            llvm::IRBuilder<> b(entry);
+            auto* frame = initialize->getArg(0);
+            auto* tag = b.CreateLoad(i64, frame, "state");
+            auto* fresh = b.CreateICmpEQ(tag, zero);
+            b.CreateCondBr(fresh, publish, invalid);
+            b.SetInsertPoint(publish);
+            auto* counter = b.CreateInBoundsGEP(i64, frame, one);
+            b.CreateStore(init_value, counter);
+            b.CreateStore(one, frame);
+            b.CreateRet(llvm::ConstantInt::get(i32, 1));
+            b.SetInsertPoint(invalid);
+            b.CreateRet(llvm::ConstantInt::get(i32, 0));
+        }
+        // RESUME: cap the number of guest iterations independently of
+        // untrusted host fuel; report YIELD only after a committed update.
+        {
+            auto* entry = llvm::BasicBlock::Create(context, "entry", resume);
+            auto* body = llvm::BasicBlock::Create(context, "body", resume);
+            auto* iteration = llvm::BasicBlock::Create(context, "iteration", resume);
+            auto* handoff = llvm::BasicBlock::Create(context, "handoff", resume);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", resume);
+            llvm::IRBuilder<> b(entry);
+            auto* frame = resume->getArg(0);
+            auto* fuel = resume->getArg(1);
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* active = b.CreateICmpEQ(state, one);
+            auto* valid_fuel = b.CreateICmpSGT(fuel, zero);
+            b.CreateCondBr(b.CreateAnd(active, valid_fuel), body, invalid);
+            b.SetInsertPoint(body);
+            auto* bounded = b.CreateSelect(b.CreateICmpUGT(fuel, max_fuel),
+                                            max_fuel, fuel, "bounded.fuel");
+            b.CreateBr(iteration);
+            b.SetInsertPoint(iteration);
+            auto* remaining = b.CreatePHI(i64, 2, "remaining");
+            remaining->addIncoming(bounded, body);
+            auto* counter = b.CreateInBoundsGEP(i64, frame, one);
+            auto* current = b.CreateLoad(i64, counter, "committed.counter");
+            // The minimal scalar subset saturates, never exhibits native
+            // signed-overflow UB, and always performs one atomic IR-side update.
+            auto* incremented = b.CreateAdd(current, one, "next.counter");
+            auto* next = b.CreateSelect(b.CreateICmpEQ(current, max_value),
+                                        max_value, incremented);
+            b.CreateStore(next, counter);
+            auto* left = b.CreateSub(remaining, one);
+            auto* expired = b.CreateICmpEQ(left, zero);
+            b.CreateCondBr(expired, handoff, iteration);
+            remaining->addIncoming(left, iteration);
+            b.SetInsertPoint(handoff);
+            b.CreateRet(llvm::ConstantInt::get(i32, 1)); // yielded
+            b.SetInsertPoint(invalid);
+            b.CreateRet(llvm::ConstantInt::getSigned(i32, -1));
+        }
+        // Cancellation is a trusted owner-turn action. Never interrupt
+        // an in-flight native stack or revive a previously cancelled frame.
+        {
+            auto* entry = llvm::BasicBlock::Create(context, "entry", cancel);
+            auto* retired = llvm::BasicBlock::Create(context, "retired", cancel);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", cancel);
+            llvm::IRBuilder<> b(entry);
+            auto* frame = cancel->getArg(0);
+            b.CreateCondBr(b.CreateICmpEQ(b.CreateLoad(i64, frame), one),
+                           retired, invalid);
+            b.SetInsertPoint(retired);
+            b.CreateStore(two, frame);
+            b.CreateStore(zero, b.CreateInBoundsGEP(i64, frame, one));
+            b.CreateRet(llvm::ConstantInt::get(i32, 1));
+            b.SetInsertPoint(invalid);
+            b.CreateRet(llvm::ConstantInt::get(i32, 0));
+        }
+    }
 
     // Native source actors execute only on OresVM scheduler turns. The
     // portable guest below uses an independent, no-import single-actor ABI.

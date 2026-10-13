@@ -187,13 +187,22 @@ public:
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'class' or 'actor'");
+            } else if (token_.text == "suspend") {
+                program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
                 program.functions.push_back(function());
             }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty()) fail("expected at least one function or actor");
+        if (program.functions.empty() && program.actors.empty() &&
+                program.cooperative_loops.empty())
+            fail("expected at least one function or actor");
+        if (!program.cooperative_loops.empty() &&
+                (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
+                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+            fail("first AOT continuation slice requires exactly one standalone suspend function");
+        }
         validate(program);
         return program;
     }
@@ -331,6 +340,38 @@ private:
             fail("integer literal overflows signed 64-bit result");
         advance();
         return value;
+    }
+
+    CooperativeScalarLoop cooperative_scalar_loop() {
+        // Explicitly narrow syntax avoids accidentally accepting unpinned
+        // loans, exception cleanup, arbitrary calls or nonresumable CFG.
+        CooperativeScalarLoop loop;
+        loop.offset = token_.offset;
+        require("suspend");
+        require("fnc");
+        loop.name = identifier();
+        require("("); require(")");
+        require(":"); require("void");
+        require("{");
+        require("val");
+        loop.variable = identifier();
+        require(":"); require("int"); require("=");
+        loop.initial = integer_literal();
+        require(";");
+        require("while"); require("("); require("true"); require(")");
+        require("{");
+        if (identifier() != loop.variable)
+            fail("AOT continuation requires assignment to its sole frame-owned scalar");
+        require("=");
+        if (identifier() != loop.variable)
+            fail("AOT continuation update must read its frame-owned scalar");
+        require("+");
+        if (integer_literal() != 1)
+            fail("first AOT continuation supports only increment by one");
+        require(";");
+        require("}");
+        require("}");
+        return loop;
     }
 
     Function function() {
