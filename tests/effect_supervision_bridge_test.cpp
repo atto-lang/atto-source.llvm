@@ -118,5 +118,35 @@ int main() {
     CHECK(restored->origin_kind == Lane::Kind::Raise);
     CHECK(restored->origin_code == 0u);
     invalid_pair.ack(key(9));
+
+    // Invalid effect values returned by native/FFI cleanup cannot masquerade
+    // as a valid terminal effect or strand a reserved supervisor slot.
+    const auto corrupt_cleanup = [](void*) noexcept -> EffectStatus {
+        return {static_cast<EffectKind>(0xff), 17u};
+    };
+    oreslang::EffectUnwind<1> corrupted_frame;
+    CHECK(corrupted_frame.push(corrupt_cleanup, nullptr));
+    const auto corrupted = corrupted_frame.finish({EffectKind::Throw, 43u});
+    CHECK(corrupted.primary.kind == EffectKind::Fatal);
+    CHECK(corrupted.primary.code == 0xFFFFFFFDu);
+    CHECK(corrupted.secondary_count == 1);
+    CHECK(corrupted.secondary[0].kind == EffectKind::Throw);
+    CHECK(corrupted.secondary[0].code == 43u);
+
+    oreslang::EffectUnwind<0> invalid_initial;
+    const auto malformed = invalid_initial.finish(
+            {static_cast<EffectKind>(0xff), 51u});
+    CHECK(malformed.primary.kind == EffectKind::Fatal);
+    CHECK(malformed.primary.code == 0xFFFFFFFDu);
+
+    Lane fallback(1);
+    fallback.reserve(key(10));
+    CHECK(Bridge::publish_terminal(fallback, key(10),
+            corrupted.primary, "invalid cleanup tag"));
+    const auto fail_closed = fallback.poll();
+    CHECK(fail_closed && fail_closed->kind == Lane::Kind::HostFailure);
+    CHECK(fail_closed->origin_kind == Lane::Kind::HostFailure);
+    CHECK(fail_closed->origin_code == 0xFFFFFFFDu);
+    fallback.ack(key(10));
     return 0;
 }
