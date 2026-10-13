@@ -72,6 +72,15 @@ inline CriticalStateAdmission admit_critical_handle_state(
             && callback.inferred.has(FunctionEffect::StateWrite)) {
         return CriticalStateAdmission::ReadModeCannotWrite;
     }
+    // The compiler-declared effect bound must cover acquisition of the
+    // lexical state capability independently of inferred field operations.
+    // A no-op callback is not permission to mint an undeclared loan.
+    if ((mode == CriticalStateMode::Read
+                && !with_effects.has(FunctionEffect::StateRead))
+            || (mode == CriticalStateMode::Write
+                && !with_effects.has(FunctionEffect::StateWrite))) {
+        return CriticalStateAdmission::EffectExceedsWith;
+    }
     if (!with_effects.permits(callback.inferred)) {
         return CriticalStateAdmission::EffectExceedsWith;
     }
