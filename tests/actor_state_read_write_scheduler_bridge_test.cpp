@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <chrono>
+#include <thread>
 
 using Registry = oreslang::runtime::ActorStateReadWriteContinuations;
 using Bridge = oreslang::runtime::ActorStateReadWriteSchedulerBridge;
@@ -20,6 +22,7 @@ struct State {
     OresNativeActorRef actor{};
     std::atomic<int> accepted{0}, rejected{0}, failures{0};
     std::atomic<int> data_rejected{0}, cancelled{0}, unwind_released{0};
+    std::atomic<int> running_loan{0}, permit_finish{0}, finished_loan{0};
 };
 extern "C" void on_data(void* raw, size_t actor, uint64_t payload) {
     auto& s = *static_cast<State*>(raw);
@@ -71,6 +74,21 @@ extern "C" void on_state(void* raw, size_t actor, OresNativeActorStateWake wake)
     };
     if (s.bridge->is_own_cancellation(false_cancellation))
         s.failures.fetch_add(1);
+    if (wake.continuation_id == 7) {
+        // A real carrier now holds this loan. The host thread will try to
+        // retire and cancel it while this callback is suspended at the gate.
+        Bridge::ScopedWake scope(*s.bridge, wake, Mode::Read);
+        if (!scope) {
+            s.failures.fetch_add(1);
+            return;
+        }
+        s.running_loan.store(1, std::memory_order_release);
+        while (!s.permit_finish.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        s.finished_loan.store(1, std::memory_order_release);
+        return; // RAII releases the loan on this same scheduler-owned turn.
+    }
     if (wake.continuation_id == 5) {
         // A guest throw is contained by this trusted C++ callback wrapper.
         // Even without explicit finish(), the scoped grant must be released
@@ -198,6 +216,35 @@ int main() {
     CHECK(bridge.pump(1) == 1);
     CHECK(ores_native_actor_scheduler_drain(state.scheduler));
     CHECK(state.cancelled.load() == 2);
+    CHECK(state.failures.load() == 0);
+
+    // Host retirement must not tear down state while a distinct scheduler
+    // worker holds the live loan. The rejection is tested across threads
+    // (not only reentrantly inside the scheduler callback).
+    CHECK(state.registry.request(incarnation, 7, Mode::Read).status == Status::Ready);
+    CHECK(bridge.pump(1) == 1);
+    bool reached_callback = false;
+    for (int i = 0; i < 3000; ++i) {
+        if (state.running_loan.load(std::memory_order_acquire)) {
+            reached_callback = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(reached_callback);
+    bool refused_retirement = false;
+    try { state.registry.retire(); }
+    catch (const std::logic_error&) { refused_retirement = true; }
+    CHECK(refused_retirement);
+    bool refused_cancellation = false;
+    try { state.registry.cancel_pending(incarnation, 7); }
+    catch (const std::logic_error&) { refused_cancellation = true; }
+    CHECK(refused_cancellation);
+    CHECK(state.registry.admitted(incarnation, 7, Mode::Read));
+    state.permit_finish.store(1, std::memory_order_release);
+    CHECK(ores_native_actor_scheduler_drain(state.scheduler));
+    CHECK(state.finished_loan.load(std::memory_order_acquire) == 1);
+    CHECK(!state.registry.admitted(incarnation, 7, Mode::Read));
     CHECK(state.failures.load() == 0);
 
     CHECK(ores_native_actor_scheduler_stop(state.scheduler, state.actor));
