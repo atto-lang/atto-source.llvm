@@ -40,7 +40,7 @@ public:
         const Failure origin = original_kind(effect.kind);
         const Failure delivered = terminal_kind(effect.kind);
         return supervisor.publish_child(
-            actor, delivered, diagnostic, parent_id, origin);
+            actor, delivered, diagnostic, parent_id, origin, effect.code);
     }
 
     static bool publish_terminal(
@@ -54,7 +54,7 @@ public:
         if (effect.kind == Effect::Return) return false;
         const Failure origin = original_kind(effect.kind);
         const Failure delivered = terminal_kind(effect.kind);
-        return lane.publish_preallocated(actor, delivered, diagnostic, parent_id, origin);
+        return lane.publish_preallocated(actor, delivered, diagnostic, parent_id, origin, effect.code);
     }
 
 private:
