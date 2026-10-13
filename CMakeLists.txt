@@ -985,6 +985,18 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_ownership_boundary_matrix.py"
             "$<TARGET_FILE:oreslang-llvmc>")
+    # Native product syntax is fail-closed until typed field-slot binding,
+    # borrow-aware moves, explicit drop glue and collector-free native layout
+    # are actually lowered. The admitted i64 named-call baseline is compiled
+    # ahead of time with Clang at O0/O2 and must have no GC IR.
+    if(ORE_CLANG)
+        add_test(NAME native_product_strict_aot_no_gc_admission
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_product_strict_aot_gate.py"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+        set_tests_properties(native_product_strict_aot_no_gc_admission
+            PROPERTIES TIMEOUT 90)
+    endif()
     # LLVM has no native I/O binding registry or continuation lowering yet.
     # Both spellings must fail closed with no IR until implementation lands.
     oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
