@@ -341,7 +341,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 });
         });
     llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
-                         arrayLength, arrayDrop, arrayClose, arrayAbort, arrayUnhandled;
+                         arrayLength, arrayDrop, arrayClose, arrayAbort,
+                         arrayPrepareFilledMany, arrayCommitMany, arrayUnhandled;
     if (has_array_bindings) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         auto* i32 = llvm::Type::getInt32Ty(context);
@@ -351,6 +352,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::FunctionType::get(i32, {native_ptr, loan_ptr}, false));
         arrayAdd = module.getOrInsertFunction("oreslang_int_array_try_add",
             llvm::FunctionType::get(i32, {native_ptr, i64, i64}, false));
+        // Each opaque handle slot is i64. Arrays of handle-slot pointers
+        // require an extra pointer layer in LLVM typed-pointer toolchains.
+        arrayPrepareFilledMany = module.getOrInsertFunction(
+            "oreslang_int_array_try_prepare_filled_many",
+            llvm::FunctionType::get(i32,
+                {native_ptr, i64, loan_ptr, loan_ptr, loan_ptr}, false));
+        arrayCommitMany = module.getOrInsertFunction(
+            "oreslang_int_array_commit_many",
+            llvm::FunctionType::get(voidTy,
+                {native_ptr, i64, loan_ptr->getPointerTo(),
+                 loan_ptr->getPointerTo()}, false));
         arrayAbort = module.getOrInsertFunction("abort",
             llvm::FunctionType::get(voidTy, {}, false));
         arrayUnhandled = module.getOrInsertFunction(
@@ -508,6 +520,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         if (fld.int_array) ++array_owner_count;
             }
         }
+        // A compiler-owned four-array transaction stages four further
+        // handles that must each have an initialized cleanup shadow before
+        // the runtime can allocate. Whole-class moves add no new handles.
+        for (const auto& statement : fn.statements)
+            if (statement.kind == Statement::Kind::ArrayCommitFilled)
+                array_owner_count += 4;
         if (array_owner_count > 64)
             throw std::runtime_error("native Array<int> per-function owned handle count exceeds 64");
         // Shadow owners are safe at every allocation failure: unlike class
@@ -556,8 +574,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             // Preserve the actual typed resource status even when open fails
             // before a valid array-region pointer can be published.
             builder.CreateStore(open_status, array_failure_status);
-            // No local array owner exists yet, but a previously opened
-            // independent owned-int region must be closed before reporting.
+            // A failed open published no native array, but a separate
+            // experimental owned-int region may need deterministic cleanup.
             if (region != nullptr) builder.CreateCall(regionClose, {region});
             builder.CreateCall(arrayUnhandled, {open_status});
             builder.CreateUnreachable();
@@ -679,7 +697,91 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
-            if (effect.kind == Statement::Kind::FieldWrite) {
+            if (effect.kind == Statement::Kind::ArrayCommitFilled) {
+                // OwnershipChecker guarantees a live unique mutable class
+                // with exactly four array fields; the class layout fixes
+                // their ordering. All inputs are evaluated before staging.
+                const auto binding = std::find_if(fn.locals.begin(), fn.locals.end(),
+                    [&](const LocalBinding& b) { return b.name == effect.receiver; });
+                if (binding == fn.locals.end() || binding->class_name.empty())
+                    throw std::runtime_error("filled array commit lacks class owner");
+                const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == binding->class_name; });
+                if (cls == source.classes.end())
+                    throw std::runtime_error("filled array commit lacks class layout");
+                std::vector<std::string> owned_fields;
+                for (const auto& item : cls->fields)
+                    if (item.int_array)
+                        owned_fields.push_back(field_key(effect.receiver, item.name));
+                if (owned_fields.size() != 4 || effect.array_commit_values.size() != 4 ||
+                        !array_handle_shadows || next_array_shadow + 4 > array_owner_count)
+                    throw std::runtime_error("unverified filled array commit owners");
+
+                const auto four = llvm::ConstantInt::get(i64, 4);
+                llvm::Value* count = lower(*effect.array_commit_length, builder, i64,
+                    storage, field_storage, declarations, &region_moves);
+                llvm::Value* lengths = builder.CreateAlloca(i64, four, "arrays.commit.lengths");
+                llvm::Value* fill = builder.CreateAlloca(i64, four, "arrays.commit.values");
+                llvm::Value* dests = builder.CreateAlloca(loan_ptr, four, "arrays.commit.dest.ptrs");
+                llvm::Value* sources = builder.CreateAlloca(loan_ptr, four, "arrays.commit.src.ptrs");
+                llvm::Value* staged = builder.CreateGEP(i64, array_handle_shadows,
+                    llvm::ConstantInt::get(i64, next_array_shadow),
+                    "arrays.commit.staged.owners");
+                const std::size_t first_stage = next_array_shadow;
+                next_array_shadow += 4;
+                std::vector<llvm::Value*> previous_shadows;
+                for (std::size_t i = 0; i < 4; ++i) {
+                    const auto index = llvm::ConstantInt::get(i64, i);
+                    llvm::Value* value = lower(*effect.array_commit_values[i],
+                        builder, i64, storage, field_storage, declarations, &region_moves);
+                    builder.CreateStore(count, builder.CreateGEP(i64, lengths, index));
+                    builder.CreateStore(value, builder.CreateGEP(i64, fill, index));
+                    builder.CreateStore(field_storage.at(owned_fields[i]),
+                        builder.CreateGEP(loan_ptr, dests, index));
+                    builder.CreateStore(builder.CreateGEP(i64, array_handle_shadows,
+                            llvm::ConstantInt::get(i64, first_stage + i)),
+                        builder.CreateGEP(loan_ptr, sources, index));
+                    previous_shadows.push_back(array_failure_places.at(owned_fields[i]));
+                }
+
+                llvm::Value* status = builder.CreateCall(arrayPrepareFilledMany,
+                    {array_region, four, lengths, fill, staged},
+                    "arrays.commit.prepare.status");
+                llvm::BasicBlock* accepted = llvm::BasicBlock::Create(
+                    context, "arrays.commit.prepare.ok", function);
+                llvm::BasicBlock* failed = llvm::BasicBlock::Create(
+                    context, "arrays.commit.prepare.failure", function);
+                builder.CreateCondBr(builder.CreateICmpEQ(status,
+                    llvm::ConstantInt::get(status->getType(), 0)), accepted, failed);
+                builder.SetInsertPoint(failed);
+                builder.CreateStore(status, array_failure_status);
+                // ABI contract: failed preparation never modifies staged[] or
+                // published class handles. The shared epilogue drops only
+                // the original live owners and then closes their region.
+                builder.CreateBr(array_failure);
+                builder.SetInsertPoint(accepted);
+                builder.CreateCall(arrayCommitMany, {array_region, four, dests, sources});
+                // IMPORTANT: commit_many disarms *sources[i] = 0. Since we
+                // supplied hidden staging shadows as those source slots, the
+                // runtime also zeroed our failure-cleanup mirrors. Restore
+                // each new owner token from the published destination *after*
+                // the infallible native commit and before any further guest
+                // operations can fail. Otherwise a later resource failure
+                // would leak four live arrays and abort on region_close.
+                for (std::size_t i = 0; i < 4; ++i) {
+                    llvm::Value* shadow = builder.CreateGEP(i64,
+                        array_handle_shadows,
+                        llvm::ConstantInt::get(i64, first_stage + i),
+                        "arrays.commit.cleanup.owner");
+                    llvm::Value* published = builder.CreateLoad(i64,
+                        field_storage.at(owned_fields[i]),
+                        "arrays.commit.published.owner");
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0),
+                        previous_shadows[i]);
+                    builder.CreateStore(published, shadow);
+                    array_failure_places[owned_fields[i]] = shadow;
+                }
+            } else if (effect.kind == Statement::Kind::FieldWrite) {
                 const std::string target = field_key(effect.receiver, effect.field);
                 if (array_field_keys.count(target)) {
                     // OwnershipChecker admitted only straight-line direct
@@ -996,14 +1098,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 llvm::Type::getInt32Ty(context), 2), memory_error);
             for (llvm::BasicBlock* failure : {quota_error, memory_error}) {
                 builder.SetInsertPoint(failure);
-                // The handoff is non-returning; a future catch/supervisor
-                // continuation must never resume the destroyed owner frame.
+                // No return to a frame whose owners were already destroyed.
                 builder.CreateCall(arrayUnhandled, {typed_status});
                 builder.CreateUnreachable();
             }
             builder.SetInsertPoint(invalid_status);
-            // An invalid success/unknown tag is a compiler/runtime
-            // invariant violation, never an ordinary catchable error.
             builder.CreateCall(arrayAbort, {});
             builder.CreateUnreachable();
         }

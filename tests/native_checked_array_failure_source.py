@@ -14,6 +14,31 @@ import subprocess
 import sys
 import tempfile
 
+BATCH_FULL_QUOTA = """define class Four as
+  let mut Array<int> previous = new Array<int>();
+  let mut Array<int> following = new Array<int>();
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> occupied = new Array<int>();
+end
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 65536, -1, -1, 0, 0);
+  rt array_commit_filled(q, 65536, -1, -1, 0, 0);
+  return 42;
+}
+"""
+BATCH_COMMIT = """define class Four as
+  let mut Array<int> previous = new Array<int>();
+  let mut Array<int> following = new Array<int>();
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> occupied = new Array<int>();
+end
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 7, -1, -1, 7, 35);
+  return q.values.get(6) + q.occupied.get(0);
+}
+"""
 LEXICAL = """pub fnc main(): int {
   let mut Array<int> first = new Array<int>();
   let mut Array<int> second = new Array<int>();
@@ -120,7 +145,7 @@ void __wrap_oreslang_int_array_unhandled_resource_failure(uint32_t status) {
     ++typed_handoffs;
     typed_status = status;
     __real_oreslang_int_array_unhandled_resource_failure(status);
-    _Exit(89); /* A terminal error handoff must never return. */
+    _Exit(89); /* The terminal error handoff must never return. */
 }
 extern void __real_oreslang_int_array_region_close(OresNativeIntArrayRegion*);
 void __wrap_oreslang_int_array_drop(OresNativeIntArrayRegion* r,
@@ -129,8 +154,10 @@ void __wrap_oreslang_int_array_drop(OresNativeIntArrayRegion* r,
     __real_oreslang_int_array_drop(r, h);
 }
 void __wrap_oreslang_int_array_region_close(OresNativeIntArrayRegion* r) {
-    ++closed;
+    // Only count a close that actually completed. An invalid live-region
+    // close aborts in the real runtime and must never pass this assertion.
     __real_oreslang_int_array_region_close(r);
+    ++closed;
 }
 extern void __real_oreslang_owned_i64_region_drop(
     OresOwnedI64Region*, OresOwnedI64Handle);
@@ -141,8 +168,8 @@ void __wrap_oreslang_owned_i64_region_drop(OresOwnedI64Region* r,
     __real_oreslang_owned_i64_region_drop(r, h);
 }
 void __wrap_oreslang_owned_i64_region_close(OresOwnedI64Region* r) {
-    ++owned_closed;
     __real_oreslang_owned_i64_region_close(r);
+    ++owned_closed;
 }
 __attribute__((noreturn)) void __wrap_abort(void) {
     if (expectations()) {
@@ -204,8 +231,8 @@ def verify(compiler, clang, root, sanitizers):
                 b"array.failure.no-memory:",
                 b"array.failure.invalid-status:",
                 b"switch i32",
-                b"@oreslang_int_array_drop",
                 b"@oreslang_int_array_unhandled_resource_failure",
+                b"@oreslang_int_array_drop",
                 b"@oreslang_int_array_region_close",
                 b"@abort",
             ]
@@ -239,9 +266,9 @@ def verify(compiler, clang, root, sanitizers):
             if sanitizers:
                 link += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
             link += [
-                "-Wl,--wrap=oreslang_int_array_drop",
                 "-Wl,--wrap=oreslang_int_array_try_add",
-                "-Wl,--wrap=oreslang_int_array_unhandled_resource_failure",
+            "-Wl,--wrap=oreslang_int_array_unhandled_resource_failure",
+            "-Wl,--wrap=oreslang_int_array_drop",
                 "-Wl,--wrap=oreslang_int_array_region_close",
                 "-Wl,--wrap=abort",
                 "-Wl,--wrap=oreslang_owned_i64_region_drop",
@@ -282,20 +309,16 @@ def verify(compiler, clang, root, sanitizers):
                      ORE_EXPECT_OWNED_DROPS=str(heap),
                      ORE_EXPECT_OWNED_CLOSES=str(heap),
                      ORE_EXPECT_RESOURCE_STATUS="0")
-            # Force a typed LIMIT from an actual compiler-generated add,
-            # after every owner has been created. The error handoff receives
-            # quota=1 only AFTER all array owners have been destroyed.
-            e = os.environ.copy()
-            e.update(ORE_FAIL_AFTER="-1", ORE_FORCE_ARRAY_LIMIT="1",
-                     ORE_EXPECT_DROPS=str(owned), ORE_EXPECT_CLOSES="1",
-                     ORE_EXPECT_OWNED_DROPS=str(heap),
-                     ORE_EXPECT_OWNED_CLOSES=str(heap),
-                     ORE_EXPECT_RESOURCE_STATUS="1")
+            # Force LIMIT after all owners are created; no destroyed owner
+            # may survive the exactly-once post-cleanup native handoff.
+            e["ORE_FORCE_ARRAY_LIMIT"] = "1"
+            e["ORE_FAIL_AFTER"] = "-1"
+            e["ORE_EXPECT_RESOURCE_STATUS"] = "1"
             limited = run([str(exe)], env=e)
             if limited.returncode != 86 or b"CHECKED_ABORT_OK\n" not in limited.stderr:
                 raise AssertionError(
-                    f"{label}: quota error did not hand off after cleanup: "
-                    f"rc={limited.returncode} stderr={limited.stderr[:2200]!r}")
+                    f"{label}: quota handoff after cleanup failed: "
+                    f"rc={limited.returncode}, stderr={limited.stderr[:2200]!r}")
             e.pop("ORE_FORCE_ARRAY_LIMIT", None)
             e["ORE_FAIL_AFTER"] = str(1 + owned + growing)
             e["ORE_EXPECT_RESOURCE_STATUS"] = "0"
@@ -304,8 +327,107 @@ def verify(compiler, clang, root, sanitizers):
                 raise AssertionError(
                     f"{label}: normal cleanup failed: rc={result.returncode}, "
                     f"stderr={result.stderr[:2200]!r}")
+        # The new compiler-only four-field transaction has its own staging
+        # allocations (4 handle creations + 4 backing buffers). The runtime
+        # rolls back partial preparation internally without publishing any
+        # staged handle. Every failed edge must still close the region with
+        # no live owners, and a successful commit must leave one owner of
+        # each filled backing array.
+        source = temp / "four-batch.ores"
+        source.write_text(BATCH_COMMIT, encoding="utf-8")
+        compiled = run([str(compiler), str(source)])
+        if compiled.returncode or compiled.stderr or not compiled.stdout:
+            raise AssertionError(f"four-batch compiler failure: {compiled.stderr!r}")
+        ir = compiled.stdout
+        for symbol in (b"@oreslang_int_array_try_prepare_filled_many",
+                       b"@oreslang_int_array_commit_many",
+                       b"arrays.commit.prepare.failure:",
+                       b"array.failure.status.slot"):
+            if symbol not in ir:
+                raise AssertionError(f"four-batch missing compiler IR {symbol!r}")
+        if ir.count(b"call void @oreslang_int_array_commit_many(") != 1:
+            raise AssertionError("four-batch must emit exactly one native commit")
+        ll = temp / "four-batch.ll"
+        ll.write_bytes(ir)
+        exe = temp / "four-batch"
+        link = [str(clang), "-O1", "-std=c11", "-Wno-override-module",
+                "-DORESLANG_NATIVE_TEST_ALLOC_FAILURE=1"]
+        if sanitizers:
+            link += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        link += [
+            "-Wl,--wrap=oreslang_int_array_try_add",
+            "-Wl,--wrap=oreslang_int_array_unhandled_resource_failure",
+            "-Wl,--wrap=oreslang_int_array_drop",
+            "-Wl,--wrap=oreslang_int_array_region_close",
+            "-Wl,--wrap=abort",
+            "-Wl,--wrap=oreslang_owned_i64_region_drop",
+            "-Wl,--wrap=oreslang_owned_i64_region_close",
+            "-x", "ir", str(ll), "-x", "c", str(runtime),
+            str(root / "src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"),
+            str(shim), "-I", str(root / "src/main/cpp"), "-o", str(exe),
+        ]
+        linked = run(link)
+        if linked.returncode:
+            raise AssertionError(f"four-batch clang/link: {linked.stderr!r}")
+        # 0 region open; 1..4 four original class handles; 5..12 four
+        # staging handles/buffers. Failed staging must preserve old owners.
+        for failed_at in range(13):
+            expected_drops = min(max(failed_at - 1, 0), 4)
+            env = os.environ.copy()
+            env.update(ORE_FAIL_AFTER=str(failed_at),
+                       ORE_EXPECT_DROPS=str(expected_drops),
+                       ORE_EXPECT_CLOSES=str(int(failed_at > 0)),
+                       ORE_EXPECT_OWNED_DROPS="0",
+                       ORE_EXPECT_OWNED_CLOSES="0",
+                       ORE_EXPECT_RESOURCE_STATUS="2")
+            result = run([str(exe)], env=env)
+            if result.returncode != 86 or b"CHECKED_ABORT_OK\n" not in result.stderr:
+                raise AssertionError(
+                    f"four-batch resource edge {failed_at}: "
+                    f"rc={result.returncode}; stderr={result.stderr[:2200]!r}")
+        env = os.environ.copy()
+        env.update(ORE_FAIL_AFTER="13", ORE_EXPECT_DROPS="4",
+                   ORE_EXPECT_CLOSES="1", ORE_EXPECT_OWNED_DROPS="0",
+                   ORE_EXPECT_OWNED_CLOSES="0",
+                   ORE_EXPECT_RESOURCE_STATUS="0")
+        result = run([str(exe)], env=env)
+        if result.returncode != 42 or result.stdout or result.stderr:
+            raise AssertionError(
+                f"four-batch success cleanup: rc={result.returncode}, "
+                f"stderr={result.stderr[:2200]!r}")
+        # A second maximal-capacity staging attempt cannot coexist with
+        # four fully reserved 65536-element destinations in this region.
+        # The quota must fail BEFORE any new owner is published. The abort
+        # cleanup must still drop four committed owners and close cleanly.
+        quota_src = temp / "four-batch-quota.ores"
+        quota_src.write_text(BATCH_FULL_QUOTA, encoding="utf-8")
+        compiled = run([str(compiler), str(quota_src)])
+        if compiled.returncode or compiled.stderr or not compiled.stdout:
+            raise AssertionError(f"full-capacity quota source failed: {compiled.stderr!r}")
+        quota_ir = compiled.stdout
+        if quota_ir.count(b"call void @oreslang_int_array_commit_many(") != 2:
+            raise AssertionError("full-capacity quota must lower both batch statements")
+        quota_ll = temp / "four-batch-quota.ll"
+        quota_ll.write_bytes(quota_ir)
+        quota_exe = temp / "four-batch-quota"
+        quota_link = [str(quota_ll) if item == str(ll) else
+                      str(quota_exe) if item == str(exe) else item for item in link]
+        linked = run(quota_link)
+        if linked.returncode:
+            raise AssertionError(f"full-capacity quota clang/link: {linked.stderr!r}")
+        env = os.environ.copy()
+        env.update(ORE_FAIL_AFTER="-1", ORE_EXPECT_DROPS="4",
+                   ORE_EXPECT_CLOSES="1", ORE_EXPECT_OWNED_DROPS="0",
+                   ORE_EXPECT_OWNED_CLOSES="0",
+                   ORE_EXPECT_RESOURCE_STATUS="0")
+        env["ORE_EXPECT_RESOURCE_STATUS"] = "1"
+        result = run([str(quota_exe)], env=env)
+        if result.returncode != 86 or b"CHECKED_ABORT_OK\n" not in result.stderr:
+            raise AssertionError(
+                f"full-capacity repeated prepare must reject and cleanly close: "
+                f"rc={result.returncode}; stderr={result.stderr[:2200]!r}")
     print("PASS checked Array<int> source failure cleanup: "
-          "28 injected allocation edges + 5 successful complete guest runs"
+          "41 injected allocation edges + 6 successful complete guest runs"
           + (" (ASan+UBSan)" if sanitizers else ""), flush=True)
 
 

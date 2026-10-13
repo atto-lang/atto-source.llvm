@@ -92,7 +92,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled };
     Kind kind;
     // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
     // Non-Copy branch-local classes are still rejected until drop glue exists.
@@ -100,6 +100,11 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // Dedicated compiler intrinsic, never lowered as a guest-callable
+    // function: rt array_commit_filled(class_owner, length, v0, v1, v2, v3).
+    // Exactly four Array<int> fields in class declaration order.
+    std::unique_ptr<Expression> array_commit_length;
+    std::vector<std::unique_ptr<Expression>> array_commit_values;
     std::size_t offset = 0;
     // A bounded synchronous if/else statement. Arms contain checked field
     // writes or direct calls; local declarations and suspension fail closed.
