@@ -13,8 +13,8 @@ pub fnc literal_different(): bool { return Assert.not_equal(7, 8); }
 ORES
 
 "$compiler" "$work/guest.ores" > "$work/guest.ll"
-grep -F 'define zeroext i1 @int_equal(i64' "$work/guest.ll"
-grep -F 'define zeroext i1 @int_different(i64' "$work/guest.ll"
+grep -E '^define (zeroext )?i1 @int_equal\\(i64' "$work/guest.ll"
+grep -E '^define (zeroext )?i1 @int_different\\(i64' "$work/guest.ll"
 grep -F 'icmp eq i64' "$work/guest.ll"
 grep -F 'icmp ne i64' "$work/guest.ll"
 if grep -E '^declare .*Assert|^declare .*assert' "$work/guest.ll"; then
@@ -40,6 +40,20 @@ int main() {
     std::cout << "ASSERT_NATIVE_COMPILED_GUEST_PASS\n";
 }
 CPP
+# Check native exported signatures against Clang's own target C++ bool ABI.
+clang++ -std=c++17 -O0 -S -emit-llvm "$work/host.cpp" -o "$work/host.ll"
+for symbol in int_equal int_different literal_equal literal_different; do
+  host_decl="$(grep -E "^declare .*i1 @$symbol\\(" "$work/host.ll")"
+  guest_def="$(grep -E "^define .*i1 @$symbol\\(" "$work/guest.ll")"
+  test -n "$host_decl" && test -n "$guest_def"
+  if [[ "$host_decl" == *"zeroext i1 @"* ]]; then
+    [[ "$guest_def" == *"zeroext i1 @"* ]] || { echo "ABI missing zeroext: $symbol" >&2; exit 1; }
+  else
+    [[ "$guest_def" != *"zeroext i1 @"* ]] || { echo "ABI unexpected zeroext: $symbol" >&2; exit 1; }
+  fi
+done
+echo ASSERT_NATIVE_C_BOOL_ABI_MATCH_PASS
+
 guest_flags=(-O2)
 if test "${ASSERT_NATIVE_SANITIZE:-0}" = 1; then
   guest_flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer)

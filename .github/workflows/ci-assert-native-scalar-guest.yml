@@ -1,7 +1,7 @@
 name: LLVM Assert compiled primitive guest (exact files)
 on:
   push:
-    branches: [feat/assert-native-scalar-predicate-20261012]
+    branches: [audit/llvm-assert-bool-cabi-targeted-20261012]
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,9 +32,9 @@ jobs:
           src/main/cpp/oreslang/frontend/Parser.cpp 72b5d5d53f440665013dbd85879dfae3588e202f
           src/main/cpp/oreslang/frontend/Parser.hpp 56b9443e2aa522dfd5659c9e6f133a4559edf15c
           src/main/cpp/oreslang/types/OwnershipChecker.cpp 553d52363f17450ac45ee061276fa61753d5b5ad
-          src/main/cpp/oreslang/backend/LlvmCodegen.cpp 42d18e7148ad14814af0acf70743258e2e8b80f8
-          tests/native_assert_scalar_guest_test.sh ee03b5575714aed052f0e90143ff54a30f01ab41
-          tests/native_assert_ast_seal_test.cpp bf0e4750ab3d44c55a835770cfe766e9297c66f4
+          src/main/cpp/oreslang/backend/LlvmCodegen.cpp 8c8d6c97a05549bdbe7465e44268fdc02537d6fd
+          tests/native_assert_scalar_guest_test.sh d79853115066f2abf85dd0d673cb211703cfe54d
+          tests/native_assert_ast_seal_test.cpp e154b1fb0e76623657bc3a07a2bb8ecb9046a69d
           HASHES
           echo ASSERT_NATIVE_SCALAR_EXACT_FILES_PASS
       - name: Install LLVM C++ compiler dependencies
