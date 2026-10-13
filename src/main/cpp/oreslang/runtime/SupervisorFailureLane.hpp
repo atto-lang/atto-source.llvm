@@ -41,12 +41,21 @@ public:
     struct Failure {
         ActorKey actor;
         Kind kind;
+        // Original pre-promotion effect. Terminal actor Throw/Raise is delivered
+        // as Panic, but the supervisor still receives typed provenance.
+        Kind origin_kind;
+        // Opaque numeric error discriminator copied before the actor is reclaimed.
+        // No borrowed exception pointer or actor-owned object crosses CONTROL.
+        std::uint32_t origin_code = 0;
         std::string summary;
         std::string parent_id;
 
         Failure(ActorKey actor, Kind kind, std::string summary,
-                std::string parent_id = {})
+                std::string parent_id = {},
+                std::optional<Kind> origin = std::nullopt,
+                std::uint32_t code = 0)
             : actor(std::move(actor)), kind(kind),
+              origin_kind(origin.value_or(kind)), origin_code(code),
               summary(std::move(summary)), parent_id(std::move(parent_id)) {}
     };
 
@@ -77,7 +86,8 @@ public:
 
     bool publish(Failure failure) {
         return publish_preallocated(failure.actor, failure.kind,
-                                    failure.summary, failure.parent_id);
+                                    failure.summary, failure.parent_id,
+                                    failure.origin_kind, failure.origin_code);
     }
 
     /**
@@ -87,18 +97,40 @@ public:
      */
     bool publish_preallocated(const ActorKey& actor, Kind kind,
                               std::string_view summary,
-                              std::string_view parent_id = {}) {
+                              std::string_view parent_id = {},
+                              std::optional<Kind> origin = std::nullopt,
+                              std::uint32_t origin_code = 0) {
         std::lock_guard<std::mutex> lock(mu_);
-        Slot& slot = require(actor);
-        if (slot.has_event) return false;
-        // Invalid enum tags can arrive from native FFI/casts. Never accept
-        // them as legitimate terminal events or acknowledge them silently.
+        // Validate and normalize before considering duplicate publication:
+        // even a duplicate must not let a forged invalid effect slip through
+        // the low-level CONTROL entrypoint unnoticed.
         switch (kind) {
             case Kind::Throw: case Kind::Raise: case Kind::Panic:
             case Kind::Cancel: case Kind::HostFailure: break;
             default: throw std::invalid_argument("invalid supervisor failure kind");
         }
+        const Kind original = origin.value_or(kind);
+        switch (original) {
+            case Kind::Throw: case Kind::Raise: case Kind::Panic:
+            case Kind::Cancel: case Kind::HostFailure: break;
+            default: throw std::invalid_argument("invalid supervisor origin kind");
+        }
+        // Every route into actor supervision, including direct lane writers,
+        // delivers unhandled Throw/Raise as Panic. Do NOT change origin_kind.
+        if (kind == Kind::Throw || kind == Kind::Raise) {
+            if (original != kind) {
+                throw std::invalid_argument("actor terminal origin contradicts effect");
+            }
+            kind = Kind::Panic;
+        } else if (original != kind && !(kind == Kind::Panic
+                && (original == Kind::Throw || original == Kind::Raise))) {
+            throw std::invalid_argument("invalid supervisor terminal/origin pair");
+        }
+        Slot& slot = require(actor);
+        if (slot.has_event) return false;
         slot.kind = kind;
+        slot.origin_kind = original;
+        slot.origin_code = origin_code;
         store_utf8(slot.summary, slot.summary_length, summary);
         store_utf8(slot.parent_id, slot.parent_length, parent_id);
         slot.has_event = true;
@@ -117,7 +149,8 @@ public:
         // queued and no in-flight message becomes inaccessible.
         Failure failure{*slot->actor, slot->kind,
             std::string(slot->summary.data(), slot->summary_length),
-            std::string(slot->parent_id.data(), slot->parent_length)};
+            std::string(slot->parent_id.data(), slot->parent_length),
+            slot->origin_kind, slot->origin_code};
         unlink_head();
         slot->in_flight = true;
         return failure;
@@ -181,6 +214,8 @@ private:
     struct Slot {
         const ActorKey* actor = nullptr;
         Kind kind = Kind::HostFailure;
+        Kind origin_kind = Kind::HostFailure;
+        std::uint32_t origin_code = 0;
         std::array<char, 512> summary{};
         std::array<char, 128> parent_id{};
         std::size_t summary_length = 0;
