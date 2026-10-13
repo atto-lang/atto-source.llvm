@@ -48,12 +48,13 @@ struct LocalBinding {
 struct ClassField {
     std::string name;
     std::int64_t initial = 0;
+    bool int_array = false; // owned opaque handle; never exposed as an int
 };
 
 struct ClassDecl {
     std::string name;
-    // The initial typed class subset admits up to 16 i64 fields.
-    // This vector is ordered: it defines the native LLVM struct layout.
+    // Up to 16 scalar i64 or owned Array<int> fields.
+    // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
 };
 

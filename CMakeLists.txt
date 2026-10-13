@@ -72,6 +72,24 @@ if(BUILD_TESTING)
             --sanitizers)
     set_tests_properties(native_int_array_source_execution
         native_int_array_source_asan_ubsan PROPERTIES TIMEOUT 180)
+
+    # Real native guest class-owned Array<int> fields, independent of the
+    # handcrafted ABI fixture and lexical-array-only source admission.
+    add_test(NAME native_class_owned_array_source_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_owned_array_source.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME native_class_owned_array_source_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_owned_array_source.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --sanitizers)
+    set_tests_properties(native_class_owned_array_source_execution
+        native_class_owned_array_source_asan_ubsan PROPERTIES TIMEOUT 180)
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)

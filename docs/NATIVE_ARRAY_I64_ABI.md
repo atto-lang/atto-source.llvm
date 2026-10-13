@@ -20,10 +20,40 @@ trusted ABI calls. A zero-argument `new Array<int>()` allocates a fresh array.
 Arrays are dropped in reverse lexical order on ordinary/guarded returns,
 followed by region close. No guest reference or element pointer escapes.
 
-**Not yet supported:** array arguments, move/copy/borrow/return, class or
-actor fields, async/suspension, user exception/unwind, array methods other than
-the admitted four, dynamic array construction in branches, `Option` and the
-full linked-queue grammar. Out-of-bounds/alloc/quota failures currently abort
+PR #270 extends this restricted subset to **class-owned arrays**:
+
+```oreslang
+define class Shelf as
+  pub let int id = 7;
+  let mut Array<int> items = new Array<int>();
+end
+
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.items.add(42);
+  return shelf.items.get(0);
+}
+```
+
+Class fields are prepared in source order, then their addresses are published
+to the function's checked local symbol table only after initialization.
+Array handles are dropped in reverse field order, before the enclosing class
+stack lifetime ends. They share a function-private region with any standalone
+owned arrays. Static maximum: 64 owned arrays across all constructed locals and
+class field slots in one function, and 16 fields per class.
+
+**Critical limitation:** the native array allocator aborts on failure.
+"Prepared before publication" is **not** a recoverable atomic transaction:
+there is no guest-visible rollback on OOM, quota exhaustion, exception or
+unwind; those must be implemented before claiming failure-atomic class
+initialization. No partial instance becomes visible on abort because
+construction is synchronous with no escape and the process terminates.
+
+**Not yet supported:** array or array-class arguments, move/copy/borrow/return
+of owned array-bearing classes, class field handle replacement, actor fields,
+async/suspension, user exception/unwind, methods on classes, array methods
+other than the admitted four, dynamic array construction in branches,
+`Option` and the full linked-queue grammar. Out-of-bounds/alloc/quota failures currently abort
 the process, not return an Oreslang `Result`. The six Git-pinned exact queue
 fixtures remain intentionally rejected without partial LLVM IR. Passing this
 first source gate must not be described as linked-queue parity.
@@ -96,8 +126,9 @@ for real LLVM 18 compilation when repository Actions minutes are exhausted.
 
 ## Required compiler follow-ups
 
-1. Class-owned array handles, region lifetime tied to owning actor/class,
-   transactional multi-field initialization, no alias escape, correct cleanup.
+1. Complete class/actor-lifetime regions and *recoverable* transactional
+   initialization with rollback/drop on allocation or exceptional failure,
+   plus proven non-copying owned-field transfer and branch sensitivity.
 2. A checked `Option<int>` and `Option<QueueEntry>` representation,
    including allocation/return failure safety.
 3. `mut self`, reader/writer safety, loops, return-guard purity and full
@@ -107,4 +138,5 @@ for real LLVM 18 compilation when repository Actions minutes are exhausted.
    LLVM verification + Clang + sanitizers. Only then replace the
    queue's fail-closed native gate with actual parity tests.
 
-The lexical compiler slice is *not* a substitute for compiling the queue.
+The lexical/class-field compiler slices are *not* substitutes for compiling
+the exact linked queue. Its existing six strict fail-closed fixtures remain.
