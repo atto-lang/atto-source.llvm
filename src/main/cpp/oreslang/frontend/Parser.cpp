@@ -279,6 +279,9 @@ private:
         // No nested class, arbitrary initializer, method, or pointer escape.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            if (token_.text == "constructor") {
+                fail("native class constructors and constructor-parameter field initializers require checked initialization lowering");
+            }
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
