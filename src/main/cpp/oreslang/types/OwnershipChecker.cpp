@@ -237,6 +237,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 source.moved = true;
             } else if (expr.left->kind == Expression::Kind::Field) {
                 const Expression& field = *expr.left;
+                // Nested array.size and other projections are not direct
+                // owned class field places for destructive rt take.
+                if (!field.left || field.left->kind != Expression::Kind::Variable)
+                    reject(expr, "native rt take requires a direct named class field");
                 LocalOwnership& source = checked_field(
                     field.left->name, field.name, field.offset, locals);
                 if (source.mode != Mode::Value)

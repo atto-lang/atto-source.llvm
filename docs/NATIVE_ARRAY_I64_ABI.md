@@ -108,6 +108,28 @@ slot reuse, and append past the maximum. The test-only token allocator hook
 also forces exhaustion and proves token reuse fails closed. The same exact
 sources should run under Clang ASan+UBSan before merge.
 
+## Field-place and declared-effect audit invariants
+
+The native frontend must preserve the complete syntactic receiver place until
+the ownership verifier resolves it. A standalone scalar/class-field assignment
+is restricted to a **direct named class receiver**, never a nested path:
+`box.items.size = 7` fails admission, rather than being rewritten into
+`items.size = 7` on an unrelated local named `items`. Similarly,
+`box.items.send(7)` cannot be interpreted as `items.send(7)` on an
+unrelated ActorRef. Direct `worker.send(7)` retains normal actor lowering.
+
+`rt take(box.items.size)` is not a move of a directly addressable class field
+and fails closed; simple reads such as `box.items.size` and
+`box.items.get(0)` remain legal. These are distinct from ownership-handle
+access, which must never be treated as a scalar int.
+
+If a function has an explicit `using` effect signature and constructs a
+class containing `Array<int>` fields, it must declare `alloc` even when
+the function itself never calls an array method. The constructor is an
+allocation operation, not a pure stack-only class initialization. This check
+does not certify the transitive effects of guest exception/abort paths;
+recoverable error handling remains unsupported.
+
 ## Source-level verification
 
 `native_int_array_source_execution` compiles real `.ores` files with
