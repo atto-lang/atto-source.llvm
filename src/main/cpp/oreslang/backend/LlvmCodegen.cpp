@@ -565,6 +565,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 llvm::Value* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record");
                 const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
                     [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                // Scalar constructor operands are evaluated exactly once,
+                // before any field is published. Their private slots are
+                // accessible only to pure declaration-site field expressions.
+                std::unordered_map<std::string, llvm::Value*> constructor_storage;
+                if (binding.new_class) {
+                    if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
+                        throw std::runtime_error("native class constructor argument arity mismatch");
+                    for (std::size_t ai = 0; ai < binding.constructor_arguments.size(); ++ai) {
+                        llvm::Value* value = lower(*binding.constructor_arguments[ai],
+                            builder, i64, storage, field_storage, declarations, &region_moves);
+                        const std::string& param = cls->constructor_parameters[ai];
+                        llvm::Value* arg_slot = builder.CreateAlloca(i64, nullptr,
+                            binding.name + ".constructor." + param);
+                        builder.CreateStore(value, arg_slot);
+                        constructor_storage.emplace(param, arg_slot);
+                    }
+                }
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
                 builder.CreateLifetimeStart(slot,
                     llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
@@ -584,11 +601,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         initial = new_checked_array(binding.name + "." + item.name);
                         owned_fields.push_back(field_key(binding.name, item.name));
                     } else {
-                        initial = binding.new_class
-                            ? static_cast<llvm::Value*>(llvm::ConstantInt::getSigned(i64, item.initial))
-                            : builder.CreateLoad(i64,
+                        if (binding.new_class) {
+                            if (!item.initializer_expression)
+                                throw std::runtime_error("native class scalar initializer is missing");
+                            const std::unordered_map<std::string, llvm::Value*> no_fields;
+                            initial = lower(*item.initializer_expression, builder, i64,
+                                constructor_storage, no_fields, declarations, &region_moves);
+                        } else {
+                            initial = builder.CreateLoad(i64,
                                 field_storage.at(field_key(binding.move_source, item.name)),
                                 binding.move_source + "." + item.name + ".take");
+                        }
                     }
                     builder.CreateStore(initial, address);
                     staged_fields.emplace_back(field_key(binding.name, item.name), address);
