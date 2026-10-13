@@ -1,20 +1,25 @@
-// Immutable source actor fields persisted in a native ActorId heap.
-define actor Counter as {
-  const base: int = 40;
-  val delta: int = 2;
-  let total: int = 0;
-  pub fnc read(): int {
-    return base + delta;
-  }
-  pub fnc add(int n): int {
-    total = total + base + delta + n;
-    return total;
-  }
-  pub fnc total_value(): int {
-    return total;
-  }
-  pub fnc plus(int n): int {
-    const local: owned int = base + delta;
-    return local + n;
-  }
-}
+// Canonical sealed actor state. Method names and numeric behavior remain
+// compatible with the original compiled native actor integration test.
+// No actor fields are visible outside a scoped state capability.
+define actor Counter as
+    state {
+        base: int = 40;
+        delta: int = 2;
+        total: int = 0;
+    }
+    pub fnc read(): int with state.read {
+        return self.handle_state(|s| -> { return s.base + s.delta; });
+    }
+    pub fnc add(int n): int with state.read, state.write {
+        return self.handle_state(critical |s| -> {
+            s.total = s.total + s.base + s.delta + n;
+            return s.total;
+        });
+    }
+    pub fnc total_value(): int with state.read {
+        return self.handle_state(|s| -> { return s.total; });
+    }
+    pub fnc plus(int n): int with state.read {
+        return self.handle_state(|s| -> { return s.base + s.delta + n; });
+    }
+end
