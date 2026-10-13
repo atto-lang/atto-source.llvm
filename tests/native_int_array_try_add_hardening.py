@@ -44,6 +44,14 @@ PROGRAMS = {
 }
 """, "NONE", 50),
 }
+# Distinct invalid 32-bit ABI tags, including signed-negative values, must
+# all reach the fatal cleanup path; none may be truncated to OK/LIMIT/OOM.
+for label, raw in (("unknown-low", "3"),
+                   ("unknown-max-signed", "2147483647"),
+                   ("unknown-min-signed", "-2147483648"),
+                   ("unknown-minus-one", "-1")):
+    PROGRAMS[label] = (PROGRAMS["unknown"][0], "BAD:" + raw, 86)
+
 SHIM = r"""
 #include "oreslang/runtime/NativeIntArrayRegion.h"
 #include <stdint.h>
@@ -58,7 +66,8 @@ extern OresNativeIntArrayStatus __real_oreslang_int_array_try_add(
     OresNativeIntArrayRegion*, OresNativeIntArrayHandle, int64_t);
 OresNativeIntArrayStatus __wrap_oreslang_int_array_try_add(
         OresNativeIntArrayRegion* r, OresNativeIntArrayHandle h, int64_t v) {
-    if (getenv("ORE_BAD")) return (OresNativeIntArrayStatus)99;
+    const char* invalid = getenv("ORE_BAD");
+    if (invalid) return (OresNativeIntArrayStatus)(uint32_t)strtoll(invalid, NULL, 0);
     if (getenv("ORE_QUOTA")) {
         if (oreslang_int_array_length(r, h) != 0)
             _Exit(91);
@@ -142,14 +151,16 @@ def verify(compiler, clang, source_root, sanitizers):
             env = os.environ.copy()
             for key in ("ORE_BAD", "ORE_QUOTA", "ORE_OOM"):
                 env.pop(key, None)
-            if injection != "NONE":
+            if injection.startswith("BAD"):
+                env["ORE_BAD"] = injection.partition(":")[2] or "99"
+            elif injection != "NONE":
                 env["ORE_" + injection] = "1"
             observed = execute([str(exe)], env=env)
             if observed.returncode != result or observed.stdout or observed.stderr:
                 raise AssertionError(
                     f"{name}: expected {result}, got {observed.returncode}, "
                     f"stdout={observed.stdout!r}, stderr={observed.stderr!r}")
-    print("PASS: 4 source-compiled guests: invalid ABI fail-closed, true quota, "
+    print(f"PASS: {len(PROGRAMS)} source-compiled guests: invalid signed and unsigned ABI fail-closed, true quota, "
           "populated OOM rollback, normal append; verified exact owner cleanup"
           + (" (ASan+UBSan)" if sanitizers else ""), flush=True)
 
