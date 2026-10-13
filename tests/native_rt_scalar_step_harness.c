@@ -4,7 +4,7 @@
 /* Keep every regression check live under -DNDEBUG / Release optimization. */
 #define CHECK(condition) do { \
     if (!(condition)) { \
-        fprintf(stderr, "frame check failed at %s:%d: %s\\n", \
+        fprintf(stderr, "frame check failed at %s:%d: %s\n", \
                 __FILE__, __LINE__, #condition); \
         abort(); \
     } \
