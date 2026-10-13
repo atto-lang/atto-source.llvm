@@ -31,8 +31,7 @@ PROGRAMS = {
   a.add(11);
   a.add(12);
   a.add(13);
-  const status: int = a.try_add(42);
-  return status + a.size * 8 + a.get(0);
+  return a.try_add(42) + a.size * 8 + a.get(0);
 }
 """, "OOM", 44),
     "populated_success": ("""pub fnc main(): int {
@@ -41,8 +40,7 @@ PROGRAMS = {
   a.add(11);
   a.add(12);
   a.add(13);
-  const status: int = a.try_add(42);
-  return status + a.size * 8 + a.get(0);
+  return a.try_add(42) + a.size * 8 + a.get(0);
 }
 """, "NONE", 50),
 }
