@@ -101,7 +101,9 @@ inline Signature signature(
             throw std::invalid_argument(
                 "unverified or ineligible nominal enum overload symbol");
         }
-        result.positions.push_back(Position{parameter.first, parameter.second});
+        std::string id = parameter.second;
+        if (parameter.first == Kind::Primitive && id == "String") id = "string";
+        result.positions.push_back(Position{parameter.first, std::move(id)});
     }
     return result;
 }
@@ -122,6 +124,24 @@ inline std::size_t select(
         }
     }
 
+    std::unordered_set<std::size_t> discriminatorPositions;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        for (std::size_t j = i + 1; j < candidates.size(); ++j) {
+            for (std::size_t p = 0; p < candidates[i].arity(); ++p) {
+                if (!(candidates[i].positions[p] == candidates[j].positions[p]))
+                    discriminatorPositions.insert(p);
+            }
+        }
+    }
+    if (staticEnumProofs.size() != discriminatorPositions.size()) {
+        throw std::invalid_argument("incomplete static nominal enum overload proof");
+    }
+    for (const auto& proof : staticEnumProofs) {
+        if (discriminatorPositions.find(proof.first) == discriminatorPositions.end()
+            || proof.second.empty()) {
+            throw std::invalid_argument("invalid or extraneous enum proof position");
+        }
+    }
     std::size_t chosen = 0;
     std::size_t matches = 0;
     for (std::size_t i = 0; i < candidates.size(); ++i) {
