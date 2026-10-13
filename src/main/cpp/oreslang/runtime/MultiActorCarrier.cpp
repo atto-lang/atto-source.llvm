@@ -30,6 +30,12 @@ MultiActorCarrier::ActorToken MultiActorCarrier::register_actor(
     if (shared_->registered == max_actors ||
             shared_->next_generation == UINT64_MAX)
         throw std::overflow_error("multi actor registration capacity exhausted");
+    // Never admit two actor identities to exactly the same root state.
+    // This is a defense in depth check, NOT an alias/borrow proof for
+    // arbitrary overlapping pointers or nested objects.
+    for (std::size_t i = 0; i < shared_->registered; ++i)
+        if (shared_->actors[i].state == state)
+            throw std::invalid_argument("duplicate actor state root");
     const std::size_t index = shared_->registered++;
     auto& actor = shared_->actors[index];
     actor.state = state;
