@@ -283,6 +283,26 @@ def check(compiler, clang, source_root, sanitizers):
             if result.returncode != expected or result.stdout or result.stderr:
                 raise AssertionError(f"{name}: incorrect/sanitizer-failed execution: "
                                      f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
+        # The nested-send rejection must not break a legitimate direct
+        # ActorRef.send(...) call. This is a compiler/IR control: the isolated
+        # test runner does not link the actor scheduler runtime.
+        actor_source = work / "direct-actor-send.ores"
+        actor_source.write_text("""define actor Worker as {
+  let total: int = 0;
+  pub on_message(int n): int { return total + n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  stop worker;
+  return 42;
+}
+""", encoding="utf-8")
+        actor_ir = run([str(compiler), str(actor_source)])
+        if actor_ir.returncode or actor_ir.stderr or \
+                b"@oreslang_source_actor_send" not in actor_ir.stdout or \
+                b"@oreslang_actor_Worker_on_message" not in actor_ir.stdout:
+            raise AssertionError("valid direct actor send must still compile to actor ABI IR")
         for name, (src, diagnostic) in NEGATIVES.items():
             source = work / (name + ".ores")
             source.write_text(src, encoding="utf-8")
