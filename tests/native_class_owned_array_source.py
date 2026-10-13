@@ -26,6 +26,37 @@ FOUR = """define class Four as
 end
 """
 POSITIVES = {
+    "scalar-class-method-namespace-and-reborrow": (CLASS + """define class Left as
+  let int value = 7;
+  pub fnc get() -> int { return self.value; }
+  pub update(mut self)(int n) -> int {
+    self.value = self.get() + n;
+    return self.value;
+  }
+end
+define class Right as
+  let int value = 12;
+  pub get() -> int { return self.value; }
+end
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Left left = new Left();
+  let mut Right right = new Right();
+  left.update(12);
+  return left.get() + right.get() + left.get() + -8;
+}
+""", 42, 2),
+    "scalar-class-method-borrow-not-move": (CLASS + """define class Counter as
+  let int current = 41;
+  pub get() -> int { return self.current; }
+end
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Counter counter = new Counter();
+  return counter.get() + counter.get() + -40;
+}
+""", 42, 2),
+
     "scalar-class-methods-shared-exclusive": (CLASS + """define class Counter as
   let int count = 0;
   pub get() -> int { return self.count; }
@@ -265,6 +296,37 @@ pub fnc main(): int {
 """, 42, 2),
 }
 NEGATIVES = {
+    "class-method-use-after-whole-move": ("""define class Counter as
+  let int current = 0;
+  pub get() -> int { return self.current; }
+end
+pub fnc main(): int {
+  let mut Counter original = new Counter();
+  let mut Counter moved = rt take(original);
+  return original.get();
+}
+""", "borrow of moved class"),
+    "class-method-mut-through-shared": ("""define class Counter as
+  let int current = 0;
+  pub bump(mut self)(int n) -> int { self.current = n; return self.current; }
+end
+fnc borrow_only(borrow Counter c): int { return c.bump(42); }
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  return borrow_only(rt borrow c);
+}
+""", "cannot mutably reborrow shared parameter"),
+    "class-method-free-self": ("""pub fnc main(): int {
+  return self;
+}
+""", "unknown parameter 'self'"),
+    "class-method-unsupported-bool": ("""define class Counter as
+  let int current = 0;
+  pub empty() -> bool { return true; }
+end
+pub fnc main(): int { return 42; }
+""", "expected 'int'"),
+
     "class-method-immutable-receiver": ("""define class Counter as
   let int count = 0;
   pub bump(mut self)(int n) -> int { self.count = n; return self.count; }
