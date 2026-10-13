@@ -45,6 +45,20 @@ inline NominalTypeTag enum_tag(std::string canonical_identity) {
                 || ch == '/' || ch == '-' || ch == ':'))
             throw std::invalid_argument("invalid canonical enum identity character");
     }
+    const auto boundary = canonical_identity.rfind("::");
+    if (boundary == std::string::npos || boundary == 0
+            || boundary + 2 >= canonical_identity.size())
+        throw std::invalid_argument(
+            "enum identity must qualify its declaration with a source owner");
+    const auto first = static_cast<unsigned char>(canonical_identity[boundary + 2]);
+    if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_'))
+        throw std::invalid_argument("enum declaration name must begin with an identifier character");
+    for (std::size_t i = boundary + 3; i < canonical_identity.size(); ++i) {
+        const auto ch = static_cast<unsigned char>(canonical_identity[i]);
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+                || (ch >= '0' && ch <= '9') || ch == '_'))
+            throw std::invalid_argument("enum declaration name must be a simple identifier");
+    }
     return {NominalTypeTag::Kind::Enum, std::move(canonical_identity)};
 }
 
@@ -113,20 +127,37 @@ inline std::size_t resolve_nominal_overload_static(
 // canonical fully-qualified enum identities across Java/LLVM/Wasm targets.
 // Hex encoding is injective and cannot alias a '$' source identifier.
 inline std::string nominal_overload_link_key(const NominalOverloadSlot& slot) {
+    // Public symbol spelling is an encoding of *every* component, never a
+    // concatenation of unescaped user input. The tagged length/hex encoding
+    // is injective even for '
+
+} // namespace oreslang
+, '::', non-ASCII bytes or embedded NUL.
     static constexpr char hex[] = "0123456789abcdef";
-    std::string key = slot.owner + "::" + slot.name
-            + "$arity" + std::to_string(slot.parameter_tags.size());
+    if (slot.owner.empty() || slot.owner.size() > 1024
+            || slot.name.empty() || slot.name.size() > 128
+            || slot.parameter_tags.size() > 64)
+        throw std::invalid_argument("invalid overload scope, name or arity");
+    const auto encode = [&](const std::string& input) {
+        std::string out = std::to_string(input.size()) + "_";
+        for (unsigned char ch : input) {
+            out.push_back(hex[ch >> 4]);
+            out.push_back(hex[ch & 15]);
+        }
+        return out;
+    };
+    std::string key = "$ores$nominal$v1$o" + encode(slot.owner)
+            + "$n" + encode(slot.name)
+            + "$a" + std::to_string(slot.parameter_tags.size());
     for (const auto& tag : slot.parameter_tags) {
         if (!tag) {
-            key += "$_";
+            key += "$u";
             continue;
         }
+        if (tag->identity.empty() || tag->identity.size() > 1024)
+            throw std::invalid_argument("invalid overload tag identity length");
         key += tag->kind == NominalTypeTag::Kind::Enum ? "$e" : "$p";
-        key += std::to_string(tag->identity.size()) + "_";
-        for (unsigned char ch : tag->identity) {
-            key.push_back(hex[ch >> 4]);
-            key.push_back(hex[ch & 15]);
-        }
+        key += encode(tag->identity);
     }
     return key;
 }
