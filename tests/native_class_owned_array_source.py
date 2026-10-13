@@ -18,6 +18,31 @@ CLASS = """define class Shelf as
 end
 """
 POSITIVES = {
+    # Exact admitted boundary: four independently constructed classes, each
+    # owning sixteen arrays. This tests all 64 handles and reverse-order drop.
+    "exact-64-owned-array-limit": ("""define class Slot16 as
+""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+             for i in range(16)) + """end
+pub fnc main(): int {
+  let mut Slot16 a = new Slot16();
+  let mut Slot16 b = new Slot16();
+  let mut Slot16 c = new Slot16();
+  let mut Slot16 d = new Slot16();
+  d.f15.add(42);
+  return d.f15.get(0);
+}
+""", 42, 64),
+    "class-constructor-effect-alloc": (CLASS + """pub fnc main(): int using alloc {
+  let mut Shelf shelf = new Shelf();
+  return shelf.number + 35;
+}
+""", 42, 2),
+    "direct-scalar-field-write": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.number = 42;
+  return shelf.number;
+}
+""", 42, 2),
     "two-fields": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   shelf.first.add(19);
@@ -77,6 +102,52 @@ POSITIVES = {
 """, 42, 2),
 }
 NEGATIVES = {
+    "class-allocation-must-declare-alloc": (CLASS + """pub fnc main(): int using state.read {
+  let mut Shelf shelf = new Shelf();
+  return shelf.number;
+}
+""", "owned allocation violates using signature without alloc"),
+    # Before this guard, nested writes could silently target an unrelated
+    # local object sharing the nested receiver's final field name.
+    "nested-write-colliding-local": ("""define class Bucket as
+  let mut Array<int> items = new Array<int>();
+end
+define class Counter as
+  pub let int size = 1;
+end
+pub fnc main(): int {
+  let mut Bucket bucket = new Bucket();
+  let mut Counter items = new Counter();
+  bucket.items.size = 99;
+  return items.size;
+}
+""", "native field assignment requires direct named class receiver"),
+    "nested-write-no-collision": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.first.size = 42;
+  return shelf.first.size;
+}
+""", "native field assignment requires direct named class receiver"),
+    "nested-actor-send-colliding-local": ("""define class Box as
+  pub let int items = 0;
+end
+define actor Worker as {
+  let total: int = 0;
+  pub on_message(int n): int { return total + n; }
+}
+pub fnc main(): int {
+  const items = spawn Worker();
+  let mut Box box = new Box();
+  box.items.send(5);
+  stop items;
+  return 42;
+}
+""", "native actor send requires direct named ActorRef receiver"),
+    "nested-take-array-size": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  return rt take(shelf.first.size);
+}
+""", "native rt take requires a direct named class field"),
     "immutable-owner": (CLASS + """pub fnc main(): int {
   let Shelf shelf = new Shelf();
   return shelf.number;
@@ -226,6 +297,26 @@ def check(compiler, clang, source_root, sanitizers):
             if result.returncode != expected or result.stdout or result.stderr:
                 raise AssertionError(f"{name}: incorrect/sanitizer-failed execution: "
                                      f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
+        # The nested-send rejection must not break a legitimate direct
+        # ActorRef.send(...) call. This is a compiler/IR control: the isolated
+        # test runner does not link the actor scheduler runtime.
+        actor_source = work / "direct-actor-send.ores"
+        actor_source.write_text("""define actor Worker as {
+  let total: int = 0;
+  pub on_message(int n): int { return total + n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  stop worker;
+  return 42;
+}
+""", encoding="utf-8")
+        actor_ir = run([str(compiler), str(actor_source)])
+        if actor_ir.returncode or actor_ir.stderr or \
+                b"@oreslang_source_actor_send" not in actor_ir.stdout or \
+                b"@oreslang_actor_Worker_on_message" not in actor_ir.stdout:
+            raise AssertionError("valid direct actor send must still compile to actor ABI IR")
         for name, (src, diagnostic) in NEGATIVES.items():
             source = work / (name + ".ores")
             source.write_text(src, encoding="utf-8")

@@ -655,6 +655,10 @@ private:
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
+                // A nested class field such as shelf.worker.send(...) must
+                // never silently resolve to an unrelated actor named worker.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor send requires direct named ActorRef receiver");
                 ActorSend send;
                 send.offset = statement.offset;
                 send.reference = action->left->name;
@@ -667,6 +671,11 @@ private:
                 continue;
             }
             if (action->kind == Expression::Kind::Field && accept("=")) {
+                // Guard the AST shape before extracting the receiver name.
+                // Without this, box.items.size = 7 could accidentally write
+                // a different local object's field, items.size.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native field assignment requires direct named class receiver");
                 statement.kind = Statement::Kind::FieldWrite;
                 statement.receiver = action->left->name;
                 statement.field = action->name;
@@ -949,7 +958,7 @@ private:
         return false;
     }
 
-    static void validate_declared_effects(const Function& fn) {
+    static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -957,7 +966,15 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
-            if ((local.heap_owned || local.int_array) &&
+            bool allocates_class_array = false;
+            if (local.new_class) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == local.class_name; });
+                if (cls != program.classes.end())
+                    allocates_class_array = std::any_of(cls->fields.begin(), cls->fields.end(),
+                        [](const ClassField& field) { return field.int_array; });
+            }
+            if ((local.heap_owned || local.int_array || allocates_class_array) &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
@@ -985,7 +1002,7 @@ private:
         }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
-            validate_declared_effects(fn);
+            validate_declared_effects(fn, program);
             // Compiler-owned ABI imports must never be shadowed by a guest.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
