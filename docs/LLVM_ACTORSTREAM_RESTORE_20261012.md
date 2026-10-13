@@ -247,3 +247,35 @@ whole-route DONE via a production actor scheduler.
 Remaining: current-main LLVM guest source-compiled forward/backward
 binding; actual mailbox publication linearization; Java/LLVM trace
 parity; branch reconciliation (`mergeable=false`). Keep draft.
+
+## Immutable reply snapshot and concurrent observer audit (2026-10-13)
+
+Returning up to 1 MiB from `completed_reply()` used to copy guest result
+bytes **while holding** the mutex serializing failed CONTROL, physical DONE,
+and final result commitment. The route now snapshots bounded typed reply
+bytes as `shared_ptr<const vector<uint8_t>>` before claiming the mutex.
+After whole-route success, each observer briefly acquires the mutex to
+validate DONE and pin that immutable snapshot, then allocates/copies its
+own result **outside the critical section**. A failed precommit allocation
+cannot publish typed source completion. Caller mutation cannot change
+committed bytes or later observers.
+
+A new native regression concurrently copies 512 KiB typed results on
+8 observer threads (32 independent observations per thread), mutates the
+returned caller-owned values, and races 100 late fatal reports. It also
+asserts that immutable ownership survives mutation of the original
+publisher's buffer and that terminal success cannot be revoked.
+
+**Latest exact-source verification**: funded
+[GitHub Actions #38347500791](https://github.com/zed-pkg-test/java-app/actions/runs/38347500791)
+reported **success**, with an executed runner job and available log.
+The harness validated these exact LLVM PR #262 Git blobs:
+
+- `NativeActorStreamRoute.hpp`: `719af9e8afd17ac9fed09270f12ea3300c1b4088`
+- `native_actorstream_route_test.cpp`: `b7de3c5b7c29d8422c0cf85a342556774ad21230`
+
+The harness compiles and executes one native test binary in each of strict
+C++17 (-Wall/-Wextra/-Werror/-pedantic), UBSan, and ASan configurations.
+The GitHub log shows `test_exact_source_and_compiler_modes ... ok`,
+`Ran 1 test`, `OK`. This is standalone native route-contract proof, **not**
+proof of compiled Oreslang guest code or Java/LLVM actor execution parity.
