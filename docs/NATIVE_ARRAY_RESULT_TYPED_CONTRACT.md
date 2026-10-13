@@ -47,6 +47,26 @@ not proof that the Java/GraalVM guest compiler accepts it, nor a general
 `Result<T,E>` representation. Version negotiation and a shared Java
 implementation must be verified before exposing it as a stable wire API.
 
+## Guest source admission gate (stage 2, deliberately negative)
+
+The LLVM parser explicitly recognizes the nominal
+`Result<void, ArrayError>` signature at function parameter/return
+positions and at both type-first and colon-style local declarations.
+Because tagged Result construction, exhaustive matching, per-value must-use
+and owner cleanup are not yet lowered, this recognition **rejects with a
+specific diagnostic and no LLVM IR**. It is not successful source compilation.
+
+CTest `native_result_typed_source_fail_closed` compiles a scalar control
+and verifies targeted rejection for the closed specialization, a foreign
+error argument, a generic non-void success payload and both forms of local
+Result storage. Future positive LLVM lowering must replace each negative
+fixture with a pinned, same-source executable case, **never** loosen the
+no-IR gate just to make the suite green.
+
+Java implements `Ok()` construction and basic `Result<void,E>` matching
+on main. Java PR #879 adds a first conservative local must-use proof. Its
+full source-level type and ownership semantics are not yet LLVM parity.
+
 ## Verification
 
 `NativeArrayResultContract.hpp` and
