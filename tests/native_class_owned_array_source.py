@@ -18,6 +18,44 @@ CLASS = """define class Shelf as
 end
 """
 POSITIVES = {
+    "replace-one-owned-array-field": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> staged = new Array<int>();
+  shelf.first = rt take(staged);
+  shelf.first.add(42);
+  return shelf.first.get(0);
+}
+""", 42, 3),
+    "replace-both-owned-array-fields": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> p = new Array<int>();
+  let mut Array<int> q = new Array<int>();
+  p.add(19);
+  q.add(23);
+  shelf.first = rt take(p);
+  shelf.second = rt take(q);
+  return shelf.first.get(0) + shelf.second.get(0);
+}
+""", 42, 4),
+    "replace-field-of-moved-class": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Shelf relocated = rt take(shelf);
+  let mut Array<int> new_first = new Array<int>();
+  relocated.first = rt take(new_first);
+  relocated.first.add(42);
+  return relocated.first.get(0);
+}
+""", 42, 3),
+    "replace-field-twice": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> a = new Array<int>();
+  let mut Array<int> b = new Array<int>();
+  shelf.first = rt take(a);
+  shelf.first = rt take(b);
+  shelf.first.add(42);
+  return shelf.first.get(0);
+}
+""", 42, 4),
     "class-array-whole-move": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   let mut Shelf moved = rt take(shelf);
@@ -156,6 +194,53 @@ pub fnc main(): int {
 """, 42, 2),
 }
 NEGATIVES = {
+    "reject-copy-into-owned-array-field": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> source = new Array<int>();
+  shelf.first = source;
+  return 42;
+}
+""", "Array<int> field requires direct rt take of lexical owner"),
+    "reject-use-after-array-field-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> source = new Array<int>();
+  shelf.first = rt take(source);
+  return source.size;
+}
+""", "use-after-move"),
+    "reject-duplicate-array-field-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> source = new Array<int>();
+  shelf.first = rt take(source);
+  shelf.second = rt take(source);
+  return 42;
+}
+""", "field transfer requires live unique lexical source"),
+    "reject-nonarray-field-source": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  const n: int = 42;
+  shelf.first = rt take(n);
+  return 42;
+}
+""", "field transfer requires live unique lexical source"),
+    "reject-array-field-transfer-in-diamond": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> staged = new Array<int>();
+  if (shelf.number == 7) {
+    shelf.first = rt take(staged);
+  } else {
+    shelf.number = 9;
+  } fi
+  return 42;
+}
+""", "requires straight-line ownership CFG"),
+    "reject-array-field-transfer-in-defer": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Array<int> staged = new Array<int>();
+  defer shelf.first = rt take(staged);
+  return 42;
+}
+""", "cannot reassign owned Array<int> class field"),
     # C runtime and compiler-generated ABI entrypoints are externally linked
     # before guest function definitions. Never let LLVM silently rename one
     # to '.1' and create an untracked or incorrectly typed symbol.
