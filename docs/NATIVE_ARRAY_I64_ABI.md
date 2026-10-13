@@ -168,11 +168,15 @@ Bounds/get/set checks continue to abort in the original runtime.
 
 The Linux-only `native_checked_array_source_failure_cleanup` test verifies
 the actual emitted ABI calls and injects deterministic faults at every region,
-owner creation, and growth allocation point for two source-compiled guest
-programs. ELF link wrappers assert the number of owner drops and region
-closes **before** compiler-generated abort; normal execution asserts exact
-cleanup and successful result. A parallel ASan+UBSan gate uses the same
+owner creation, and growth allocation point for three source-compiled guest
+programs: two lexical arrays, four class-owned arrays, and mixed scalar
+`owned int` plus `Array<int>`. ELF link wrappers assert the exact numbers
+of both array and scalar owner drops and both region closes **before**
+compiler-generated abort; normal execution asserts exact-once cleanup and
+a successful result. A parallel ASan+UBSan gate uses the same
 compiler-produced IR. No hand-written surrogate IR is accepted.
+The mixed-owned-int fixture is explicitly gated with
+`--experimental-owned-int` and is not enabled by default.
 
 This lowering is still restricted to the earlier lexical/class subset; it
 does not implement `self.field = staged`, native `Option`, queue class methods,
