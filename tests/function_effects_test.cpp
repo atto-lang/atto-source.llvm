@@ -97,9 +97,9 @@ int main() {
 
         const std::array<std::string_view, 13> invalid{{
             std::string_view{}, "unknown", "state", "state.READ", "state.read ",
-            " state.read", "state-read", "suspend\\n", "PANIC", "panic.",
-            "throw/raise", std::string_view{"panic\\0extra", 11},
-            std::string_view{"\\0panic", 6}
+            " state.read", "state-read", "suspend\n", "PANIC", "panic.",
+            "throw/raise", std::string_view{"panic\0extra", 11},
+            std::string_view{"\0panic", 6}
         }};
         for (std::string_view spelling : invalid) {
             bool rejected = false;
