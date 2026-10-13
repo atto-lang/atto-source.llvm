@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -82,7 +83,8 @@ inline PairStatus compare(const Signature& left, const Signature& right) {
 
 inline Signature signature(
     std::string name,
-    const std::vector<std::pair<Kind, std::string>>& resolvedParameters) {
+    const std::vector<std::pair<Kind, std::string>>& resolvedParameters,
+    const std::unordered_set<std::string>& verifiedEligibleEnumIds) {
     if (name.empty()) throw std::invalid_argument("callable name cannot be empty");
     Signature result{std::move(name), {}};
     for (const auto& parameter : resolvedParameters) {
@@ -93,8 +95,12 @@ inline Signature signature(
             throw std::invalid_argument(
                 "structural/borrowed/generic/unknown primitive overload type");
         }
-        // The compiler must establish each Enum symbol's eligibility before
-        // constructing a nominal Position. A textual guess is not such proof.
+        if (parameter.first == Kind::Enum
+            && verifiedEligibleEnumIds.find(parameter.second)
+                == verifiedEligibleEnumIds.end()) {
+            throw std::invalid_argument(
+                "unverified or ineligible nominal enum overload symbol");
+        }
         result.positions.push_back(Position{parameter.first, parameter.second});
     }
     return result;
