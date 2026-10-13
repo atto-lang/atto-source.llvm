@@ -486,16 +486,69 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         if (array_owner_count > 64)
             throw std::runtime_error("native Array<int> per-function owned handle count exceeds 64");
+        // Shadow owners are safe at every allocation failure: unlike class
+        // field addresses, they are zeroed before the first checked call.
         llvm::Value* array_region = nullptr;
-        if (array_owner_count)
-            array_region = builder.CreateCall(arrayOpen, {}, "native.int.array.region");
+        llvm::Value* array_handle_shadows = nullptr;
+        llvm::BasicBlock* array_failure = nullptr;
+        std::size_t next_array_shadow = 0;
+        std::vector<llvm::Value*> heap_failure_slots;
+        std::unordered_map<std::string, llvm::Value*> owned_failure_handles;
+        if (array_owner_count) {
+            array_handle_shadows = builder.CreateAlloca(i64,
+                llvm::ConstantInt::get(i64, array_owner_count), "array.failure.owners");
+            for (std::size_t k = 0; k < array_owner_count; ++k) {
+                llvm::Value* address = builder.CreateGEP(i64, array_handle_shadows,
+                    llvm::ConstantInt::get(i64, k), "array.failure.slot.init");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), address);
+            }
+            for (const auto& local : fn.locals) {
+                if (!local.heap_owned) continue;
+                llvm::Value* shadow = builder.CreateAlloca(i64, nullptr,
+                    local.name + ".owned.failure.slot");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), shadow);
+                heap_failure_slots.push_back(shadow);
+                owned_failure_handles.emplace(local.name, shadow);
+            }
+            array_failure = llvm::BasicBlock::Create(context, "array.resource.failure", function);
+            llvm::Value* open_out = builder.CreateAlloca(native_ptr, nullptr, "array.region.out");
+            llvm::Value* open_status = builder.CreateCall(arrayOpen, {open_out}, "array.region.status");
+            llvm::BasicBlock* opened = llvm::BasicBlock::Create(
+                context, "array.region.open.ok", function);
+            llvm::BasicBlock* denied = llvm::BasicBlock::Create(
+                context, "array.region.open.failure", function);
+            builder.CreateCondBr(builder.CreateICmpEQ(open_status,
+                llvm::ConstantInt::get(open_status->getType(), 0)), opened, denied);
+            builder.SetInsertPoint(denied);
+            // No local owner of either kind has been constructed yet.
+            if (region != nullptr) builder.CreateCall(regionClose, {region});
+            builder.CreateCall(arrayAbort, {});
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(opened);
+            array_region = builder.CreateLoad(native_ptr, open_out, "native.int.array.region");
+        }
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
-            &array_field_keys};
+            &array_field_keys, array_failure, &owned_failure_handles};
+        auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
+            if (!array_handle_shadows || next_array_shadow >= array_owner_count)
+                throw std::runtime_error("missing native array failure owner slot");
+            llvm::Value* address = builder.CreateGEP(i64, array_handle_shadows,
+                llvm::ConstantInt::get(i64, next_array_shadow++),
+                label + ".failure.owner");
+            llvm::Value* status = builder.CreateCall(arrayNew,
+                {array_region, address}, label + ".array.create.status");
+            llvm::BasicBlock* proceed = llvm::BasicBlock::Create(
+                context, label + ".array.created", function);
+            builder.CreateCondBr(builder.CreateICmpEQ(status,
+                llvm::ConstantInt::get(status->getType(), 0)),
+                proceed, array_failure);
+            builder.SetInsertPoint(proceed);
+            return builder.CreateLoad(i64, address, label + ".array.new");
+        };
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
-                llvm::Value* handle = builder.CreateCall(arrayNew,
-                    {array_region}, binding.name + ".array.new");
+                llvm::Value* handle = new_checked_array(binding.name);
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
                     binding.name + ".array.owner");
                 builder.CreateStore(handle, slot);
@@ -511,9 +564,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
                 builder.CreateLifetimeStart(slot,
                     llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
-                // Prepare the entire class before publishing any field
-                // addresses. Runtime allocation/quota failures terminate via
-                // abort, never expose a partially initialized object.
+                // Prepare before publishing class field addresses. On any
+                // failure the checked cleanup reads only initialized shadows,
+                // never uninitialized class field storage.
                 std::vector<std::pair<std::string, llvm::Value*>> staged_fields;
                 std::vector<std::string> owned_fields;
                 for (std::size_t i = 0; i < cls->fields.size(); ++i) {
@@ -524,8 +577,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     if (item.int_array) {
                         if (!binding.new_class)
                             throw std::runtime_error("native Array<int> class move needs owned transfer");
-                        initial = builder.CreateCall(arrayNew, {array_region},
-                            binding.name + "." + item.name + ".array.new");
+                        initial = new_checked_array(binding.name + "." + item.name);
                         owned_fields.push_back(field_key(binding.name, item.name));
                     } else {
                         initial = binding.new_class
@@ -555,6 +607,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     {region, initial}, binding.name + ".owned.handle");
                 slot = builder.CreateAlloca(i64, nullptr, binding.name + ".owned.handle.slot");
                 builder.CreateStore(handle, slot);
+                if (array_owner_count)
+                    builder.CreateStore(handle, owned_failure_handles.at(binding.name));
                 llvm::Value* live = builder.CreateAlloca(builder.getInt1Ty(), nullptr,
                     binding.name + ".owned.live");
                 builder.CreateStore(builder.getTrue(), live);
