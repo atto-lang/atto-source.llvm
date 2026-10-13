@@ -482,6 +482,23 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_tagged_receive_missing_with_write
         actor-receive-missing-with-write-reject.ores
         --diagnostic "actor state loan requires explicit with effects")
+    # Fixed actor-state `int` keys and scalar callback results are not
+    # implicitly bool-convertible; enforce at both ordinary and tagged loans.
+    oreslang_contract_test(reject_actor_state_bool_initializer
+        actor-state-boolean-initializer-reject.ores
+        --diagnostic "actor state int initializer cannot contain boolean")
+    oreslang_contract_test(reject_actor_method_bool_write
+        actor-method-boolean-write-reject.ores
+        --diagnostic "actor state int write cannot contain boolean")
+    oreslang_contract_test(reject_actor_method_bool_result
+        actor-method-boolean-result-reject.ores
+        --diagnostic "actor state int callback result cannot contain boolean")
+    oreslang_contract_test(reject_actor_receive_bool_write
+        actor-receive-boolean-write-reject.ores
+        --diagnostic "actor state int write cannot contain boolean")
+    oreslang_contract_test(reject_actor_receive_bool_result
+        actor-receive-boolean-result-reject.ores
+        --diagnostic "actor state int callback result cannot contain boolean")
     # Cross-backend parity: the exact same .ores fixture Git blobs are
     # checked by Java/GraalVM PR #760 with the Java AST/effect verifier.
     oreslang_contract_test(native_shared_actor_state_read
