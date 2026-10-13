@@ -132,6 +132,8 @@ if(BUILD_TESTING)
     # Closed actor inbox declarations: module-local and top-level contracts.
     oreslang_contract_test(actor_receive_exhaustive_bool_ir message-receive-bool-match.ores
         --ir "match.true")
+    oreslang_contract_test(actor_receive_bool_state_phi_ir message-receive-bool-match.ores
+        --ir "bool.state.loan.copy")
     oreslang_contract_test(actor_receive_bool_conditional_ir message-receive-bool-match.ores
         --ir "match.false")
     oreslang_contract_test(reject_receive_bool_nonexhaustive message-receive-bool-nonexhaustive.ores
