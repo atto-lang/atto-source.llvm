@@ -313,6 +313,12 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        // Result and Option are compiler-managed tagged sum type families.
+        // A user class with either spelling must not spoof nominal ADT
+        // identity or inherit the old scalar-only class representation.
+        if (result.name == "Result" || result.name == "Option") {
+            fail("native builtin Result/Option names cannot be redefined as classes");
+        }
         require("as");
         std::unordered_set<std::string> seen;
         // Ordered i64 scalar slots and owned Array<int> handles only.
