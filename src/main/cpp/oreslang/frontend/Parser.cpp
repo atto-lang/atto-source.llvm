@@ -926,7 +926,9 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
-            if (accept("(")) {
+            // Keep ActorRef.send(...) for the outer actor action parser.
+            // Eager ArrayCall parsing would erase the send/stop ordering.
+            if (field->name != "send" && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
