@@ -169,3 +169,25 @@ must still lower actual guest return envelopes, bind them to scheduler-owned
 actor IDs and canonical MessagePack codecs, and execute source-compiled
 `PipelinePlanner`/`PipelineController`/`PipelineRunner`. A host test does
 not demonstrate equivalent source-compiled LLVM guest behavior.
+
+
+## Typed result race hardening and exact-blob mirror (2026-10-12)
+
+Native host contract tests now reject frames larger than 1 MiB without
+advancing source completion. A 100-iteration concurrent test races authenticated
+source result commitment against fatal CONTROL failure, then supplies all
+physical-DONE receipts. Whichever source-publication event wins, a fatal event
+before whole-route completion must prevent exposing a reply and leave the
+terminal status failed.
+
+The updated C++ test Git blob is `c427435076cc65d5d69455936478fa3aab030cbe`;
+the header Git blob remains `1bb869f1d95b92ed3cfe12b86a20dc01e898ebd8`.
+Both files were copied byte-identically into a **private** funded-test mirror,
+[proof PR #6](https://github.com/zed-pkg-test/formal-methods-cross-check/pull/6),
+with strict C++17, UBSan and ASan commands and explicit source blob pins.
+The mirror's attempted Actions jobs failed before exposing executed build steps;
+**this run is not a passing test**. Previous passed exact-source host tests
+in this document refer to their older named Git blob pairs, not these changes.
+
+No compiler-generated `self.forward()`/`self.backward()` pipeline or returned
+typed `.ores` value is yet certified by LLVM PR #262. Keep the PR draft.
