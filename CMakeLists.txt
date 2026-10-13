@@ -316,6 +316,20 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Visibility is a compiler-enforced access rule, never a formatter convention.
+    # Both input declaration orders must produce the same public API. A private
+    # field must fail before LLVM IR is emitted, for reads and writes alike.
+    oreslang_contract_test(native_private_class_field_read
+        class-private-field-read-reject.ores
+        --diagnostic "private native class field")
+    oreslang_contract_test(native_private_class_field_write
+        class-private-field-write-reject.ores
+        --diagnostic "private native class field")
+    oreslang_contract_test(native_legacy_pub_define_class
+        class-explicit-public-visible.ores)
+    oreslang_contract_test(native_canonical_define_pub_class
+        class-canonical-public-visible.ores)
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
