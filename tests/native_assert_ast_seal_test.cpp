@@ -34,7 +34,7 @@ void should_reject(const char* name, const Mutation& mutate,
 int main() {
     const auto ast = oreslang::parse_program(kValid);
     const auto ir = oreslang::emit_verified_llvm_ir(ast, false);
-    if (ir.find("define i1 @check_equal(i64 ") == std::string::npos ||
+    if (ir.find("define zeroext i1 @check_equal(i64 ") == std::string::npos ||
             ir.find("icmp eq i64") == std::string::npos)
         throw std::runtime_error("valid sealed call did not emit primitive bool IR");
 

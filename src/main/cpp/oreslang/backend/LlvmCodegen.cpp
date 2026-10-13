@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -450,8 +451,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             fn.returns_void ? llvm::Type::getVoidTy(context)
                             : (fn.returns_bool ? llvm::Type::getInt1Ty(context) : i64),
             argument_types, false);
-        declarations.emplace(fn.name, llvm::Function::Create(
-            signature, llvm::Function::ExternalLinkage, symbol, module));
+        auto* declaration = llvm::Function::Create(
+            signature, llvm::Function::ExternalLinkage, symbol, module);
+        // The host C/C++ bool ABI requires canonical zero-extension of i1.
+        // Do not rely on an accidental x86 register layout or a permissive
+        // optimizer when linking generated Oreslang to native callers.
+        if (fn.returns_bool)
+            declaration->addRetAttr(llvm::Attribute::ZExt);
+        declarations.emplace(fn.name, declaration);
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(fn.name);

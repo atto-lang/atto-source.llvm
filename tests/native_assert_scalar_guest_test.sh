@@ -13,8 +13,8 @@ pub fnc literal_different(): bool { return Assert.not_equal(7, 8); }
 ORES
 
 "$compiler" "$work/guest.ores" > "$work/guest.ll"
-grep -F 'define i1 @int_equal(i64' "$work/guest.ll"
-grep -F 'define i1 @int_different(i64' "$work/guest.ll"
+grep -F 'define zeroext i1 @int_equal(i64' "$work/guest.ll"
+grep -F 'define zeroext i1 @int_different(i64' "$work/guest.ll"
 grep -F 'icmp eq i64' "$work/guest.ll"
 grep -F 'icmp ne i64' "$work/guest.ll"
 if grep -E '^declare .*Assert|^declare .*assert' "$work/guest.ll"; then
