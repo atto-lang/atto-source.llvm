@@ -43,7 +43,26 @@ struct RegionMoveLowering {
     llvm::Value* array_region = nullptr;
     llvm::FunctionCallee array_add, array_get, array_set, array_length;
     const std::unordered_set<std::string>* array_names = nullptr;
+    const std::unordered_set<std::string>* array_fields = nullptr;
 };
+
+// Only a lexical named array or a direct class-owned array field is legal.
+// The type/ownership pass must already have certified this receiver.
+llvm::Value* array_handle_address(const Expression& receiver,
+                                   const std::unordered_map<std::string, llvm::Value*>& storage,
+                                   const std::unordered_map<std::string, llvm::Value*>& fields,
+                                   const RegionMoveLowering* moves) {
+    if (!moves) throw std::runtime_error("native Array<int> operation lacks region");
+    if (receiver.kind == Expression::Kind::Variable && moves->array_names &&
+            moves->array_names->count(receiver.name))
+        return storage.at(receiver.name);
+    if (receiver.kind == Expression::Kind::Field && receiver.left &&
+            receiver.left->kind == Expression::Kind::Variable && moves->array_fields) {
+        const std::string key = field_key(receiver.left->name, receiver.name);
+        if (moves->array_fields->count(key)) return fields.at(key);
+    }
+    throw std::runtime_error("native Array<int> receiver is not an owned place");
+}
 
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
@@ -65,7 +84,16 @@ llvm::Value* lower(const Expression& expr,
             return stored;
         }
         case Expression::Kind::Field:
-            if (moves && moves->array_names &&
+            if (expr.name == "size" && expr.left &&
+                    expr.left->kind == Expression::Kind::Field) {
+                llvm::Value* handle = builder.CreateLoad(i64,
+                    array_handle_address(*expr.left, storage, field_storage, moves),
+                    "class.array.size.handle");
+                return builder.CreateCall(moves->array_length,
+                    {moves->array_region, handle}, "class.array.size");
+            }
+            if (moves && moves->array_names && expr.left &&
+                    expr.left->kind == Expression::Kind::Variable &&
                     moves->array_names->count(expr.left->name)) {
                 if (expr.name != "size")
                     throw std::runtime_error("native Array<int> supports only size field");
@@ -77,11 +105,11 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
-            if (!moves || !moves->array_names || !expr.left ||
-                    !moves->array_names->count(expr.left->name))
+            if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
             llvm::Value* handle = builder.CreateLoad(i64,
-                storage.at(expr.left->name), expr.left->name + ".array.handle");
+                array_handle_address(*expr.left, storage, field_storage, moves),
+                "owned.array.call.handle");
             std::vector<llvm::Value*> args;
             for (const auto& arg : expr.arguments)
                 args.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
@@ -188,13 +216,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 !actor.on_message.locals.empty() || !actor.on_message.early_returns.empty())
                 throw std::runtime_error("wasm32 actor guest requires synchronous scalar handler");
         }
+        for (const auto& cls : source.classes)
+            for (const auto& field : cls.fields)
+                if (field.int_array)
+                    throw std::runtime_error("wasm32 class Array<int> owned fields are not implemented");
         for (const auto& fn : source.functions) {
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
-            for (const auto& local : fn.locals)
-                if (local.heap_owned || local.int_array)
+            for (const auto& local : fn.locals) {
+                // Retain the established owned-i64 diagnostic: arrays have a
+                // distinct unsupported guest runtime contract.
+                if (local.heap_owned)
+                    throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
+                if (local.int_array)
                     throw std::runtime_error("wasm32 native heap-owned/Array<int> regions are not implemented");
+            }
         }
     }
     // Native C entrypoints return i32; Oreslang int remains an internal i64.
@@ -260,9 +297,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // Emit declarations only for functions that actually own Array<int>
     // locals. Opaque, unique handles are never exposed as guest values.
     const bool has_array_bindings = std::any_of(source.functions.begin(), source.functions.end(),
-        [](const Function& fn) {
+        [&](const Function& fn) {
             return std::any_of(fn.locals.begin(), fn.locals.end(),
-                [](const LocalBinding& b) { return b.int_array; });
+                [&](const LocalBinding& b) {
+                    if (b.int_array) return true;
+                    if (!b.new_class) return false;
+                    const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
+                        [&](const ClassDecl& candidate) { return candidate.name == b.class_name; });
+                    return cls != source.classes.end() &&
+                        std::any_of(cls->fields.begin(), cls->fields.end(),
+                            [](const ClassField& fld) { return fld.int_array; });
+                });
         });
     llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
                          arrayLength, arrayDrop, arrayClose;
@@ -394,6 +439,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             bool heap_owned;
             std::uint64_t bytes;
             bool int_array = false;
+            std::vector<std::string> owned_array_fields;
         };
         std::vector<LocalSlot> lexical_slots;
         std::unordered_map<std::string, llvm::Value*> owned_live_flags;
@@ -405,13 +451,28 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 {llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64),
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         std::unordered_set<std::string> array_names;
-        for (const auto& local : fn.locals)
-            if (local.int_array) array_names.insert(local.name);
+        std::unordered_set<std::string> array_field_keys;
+        std::size_t array_owner_count = 0;
+        for (const auto& local : fn.locals) {
+            if (local.int_array) {
+                array_names.insert(local.name);
+                ++array_owner_count;
+            } else if (local.new_class) {
+                const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == local.class_name; });
+                if (cls != source.classes.end())
+                    for (const auto& fld : cls->fields)
+                        if (fld.int_array) ++array_owner_count;
+            }
+        }
+        if (array_owner_count > 64)
+            throw std::runtime_error("native Array<int> per-function owned handle count exceeds 64");
         llvm::Value* array_region = nullptr;
-        if (!array_names.empty())
+        if (array_owner_count)
             array_region = builder.CreateCall(arrayOpen, {}, "native.int.array.region");
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
-            array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names};
+            array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
+            &array_field_keys};
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
                 llvm::Value* handle = builder.CreateCall(arrayNew,
@@ -431,21 +492,39 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
                 builder.CreateLifetimeStart(slot,
                     llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                // Prepare the entire class before publishing any field
+                // addresses. Runtime allocation/quota failures terminate via
+                // abort, never expose a partially initialized object.
+                std::vector<std::pair<std::string, llvm::Value*>> staged_fields;
+                std::vector<std::string> owned_fields;
                 for (std::size_t i = 0; i < cls->fields.size(); ++i) {
                     const ClassField& item = cls->fields[i];
                     llvm::Value* address = builder.CreateStructGEP(shape, slot,
                         static_cast<unsigned>(i), binding.name + "." + item.name);
-                    // The admitted stack class contains only trivially movable i64 fields.
-                    llvm::Value* initial = binding.new_class
-                        ? static_cast<llvm::Value*>(llvm::ConstantInt::getSigned(i64, item.initial))
-                        : builder.CreateLoad(i64,
-                            field_storage.at(field_key(binding.move_source, item.name)),
-                            binding.move_source + "." + item.name + ".take");
+                    llvm::Value* initial = nullptr;
+                    if (item.int_array) {
+                        if (!binding.new_class)
+                            throw std::runtime_error("native Array<int> class move needs owned transfer");
+                        initial = builder.CreateCall(arrayNew, {array_region},
+                            binding.name + "." + item.name + ".array.new");
+                        owned_fields.push_back(field_key(binding.name, item.name));
+                    } else {
+                        initial = binding.new_class
+                            ? static_cast<llvm::Value*>(llvm::ConstantInt::getSigned(i64, item.initial))
+                            : builder.CreateLoad(i64,
+                                field_storage.at(field_key(binding.move_source, item.name)),
+                                binding.move_source + "." + item.name + ".take");
+                    }
                     builder.CreateStore(initial, address);
-                    field_storage.emplace(field_key(binding.name, item.name), address);
+                    staged_fields.emplace_back(field_key(binding.name, item.name), address);
                 }
+                for (const auto& field : staged_fields)
+                    field_storage.emplace(field.first, field.second);
+                for (const auto& name : owned_fields)
+                    array_field_keys.insert(name);
                 storage.emplace(binding.name, slot);
-                lexical_slots.push_back({binding.name, slot, false, bytes});
+                lexical_slots.push_back({binding.name, slot, false, bytes, false,
+                                         std::move(owned_fields)});
                 continue;
             }
             llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
@@ -580,6 +659,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     builder.CreateBr(after_drop);
                     builder.SetInsertPoint(after_drop);
                 } else {
+                    // A class owns each array handle independently. Drop
+                    // fields in reverse declaration order before ending the
+                    // containing record lifetime (no aliases may escape).
+                    for (auto fld = it->owned_array_fields.rbegin();
+                         fld != it->owned_array_fields.rend(); ++fld) {
+                        llvm::Value* address = field_storage.at(*fld);
+                        llvm::Value* handle = builder.CreateLoad(i64, address,
+                            *fld + ".drop.handle");
+                        builder.CreateCall(arrayDrop, {array_region, handle});
+                        builder.CreateStore(llvm::ConstantInt::get(i64, 0), address);
+                    }
                     // llvm.lifetime.end is not a source-level destructor.
                     builder.CreateLifetimeEnd(it->address,
                         llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));

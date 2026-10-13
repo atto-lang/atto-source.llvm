@@ -260,27 +260,46 @@ private:
         result.name = identifier();
         require("as");
         std::unordered_set<std::string> seen;
-        // Only plain, ordered i64 fields are admitted: no nested objects,
-        // pointers, destructors, user initializers or implicit heap storage.
+        // Ordered i64 scalar slots and owned Array<int> handles only.
+        // No nested class, arbitrary initializer, method, or pointer escape.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
             require("let");
-            require("int");
             ClassField field;
-            field.name = identifier();
-            if (!seen.insert(field.name).second)
-                fail("duplicate class field '" + field.name + "'");
-            require("=");
-            if (token_.kind != Kind::Integer)
-                fail("class field requires i64 literal initializer");
-            field.initial = integer_literal();
+            if (accept("mut")) {
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                field.int_array = true;
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                require("new");
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                require("(");
+                require(")");
+            } else {
+                require("int");
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                if (token_.kind != Kind::Integer)
+                    fail("class field requires i64 literal initializer");
+                field.initial = integer_literal();
+            }
             require(";");
             result.fields.push_back(std::move(field));
         }
-        if (result.fields.empty()) fail("native class requires at least one i64 field");
+        if (result.fields.empty()) fail("native class requires at least one field");
         require("end");
         return result;
     }
@@ -655,6 +674,10 @@ private:
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
+                // A nested class field such as shelf.worker.send(...) must
+                // never silently resolve to an unrelated actor named worker.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor send requires direct named ActorRef receiver");
                 ActorSend send;
                 send.offset = statement.offset;
                 send.reference = action->left->name;
@@ -667,6 +690,11 @@ private:
                 continue;
             }
             if (action->kind == Expression::Kind::Field && accept("=")) {
+                // Guard the AST shape before extracting the receiver name.
+                // Without this, box.items.size = 7 could accidentally write
+                // a different local object's field, items.size.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native field assignment requires direct named class receiver");
                 statement.kind = Statement::Kind::FieldWrite;
                 statement.receiver = action->left->name;
                 statement.field = action->name;
@@ -839,13 +867,17 @@ private:
                 } while (accept(","));
                 require(")");
             }
-        } else if (accept(".")) {
+        }
+        // Class-owned array expressions are intentionally limited to one
+        // field selection followed by a native array method or .size.
+        while (accept(".")) {
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
-            // A method call is distinct from a field access. The ownership
-            // pass admits only get in value position, and add/set as effects.
-            if (accept("(")) {
+            // Keep ActorRef.send(...) available to the outer statement parser:
+            // it tracks actor DATA sends and send-after-stop ordering.
+            // Eager ArrayCall parsing here would erase those actor effects.
+            if (field->name != "send" && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
@@ -855,6 +887,7 @@ private:
                 }
             }
             expr = std::move(field);
+            if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
     }
@@ -949,7 +982,7 @@ private:
         return false;
     }
 
-    static void validate_declared_effects(const Function& fn) {
+    static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -957,7 +990,15 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
-            if ((local.heap_owned || local.int_array) &&
+            bool allocates_class_array = false;
+            if (local.new_class) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == local.class_name; });
+                if (cls != program.classes.end())
+                    allocates_class_array = std::any_of(cls->fields.begin(), cls->fields.end(),
+                        [](const ClassField& field) { return field.int_array; });
+            }
+            if ((local.heap_owned || local.int_array || allocates_class_array) &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
@@ -985,7 +1026,7 @@ private:
         }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
-            validate_declared_effects(fn);
+            validate_declared_effects(fn, program);
             // Compiler-owned ABI imports must never be shadowed by a guest.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
