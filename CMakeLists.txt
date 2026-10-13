@@ -95,6 +95,14 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Native compiler must not reinterpret nominal Result signatures as int,
+    # emit partial IR, or silently admit an unsupported sum representation.
+    add_test(NAME native_result_typed_source_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_result_source_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_result_typed_source_fail_closed
+        PROPERTIES TIMEOUT 45)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_NATIVE_ARRAY_CLANG)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
