@@ -1205,6 +1205,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_native_private_field_take class-private-take-reject.ores --diagnostic "private class field")
     oreslang_contract_test(reject_native_private_array_size class-private-array-size-reject.ores --diagnostic "private class field")
     oreslang_contract_test(reject_native_private_array_mutation class-private-array-mutation-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_filled_commit class-private-filled-array-commit-reject.ores --diagnostic "private class field")
 
     if(ORE_CLANG)
         oreslang_contract_test(native_public_class_field_read class-public-field-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)

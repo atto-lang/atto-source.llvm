@@ -19,3 +19,10 @@ This changes only the current mainline visibility path. Full native scalar
 constructor lowering from the old draft #294 is not integrated here.
 The branch remains draft until exact-head CMake/CTest, AddressSanitizer,
 UndefinedBehaviorSanitizer and Java/LLVM parity runs have actually executed.
+
+## Bulk array-commit privacy gate
+
+The source-reachable `rt array_commit_filled` transaction must verify that all
+four array fields are public before mutating any. Even a unique mutable owner
+cannot use this intrinsic to access private fields from a free function.
+The private-field fixture must reject before LLVM IR emission.

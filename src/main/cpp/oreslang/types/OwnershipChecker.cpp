@@ -514,6 +514,13 @@ void validate_i64_ownership(const Program& program) {
                 auto& recv = found->second;
                 if (recv.class_array_fields.size() != 4)
                     throw std::runtime_error("ownership violation: filled array commit requires exactly four owned Array<int> fields");
+                // This source-reachable intrinsic writes all four array slots.
+                // Owning the whole class does not grant access to private slots.
+                for (const auto& field : recv.class_array_fields)
+                    if (!recv.public_fields.count(field))
+                        throw std::runtime_error("ownership violation: private class field '" +
+                            recv.class_name + "." + field +
+                            "' is not accessible to filled array commit");
                 if (recv.mode != Mode::Value || !recv.mutable_owner ||
                         recv.moved || !recv.moved_fields.empty() ||
                         recv.exclusive_loan || recv.shared_loans != 0)
