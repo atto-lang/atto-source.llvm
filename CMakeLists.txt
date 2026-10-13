@@ -1217,6 +1217,23 @@ if(BUILD_TESTING)
                 PROPERTIES TIMEOUT 120)
         endif()
 
+        # Experimental multiple actors on ONE OS worker, using two
+        # independently compiled scalar .ores continuations. Not production
+        # source actor lowering and not a hard realtime guarantee.
+        if(ORE_CLANG)
+            add_test(NAME native_multi_actor_compiled_round_robin_fairness
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_multi_actor_carrier_aot.py"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                    --clangxx "${CMAKE_CXX_COMPILER}"
+                    --fast "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                    --slow "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-multi-actor-slow.ores"
+                    --test "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_multi_actor_carrier_aot_test.cpp"
+                    --source-root "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            set_tests_properties(native_multi_actor_compiled_round_robin_fairness
+                PROPERTIES TIMEOUT 150)
+        endif()
+
         add_executable(oreslang-carrier-supervisor-test
             tests/native_carrier_supervisor_integration.cpp
             src/main/cpp/oreslang/runtime/HungryCarrier.cpp
