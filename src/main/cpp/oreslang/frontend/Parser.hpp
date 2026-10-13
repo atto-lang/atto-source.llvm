@@ -166,7 +166,18 @@ struct ActorDecl {
     std::size_t offset = 0;
 };
 
+// First AOT-only resumable source slice. No owned borrows, calls, FFI,
+// lexical cleanup or actor scheduler integration is admitted yet.
+// The host supplies a zeroed, single-owner two-i64 continuation frame.
+struct CooperativeScalarLoop {
+    std::string name;
+    std::string variable;
+    std::int64_t initial = 0;
+    std::size_t offset = 0;
+};
+
 struct Program {
+    std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
