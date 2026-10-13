@@ -240,7 +240,8 @@ private:
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
         }
         std::unordered_set<std::string> names;
-        while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+        while (token_.text == "let" || token_.text == "const" ||
+               token_.text == "val" || token_.text == "final") {
             if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
             LocalBinding field;
             field.offset = token_.offset;
@@ -249,7 +250,10 @@ private:
             field.name = identifier();
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
             require(":");
-            require("int");
+            if (token_.text != "int") {
+                fail("native actor member field requires int; Map and actor-group fields need typed native lowering");
+            }
+            advance();
             require("=");
             field.initializer = expression();
             require(";");
@@ -274,6 +278,10 @@ private:
         // quietly route a read declaration through the legacy write lane.
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
+        if (accept("static")) {
+            if (accept("method")) fail("static method is invalid; use static fnc");
+            fail("native actor static fnc requires separate member lowering");
         }
         if (!accept("fnc")) accept("method"); // optional method marker
         if (at_unsupported_critical_mode()) {

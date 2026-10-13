@@ -1741,7 +1741,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(refreshed_actor_immutable_write actor-immutable-write.ores --diagnostic "cannot assign immutable or unknown actor field")
     oreslang_contract_test(refreshed_actor_unknown_field actor-unknown-field.ores --diagnostic "unknown parameter")
     oreslang_contract_test(refreshed_actor_unknown_write actor-unknown-write.ores --diagnostic "cannot assign immutable or unknown actor field")
-    oreslang_contract_test(refreshed_actor_unsupported_field actor-unsupported-field.ores --diagnostic "expected 'int'")
+    oreslang_contract_test(refreshed_actor_unsupported_field actor-unsupported-field.ores --diagnostic "native actor member field requires int")
 endif()
 
 if(BUILD_TESTING AND Python3_Interpreter_FOUND AND ORE_CLANG)
