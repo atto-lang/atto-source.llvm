@@ -84,3 +84,13 @@ The slice additionally rejects effect-qualified function signatures and
 potentially throwing or unverified calls in the local `finally` block. The
 first implementation has no typed effect propagation across nested calls, so
 accepting such calls would incorrectly imply successful unwind semantics.
+
+### Ownership-verified nonthrowing scalar gate
+
+The exceptional path now requires primitive stack `int` data or scalar
+class fields, proven by the ownership checker as well as the parser. A
+heap-owned `int` read, `Array<int>.size`, class-array field or any
+native-runtime-backed handle read cannot be used in the `throw` payload,
+scoped `defer` expression, catch return, or `finally` update. Such reads
+can invoke runtime ABIs and invalidate the current nonthrowing proof.
+Nonexceptional source paths remain unchanged.

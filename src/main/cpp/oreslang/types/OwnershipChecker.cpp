@@ -305,6 +305,45 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
     reject(expr, "unsupported guarded condition");
 }
 
+// Only primitive stack int reads are safe in the initial caught-throw CFG.
+// A syntactically pure Array<int>.size or heap-owned int read still invokes
+// native runtime functions and therefore lacks a nonthrowing proof.
+void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
+                                   const Functions& functions) {
+    switch (expr.kind) {
+        case Expression::Kind::Integer:
+            return;
+        case Expression::Kind::Variable: {
+            const auto& place = local(expr, locals);
+            if (place.heap_owned || place.int_array || !place.class_name.empty())
+                reject(expr, "native caught throw scalar read requires stack i64");
+            check_value(expr, locals, functions);
+            return;
+        }
+        case Expression::Kind::Field: {
+            if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                reject(expr, "native caught throw scalar read requires direct named field");
+            const auto& place = local(*expr.left, locals);
+            if (place.heap_owned || place.int_array ||
+                    place.class_array_fields.count(expr.name))
+                reject(expr, "native caught throw scalar read requires stack i64");
+            check_value(expr, locals, functions);
+            return;
+        }
+        case Expression::Kind::Negate:
+            check_caught_throw_scalar_read(*expr.left, locals, functions);
+            return;
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            check_caught_throw_scalar_read(*expr.left, locals, functions);
+            check_caught_throw_scalar_read(*expr.right, locals, functions);
+            return;
+        default:
+            reject(expr, "native caught throw scalar read cannot call, move or borrow");
+    }
+}
+
 } // namespace
 
 void validate_i64_ownership(const Program& program) {
@@ -491,14 +530,17 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: class mutation requires let mut owner");
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
-                check_value(*cleanup.expression, path, functions);
+                if (function.caught_throw_value)
+                    check_caught_throw_scalar_read(*cleanup.expression, path, functions);
+                else
+                    check_value(*cleanup.expression, path, functions);
                 recv.moved_fields.erase(cleanup.field);
             }
         };
         if (function.caught_throw_value) {
             // Type-check payload before unwind; each scoped field cleanup
             // is verified at its LIFO execution point.
-            check_value(*function.caught_throw_value, locals, functions);
+            check_caught_throw_scalar_read(*function.caught_throw_value, locals, functions);
             for (auto it = function.caught_throw_defers.rbegin();
                  it != function.caught_throw_defers.rend(); ++it) {
                 const auto& effect = *it;
@@ -510,7 +552,7 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: caught throw defer requires mutable receiver");
                 if (recv.exclusive_loan || recv.shared_loans)
                     throw std::runtime_error("ownership violation: caught throw defer conflicts with active borrow");
-                check_value(*effect.expression, locals, functions);
+                check_caught_throw_scalar_read(*effect.expression, locals, functions);
                 recv.moved_fields.erase(effect.field);
             }
             if (!locals.emplace(function.catch_binding, LocalOwnership{}).second)
@@ -527,7 +569,12 @@ void validate_i64_ownership(const Program& program) {
             check_value(*guard.result, taken, functions);
             check_deferred_exit(taken);
         }
-        if (function.result) check_value(*function.result, locals, functions);
+        if (function.result) {
+            if (function.caught_throw_value)
+                check_caught_throw_scalar_read(*function.result, locals, functions);
+            else
+                check_value(*function.result, locals, functions);
+        }
         check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
         // field-sensitive fixed-point verifier. This currently models the

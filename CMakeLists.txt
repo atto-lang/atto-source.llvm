@@ -387,6 +387,22 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_caught_throw_finally_call
         native-caught-throw-finally-call-reject.ores
         --diagnostic "native caught throw finally requires nonthrowing field write")
+    # Native ABI-backed reads are not pure scalar operations.
+    oreslang_contract_test(reject_caught_throw_array_size_operand
+        native-caught-throw-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_heap_owned_operand
+        native-caught-throw-heap-owned-reject.ores --experimental-owned-int
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_defer_array_size
+        native-caught-throw-defer-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_catch_array_size
+        native-caught-throw-catch-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_finally_array_size
+        native-caught-throw-finally-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
     oreslang_contract_test(reject_finally_return_override
         native-finally-return-reject.ores --diagnostic "cannot escape finally")
     oreslang_contract_test(reject_finally_break_override
