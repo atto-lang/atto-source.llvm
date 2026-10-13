@@ -79,6 +79,19 @@ The arm result type must unify with the operation's `Selectable<T>` type;
 no implicit channel-to-Future, Observable-to-value, or deep structural
 runtime type checks are allowed.
 
+An operation whose result is `void` binds no name but still uses the explicit
+selectable-arm arrow, for example:
+```ores
+select {
+  when self.outbox.send(command): -> {
+    stdio.println("destination transport admitted command");
+  }
+}
+```
+The `Selectable<void>` type checker must reject attempts to bind a value;
+an operation yielding `T` requires a compatible binding (or an explicitly
+discarding syntax) and may not silently erase an incoming item.
+
 `when await fut` is arm-level syntactic sugar for creating the future
 completion operation, **not** an early suspension or an additional concurrent
 task. A standalone `await fut` still suspends normally. `select` chooses
