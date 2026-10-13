@@ -155,9 +155,11 @@ bool native_pure_scalar_tree(const Expression& expr) {
 
 class Parser {
 public:
-    explicit Parser(std::string_view source, bool experimental_owned_int)
+    explicit Parser(std::string_view source, bool experimental_owned_int,
+                    bool experimental_rt_scalar_loop)
         : lexer_(source), token_(lexer_.next()),
-          experimental_owned_int_(experimental_owned_int) {}
+          experimental_owned_int_(experimental_owned_int),
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
     Program parse() {
         Program program;
@@ -570,6 +572,47 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "while" && experimental_rt_scalar_loop_) {
+                if (value.scalar_while || value.locals.size() != 1 ||
+                        !value.statements.empty() || !value.early_returns.empty() ||
+                        !value.actor_spawns.empty() || !value.actor_actions.empty() ||
+                        value.has_declared_effects || !value.parameters.empty() ||
+                        value.returns_void)
+                    fail("experimental scalar loop requires one local and no effects");
+                const LocalBinding& local = value.locals.front();
+                if (!local.owner_mutable || local.heap_owned || local.int_array ||
+                        !local.class_name.empty() || !local.initializer ||
+                        local.initializer->kind != Expression::Kind::Integer)
+                    fail("experimental scalar loop requires val scalar integer initializer");
+                auto loop = std::make_unique<ScalarWhileLoop>();
+                loop->counter = local.name;
+                loop->initial = local.initializer->integer;
+                require("while");
+                require("(");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop condition must read its counter");
+                require("<");
+                loop->upper_bound = integer_literal();
+                require(")");
+                require("{");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop must update its counter");
+                require("=");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop cannot read another owner");
+                require("+");
+                if (integer_literal() != 1)
+                    fail("experimental scalar loop increment must be exactly one");
+                require(";");
+                require("}");
+                if (loop->initial < 0 || loop->upper_bound < loop->initial ||
+                        loop->upper_bound > 1000000000LL)
+                    fail("experimental scalar loop requires bounded nonnegative i64 range");
+                value.scalar_while = std::move(loop);
+                if (token_.text != "return")
+                    fail("experimental scalar loop must be followed by a single return");
+                continue;
+            }
             if (token_.text == "while" || token_.text == "for" ||
                     token_.text == "loop") {
                 fail("native realtime source loop requires verified LLVM continuation lowering");
@@ -801,6 +844,10 @@ private:
         require("return");
         if (!value.returns_void) {
             value.result = expression();
+            if (value.scalar_while &&
+                    (value.result->kind != Expression::Kind::Variable ||
+                     value.result->name != value.scalar_while->counter))
+                fail("experimental scalar loop must return the counter");
             if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
                 fail("native protected try return requires nonthrowing scalar/field read");
         }
@@ -1321,12 +1368,20 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    bool experimental_rt_scalar_loop_;
 };
 
 } // namespace
 
-Program parse_program(std::string_view source, bool experimental_owned_int) {
-    Program program = Parser(source, experimental_owned_int).parse();
+Program parse_program(std::string_view source, bool experimental_owned_int,
+                      bool experimental_rt_scalar_loop) {
+    Program program = Parser(source, experimental_owned_int,
+                             experimental_rt_scalar_loop).parse();
+    if (experimental_rt_scalar_loop &&
+            (program.functions.size() != 1 || !program.functions.front().scalar_while ||
+             !program.classes.empty() || !program.actors.empty() ||
+             !program.module.empty()))
+        throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
     // LLVM lowering is prohibited unless the native subset has passed both
     // name/arity checking and flow-sensitive explicit ownership admission.
     validate_i64_ownership(program);

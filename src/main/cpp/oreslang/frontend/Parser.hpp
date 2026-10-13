@@ -119,8 +119,18 @@ struct GuardedReturn {
     std::size_t offset = 0;
 };
 
+// Experimental LLVM AOT-only, single-owner scalar loop frame. The grammar
+// admits only one val i64 counter, a constant upper bound and a +1 body.
+// No borrowed pointer, object owner, dynamic call or cleanup crosses a yield.
+struct ScalarWhileLoop {
+    std::string counter;
+    std::int64_t initial = 0;
+    std::int64_t upper_bound = 0;
+};
+
 struct Function {
     std::string name;
+    std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
     std::vector<Statement> statements;
@@ -159,6 +169,7 @@ struct Program {
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32 and source-level await/suspension.
-Program parse_program(std::string_view source, bool experimental_owned_int = false);
+Program parse_program(std::string_view source, bool experimental_owned_int = false,
+                      bool experimental_rt_scalar_loop = false);
 
 } // namespace oreslang
