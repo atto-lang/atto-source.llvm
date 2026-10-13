@@ -282,9 +282,10 @@ private:
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
-            require("let");
+            const bool legacy_let = accept("let");
             ClassField field;
-            if (accept("mut")) {
+            if (!legacy_let) field.final_field = accept("final");
+            if (legacy_let && accept("mut")) {
                 require("Array");
                 require("<");
                 require("int");
@@ -293,7 +294,7 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 require("new");
                 require("Array");
                 require("<");
@@ -306,7 +307,7 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 if (token_.kind != Kind::Integer)
                     fail("class field requires i64 literal initializer");
                 field.initial = integer_literal();
