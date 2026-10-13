@@ -191,3 +191,29 @@ in this document refer to their older named Git blob pairs, not these changes.
 
 No compiler-generated `self.forward()`/`self.backward()` pipeline or returned
 typed `.ores` value is yet certified by LLVM PR #262. Keep the PR draft.
+
+## Final reply critical-section and ambiguous-publish audit (2026-10-12)
+
+`complete_source_with_reply` now enforces the 1 MiB bound, copies the
+runtime-validated frame *before* acquiring the route mutex, then authenticates
+the source/sender/phase and atomically swaps the owned copy into the final
+route slot while advancing the phase. This keeps bounded allocation/copying
+off the critical CONTROL/DONE mutex path and preserves fail-closed behavior
+when copying fails or races fatal termination.
+
+A new regression calls `fail()` on an outstanding directional publication
+claim whose scheduler cannot attest whether publication occurred. It
+requires both settlement attempts and any subsequent send to fail, and the
+route to remain failed after all physical DONE receipts. This is still a
+native contract test: production LLVM must wire claims to actual mailbox
+publication and must never treat an ambiguous emission as a safe rollback.
+
+The exact copied private proof blobs are now:
+- header: `6d94673ea26238df8cb3e136cda56987365a09c3`
+- regression: `8e5b877d947d095fbaf21cac0b18125b8c177d71`
+
+Private [funded-test PR #6](https://github.com/zed-pkg-test/formal-methods-cross-check/pull/6)
+pins both blobs. Its Actions attempts failed without usable executed-step
+evidence; no pass is claimed for the latest tree. LLVM PR #262 remains
+draft, unmerged, and source-compiled guest typed result integration is not
+implemented on this branch.
