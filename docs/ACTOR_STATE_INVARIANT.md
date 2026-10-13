@@ -70,3 +70,5 @@ Older fixtures/PRs that declare actor instance data directly need migration
 to the new syntax before either draft PR may merge.
 
 Focused native guest evidence: [41/41 passing CTests with ASan/UBSan](https://github.com/flags-2-env-test/java-app/actions/runs/38343367152), including ordinary-method state execution, multi-key actor persistence and a compiled three-actor typed directional round trip. These results do not certify full-tree or cross-backend parity.
+
+Updated evidence: [46/46 focused native CTests on exact pinned inputs](https://github.com/flags-2-env-test/java-app/actions/runs/38343656495). Includes boolean-loan effect validation and rejection of bool-to-integer use inside callbacks. Full LLVM repository tests and Java/GraalVM parity have not passed as part of this gate.

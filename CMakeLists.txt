@@ -137,15 +137,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(actor_receive_bool_conditional_ir message-receive-bool-match.ores
         --ir "match.false")
     oreslang_contract_test(reject_receive_bool_nonexhaustive message-receive-bool-nonexhaustive.ores
-        --diagnostic "nonexhaustive receive boolean match")
+        --diagnostic "nonexhaustive receive boolean match"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_receive_bool_duplicate_arm message-receive-bool-duplicate.ores
-        --diagnostic "duplicate receive boolean match arm")
+        --diagnostic "duplicate receive boolean match arm"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_receive_bool_wrong_subject message-receive-bool-wrong-subject.ores
-        --diagnostic "receive match must inspect Message parameter")
+        --diagnostic "receive match must inspect Message parameter"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_receive_bool_wrong_contract message-receive-int-bool-match.ores
-        --diagnostic "receive match true/false requires bool-only contract")
+        --diagnostic "receive match true/false requires bool-only contract"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_unnarrowed_message_payload message-receive-bool-unnarrowed-payload.ores
-        --diagnostic "match arm Message payload binding is not narrowed")
+        --diagnostic "match arm Message payload binding is not narrowed"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(actor_message_shape_declaration message-pattern-shapes.ores
         --ir "oreslang_actor_Foo_receive")
     oreslang_contract_test(actor_module_typed_receive_symbols message-pattern-module.ores

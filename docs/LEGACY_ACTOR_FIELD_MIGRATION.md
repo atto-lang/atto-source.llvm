@@ -132,3 +132,11 @@ general state loans, arbitrary user functions during loans, suspension,
 reference-valued state snapshots, multi-flow scheduling, native full-tree
 CTest and Java/GraalVM Native Image parity remain release blockers.
 **Keep PR #244 draft.**
+
+## Boolean match negative hardening (2026-10-12)
+
+[Funded exact-source native Actions #38343656495](https://github.com/flags-2-env-test/java-app/actions/runs/38343656495): **46/46 selected CTests passed**, including the native three-actor typed guest, the multi-key historical actor, tag/MessagePack contracts, AOT-compatible LLVM emission, ASan/UBSan and five canonical boolean negative fixtures. This updated test mirror verifies **52 pinned blobs** (not a full source tree).
+
+The compiler now explicitly prohibits treating the bool match subject as an i64 arithmetic operand inside a scoped state callback, including its write expressions and return expression. Nonexhaustive, duplicate, wrong-subject, wrong-domain and unnarrowed-payload negatives use legal fixed-key actor state; each CTest also guards against accidental unrelated legacy actor-field syntax rejection.
+
+The original **14-file** historical migration inventory now has representative canonical tests across each listed behavior; this does **not** establish that all tests elsewhere in the repository have been migrated or executed. Full historical CTest, Java/GraalVM AOT/hybrid parity, general state loans and concurrent-flow routing are still unverified release gates. **Remain draft.**
