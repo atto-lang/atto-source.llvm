@@ -341,7 +341,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 });
         });
     llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
-                         arrayLength, arrayDrop, arrayClose, arrayAbort;
+                         arrayLength, arrayDrop, arrayClose, arrayAbort, arrayUnhandled;
     if (has_array_bindings) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         auto* i32 = llvm::Type::getInt32Ty(context);
@@ -353,6 +353,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::FunctionType::get(i32, {native_ptr, i64, i64}, false));
         arrayAbort = module.getOrInsertFunction("abort",
             llvm::FunctionType::get(voidTy, {}, false));
+        arrayUnhandled = module.getOrInsertFunction(
+            "oreslang_int_array_unhandled_resource_failure",
+            llvm::FunctionType::get(voidTy, {i32}, false));
         arrayGet = module.getOrInsertFunction("oreslang_int_array_get",
             llvm::FunctionType::get(i64, {native_ptr, i64, i64}, false));
         arraySet = module.getOrInsertFunction("oreslang_int_array_set",
@@ -553,9 +556,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             // Preserve the actual typed resource status even when open fails
             // before a valid array-region pointer can be published.
             builder.CreateStore(open_status, array_failure_status);
-            // No local owner of either kind has been constructed yet.
+            // No local array owner exists yet, but a previously opened
+            // independent owned-int region must be closed before reporting.
             if (region != nullptr) builder.CreateCall(regionClose, {region});
-            builder.CreateCall(arrayAbort, {});
+            builder.CreateCall(arrayUnhandled, {open_status});
             builder.CreateUnreachable();
             builder.SetInsertPoint(opened);
             array_region = builder.CreateLoad(native_ptr, open_out, "native.int.array.region");
@@ -990,11 +994,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 llvm::Type::getInt32Ty(context), 1), quota_error);
             dispatch->addCase(llvm::ConstantInt::get(
                 llvm::Type::getInt32Ty(context), 2), memory_error);
-            for (llvm::BasicBlock* fatal : {quota_error, memory_error, invalid_status}) {
-                builder.SetInsertPoint(fatal);
-                builder.CreateCall(arrayAbort, {});
+            for (llvm::BasicBlock* failure : {quota_error, memory_error}) {
+                builder.SetInsertPoint(failure);
+                // The handoff is non-returning; a future catch/supervisor
+                // continuation must never resume the destroyed owner frame.
+                builder.CreateCall(arrayUnhandled, {typed_status});
                 builder.CreateUnreachable();
             }
+            builder.SetInsertPoint(invalid_status);
+            // An invalid success/unknown tag is a compiler/runtime
+            // invariant violation, never an ordinary catchable error.
+            builder.CreateCall(arrayAbort, {});
+            builder.CreateUnreachable();
         }
     }
 
