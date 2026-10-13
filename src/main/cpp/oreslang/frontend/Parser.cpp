@@ -919,8 +919,22 @@ private:
         expr->name = identifier();
         if (accept("(")) {
             expr->kind = Expression::Kind::Call;
+            bool named_seen = false;
+            std::unordered_set<std::string> labels;
             if (!accept(")")) {
                 do {
+                    if (named_argument_ahead()) {
+                        std::string label = identifier();
+                        require(":");
+                        if (!labels.insert(label).second) {
+                            fail("duplicate named argument '" + label + "'");
+                        }
+                        named_seen = true;
+                        expr->argument_names.push_back(std::move(label));
+                    } else {
+                        if (named_seen) fail("positional argument cannot follow named argument");
+                        expr->argument_names.emplace_back();
+                    }
                     expr->arguments.push_back(expression());
                 } while (accept(","));
                 require(")");
@@ -938,6 +952,9 @@ private:
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
+                        if (named_argument_ahead()) {
+                            fail("native array method arguments have no named parameter contract");
+                        }
                         field->arguments.push_back(expression());
                     } while (accept(","));
                     require(")");
@@ -947,6 +964,12 @@ private:
             if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
+    }
+
+    bool named_argument_ahead() const {
+        if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
+        Lexer lookahead = lexer_;
+        return lookahead.next().text == ":";
     }
 
     bool accept(std::string_view text) {
@@ -981,7 +1004,7 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::size_t>& functions) {
+                                    const std::unordered_map<std::string, std::vector<std::string>>& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1000,13 +1023,43 @@ private:
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
-                if (found == functions.end() || found->second != expr.arguments.size()) {
+                if (found == functions.end() || found->second.size() != expr.arguments.size()) {
                     throw std::runtime_error("unknown function or wrong call arity '"
                                              + expr.name + "' at byte "
                                              + std::to_string(expr.offset));
                 }
-                for (const auto& arg : expr.arguments) {
-                    validate_expression(*arg, parameters, functions);
+                if (!expr.argument_names.empty()
+                        && expr.argument_names.size() != expr.arguments.size()) {
+                    throw std::runtime_error("invalid named call argument layout");
+                }
+                std::vector<bool> claimed(found->second.size(), false);
+                bool named_seen = false;
+                std::size_t positional = 0;
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const std::string label = expr.argument_names.empty()
+                            ? std::string{} : expr.argument_names[i];
+                    std::size_t target = positional;
+                    if (!label.empty()) {
+                        named_seen = true;
+                        const auto it = std::find(found->second.begin(), found->second.end(), label);
+                        if (it == found->second.end()) {
+                            throw std::runtime_error("unknown named argument '" + label
+                                                     + "' for " + expr.name);
+                        }
+                        target = static_cast<std::size_t>(it - found->second.begin());
+                    } else {
+                        if (named_seen) {
+                            throw std::runtime_error("positional argument after named argument");
+                        }
+                        ++positional;
+                    }
+                    if (claimed[target]) {
+                        throw std::runtime_error("duplicate binding of parameter '"
+                                                 + found->second[target] + "'");
+                    }
+                    claimed[target] = true;
+                    // Lexical source order is also the ownership/effect-check order.
+                    validate_expression(*expr.arguments[i], parameters, functions);
                 }
                 return;
             }
@@ -1081,7 +1134,7 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
-        std::unordered_map<std::string, std::size_t> functions;
+        std::unordered_map<std::string, std::vector<std::string>> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
             // Compiler-owned ABI imports must never be shadowed by a guest.
@@ -1090,7 +1143,10 @@ private:
             if (std::count_if(fn.locals.begin(), fn.locals.end(),
                     [](const LocalBinding& local) { return local.int_array; }) > 64)
                 throw std::runtime_error("native Array<int> owner limit exceeded (64)");
-            if (!functions.emplace(fn.name, fn.parameters.size()).second) {
+            std::vector<std::string> formal_names;
+            formal_names.reserve(fn.parameters.size());
+            for (const auto& param : fn.parameters) formal_names.push_back(param.name);
+            if (!functions.emplace(fn.name, std::move(formal_names)).second) {
                 throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
                                          + std::to_string(fn.offset));
             }
