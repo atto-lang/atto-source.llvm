@@ -1196,6 +1196,17 @@ private:
             }
             if (!live_actors.empty())
                 throw std::runtime_error("actor reference must be stopped before return");
+            if (fn.caught_throw_value) {
+                // The thrown i64 expression and scoped defers see the original
+                // lexical environment. Catch binding enters only on handler
+                // admission, before checking the catch return expression.
+                validate_expression(*fn.caught_throw_value, params, functions);
+                for (const auto& defer : fn.caught_throw_defers)
+                    check_statement_names(defer, params);
+                if (!params.insert(fn.catch_binding).second)
+                    throw std::runtime_error("duplicate caught throw binding '" +
+                        fn.catch_binding + "'");
+            }
             for (const auto& guard : fn.early_returns) {
                 validate_expression(*guard.lhs, params, functions);
                 validate_expression(*guard.rhs, params, functions);
