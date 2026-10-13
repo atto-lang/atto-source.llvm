@@ -109,7 +109,22 @@ Closing a region requires every owned array to have been dropped.
 Invalid inputs, exhaustion, stale/cross-region handles, allocation failure
 and region-close-with-live-owners abort deliberately. This is a low-level
 compiler-only contract analogous to `NativeOwnedI64Region`, not a recoverable
-guest `Result` API. The eventual lowering must supply error/unwind and drop
+guest `Result` API.
+
+The LLVM compiler now retains the *exact checked status* in a compiler-owned
+i32 slot on every native region-open, owner-create and `Array<int>.add`
+resource-failure edge. Only `LIMIT=1` and `NO_MEMORY=2` are admitted into
+their separately named post-cleanup terminal blocks; an unexpected status
+also terminates. The status is saved **before** the shared reverse-order
+owner destruction and region closure, so later typed error propagation
+cannot confuse the cause with cleanup effects. All three terminal blocks
+currently `abort`: returning normally would expose destroyed owners.
+These status blocks are **not** yet source-visible `throw`, `trap`,
+`Option` or `Result` semantics. The eventual lowering must supply a
+well-defined typed guest exception/unwind handler and error-payload lifetime,
+and must not accidentally catch `raise` or `panic`.
+
+The eventual lowering must supply error/unwind and drop
 glue when the full Oreslang language semantics demand it.
 
 ## Recoverable internal resource API and staging contract
