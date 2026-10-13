@@ -44,14 +44,18 @@ public:
         // Original pre-promotion effect. Terminal actor Throw/Raise is delivered
         // as Panic, but the supervisor still receives typed provenance.
         Kind origin_kind;
+        // Opaque numeric error discriminator copied before the actor is reclaimed.
+        // No borrowed exception pointer or actor-owned object crosses CONTROL.
+        std::uint32_t origin_code = 0;
         std::string summary;
         std::string parent_id;
 
         Failure(ActorKey actor, Kind kind, std::string summary,
                 std::string parent_id = {},
-                std::optional<Kind> origin = std::nullopt)
+                std::optional<Kind> origin = std::nullopt,
+                std::uint32_t code = 0)
             : actor(std::move(actor)), kind(kind),
-              origin_kind(origin.value_or(kind)),
+              origin_kind(origin.value_or(kind)), origin_code(code),
               summary(std::move(summary)), parent_id(std::move(parent_id)) {}
     };
 
@@ -83,7 +87,7 @@ public:
     bool publish(Failure failure) {
         return publish_preallocated(failure.actor, failure.kind,
                                     failure.summary, failure.parent_id,
-                                    failure.origin_kind);
+                                    failure.origin_kind, failure.origin_code);
     }
 
     /**
@@ -94,7 +98,8 @@ public:
     bool publish_preallocated(const ActorKey& actor, Kind kind,
                               std::string_view summary,
                               std::string_view parent_id = {},
-                              std::optional<Kind> origin = std::nullopt) {
+                              std::optional<Kind> origin = std::nullopt,
+                              std::uint32_t origin_code = 0) {
         std::lock_guard<std::mutex> lock(mu_);
         Slot& slot = require(actor);
         if (slot.has_event) return false;
@@ -117,6 +122,7 @@ public:
         }
         slot.kind = kind;
         slot.origin_kind = original;
+        slot.origin_code = origin_code;
         store_utf8(slot.summary, slot.summary_length, summary);
         store_utf8(slot.parent_id, slot.parent_length, parent_id);
         slot.has_event = true;
@@ -136,7 +142,7 @@ public:
         Failure failure{*slot->actor, slot->kind,
             std::string(slot->summary.data(), slot->summary_length),
             std::string(slot->parent_id.data(), slot->parent_length),
-            slot->origin_kind};
+            slot->origin_kind, slot->origin_code};
         unlink_head();
         slot->in_flight = true;
         return failure;
@@ -201,6 +207,7 @@ private:
         const ActorKey* actor = nullptr;
         Kind kind = Kind::HostFailure;
         Kind origin_kind = Kind::HostFailure;
+        std::uint32_t origin_code = 0;
         std::array<char, 512> summary{};
         std::array<char, 128> parent_id{};
         std::size_t summary_length = 0;
