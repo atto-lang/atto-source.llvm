@@ -407,11 +407,43 @@ void validate_i64_ownership(const Program& program) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.new_class) {
-                // Constructor operands must remain independent scalar reads.
-                // Check every operand before introducing the new class owner.
-                // The parser has already rejected calls, takes and loans.
+                // Constructor operands must be plain stack i64 expressions.
+                // An experimental owned-int variable *looks* like a scalar
+                // name, but its LLVM lowering performs a native region read
+                // which can fail after construction has started. Exclude it
+                // until partial-construction cleanup/rollback is proven.
+                std::function<void(const Expression&)> scalar_operand;
+                scalar_operand = [&](const Expression& expression) {
+                    switch (expression.kind) {
+                        case Expression::Kind::Integer:
+                            return;
+                        case Expression::Kind::Variable: {
+                            auto it = locals.find(expression.name);
+                            if (it == locals.end() || it->second.heap_owned
+                                    || it->second.int_array
+                                    || !it->second.class_name.empty()) {
+                                reject(expression,
+                                    "native scalar constructor arguments require plain stack i64 values");
+                            }
+                            check_value(expression, locals, functions);
+                            return;
+                        }
+                        case Expression::Kind::Negate:
+                            scalar_operand(*expression.left);
+                            return;
+                        case Expression::Kind::Add:
+                        case Expression::Kind::Subtract:
+                        case Expression::Kind::Multiply:
+                            scalar_operand(*expression.left);
+                            scalar_operand(*expression.right);
+                            return;
+                        default:
+                            reject(expression,
+                                "native scalar constructor argument requires pure integer expression");
+                    }
+                };
                 for (const auto& argument : binding.constructor_arguments)
-                    check_value(*argument, locals, functions);
+                    scalar_operand(*argument);
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.class_fixed_fields = class_fixed_fields.at(binding.class_name);
