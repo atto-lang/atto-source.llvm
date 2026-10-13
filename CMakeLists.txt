@@ -941,7 +941,7 @@ if(BUILD_TESTING)
         set_tests_properties(native_compiled_name_arity_overloads PROPERTIES TIMEOUT 60)
         oreslang_contract_test(native_compiled_name_arity_borrow_abi
             native-name-arity-borrow-execute.ores
-            --ir "read\\$arity1" --run 41 --clang "${ORE_CLANG}")
+            --ir "read\$arity1" --run 41 --clang "${ORE_CLANG}")
         set_tests_properties(native_compiled_name_arity_borrow_abi PROPERTIES TIMEOUT 60)
     endif()
     oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
