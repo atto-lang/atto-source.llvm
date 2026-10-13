@@ -872,8 +872,44 @@ std::string emit_verified_llvm_ir(const Program& source) {
                      llvm::ConstantInt::get(i64, std::distance(actor.fields.begin(), match)), updated});
                 builder.CreateStore(updated, locals.at(assignment.field));
             }
-            auto* result = lower(*method.result, builder, i64,
-                                 parameters, locals, declarations);
+            llvm::Value* result = nullptr;
+            if (method.method_state_loan) {
+                // Scheduler-authored heap, domain and generation tokens
+                // authenticate this synchronous scalar state access.
+                auto loanLocals = locals;
+                for (std::size_t index = 0; index < actor.fields.size(); ++index) {
+                    const auto& field = actor.fields[index];
+                    auto* slot = builder.CreateAlloca(i64, nullptr,
+                                                      "state." + field.name);
+                    auto* snapshot = builder.CreateCall(fieldRead,
+                        {heap, currentDomain, currentEpoch,
+                         llvm::ConstantInt::get(i64, index)},
+                        "state.snapshot." + field.name);
+                    builder.CreateStore(snapshot, slot);
+                    loanLocals.emplace("@state." + field.name, slot);
+                }
+                for (const auto& assignment : method.method_state_loan->assignments) {
+                    const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                        [&](const LocalBinding& f) { return f.name == assignment.field; });
+                    if (field == actor.fields.end()
+                            || method.method_state_loan->mode == StateLoan::Mode::Read)
+                        throw std::runtime_error("invalid actor state method write");
+                    auto* updated = lower(*assignment.value, builder, i64,
+                                          parameters, loanLocals, declarations);
+                    builder.CreateCall(fieldWrite,
+                        {heap, currentDomain, currentEpoch,
+                         llvm::ConstantInt::get(i64,
+                             std::distance(actor.fields.begin(), field)), updated});
+                    builder.CreateStore(updated,
+                                        loanLocals.at("@state." + assignment.field));
+                }
+                // The returned i64 is copied, never a state reference.
+                result = lower(*method.method_state_loan->result, builder, i64,
+                               parameters, loanLocals, declarations);
+            } else {
+                result = lower(*method.result, builder, i64,
+                               parameters, locals, declarations);
+            }
             for (auto iter = ownedSlots.rbegin(); iter != ownedSlots.rend(); ++iter) {
                 if (iter->heap) builder.CreateCall(heapDrop, {region, iter->slot});
                 else builder.CreateLifetimeEnd(iter->slot, llvm::ConstantInt::get(i64, 8));
