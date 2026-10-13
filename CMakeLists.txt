@@ -1487,3 +1487,11 @@ if(BUILD_TESTING)
     add_test(NAME refreshed_actor_control_data_lane COMMAND oreslang-refreshed-control-data-lane-test)
     set_tests_properties(refreshed_actor_control_data_lane PROPERTIES TIMEOUT 30)
 endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND ORE_CLANG)
+    add_test(NAME native_aot_driver
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_driver.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    set_tests_properties(native_aot_driver PROPERTIES TIMEOUT 30)
+endif()
