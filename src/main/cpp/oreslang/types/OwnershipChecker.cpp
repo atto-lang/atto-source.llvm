@@ -715,6 +715,20 @@ void validate_i64_ownership(const Program& program) {
                 return;
             }
             if (expr.kind == Expression::Kind::ArrayCall) {
+                if (expr.left && expr.left->kind == Expression::Kind::Variable) {
+                    const auto owner = cfg_entry.find(expr.left->name);
+                    if (owner != cfg_entry.end() && !owner->second.class_name.empty()) {
+                        // Class owners are represented by disjoint tracked
+                        // field places, not a single "counter" CFG entry.
+                        // An instance call loans the entire live class, so
+                        // conservatively read every owned field at this edge.
+                        for (const auto& field : owner->second.class_fields)
+                            operations.push_back({OpKind::Read, expr.left->name + "." + field});
+                        for (const auto& arg : expr.arguments)
+                            add_effects(*arg, operations);
+                        return;
+                    }
+                }
                 const std::string place = expr.left->kind == Expression::Kind::Field
                     ? expr.left->left->name + "." + expr.left->name : expr.left->name;
                 operations.push_back({OpKind::Read, place});
