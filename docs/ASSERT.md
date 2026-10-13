@@ -1,11 +1,13 @@
 # Core assertions
 
-> **LLVM status:** This is a source/API contract, not an executable native
-> standard library. The example below currently runs on Java/GraalVM only.
-> Canonical imports and qualified Assert member calls now parse into a
-> sealed native AST with explicit alias binding and arity checks. Source-level
-> bool return metadata is staged, but LLVM code generation still rejects the
-> unlinked standard-library ABI and assertion/trap lowering.
+> **LLVM status:** Only a restricted native scalar predicate specialization
+> is executable on this branch: sealed `std/assert` imports, direct
+> `Assert.equal(int, int)` / `Assert.not_equal(int, int)` as the complete
+> return expression of a `bool` function, and by-value integer arguments.
+> These lower to LLVM `icmp` and an `i1` return ABI. This is **not**
+> source-owned stdlib linking, general `Any`, arbitrary `bool` expressions,
+> throwing assertions, `trap`, catch, cancellation or cleanup parity. Those
+> operations continue to fail closed before IR emission.
 
 Import the source-owned module with `import module Assert from "std/assert";`.
 

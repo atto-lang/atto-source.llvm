@@ -125,11 +125,20 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
-        case Expression::Kind::ModuleCall:
-            // Never materialize an untyped host symbol for stdlib members.
-            // The sealed AST must be linked to verified .ores lowering first.
-            throw std::runtime_error(
-                "native Assert module call awaits typed source-owned linking");
+        case Expression::Kind::ModuleCall: {
+            // This path is admitted only by the whole-program, pre-IR scan
+            // above. i64 primitive equality is widened into no host callback.
+            if (expr.arguments.size() != 2 ||
+                    (expr.name != "equal" && expr.name != "not_equal"))
+                throw std::runtime_error("unverified native Assert primitive");
+            llvm::Value* lhs = lower(*expr.arguments[0], builder, i64,
+                storage, field_storage, functions, moves);
+            llvm::Value* rhs = lower(*expr.arguments[1], builder, i64,
+                storage, field_storage, functions, moves);
+            return expr.name == "equal"
+                ? builder.CreateICmpEQ(lhs, rhs, "assert.equal.int")
+                : builder.CreateICmpNE(lhs, rhs, "assert.not_equal.int");
+        }
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
@@ -145,13 +154,101 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
-    // A parsed import is not a linked module. Reject before constructing an
-    // LLVM module or exporting a symbol until the source-owned stdlib ABI
-    // (Any, bool, typed failure, trap) is executable on this backend.
+    // A deliberately narrow, executable primitive specialization of the
+    // sealed Assert namespace. This is NOT Any, stdlib source-module linking,
+    // assertion throws, trap, or general typed expression lowering.
+    // Admission is global and completes before *any* LLVM IR is produced.
     if (!source.imports.empty()) {
-        throw std::runtime_error(
-            "native module imports are unsupported until linked stdlib "
-            "and typed assertion/trap lowering are implemented");
+        if (wasm32_target || source.imports.size() != 1 ||
+                source.imports.front().symbol != "Assert" ||
+                source.imports.front().canonical_path != "std/assert" ||
+                !source.actors.empty() || !source.classes.empty())
+            throw std::runtime_error("native Assert scalar specialization requires a sealed host-only import");
+
+        auto contains_module_call = [&](const Expression* root, const auto& visit) -> bool {
+            if (!root) return false;
+            if (root->kind == Expression::Kind::ModuleCall) return true;
+            if (root->left && visit(root->left.get(), visit)) return true;
+            if (root->right && visit(root->right.get(), visit)) return true;
+            for (const auto& arg : root->arguments)
+                if (visit(arg.get(), visit)) return true;
+            return false;
+        };
+        for (const auto& fn : source.functions) {
+            if (fn.returns_bool) {
+                if (fn.name == "main" || fn.returns_void || !fn.result ||
+                        fn.result->kind != Expression::Kind::ModuleCall ||
+                        (fn.result->name != "equal" && fn.result->name != "not_equal") ||
+                        fn.result->arguments.size() != 2 ||
+                        !fn.statements.empty() || !fn.early_returns.empty() ||
+                        !fn.locals.empty() || !fn.actor_spawns.empty() ||
+                        !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                        fn.has_declared_effects)
+                    throw std::runtime_error(
+                        "native Assert bool functions require direct equal/not_equal primitive return");
+                for (const auto& param : fn.parameters)
+                    if (!param.class_name.empty() || param.mode != Parameter::Mode::Value)
+                        throw std::runtime_error("native Assert bool parameters must be by-value int");
+                for (const auto& arg : fn.result->arguments)
+                    if (arg->kind != Expression::Kind::Integer &&
+                            !(arg->kind == Expression::Kind::Variable &&
+                              std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                                  [&](const Parameter& p) { return p.name == arg->name; })))
+                        throw std::runtime_error(
+                            "native Assert scalar arguments must be int literals or by-value int parameters");
+            } else {
+                if (contains_module_call(fn.result.get(), contains_module_call))
+                    throw std::runtime_error(
+                        "native Assert member calls cannot enter an int/void expression");
+                for (const auto& local : fn.locals)
+                    if (contains_module_call(local.initializer.get(), contains_module_call))
+                        throw std::runtime_error("native Assert member requires a typed bool return");
+                for (const auto& stmt : fn.statements)
+                    if (contains_module_call(stmt.expression.get(), contains_module_call) ||
+                            contains_module_call(stmt.condition_lhs.get(), contains_module_call) ||
+                            contains_module_call(stmt.condition_rhs.get(), contains_module_call))
+                        throw std::runtime_error("native Assert member requires a typed bool return");
+                for (const auto& guard : fn.early_returns)
+                    if (contains_module_call(guard.lhs.get(), contains_module_call) ||
+                            contains_module_call(guard.rhs.get(), contains_module_call) ||
+                            contains_module_call(guard.result.get(), contains_module_call))
+                        throw std::runtime_error("native Assert member requires a typed bool return");
+            }
+        }
+        // The older int-only Call lowering would otherwise attempt to use an
+        // i1-producing function in an i64 arithmetic/return context.
+        for (const auto& fn : source.functions) {
+            if (!fn.returns_bool) {
+                auto calls_bool = [&](const Expression* root, const auto& visit) -> bool {
+                    if (!root) return false;
+                    if (root->kind == Expression::Kind::Call &&
+                            std::any_of(source.functions.begin(), source.functions.end(),
+                              [&](const Function& callee) {
+                                  return callee.returns_bool && callee.name == root->name;
+                              })) return true;
+                    if (root->left && visit(root->left.get(), visit)) return true;
+                    if (root->right && visit(root->right.get(), visit)) return true;
+                    for (const auto& arg : root->arguments)
+                        if (visit(arg.get(), visit)) return true;
+                    return false;
+                };
+                if (calls_bool(fn.result.get(), calls_bool))
+                    throw std::runtime_error("native bool-to-int coercion requires explicit lowering");
+                for (const auto& local : fn.locals)
+                    if (calls_bool(local.initializer.get(), calls_bool))
+                        throw std::runtime_error("native bool-to-int coercion requires explicit lowering");
+                for (const auto& stmt : fn.statements)
+                    if (calls_bool(stmt.expression.get(), calls_bool) ||
+                            calls_bool(stmt.condition_lhs.get(), calls_bool) ||
+                            calls_bool(stmt.condition_rhs.get(), calls_bool))
+                        throw std::runtime_error("native bool-to-int coercion requires explicit lowering");
+                for (const auto& guard : fn.early_returns)
+                    if (calls_bool(guard.lhs.get(), calls_bool) ||
+                            calls_bool(guard.rhs.get(), calls_bool) ||
+                            calls_bool(guard.result.get(), calls_bool))
+                        throw std::runtime_error("native bool-to-int coercion requires explicit lowering");
+            }
+        }
     }
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
@@ -292,7 +389,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
                 : class_types.at(param.class_name)->getPointerTo());
         llvm::FunctionType* signature = llvm::FunctionType::get(
-            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
+            fn.returns_void ? llvm::Type::getVoidTy(context)
+                            : (fn.returns_bool ? llvm::Type::getInt1Ty(context) : i64),
             argument_types, false);
         declarations.emplace(fn.name, llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module));
@@ -526,7 +624,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             else builder.CreateRet(result);
         } else {
             llvm::Value* return_snapshot = fn.returns_void
-                ? nullptr : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot");
+                ? nullptr : builder.CreateAlloca(fn.returns_bool ? builder.getInt1Ty() : i64,
+                    nullptr, "return.snapshot.slot");
             llvm::BasicBlock* cleanup = llvm::BasicBlock::Create(
                 context, "exit.cleanup", function);
             auto branch_to_cleanup = [&](llvm::Value* value) {
@@ -568,7 +667,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             }
             emit_lexical_cleanup();
             if (fn.returns_void) builder.CreateRetVoid();
-            else builder.CreateRet(builder.CreateLoad(i64, return_snapshot, "return.snapshot"));
+            else builder.CreateRet(builder.CreateLoad(
+                fn.returns_bool ? builder.getInt1Ty() : i64,
+                return_snapshot, "return.snapshot"));
         }
     }
 
