@@ -195,6 +195,8 @@ public:
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        for (auto& method : method_functions_)
+            program.functions.push_back(std::move(method));
         if (program.functions.empty() && program.actors.empty()) fail("expected at least one function or actor");
         validate(program);
         return program;
@@ -277,13 +279,18 @@ private:
         result.name = identifier();
         require("as");
         std::unordered_set<std::string> seen;
-        // Ordered i64 scalar slots and owned Array<int> handles only.
-        // No nested class, arbitrary initializer, method, or pointer escape.
+        // Keep the existing bounded layout; instance methods lower
+        // as typed synchronous borrowed-receiver functions. Array-owning
+        // methods still require region-provenance ABI support.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            const bool publicly_visible = accept("pub");
+            if (token_.text != "let") {
+                method_functions_.push_back(function(result.name, publicly_visible));
+                continue;
+            }
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
             require("let");
             ClassField field;
             if (accept("mut")) {
@@ -335,10 +342,10 @@ private:
         return value;
     }
 
-    Function function() {
+    Function function(std::string method_class = {}, bool public_already = false) {
         Function value;
         value.offset = token_.offset;
-        value.exported = accept("pub");
+        value.exported = public_already || accept("pub");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -357,23 +364,58 @@ private:
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
-        if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
-        value.name = identifier();
-        require("(");
-        if (!accept(")")) {
-            do {
-                Parameter parameter;
-                if (accept("borrow")) {
-                    parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
-                                                    : Parameter::Mode::Borrow;
-                }
-                if (!accept("int")) parameter.class_name = identifier();
-                parameter.name = identifier();
-                value.parameters.push_back(std::move(parameter));
-            } while (accept(","));
+        if (method_class.empty()) {
+            if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+            value.name = identifier();
+            require("(");
+            if (!accept(")")) {
+                do {
+                    Parameter parameter;
+                    if (accept("borrow")) {
+                        parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
+                                                        : Parameter::Mode::Borrow;
+                    }
+                    if (!accept("int")) parameter.class_name = identifier();
+                    parameter.name = identifier();
+                    value.parameters.push_back(std::move(parameter));
+                } while (accept(","));
+                require(")");
+            }
+            require(":");
+        } else {
+            if (token_.text == "static" || token_.text == "suspend" ||
+                    token_.text == "suspends")
+                fail("native class static/suspending method requires separate lowering");
+            if (!accept("method")) accept("fnc");
+            const std::string public_name = identifier();
+            value.name = native_class_method_name(method_class, public_name);
+            value.class_method_owner = method_class;
+            // Bare size() borrows self shared; set(mut self)(int n)
+            // obtains an exclusive, call-scoped receiver.
+            require("(");
+            const bool mut_self = accept("mut");
+            if (mut_self || token_.text == "self") require("self");
             require(")");
+            value.class_method_mutable = mut_self;
+            Parameter receiver;
+            receiver.class_name = method_class;
+            receiver.name = "self";
+            receiver.mode = mut_self ? Parameter::Mode::BorrowMut : Parameter::Mode::Borrow;
+            value.parameters.push_back(std::move(receiver));
+            if (accept("(")) {
+                if (!accept(")")) {
+                    do {
+                        Parameter parameter;
+                        require("int");
+                        parameter.name = identifier();
+                        value.parameters.push_back(std::move(parameter));
+                    } while (accept(","));
+                    require(")");
+                }
+            }
+            if (accept("-")) require(">");
+            else require(":");
         }
-        require(":");
         value.returns_void = accept("void");
         if (!value.returns_void) require("int");
         if (accept("using")) {
@@ -1414,6 +1456,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    std::vector<Function> method_functions_;
 };
 
 } // namespace
