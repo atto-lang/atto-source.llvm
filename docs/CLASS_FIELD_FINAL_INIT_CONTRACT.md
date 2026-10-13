@@ -53,16 +53,36 @@ idempotent and never touch local `let`/`val`/`const` declarations.
 
 ## Implementation slice in this PR
 
-The native subset accepts literal `int` slot initializers and the existing
-owned `Array<int>` initialization path. It preserves fixed/mut field metadata
-and rejects assignment and destructive take of fixed fields in the native
-ownership checker before IR. General class members, arbitrary expressions,
-constructor parameters, methods and broad heap class support remain unsupported.
+Native LLVM supports a bounded scalar constructor form:
 
-## Native fail-closed constructor admission
+```ores
+define class Pair as
+  final int a: start + 1;
+  final mut int b: start * 2;
+  constructor(int start) { return; }
+end
+```
 
-Native LLVM does not lower ordinary class constructors or
-constructor-parameter member initialization. Unqualified constructor
-and visibility-qualified pub constructor declarations are rejected
-with a specific checked-initialization-lowering diagnostic before IR.
-CTest negative fixtures cover both. This is not constructor parity.
+Constructor parameters must be typed `int`, the body must be empty or
+`return;`, and constructor calls must have the exact positional arity.
+Arguments are checked as side-effect-free i64 scalar expressions, evaluated
+exactly once, and stored in private temporary slots. Declaration-site field
+expressions may reference only these parameters or i64 literals and may use
+addition, subtraction, multiplication, and negation. Each expression is checked
+for lexical names and accepted syntax before native IR generation. The native
+backend emits ordered, stack-owned i64 field stores before the constructed
+object is observable.
+
+The existing owner checker still rejects final/const/val slot reassignments
+and destructive moves. Owned Array<int> fields with an explicit constructor,
+effectful field/argument expressions, arbitrary constructor body statements,
+reference-valued parameters, inheritance, and general object field expression
+lowering remain **rejected before IR**. Unqualified and pub scalar constructors
+share the same bounded admission.
+
+CTest now includes a source-identical scalar constructor guest shared with
+Java/GraalVM (expected result 40), explicit/public ctor guests, duplicate and
+unknown params, arity failures, effectful expressions, and owned-array denials.
+These fixtures are currently committed but **not validated by a running CI
+worker**. This implementation must not be represented as backend parity until
+real exact-tree compiled native and GraalVM results pass.
