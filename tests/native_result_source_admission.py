@@ -24,6 +24,12 @@ NEGATIVE = {
     "return-payload": (
         "fnc make(): Result<int, ArrayError> { return Ok(0); }",
         "native generic Result<T,E> requires source tagged-value lowering"),
+    "local-colon": (
+        "fnc make(): int { val outcome: Result<void, ArrayError> = Ok(); return 0; }",
+        "native Result<void, ArrayError> requires tagged construction"),
+    "local-type-first": (
+        "fnc make(): int { let Result<void, ArrayError> outcome = Ok(); return 0; }",
+        "native Result<void, ArrayError> requires tagged construction"),
 }
 
 CONTROL = "pub fnc main(): int { return 42; }"
