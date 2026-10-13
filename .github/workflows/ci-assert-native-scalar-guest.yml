@@ -26,7 +26,9 @@ jobs:
           src/main/cpp/oreslang/frontend/Parser.cpp 72b5d5d53f440665013dbd85879dfae3588e202f
           src/main/cpp/oreslang/frontend/Parser.hpp 56b9443e2aa522dfd5659c9e6f133a4559edf15c
           src/main/cpp/oreslang/types/OwnershipChecker.cpp 553d52363f17450ac45ee061276fa61753d5b5ad
-          src/main/cpp/oreslang/backend/LlvmCodegen.cpp 2fd77306aaa8005e79a7d249341be1b6da78205e
+          src/main/cpp/oreslang/backend/LlvmCodegen.cpp 3f69ffdd8f3ae4702c605a4d3a09548ea4f9714f
+          tests/native_assert_scalar_guest_test.sh 101d798dd457d26c8c2c768506f6d05efdec8213
+          tests/native_assert_ast_seal_test.cpp b5022928426331310363da7c7b9b4c687e556ccd
           HASHES
           echo ASSERT_NATIVE_SCALAR_EXACT_FILES_PASS
       - name: Install LLVM C++ compiler dependencies
@@ -45,5 +47,18 @@ jobs:
             src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
             $(llvm-config --ldflags --libs core support --system-libs) \
             -o /tmp/oreslang-llvmc
+      - name: Verify codegen cannot trust forged AST or unbound module
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O0 -Isrc/main/cpp \
+            $(llvm-config --cxxflags) -fexceptions \
+            tests/native_assert_ast_seal_test.cpp \
+            src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+            src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+            $(llvm-config --ldflags --libs core support --system-libs) \
+            -o /tmp/oreslang-assert-ast-seal-test
+          /tmp/oreslang-assert-ast-seal-test | grep -Fx ASSERT_NATIVE_BACKEND_AST_SEAL_PASS
       - name: Execute compiled guest IR and fail-closed negatives
         run: bash tests/native_assert_scalar_guest_test.sh /tmp/oreslang-llvmc

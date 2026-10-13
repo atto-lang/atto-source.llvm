@@ -158,13 +158,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // sealed Assert namespace. This is NOT Any, stdlib source-module linking,
     // assertion throws, trap, or general typed expression lowering.
     // Admission is global and completes before *any* LLVM IR is produced.
-    if (!source.imports.empty()) {
-        if (wasm32_target || source.imports.size() != 1 ||
-                source.imports.front().symbol != "Assert" ||
-                source.imports.front().canonical_path != "std/assert" ||
-                !source.actors.empty() || !source.classes.empty())
-            throw std::runtime_error("native Assert scalar specialization requires a sealed host-only import");
-
+    // Never trust that every caller used parse_program(): future macro
+    // expansion or AST transformation must not bypass the sealed import
+    // boundary. Check even import-free programs before constructing LLVM IR.
         auto contains_module_call = [&](const Expression* root, const auto& visit) -> bool {
             if (!root) return false;
             if (root->kind == Expression::Kind::ModuleCall) return true;
@@ -190,10 +186,56 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             }
             return false;
         };
+
+    auto has_module_call = [&](const Function& fn) -> bool {
+        if (contains_module_call(fn.result.get(), contains_module_call)) return true;
+        for (const auto& local : fn.locals)
+            if (contains_module_call(local.initializer.get(), contains_module_call))
+                return true;
+        if (scan_statements(fn.statements, scan_statements,
+                [&](const Expression* e) {
+                    return contains_module_call(e, contains_module_call);
+                })) return true;
+        for (const auto& guard : fn.early_returns)
+            if (contains_module_call(guard.lhs.get(), contains_module_call) ||
+                    contains_module_call(guard.rhs.get(), contains_module_call) ||
+                    contains_module_call(guard.result.get(), contains_module_call))
+                return true;
+        for (const auto& send : fn.actor_sends)
+            if (contains_module_call(send.payload.get(), contains_module_call))
+                return true;
+        for (const auto& write : fn.actor_field_writes)
+            if (contains_module_call(write.expression.get(), contains_module_call))
+                return true;
+        return false;
+    };
+    if (source.imports.empty()) {
+        for (const auto& fn : source.functions)
+            if (fn.returns_bool || has_module_call(fn))
+                throw std::runtime_error(
+                    "native bool/Assert call requires a sealed std/assert import");
+        for (const auto& actor : source.actors) {
+            for (const auto& field : actor.fields)
+                if (contains_module_call(field.initializer.get(), contains_module_call))
+                    throw std::runtime_error("unbound native Assert call in actor field");
+            if (has_module_call(actor.on_message))
+                throw std::runtime_error("unbound native Assert call in actor handler");
+        }
+    }
+    if (!source.imports.empty()) {
+        if (wasm32_target || source.imports.size() != 1 ||
+                source.imports.front().symbol != "Assert" ||
+                source.imports.front().canonical_path != "std/assert" ||
+                !source.actors.empty() || !source.classes.empty())
+            throw std::runtime_error("native Assert scalar specialization requires a sealed host-only import");
+
         for (const auto& fn : source.functions) {
             if (fn.returns_bool) {
                 if (fn.name == "main" || fn.returns_void || !fn.result ||
                         fn.result->kind != Expression::Kind::ModuleCall ||
+                        !fn.result->left ||
+                        fn.result->left->kind != Expression::Kind::Variable ||
+                        fn.result->left->name != "Assert" ||
                         (fn.result->name != "equal" && fn.result->name != "not_equal") ||
                         fn.result->arguments.size() != 2 ||
                         !fn.statements.empty() || !fn.early_returns.empty() ||
@@ -206,10 +248,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     if (!param.class_name.empty() || param.mode != Parameter::Mode::Value)
                         throw std::runtime_error("native Assert bool parameters must be by-value int");
                 for (const auto& arg : fn.result->arguments)
-                    if (arg->kind != Expression::Kind::Integer &&
+                    if (!arg || (arg->kind != Expression::Kind::Integer &&
                             !(arg->kind == Expression::Kind::Variable &&
                               std::any_of(fn.parameters.begin(), fn.parameters.end(),
-                                  [&](const Parameter& p) { return p.name == arg->name; })))
+                                  [&](const Parameter& p) { return p.name == arg->name; }))))
                         throw std::runtime_error(
                             "native Assert scalar arguments must be int literals or by-value int parameters");
             } else {
