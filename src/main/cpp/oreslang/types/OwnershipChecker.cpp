@@ -1,4 +1,5 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
 
 #include <algorithm>
@@ -11,6 +12,8 @@
 #include <vector>
 
 namespace oreslang {
+
+// Select a callable by name+explicit-arity before validating loan/type contracts.
 namespace {
 
 using Mode = Parameter::Mode;
@@ -144,7 +147,7 @@ void release(const Loan& loan, Locals& locals) {
 }
 
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
-    const auto found = functions.find(expr.name);
+    const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
     if (found == functions.end())
         reject(expr, "internal ownership error: unresolved function");
     const auto& parameters = found->second->parameters;
@@ -272,7 +275,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             return;
         }
         case Expression::Kind::Call:
-            if (functions.at(expr.name)->returns_void)
+            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
@@ -358,7 +361,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 void validate_i64_ownership(const Program& program) {
     Functions functions;
     for (const auto& function : program.functions)
-        functions.emplace(function.name, &function);
+        functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     for (const auto& cls : program.classes) {

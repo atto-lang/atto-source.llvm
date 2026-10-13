@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
@@ -23,6 +24,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace oreslang {
+
+// Guest identifiers exclude $, so native selector suffixes cannot alias source names.
 namespace {
 
 std::string field_key(const std::string& receiver, const std::string& field) {
@@ -206,7 +209,7 @@ llvm::Value* lower(const Expression& expr,
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
                 arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
-            llvm::Function* callee = functions.at(expr.name);
+            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
             return builder.CreateCall(callee, arguments,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
         }
@@ -399,10 +402,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
 
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
+    // Unique free functions retain their ABI symbol, overloaded families use arity slots.
+    std::unordered_map<std::string, std::size_t> family_sizes;
+    for (const auto& fn : source.functions) ++family_sizes[fn.name];
     for (const auto& fn : source.functions) {
-        const std::string symbol = native_main && source.module.empty() && fn.name == "main"
+        const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name);
+        const std::string symbol = family_sizes.at(fn.name) > 1
+            ? native_function_slot(base_symbol, fn.parameters.size())
+            : base_symbol;
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
@@ -411,11 +420,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
-        declarations.emplace(fn.name, llvm::Function::Create(
-            signature, llvm::Function::ExternalLinkage, symbol, module));
+        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
+            llvm::Function::Create(signature, llvm::Function::ExternalLinkage, symbol, module));
     }
     for (const auto& fn : source.functions) {
-        llvm::Function* function = declarations.at(fn.name);
+        llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         std::unordered_map<std::string, llvm::Value*> storage;
@@ -1106,7 +1115,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::Function::ExternalLinkage, "main", module);
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
-        llvm::Function* guest = declarations.at("main");
+        llvm::Function* guest = declarations.at(native_function_slot("main", 0));
         llvm::Value* result = builder.CreateCall(guest);
         if (main_it->returns_void) {
             builder.CreateRet(llvm::ConstantInt::get(i32, 0));
