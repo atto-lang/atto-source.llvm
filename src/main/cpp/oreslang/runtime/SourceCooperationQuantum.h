@@ -33,6 +33,14 @@ public:
     BasicSourceCooperationQuantum()
         : lastCooperate_(Clock::now()), dispatchStarted_(lastCooperate_) {}
 
+    // A budget belongs to one logical task: copying or moving would split
+    // its reduction history from the saved heap continuation. Carrier
+    // migration transports the owning task, never a copied quantum.
+    BasicSourceCooperationQuantum(const BasicSourceCooperationQuantum&) = delete;
+    BasicSourceCooperationQuantum& operator=(const BasicSourceCooperationQuantum&) = delete;
+    BasicSourceCooperationQuantum(BasicSourceCooperationQuantum&&) = delete;
+    BasicSourceCooperationQuantum& operator=(BasicSourceCooperationQuantum&&) = delete;
+
     // Calling this after await restarts *only* the fairness quantum.
     void beginDispatch() noexcept {
         dispatchStarted_ = Clock::now();
