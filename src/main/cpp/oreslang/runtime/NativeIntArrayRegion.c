@@ -102,7 +102,8 @@ OresNativeIntArrayRegion* oreslang_int_array_region_open(void) {
 OresNativeIntArrayStatus oreslang_int_array_try_new(
         OresNativeIntArrayRegion* region, OresNativeIntArrayHandle* out_handle) {
     if (!region || !out_handle) fail_closed();
-    if (region->live_count >= MAX_ARRAY_SLOTS) return ORES_NATIVE_ARRAY_LIMIT;
+    if (region->live_count > MAX_ARRAY_SLOTS) fail_closed();
+    if (region->live_count == MAX_ARRAY_SLOTS) return ORES_NATIVE_ARRAY_LIMIT;
     for (size_t i = 0; i < MAX_ARRAY_SLOTS; ++i) {
         IntArraySlot* slot = &region->arrays[i];
         if (slot->token == 0) {
@@ -222,6 +223,8 @@ OresNativeIntArrayStatus oreslang_int_array_try_prepare_many(
         OresNativeIntArrayRegion* region, uint64_t n,
         OresNativeIntArrayHandle* out) {
     if (!region || (n && !out)) fail_closed();
+    if (region->live_count > MAX_ARRAY_SLOTS ||
+            region->reserved_elements > REGION_ELEMENT_BUDGET) fail_closed();
     if (n > MAX_ARRAY_SLOTS ||
             n > MAX_ARRAY_SLOTS - region->live_count)
         return ORES_NATIVE_ARRAY_LIMIT;
