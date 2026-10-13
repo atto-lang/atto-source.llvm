@@ -260,27 +260,46 @@ private:
         result.name = identifier();
         require("as");
         std::unordered_set<std::string> seen;
-        // Only plain, ordered i64 fields are admitted: no nested objects,
-        // pointers, destructors, user initializers or implicit heap storage.
+        // Ordered i64 scalar slots and owned Array<int> handles only.
+        // No nested class, arbitrary initializer, method, or pointer escape.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
             require("let");
-            require("int");
             ClassField field;
-            field.name = identifier();
-            if (!seen.insert(field.name).second)
-                fail("duplicate class field '" + field.name + "'");
-            require("=");
-            if (token_.kind != Kind::Integer)
-                fail("class field requires i64 literal initializer");
-            field.initial = integer_literal();
+            if (accept("mut")) {
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                field.int_array = true;
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                require("new");
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                require("(");
+                require(")");
+            } else {
+                require("int");
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                if (token_.kind != Kind::Integer)
+                    fail("class field requires i64 literal initializer");
+                field.initial = integer_literal();
+            }
             require(";");
             result.fields.push_back(std::move(field));
         }
-        if (result.fields.empty()) fail("native class requires at least one i64 field");
+        if (result.fields.empty()) fail("native class requires at least one field");
         require("end");
         return result;
     }
@@ -370,6 +389,27 @@ private:
                 binding.owner_mutable = accept("mut");
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
+                if (token_.text == "Array") {
+                    // Native slice #265: only a lexical, exclusively owned Array<int>.
+                    // No implicit copies, fields, captures, cross-call transfers, or
+                    // suspension can enter the current synchronous array ABI.
+                    if (!binding.owner_mutable)
+                        fail("native Array<int> requires let mut owner");
+                    require("Array");
+                    require("<");
+                    require("int");
+                    require(">");
+                    binding.name = identifier();
+                    require("=");
+                    require("new");
+                    require("Array");
+                    require("<");
+                    require("int");
+                    require(">");
+                    require("(");
+                    require(")");
+                    binding.int_array = true;
+                } else {
                 binding.class_name = identifier();
                 binding.name = identifier();
                 require("=");
@@ -386,6 +426,7 @@ private:
                     binding.move_source = identifier();
                     if (parenthesized) require(")");
                     binding.move_class = true;
+                }
                 }
             } else {
                 // A val owns mutable scalar storage; const permits only shared
@@ -485,7 +526,8 @@ private:
                     statement.receiver = target->left->name;
                     statement.field = target->name;
                     statement.expression = expression();
-                } else if (target->kind == Expression::Kind::Call) {
+                } else if (target->kind == Expression::Kind::Call ||
+                           target->kind == Expression::Kind::ArrayCall) {
                     statement.kind = Statement::Kind::Call;
                     statement.expression = std::move(target);
                 } else {
@@ -613,6 +655,10 @@ private:
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
+                // A nested class field such as shelf.worker.send(...) must
+                // never silently resolve to an unrelated actor named worker.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor send requires direct named ActorRef receiver");
                 ActorSend send;
                 send.offset = statement.offset;
                 send.reference = action->left->name;
@@ -625,11 +671,17 @@ private:
                 continue;
             }
             if (action->kind == Expression::Kind::Field && accept("=")) {
+                // Guard the AST shape before extracting the receiver name.
+                // Without this, box.items.size = 7 could accidentally write
+                // a different local object's field, items.size.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native field assignment requires direct named class receiver");
                 statement.kind = Statement::Kind::FieldWrite;
                 statement.receiver = action->left->name;
                 statement.field = action->name;
                 statement.expression = expression();
-            } else if (action->kind == Expression::Kind::Call) {
+            } else if (action->kind == Expression::Kind::Call ||
+                       action->kind == Expression::Kind::ArrayCall) {
                 statement.kind = Statement::Kind::Call;
                 statement.expression = std::move(action);
             } else {
@@ -791,11 +843,27 @@ private:
                 } while (accept(","));
                 require(")");
             }
-        } else if (accept(".")) {
+        }
+        // Class-owned array expressions are intentionally limited to one
+        // field selection followed by a native array method or .size.
+        while (accept(".")) {
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            // Keep ActorRef.send(...) available to the outer statement parser:
+            // it tracks actor DATA sends and send-after-stop ordering.
+            // Eager ArrayCall parsing here would erase those actor effects.
+            if (field->name != "send" && accept("(")) {
+                field->kind = Expression::Kind::ArrayCall;
+                if (!accept(")")) {
+                    do {
+                        field->arguments.push_back(expression());
+                    } while (accept(","));
+                    require(")");
+                }
+            }
             expr = std::move(field);
+            if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
     }
@@ -844,6 +912,11 @@ private:
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions);
                 return;
+            case Expression::Kind::ArrayCall:
+                validate_expression(*expr.left, parameters, functions);
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions);
+                return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
                 if (found == functions.end() || found->second != expr.arguments.size()) {
@@ -876,7 +949,8 @@ private:
 
     static bool contains_callable_invocation(const Expression* expr) {
         if (!expr) return false;
-        if (expr->kind == Expression::Kind::Call) return true;
+        if (expr->kind == Expression::Kind::Call ||
+            expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get()) ||
             contains_callable_invocation(expr->right.get())) return true;
         for (const auto& item : expr->arguments)
@@ -884,7 +958,7 @@ private:
         return false;
     }
 
-    static void validate_declared_effects(const Function& fn) {
+    static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -892,7 +966,16 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
-            if (local.heap_owned && !fn.declared_effects.has(FunctionEffect::Alloc))
+            bool allocates_class_array = false;
+            if (local.new_class) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == local.class_name; });
+                if (cls != program.classes.end())
+                    allocates_class_array = std::any_of(cls->fields.begin(), cls->fields.end(),
+                        [](const ClassField& field) { return field.int_array; });
+            }
+            if ((local.heap_owned || local.int_array || allocates_class_array) &&
+                    !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
             if (contains_callable_invocation(local.initializer.get()))
@@ -919,7 +1002,13 @@ private:
         }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
-            validate_declared_effects(fn);
+            validate_declared_effects(fn, program);
+            // Compiler-owned ABI imports must never be shadowed by a guest.
+            if (fn.name.rfind("oreslang_int_array_", 0) == 0)
+                throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (std::count_if(fn.locals.begin(), fn.locals.end(),
+                    [](const LocalBinding& local) { return local.int_array; }) > 64)
+                throw std::runtime_error("native Array<int> owner limit exceeded (64)");
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
                 throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
                                          + std::to_string(fn.offset));
@@ -980,7 +1069,11 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.new_class || binding.move_class) {
+                if (binding.int_array) {
+                    // Construction was parsed as exactly new Array<int>().
+                    // Its initializer is a trusted runtime operation, never
+                    // a user-callable scalar or transferable class value.
+                } else if (binding.new_class || binding.move_class) {
                     if (classes.count(binding.class_name) == 0)
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
                     if (binding.move_class && !params.count(binding.move_source))

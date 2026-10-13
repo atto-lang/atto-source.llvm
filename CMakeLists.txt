@@ -28,6 +28,94 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Native Array<int> substrate, independent of source-level admission.
+    # Invalid operations must abort even in Release/NDEBUG.
+    add_executable(oreslang-native-int-array-region-test
+        tests/native_int_array_region_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-int-array-region-test PRIVATE
+        ORESLANG_NATIVE_TEST_TOKEN_EXHAUSTION=1)
+    target_compile_options(oreslang-native-int-array-region-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Werror -Wpedantic>)
+    add_test(NAME native_int_array_region_security
+        COMMAND oreslang-native-int-array-region-test)
+
+    # Checked, recoverable internal allocation/resize + staged prepare/commit.
+    # Failpoint injection only exists in this test executable; existing
+    # compiler-generated abort ABI and production runtime remain unchanged.
+    add_executable(oreslang-native-int-array-transaction-test
+        tests/native_int_array_transaction_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-transaction-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-int-array-transaction-test PRIVATE
+        ORESLANG_NATIVE_TEST_ALLOC_FAILURE=1)
+    target_compile_options(oreslang-native-int-array-transaction-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Werror -Wpedantic>)
+    add_test(NAME native_int_array_transaction_recovery
+        COMMAND oreslang-native-int-array-transaction-test)
+    set_tests_properties(native_int_array_transaction_recovery PROPERTIES TIMEOUT 120)
+
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    if(NOT ORE_NATIVE_ARRAY_CLANG)
+        message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
+        set(ORE_NATIVE_ARRAY_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang")
+    endif()
+    add_test(NAME native_annotation_macro_aot_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/annotation_macro_aot_admission_matrix.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}")
+    set_tests_properties(native_annotation_macro_aot_admission PROPERTIES TIMEOUT 180)
+    add_test(NAME native_annotation_macro_aot_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_annotation_macro_aot_harness.py")
+    set_tests_properties(native_annotation_macro_aot_harness_selftest PROPERTIES TIMEOUT 30)
+    add_test(NAME native_int_array_llvm_abi
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_llvm_abi.py"
+          --clang "${ORE_NATIVE_ARRAY_CLANG}"
+          --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_int_array_llvm_abi PROPERTIES TIMEOUT 120)
+
+    # Actual Oreslang -> LLVM compiler-generated IR -> Clang linked with
+    # the trusted region ABI. Separate from hand-authored native ABI fixture.
+    add_test(NAME native_int_array_source_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME native_int_array_source_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --sanitizers)
+    set_tests_properties(native_int_array_source_execution
+        native_int_array_source_asan_ubsan PROPERTIES TIMEOUT 180)
+
+    # Real native guest class-owned Array<int> fields, independent of the
+    # handcrafted ABI fixture and lexical-array-only source admission.
+    add_test(NAME native_class_owned_array_source_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_owned_array_source.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME native_class_owned_array_source_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_owned_array_source.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --sanitizers)
+    set_tests_properties(native_class_owned_array_source_execution
+        native_class_owned_array_source_asan_ubsan PROPERTIES TIMEOUT 180)
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
@@ -66,6 +154,32 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-owned-heap-test)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+    # Exact queue snapshots are pinned to the merged upstream Git objects.
+    # An unsupported feature is NOT a blanket allowance to ignore arbitrary
+    # compiler failures. The harness also builds and runs supported scalar IR.
+    find_program(ORE_QUEUE_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    # Never silently omit the admission test when Clang is absent: a reduced
+    # test count must not look like proof of a successful compiler/runtime gate.
+    # The test explicitly fails if its native execution control is unavailable.
+    if(NOT ORE_QUEUE_CLANG)
+        message(WARNING "Linked-queue CTest will fail: Clang is required for the native execution control")
+        set(ORE_QUEUE_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang-executable")
+    endif()
+    add_test(NAME native_linked_queue_exact_source_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_linked_queue_fail_closed.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture-root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/linked-queue"
+            --clang "${ORE_QUEUE_CLANG}")
+    set_tests_properties(native_linked_queue_exact_source_failclosed
+        PROPERTIES TIMEOUT 120)
+    add_test(NAME native_linked_queue_harness_adversarial
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -p "test_native_linked_queue_fail_closed.py" -v)
+    set_tests_properties(native_linked_queue_harness_adversarial
+        PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
         add_executable(oreslang-messagepack-wire-v2-test

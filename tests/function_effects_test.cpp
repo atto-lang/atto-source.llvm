@@ -31,6 +31,8 @@ int main() {
                 "raise and throw must be distinct");
         require(FunctionEffects::parse("panic") != FunctionEffects::parse("throw"),
                 "panic and throw must be distinct");
+        require(FunctionEffects::parse("panic") != FunctionEffects::parse("raise"),
+                "panic and raise must be distinct");
         // Exhaustive spelling and one-hot flag coverage: adding or aliasing an
         // effect must require updating this reviewed table.
         const std::array<std::pair<std::string_view, FunctionEffect>, 10> known{{
@@ -65,9 +67,39 @@ int main() {
         require(seen == ((1u << known.size()) - 1u),
                 "effect flags must form the reviewed contiguous bit range");
 
-        const std::array<std::string_view, 7> invalid{{
-            std::string_view{}, "unknown", "state", "state.READ",
-            "state.read ", "PANIC", std::string_view{"panic\0extra", 11}
+        // Exhaust all 2^10 by 2^10 ordered permission pairs, including
+        // empty, singleton, composite, and disjoint effect sets. Deliberately
+        // run as ordinary executable code: assert() disappears under NDEBUG.
+        constexpr std::uint32_t all_effects = (1u << known.size()) - 1u;
+        for (std::uint32_t lhs = 0; lhs <= all_effects; ++lhs) {
+            const FunctionEffects a{lhs};
+            require(a.permits(a), "every effect set must permit itself");
+            require(a.permits({}), "every effect set must permit pure effects");
+            require(a.united({}).bits == lhs, "union with empty set is identity");
+            for (const auto& [name, effect] : known) {
+                (void)name;
+                const auto bit = static_cast<std::uint32_t>(effect);
+                require(a.has(effect) == ((lhs & bit) != 0),
+                        "effect membership must match independent bit mask");
+            }
+            for (std::uint32_t rhs = 0; rhs <= all_effects; ++rhs) {
+                const FunctionEffects b{rhs};
+                require(a.permits(b) == ((lhs & rhs) == rhs),
+                        "permits must implement exact subset relation");
+                require(a.united(b).bits == (lhs | rhs),
+                        "effect union must match independent bitwise OR");
+                require(a.united(b).permits(a) && a.united(b).permits(b),
+                        "union must permit both operands");
+                require(a.united(b).bits == b.united(a).bits,
+                        "effect union must be commutative");
+            }
+        }
+
+        const std::array<std::string_view, 13> invalid{{
+            std::string_view{}, "unknown", "state", "state.READ", "state.read ",
+            " state.read", "state-read", "suspend\\n", "PANIC", "panic.",
+            "throw/raise", std::string_view{"panic\\0extra", 11},
+            std::string_view{"\\0panic", 6}
         }};
         for (std::string_view spelling : invalid) {
             bool rejected = false;

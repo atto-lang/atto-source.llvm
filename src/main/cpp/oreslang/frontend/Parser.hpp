@@ -12,7 +12,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -34,6 +34,7 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Restricted local stack-only explicit class move.
@@ -47,12 +48,13 @@ struct LocalBinding {
 struct ClassField {
     std::string name;
     std::int64_t initial = 0;
+    bool int_array = false; // owned opaque handle; never exposed as an int
 };
 
 struct ClassDecl {
     std::string name;
-    // The initial typed class subset admits up to 16 i64 fields.
-    // This vector is ordered: it defines the native LLVM struct layout.
+    // Up to 16 scalar i64 or owned Array<int> fields.
+    // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
 };
 
