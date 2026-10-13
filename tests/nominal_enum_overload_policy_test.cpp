@@ -64,6 +64,25 @@ int main() {
     REQUIRE(select({color, mode}, {{0, "unit::Mode"}}) == 1);
     REQUIRE(select({color, mode}, {{0, "unit::Color"}}) == 0);
 
+    Signature twoColors = signature("go", {
+        {Kind::Enum, "unit::Color"}, {Kind::Enum, "unit::Color"}}, eligibleIds);
+    Signature twoModes = signature("go", {
+        {Kind::Enum, "unit::Mode"}, {Kind::Enum, "unit::Mode"}}, eligibleIds);
+    rejects([&] { (void)select({twoColors, twoModes}, {{0, "unit::Color"}}); });
+    rejects([&] { (void)select({twoColors, twoModes}, {{1, "unit::Color"}}); });
+    rejects([&] { (void)select({twoColors, twoModes},
+                               {{0, "unit::Color"}, {1, "unit::Mode"}}); });
+    REQUIRE(select({twoColors, twoModes},
+                   {{0, "unit::Color"}, {1, "unit::Color"}}) == 0);
+    rejects([&] { (void)select({color, mode},
+                               {{0, "unit::Mode"}, {1, "unit::Mode"}}); });
+    Signature upper = signature("go", {
+        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "String"}}, eligibleIds);
+    REQUIRE(compare(color, upper) == PairStatus::InvalidSameArity);
+    Signature lowercase = signature("go", {
+        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "string"}}, eligibleIds);
+    REQUIRE(compare(upper, lowercase) == PairStatus::Same);
+
     rejects([&] { (void)select({color, mode}, {}); });
     rejects([&] { (void)select({color, mode}, {{0, "unknown::Color"}}); });
     rejects([&] { (void)select({color, mode}, {{2, "unit::Color"}}); });
