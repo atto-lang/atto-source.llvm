@@ -82,6 +82,17 @@ if(BUILD_TESTING)
     add_test(NAME native_int_array_transaction_recovery
         COMMAND oreslang-native-int-array-transaction-test)
     set_tests_properties(native_int_array_transaction_recovery PROPERTIES TIMEOUT 120)
+    # Deterministic model-based differential stress on real Array<int> ABI.
+    add_executable(oreslang-native-int-array-model-test
+        tests/native_int_array_model_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-int-array-model-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Werror -Wpedantic>)
+    add_test(NAME native_int_array_model_differential
+        COMMAND oreslang-native-int-array-model-test)
+    set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
