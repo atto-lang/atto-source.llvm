@@ -474,6 +474,14 @@ if(BUILD_TESTING)
             --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_guest.c"
             --stderr "ACTOR_METHOD_STATE_GUEST_PASS read=7 increment=8,9 reset=12")
     endif()
+    # Tagged receive handlers may not omit 'with' while acquiring a loan.
+    # Both canonical callback spellings must be rejected before LLVM IR.
+    oreslang_contract_test(reject_tagged_receive_missing_with_read
+        actor-receive-missing-with-read-reject.ores
+        --diagnostic "actor state loan requires explicit with effects")
+    oreslang_contract_test(reject_tagged_receive_missing_with_write
+        actor-receive-missing-with-write-reject.ores
+        --diagnostic "actor state loan requires explicit with effects")
     # Cross-backend parity: the exact same .ores fixture Git blobs are
     # checked by Java/GraalVM PR #760 with the Java AST/effect verifier.
     oreslang_contract_test(native_shared_actor_state_read
