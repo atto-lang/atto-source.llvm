@@ -122,17 +122,9 @@ public:
         if (reserved.direction != Direction::Root) aborted_ = true;
     }
 
-    // Terminal action is authorized only on a physical source DATA turn
-    // returning from its actual first downstream neighbor.
-    void complete_source(std::uint64_t actor, std::uint64_t actual_sender) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (aborted_ || claimed_ || actor != actors_.front() ||
-            actual_sender != actors_[1] || phase_ != 2 * actors_.size() - 1 ||
-            physically_done_[0])
-            throw std::logic_error("source completion lacks verified return DATA");
-        ++phase_;
-    }
-
+    // Payloadless source completion is deliberately unsupported. The only
+    // terminal source transition is complete_source_with_reply: it must
+    // atomically bind a canonical nominal reply before physical DONE.
     // The compiler-owned mailbox codec must verify the canonical typed
     // MessagePack reply BEFORE calling this trusted scheduler-only boundary.
     // The route copies bytes atomically with the source completion phase.
@@ -184,17 +176,17 @@ public:
                                              : 2 * actors_.size() - pos;
         // Another stage may be in the middle of a legal publication while
         // this stage finishes. Only this stage's own committed phase matters.
-        if (!successful || phase_ < required_phase) aborted_ = true;
+        if (!successful || phase_ < required_phase ||
+            (pos == 0 && !reply_attested_)) aborted_ = true;
     }
 
     void fail() noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
-        // Successful whole-pipeline completion is a terminal observation:
-        // no actor remains alive to report a new failure. A delayed or
-        // duplicate failure event must not revoke a success already
-        // established by the final scheduler-owned physical DONE receipt.
+        // Successful typed whole-pipeline completion is terminal only after
+        // the scheduler has attested an actual copied nominal reply. A
+        // payloadless source phase is never a successful publication.
         // Whichever event first crosses this mutex is the terminal winner.
-        if (!aborted_ && done_count_ == actors_.size() &&
+        if (!aborted_ && reply_attested_ && done_count_ == actors_.size() &&
             phase_ == 2 * actors_.size()) return;
         aborted_ = true;
     }
@@ -203,7 +195,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if (aborted_) return Done::Failed;
         if (done_count_ != actors_.size()) return Done::Pending;
-        return phase_ == 2 * actors_.size() ? Done::Succeeded : Done::Failed;
+        return phase_ == 2 * actors_.size() && reply_attested_
+            ? Done::Succeeded : Done::Failed;
     }
 
     bool fenced(std::uint64_t actor) const {
