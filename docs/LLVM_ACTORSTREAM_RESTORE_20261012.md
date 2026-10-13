@@ -217,3 +217,33 @@ pins both blobs. Its Actions attempts failed without usable executed-step
 evidence; no pass is claimed for the latest tree. LLVM PR #262 remains
 draft, unmerged, and source-compiled guest typed result integration is not
 implemented on this branch.
+
+## Typed-only final-DONE gate and funded native proof (2026-10-13)
+
+The legacy payloadless `complete_source()` phase-advancing method was
+deleted. Only `complete_source_with_reply`, with compiler-checked closed
+nominal domain, authenticated source/sender and owned bounded canonical
+bytes, may advance a source to terminal phase. Native `done()` and
+post-success `fail()` now explicitly require `reply_attested_` as well
+as full physical DONE and terminal phase. Source `physical_done` without
+a committed reply is a terminal failure.
+
+The native contract test was migrated to typed source completion for all
+2, 3, 4, 15 and 16-stage cases; missing-result routes are rejected.
+The exact Git blobs were independently copied and verified in funded
+validation PR [#207](https://github.com/zed-pkg-test/java-app/pull/207):
+
+- `NativeActorStreamRoute.hpp`: `c2af09d99be616b956a2fd103aeaa6dc6b899134`
+- `native_actorstream_route_test.cpp`: `17088dfa630751d08253b7bf3ac304bf30b028f8`
+
+**Passed:** funded [Native ActorStream CI #38343847695](https://github.com/zed-pkg-test/java-app/actions/runs/38343847695):
+the runner checked both source blobs with `git hash-object`, then executed
+the native contract test in strict C++17 (`-Wall -Wextra -Werror -pedantic`),
+UBSan and ASan configurations. All modes passed, with test logs available.
+This is a **native contract** proof on exact blobs, not proof that an LLVM
+`.ores` guest lowered `self.forward()`/`self.backward()` or reached
+whole-route DONE via a production actor scheduler.
+
+Remaining: current-main LLVM guest source-compiled forward/backward
+binding; actual mailbox publication linearization; Java/LLVM trace
+parity; branch reconciliation (`mergeable=false`). Keep draft.
