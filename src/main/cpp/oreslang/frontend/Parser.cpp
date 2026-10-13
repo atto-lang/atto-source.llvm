@@ -958,7 +958,7 @@ private:
         return false;
     }
 
-    static void validate_declared_effects(const Function& fn) {
+    static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -966,7 +966,15 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
-            if ((local.heap_owned || local.int_array) &&
+            bool allocates_class_array = false;
+            if (local.new_class) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == local.class_name; });
+                if (cls != program.classes.end())
+                    allocates_class_array = std::any_of(cls->fields.begin(), cls->fields.end(),
+                        [](const ClassField& field) { return field.int_array; });
+            }
+            if ((local.heap_owned || local.int_array || allocates_class_array) &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
@@ -994,7 +1002,7 @@ private:
         }
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
-            validate_declared_effects(fn);
+            validate_declared_effects(fn, program);
             // Compiler-owned ABI imports must never be shadowed by a guest.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
