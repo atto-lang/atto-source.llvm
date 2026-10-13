@@ -390,6 +390,8 @@ if(BUILD_TESTING)
             --run 43 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_named_call_mixed_guest named-call-mixed-main.ores
             --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_mut_borrow_binding
+            named-call-mut-borrow-native.ores --run 7 --clang "${ORE_CLANG}")
     endif()
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
     if(ORE_CLANG)
@@ -891,6 +893,9 @@ if(BUILD_TESTING)
         --diagnostic "duplicate binding of parameter")
     oreslang_contract_test(native_named_call_positional_after_named named-call-positional-after-named-reject.ores
         --diagnostic "positional argument cannot follow named argument")
+    oreslang_contract_test(native_named_call_mut_borrow_conflict
+        named-call-mut-borrow-after-loan-reject.ores
+        --diagnostic "field read conflicts with active mutable borrow")
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
     # Source-level bounded class ownership and per-call shared/exclusive loans.
