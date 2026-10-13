@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <vector>
 #include <cstdint>
+#include <type_traits>
 
 using oreslang::EffectKind;
 using oreslang::EffectStatus;
@@ -19,6 +20,25 @@ static EffectStatus run_step(void* value) noexcept {
     s->order->push_back(s->id);
     return s->effect;
 }
+
+struct CountedStep {
+    int* executions;
+    EffectStatus effect;
+};
+
+static EffectStatus run_counted(void* value) noexcept {
+    auto* step = static_cast<CountedStep*>(value);
+    ++*step->executions;
+    return step->effect;
+}
+
+// The unwind frame is a unique lexical owner; copying or moving it would
+// duplicate callbacks or invalidate contexts and violate exactly-once cleanup.
+static_assert(std::is_default_constructible_v<oreslang::EffectUnwind<1>>);
+static_assert(!std::is_copy_constructible_v<oreslang::EffectUnwind<1>>);
+static_assert(!std::is_copy_assignable_v<oreslang::EffectUnwind<1>>);
+static_assert(!std::is_move_constructible_v<oreslang::EffectUnwind<1>>);
+static_assert(!std::is_move_assignable_v<oreslang::EffectUnwind<1>>);
 
 int main() {
     using Frame = oreslang::EffectUnwind<3, 2>;
@@ -160,6 +180,52 @@ int main() {
     CHECK(outgoing.secondary_count == 1);
     CHECK(outgoing.secondary[0].kind == EffectKind::Throw);
     CHECK(outgoing.secondary[0].code == 17);
+
+    // Exhaustively validate all possible one-byte effect ABI tags. Only the
+    // seven admitted tags are valid; the remaining 249 become terminal Fatal.
+    for (unsigned raw = 0; raw < 256; ++raw) {
+        const auto kind = static_cast<EffectKind>(raw);
+        const bool valid = raw < 7;
+        CHECK(oreslang::effect_kind_valid(kind) == valid);
+        CHECK(oreslang::native_trap_admits(kind) == (raw == 1));
+        const auto normalized = oreslang::normalize_effect({kind, 0xCAFEu});
+        CHECK(normalized.kind == (valid ? kind : EffectKind::Fatal));
+        CHECK(normalized.code == (valid ? 0xCAFEu : 0xFFFFFFFDu));
+    }
+
+    // Rejected registration must never displace a valid cleanup, and a
+    // completed frame cannot be pushed again or unwound twice.
+    int executed_count = 0;
+    CountedStep counted{&executed_count, {EffectKind::Return, 0}};
+    oreslang::EffectUnwind<1> once;
+    CHECK(!once.push(nullptr, &counted));
+    CHECK(once.push(run_counted, &counted));
+    CHECK(!once.push(run_counted, &counted));
+    const auto finished = once.finish();
+    CHECK(finished.primary.kind == EffectKind::Return);
+    CHECK(finished.secondary_count == 0);
+    CHECK(executed_count == 1);
+    CHECK(once.remaining() == 0);
+    CHECK(!once.push(run_counted, &counted));
+    const auto repeated = once.finish();
+    CHECK(repeated.primary.kind == EffectKind::Fatal);
+    CHECK(repeated.primary.code == 0xFFFFFFFEu);
+    CHECK(executed_count == 1);
+
+    // Zero diagnostic slots must still preserve the primary failure and
+    // report all suppressed failures as bounded, allocation-free overflow.
+    int fail_count = 0;
+    CountedStep fails{&fail_count, {EffectKind::Throw, 55}};
+    oreslang::EffectUnwind<3, 0> bounded;
+    CHECK(bounded.push(run_counted, &fails));
+    CHECK(bounded.push(run_counted, &fails));
+    CHECK(bounded.push(run_counted, &fails));
+    const auto no_slots = bounded.finish({EffectKind::Throw, 44});
+    CHECK(no_slots.primary.kind == EffectKind::Throw);
+    CHECK(no_slots.primary.code == 55);
+    CHECK(no_slots.secondary_count == 0);
+    CHECK(no_slots.overflow_count == 3);
+    CHECK(fail_count == 3);
 
     CHECK(oreslang::native_trap_admits(EffectKind::Throw));
     for (const EffectKind kind : kinds)
