@@ -1545,6 +1545,32 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_versioned_state_logical_races
         PROPERTIES TIMEOUT 20)
     set_tests_properties(native_actor_state_scope_nested_loan_fencing PROPERTIES TIMEOUT 20)
+
+    # Portable native ML staging boundaries only: the sink is volatile and
+    # MPA preflight never authorizes a privileged effect.
+    add_executable(oreslang-native-ml-admission-test
+        tests/native_ml_admission_test.cpp)
+    target_include_directories(oreslang-native-ml-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ml-admission-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ml-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ml_volatile_fence_and_mpa_failclosed
+        COMMAND oreslang-native-ml-admission-test)
+    set_tests_properties(native_ml_volatile_fence_and_mpa_failclosed PROPERTIES TIMEOUT 20)
+
+    # A real .ores -> LLVM IR -> Clang executable evidence slice, deliberately
+    # labeled scalar-only; this is NOT a full actor/HPC/ML parity claim.
+    if(ORE_CLANG)
+        add_test(NAME native_hpc_ml_scalar_source_provenance
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_hpc_ml_source_evidence.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/hpc-ml-scalar-evidence.ores"
+                --samples 3 --warmups 1 --expected-exit 42)
+        set_tests_properties(native_hpc_ml_scalar_source_provenance PROPERTIES TIMEOUT 60)
+    endif()
 endif()
 
 if(BUILD_TESTING)
