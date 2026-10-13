@@ -931,7 +931,7 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_class_static_overload_executable
             native-class-static-arity-guest.ores
-            --ir "Foo.pick\\$arity0" --run 24 --clang "${ORE_CLANG}")
+            --ir "Foo.pick\$arity0" --run 24 --clang "${ORE_CLANG}")
         set_tests_properties(native_class_static_overload_executable PROPERTIES TIMEOUT 60)
     endif()
     # Audit canonical name+arity selection through the ownership checker,
