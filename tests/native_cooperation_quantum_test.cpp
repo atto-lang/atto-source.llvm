@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -27,6 +28,14 @@ std::atomic<int> FakeClock::reads{0};
 using Quantum = oreslang::runtime::BasicSourceCooperationQuantum<FakeClock>;
 static_assert(std::is_same_v<decltype(std::declval<Quantum>().completedBackedgesThisDispatch()), std::uint64_t>,
               "per-dispatch reductions must not wrap at 32 bits");
+static_assert(oreslang::runtime::detail::saturatingBackedgeSuccessor(
+                  std::numeric_limits<std::uint64_t>::max() - 1)
+                  == std::numeric_limits<std::uint64_t>::max(),
+              "the last representable reduction must be counted");
+static_assert(oreslang::runtime::detail::saturatingBackedgeSuccessor(
+                  std::numeric_limits<std::uint64_t>::max())
+                  == std::numeric_limits<std::uint64_t>::max(),
+              "a wrapped reduction counter could bypass the budget");
 
 static void require(bool ok) {
     if (!ok) throw std::runtime_error("native cooperation-quantum invariant failed");
@@ -49,6 +58,25 @@ static void reduction_fast_path() {
     }
     require(FakeClock::reads.load() == 9);
     require(q.completedBackedgesThisDispatch() == 512);
+}
+
+static void overdue_no_yield_region_checks_every_new_boundary() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 1; i <= 511; ++i)
+        require(q.completedBackedgeNeedsCheck() == (i % 64 == 0));
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    // The first deadline was skipped while a lexical guard was live.
+    // Once the guard is dropped, the next completed backedge must permit
+    // handoff immediately instead of waiting for another full batch.
+    for (int i = 513; i <= 560; ++i) {
+        require(q.completedBackedgeNeedsCheck());
+        require(q.shouldCooperateAtCheck());
+    }
+    require(q.completedBackedgesThisDispatch() == 560);
+    require(FakeClock::reads.load() == 2);
 }
 
 static void timer_slow_path() {
@@ -108,6 +136,7 @@ static void repeated_dispatches_keep_task_context() {
 }
 int main() {
     reduction_fast_path();
+    overdue_no_yield_region_checks_every_new_boundary();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
     await_is_not_cooperate();
