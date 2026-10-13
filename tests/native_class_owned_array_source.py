@@ -26,6 +26,38 @@ FOUR = """define class Four as
 end
 """
 POSITIVES = {
+    "scalar-class-methods-shared-exclusive": (CLASS + """define class Counter as
+  let int count = 0;
+  pub get() -> int { return self.count; }
+  pub method bump(mut self)(int delta) -> int {
+    self.count = self.count + delta;
+    return self.count;
+  }
+end
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Counter counter = new Counter();
+  counter.bump(19);
+  shelf.first.add(23);
+  return counter.get() + shelf.first.get(0);
+}
+""", 42, 2),
+    "scalar-class-method-void": (CLASS + """define class Counter as
+  let int count = 0;
+  pub set(mut self)(int n) -> void {
+    self.count = n;
+    return;
+  }
+  pub value() -> int { return self.count; }
+end
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Counter counter = new Counter();
+  counter.set(42);
+  return counter.value();
+}
+""", 42, 2),
+
     "four-atomic-filled": (FOUR + """pub fnc main(): int {
   let mut Four q = new Four();
   rt array_commit_filled(q, 3, -1, -1, 19, 23);
@@ -233,6 +265,62 @@ pub fnc main(): int {
 """, 42, 2),
 }
 NEGATIVES = {
+    "class-method-immutable-receiver": ("""define class Counter as
+  let int count = 0;
+  pub bump(mut self)(int n) -> int { self.count = n; return self.count; }
+end
+pub fnc main(): int {
+  let Counter c = new Counter();
+  return c.bump(42);
+}
+""", "cannot mutably borrow immutable owner"),
+    "class-method-unknown": ("""define class Counter as
+  let int count = 0;
+  pub value() -> int { return self.count; }
+end
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  return c.missing();
+}
+""", "unknown native class method or wrong arity"),
+    "class-method-wrong-arity": ("""define class Counter as
+  let int count = 0;
+  pub add(mut self)(int n) -> int { return self.count + n; }
+end
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  return c.add();
+}
+""", "unknown native class method or wrong arity"),
+    "class-method-void-used-as-value": ("""define class Counter as
+  let int count = 0;
+  pub clear(mut self)() -> void { self.count = 0; return; }
+end
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  return c.clear();
+}
+""", "void class method cannot be used as int expression"),
+    "class-method-shared-cannot-write": ("""define class Counter as
+  let int count = 0;
+  pub broken() -> int { self.count = 42; return self.count; }
+end
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  return c.broken();
+}
+""", "cannot mutate through shared class borrow"),
+    "class-method-array-owners-rejected": (CLASS + """define class WithArrays as
+  let mut Array<int> items = new Array<int>();
+  pub length() -> int { return 42; }
+end
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut WithArrays a = new WithArrays();
+  return a.length();
+}
+""", "native class method on Array<int>-owning class requires region-borrow ABI lowering"),
+
     "reject-batch-two-array-class": (CLASS + """pub fnc main(): int {
   let mut Shelf q = new Shelf();
   rt array_commit_filled(q, 4, -1, -1, 0, 0);
