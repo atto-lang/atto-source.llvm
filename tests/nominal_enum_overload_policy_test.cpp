@@ -11,7 +11,7 @@
 
 #define REQUIRE(expression) do { \
     if (!(expression)) { \
-        std::fprintf(stderr, "nominal enum overload check failed: %s at %s:%d\\n", \
+        std::fprintf(stderr, "nominal enum overload check failed: %s at %s:%d\n", \
                      #expression, __FILE__, __LINE__); \
         std::abort(); \
     } \
