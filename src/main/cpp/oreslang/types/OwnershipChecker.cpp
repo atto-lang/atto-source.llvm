@@ -30,6 +30,7 @@ struct LocalOwnership {
     std::string class_name;
     std::unordered_set<std::string> class_fields;
     std::unordered_set<std::string> class_array_fields;
+    std::unordered_set<std::string> final_fields;
     // Primitive i64 class fields can be moved and later restored by a write.
     std::unordered_set<std::string> moved_fields;
 };
@@ -157,19 +158,49 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
     // Preserve the full set of argument loans until the call has completed.
     // Nested calls observe outstanding outer-call loans. Evaluation is
     // strictly left-to-right, matching the LLVM emitter.
+    if (!expr.argument_names.empty() &&
+            expr.argument_names.size() != expr.arguments.size())
+        reject(expr, "invalid native named call argument layout");
+
     std::vector<Loan> loans;
-    for (std::size_t i = 0; i < parameters.size(); ++i) {
+    std::vector<bool> assigned(parameters.size(), false);
+    std::size_t positional = 0;
+    bool named_seen = false;
+    for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
         const Expression& argument = *expr.arguments[i];
-        if (parameters[i].mode == Mode::Value) {
-            if (!parameters[i].class_name.empty())
+        const std::string label = expr.argument_names.empty()
+                ? std::string{} : expr.argument_names[i];
+        std::size_t formal = positional;
+        if (!label.empty()) {
+            named_seen = true;
+            formal = 0;
+            while (formal < parameters.size() &&
+                   parameters[formal].name != label) ++formal;
+            if (formal == parameters.size())
+                reject(argument, "ownership violation: unknown named parameter '" + label + "'");
+        } else {
+            if (named_seen)
+                reject(argument, "ownership violation: positional argument after named argument");
+            ++positional;
+        }
+        if (formal >= parameters.size() || assigned[formal])
+            reject(argument, "ownership violation: duplicate named parameter binding");
+        assigned[formal] = true;
+
+        // Acquire loans in *lexical source order* while using the target
+        // parameter's ownership mode. A later argument must observe earlier
+        // mutable/shared loans even if its formal slot is numerically lower.
+        const Parameter& parameter = parameters[formal];
+        if (parameter.mode == Mode::Value) {
+            if (!parameter.class_name.empty())
                 reject(argument, "ownership violation: by-value class parameters require move/drop lowering");
             check_value(argument, locals, functions);
         } else {
-            // Acquire first so malformed loans preserve the existing
-            // precise diagnostics for temporaries and missing 'rt borrow'.
-            Loan loan = acquire(argument, parameters[i].mode, locals);
+            // Acquire first so malformed loans preserve precise diagnostics
+            // for temporaries and missing explicit 'rt borrow' markers.
+            Loan loan = acquire(argument, parameter.mode, locals);
             const auto& source = locals.at(loan.name);
-            if (source.class_name != parameters[i].class_name)
+            if (source.class_name != parameter.class_name)
                 reject(argument, "ownership violation: borrowed argument type mismatch");
             loans.push_back(std::move(loan));
         }
@@ -251,6 +282,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                     reject(expr, "native rt take requires a direct named class field");
                 LocalOwnership& source = checked_field(
                     field.left->name, field.name, field.offset, locals);
+                if (source.final_fields.count(field.name))
+                    reject(expr, "ownership violation: cannot take final class field");
                 if (source.mode != Mode::Value)
                     reject(expr, "ownership violation: cannot take a class field through a borrowed parameter");
                 if (source.exclusive_loan || source.shared_loans != 0)
@@ -364,14 +397,17 @@ void validate_i64_ownership(const Program& program) {
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;
     for (const auto& cls : program.classes) {
-        std::unordered_set<std::string> fields, arrays;
+        std::unordered_set<std::string> fields, arrays, finals;
         for (const auto& field : cls.fields) {
             fields.insert(field.name);
             if (field.int_array) arrays.insert(field.name);
+            if (field.final_field) finals.insert(field.name);
         }
         class_fields.emplace(cls.name, std::move(fields));
         class_arrays.emplace(cls.name, std::move(arrays));
+        class_finals.emplace(cls.name, std::move(finals));
     }
     for (const auto& function : program.functions) {
         Locals locals;
@@ -395,6 +431,7 @@ void validate_i64_ownership(const Program& program) {
             if (!param.class_name.empty()) {
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
+                entry.final_fields = class_finals.at(param.class_name);
             }
             locals.emplace(param.name, std::move(entry));
         }
@@ -410,6 +447,7 @@ void validate_i64_ownership(const Program& program) {
             } else if (binding.new_class) {
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
+                entry.final_fields = class_finals.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
@@ -431,6 +469,7 @@ void validate_i64_ownership(const Program& program) {
                         std::to_string(binding.offset));
                 entry.class_fields = source.class_fields;
                 entry.class_array_fields = source.class_array_fields;
+                entry.final_fields = source.final_fields;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
@@ -479,6 +518,8 @@ void validate_i64_ownership(const Program& program) {
             }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
+                if (recv.final_fields.count(stmt.field))
+                    throw std::runtime_error("ownership violation: cannot reassign final class field");
                 if (recv.class_array_fields.count(stmt.field)) {
                     const Expression& move = *stmt.expression;
                     if (move.kind != Expression::Kind::Take || !move.left ||
@@ -586,6 +627,8 @@ void validate_i64_ownership(const Program& program) {
                 }
                 auto& recv = checked_field(cleanup.receiver, cleanup.field,
                                            cleanup.offset, path);
+                if (recv.final_fields.count(cleanup.field))
+                    throw std::runtime_error("ownership violation: cannot reassign final class field");
                 if (recv.class_array_fields.count(cleanup.field))
                     throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
                 if (recv.mode == Mode::Borrow)
@@ -610,6 +653,8 @@ void validate_i64_ownership(const Program& program) {
                 const auto& effect = *it;
                 auto& recv = checked_field(effect.receiver, effect.field,
                                            effect.offset, locals);
+                if (recv.final_fields.count(effect.field))
+                    throw std::runtime_error("ownership violation: cannot reassign final class field");
                 if (recv.class_array_fields.count(effect.field))
                     throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
                 if (recv.mode == Mode::Borrow || (recv.mode == Mode::Value && !recv.mutable_owner))
