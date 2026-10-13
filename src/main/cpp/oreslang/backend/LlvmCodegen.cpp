@@ -213,6 +213,11 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::ModuleCall:
+            // Never materialize an untyped host symbol for stdlib members.
+            // The sealed AST must be linked to verified .ores lowering first.
+            throw std::runtime_error(
+                "native Assert module call awaits typed source-owned linking");
         case Expression::Kind::Call: {
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
@@ -228,6 +233,14 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
+    // A parsed import is not a linked module. Reject before constructing an
+    // LLVM module or exporting a symbol until the source-owned stdlib ABI
+    // (Any, bool, typed failure, trap) is executable on this backend.
+    if (!source.imports.empty()) {
+        throw std::runtime_error(
+            "native module imports are unsupported until linked stdlib "
+            "and typed assertion/trap lowering are implemented");
+    }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
