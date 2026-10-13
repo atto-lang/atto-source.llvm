@@ -6,6 +6,7 @@ Other cases deliberately deny a checked call without modifying its array.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -125,10 +126,16 @@ def verify(compiler: Path, clang: Path, root: Path, sanitizers: bool):
         built = run([str(compiler), str(source)])
         if built.returncode != 0 or built.stderr or not built.stdout.startswith(b"; ModuleID"):
             raise AssertionError(f"compiler failed: {built.stderr!r}")
-        if (built.stdout.count(b"call i32 @oreslang_int_array_try_add(") != 6
-                or built.stdout.count(b"array.try_add.known.status") != 2):
-            # Four ordinary array.add() effects + two checked expressions.
-            raise AssertionError("missing two closed-domain checked statuses")
+        checked_checks = re.findall(
+            rb"array\\.try_add\\.known\\.status(?:\\d+)? = icmp ule i32",
+            built.stdout)
+        add_calls = built.stdout.count(b"call i32 @oreslang_int_array_try_add(")
+        if add_calls != 6 or len(checked_checks) != 2:
+            # Four ordinary add() effects + two checked expressions. Count
+            # instructions, not SSA names also used by conditional branches.
+            raise AssertionError(
+                f"expected 6 native adds and 2 closed-domain status checks; "
+                f"observed {add_calls} adds and {len(checked_checks)} checks")
         ll = wd / "retry.ll"
         ll.write_bytes(built.stdout)
         shim = wd / "retry_shim.c"
