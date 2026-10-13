@@ -24,7 +24,10 @@ enum class CriticalStateAdmission : std::uint8_t {
     LoanAcrossSuspension,
     MissingContinuationFence,
     InvalidEffectMetadata,
-    ScopeDenied
+    ScopeDenied,
+    // A sealed actor state loan cannot nest, including read/read and
+    // read/write, even when the scheduler continuation is identical.
+    NestedStateLoan
 };
 
 struct CriticalStateCallback {
