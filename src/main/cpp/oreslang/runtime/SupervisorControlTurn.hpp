@@ -49,9 +49,10 @@ public:
     bool publish_child(const SupervisorFailureLane::ActorKey& child,
                        SupervisorFailureLane::Kind kind,
                        std::string_view summary,
-                       std::string_view parent_id = {}) {
+                       std::string_view parent_id = {},
+                       std::optional<SupervisorFailureLane::Kind> origin = std::nullopt) {
         const bool admitted = child_failures_.publish_preallocated(
-            child, kind, summary, parent_id);
+            child, kind, summary, parent_id, origin);
         return admitted;
     }
 
