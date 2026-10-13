@@ -79,3 +79,8 @@ native-only fixtures, not Java/LLVM language-parity proofs.
 noncommutative deferred writes before catch and a finally mutation after
 return snapshot. `native-caught-throw-payload.ores` checks the i64 binding.
 All unimplemented cases must reject before LLVM IR emission.
+
+The slice additionally rejects effect-qualified function signatures and
+potentially throwing or unverified calls in the local `finally` block. The
+first implementation has no typed effect propagation across nested calls, so
+accepting such calls would incorrectly imply successful unwind semantics.

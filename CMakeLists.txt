@@ -381,6 +381,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_caught_throw_unsafe_defer
         native-caught-throw-defer-call-reject.ores
         --diagnostic "native caught throw defer requires named class field write")
+    oreslang_contract_test(reject_caught_throw_effect_signature
+        native-caught-throw-qualified-effects-reject.ores
+        --diagnostic "native caught throw effect-qualified function unsupported")
+    oreslang_contract_test(reject_caught_throw_finally_call
+        native-caught-throw-finally-call-reject.ores
+        --diagnostic "native caught throw finally requires nonthrowing field write")
     oreslang_contract_test(reject_finally_return_override
         native-finally-return-reject.ores --diagnostic "cannot escape finally")
     oreslang_contract_test(reject_finally_break_override

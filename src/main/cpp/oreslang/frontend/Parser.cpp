@@ -570,6 +570,10 @@ private:
                     if (value.returns_void || !value.statements.empty() ||
                             !value.actor_actions.empty())
                         fail("native caught throw requires a single terminal int try scope");
+                    // No partially inferred effect set can masquerade as a
+                    // complete exception/cleanup summary at this boundary.
+                    if (value.has_declared_effects)
+                        fail("native caught throw effect-qualified function unsupported");
                     while (accept("defer")) {
                         if (value.caught_throw_defers.size() == 8)
                             fail("native caught throw defer limit exceeded (8)");
@@ -618,9 +622,9 @@ private:
                     auto cleanup = branch_arm(true);
                     require("}");
                     for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
-                        if (it->kind != Statement::Kind::Call &&
-                                it->kind != Statement::Kind::FieldWrite)
-                            fail("native finally permits only direct calls and class field writes");
+                        if (it->kind != Statement::Kind::FieldWrite ||
+                                !native_pure_scalar_tree(*it->expression))
+                            fail("native caught throw finally requires nonthrowing field write");
                         it->kind = Statement::Kind::Defer;
                         value.statements.push_back(std::move(*it));
                     }
