@@ -27,8 +27,8 @@ MOVED_CLASS = """define class Pair as
 end
 pub fnc main(): int {
   let mut Pair original = new Pair();
-  original.first.add(7);
   let mut Pair moved = rt take(original);
+  moved.first.add(7);
   moved.second.add(35);
   return moved.first.get(0) + moved.second.get(0);
 }
