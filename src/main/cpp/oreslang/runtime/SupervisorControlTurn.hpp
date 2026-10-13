@@ -120,6 +120,11 @@ public:
                             if (!hooks.on_restart(*next)) hooks.on_escalate(*next);
                         }
                         break;
+                    default:
+                        // Invalid enum tags from host FFI/corrupt handlers must
+                        // retain the in-flight CONTROL event for retry rather
+                        // than silently acknowledging a failed actor.
+                        throw std::invalid_argument("invalid supervisor CONTROL decision");
                 }
                 child_failures_.ack(next->actor);
             } catch (...) {
