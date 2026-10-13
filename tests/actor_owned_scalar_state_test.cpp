@@ -34,6 +34,15 @@ int main() {
     checked.inferred = {static_cast<std::uint32_t>(FunctionEffect::StateRead)
             | static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
     const FunctionEffects allowed = checked.inferred;
+
+    // Without scheduler-confirmed incarnation/continuation metadata the
+    // native state bridge must reject even an otherwise valid write loan.
+    rejects([&] {
+        (void) state.critical(actor, 100, checked, allowed,
+                [](State::Access&) -> State::Value { return std::int64_t{999}; });
+    });
+    check(state.ready_to_suspend(actor));
+    checked.continuation_generation_fenced = true;
     const FunctionEffects readonly{static_cast<std::uint32_t>(FunctionEffect::StateRead)};
 
     check(state.ready_to_suspend(actor));
