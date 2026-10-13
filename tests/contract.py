@@ -15,12 +15,15 @@ def main():
     parser.add_argument("--diagnostic")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
+    parser.add_argument("--target")
     parser.add_argument("--native-runtime")
     parser.add_argument("--experimental-owned-int", action="store_true")
     parser.add_argument("--no-native-abi", action="store_true")
     parser.add_argument("--no-main-link", action="store_true")
     args = parser.parse_args()
     cmd = [args.compiler]
+    if args.target:
+        cmd.append("--target=" + args.target)
     if args.experimental_owned_int:
         cmd.append("--experimental-owned-int")
     cmd.append(args.fixture)
