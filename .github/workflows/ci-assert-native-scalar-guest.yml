@@ -28,7 +28,7 @@ jobs:
           src/main/cpp/oreslang/types/OwnershipChecker.cpp 553d52363f17450ac45ee061276fa61753d5b5ad
           src/main/cpp/oreslang/backend/LlvmCodegen.cpp 3f69ffdd8f3ae4702c605a4d3a09548ea4f9714f
           tests/native_assert_scalar_guest_test.sh 101d798dd457d26c8c2c768506f6d05efdec8213
-          tests/native_assert_ast_seal_test.cpp b5022928426331310363da7c7b9b4c687e556ccd
+          tests/native_assert_ast_seal_test.cpp b4015263bb5b6335f4080b525c669dd1a08e85b8
           HASHES
           echo ASSERT_NATIVE_SCALAR_EXACT_FILES_PASS
       - name: Install LLVM C++ compiler dependencies
