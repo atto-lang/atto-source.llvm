@@ -72,6 +72,11 @@ unambiguous; preserve `with` as an independent existing construct.
 `pure` follows the existing draft PURE.md requirement to become globally
 reserved when that feature ships.
 
+The canonical typed-throw spelling is `using throw<E>`; a future `throws E`
+suffix, if accepted, must be merely an alias with the same effect metadata,
+not a separate unchecked exception mechanism. The source-level root/actor
+routing contract is `contracts/EXCEPTION_CONTROL_V1.md`.
+
 Effects are inferred for unannotated functions. Explicit `using` clauses
 are upper bounds / API promises; a body may use fewer effects but never
 more. Imports, callbacks, generics, dynamic dispatch, and function values
