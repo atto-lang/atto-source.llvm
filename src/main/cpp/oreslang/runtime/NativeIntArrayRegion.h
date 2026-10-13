@@ -31,6 +31,19 @@ typedef enum {
     ORES_NATIVE_ARRAY_NO_MEMORY = 2
 } OresNativeIntArrayStatus;
 
+/* First native error-handoff boundary. Called only after the compiler has
+ * completed all owned-resource cleanup, or after a failed region open with
+ * no published owner. Carries the exact LIMIT/NO_MEMORY tag for a future
+ * guest/supervisor handler. This implementation is intentionally noreturn:
+ * it never resumes into a frame whose owners have already been destroyed.
+ * Other statuses are invariant failures, not catchable resource errors.
+ * This ABI must remain allocation-free even on the out-of-memory path.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noreturn))
+#endif
+void oreslang_int_array_unhandled_resource_failure(uint32_t status);
+
 OresNativeIntArrayStatus oreslang_int_array_try_region_open(
     OresNativeIntArrayRegion** out_region);
 OresNativeIntArrayStatus oreslang_int_array_try_new(
@@ -93,6 +106,22 @@ void oreslang_int_array_test_set_next_token(uint64_t token);
  * 1 fails the attempt after that, and so forth; never compiled in production.
  */
 void oreslang_int_array_test_fail_after(int64_t attempts);
+/* Test-only audit counter for backing-buffer bytes wiped before release.
+ * It excludes metadata wiping and resets without modifying owners.
+ */
+void oreslang_int_array_test_reset_scrubbed_backing_bytes(void);
+uint64_t oreslang_int_array_test_scrubbed_backing_bytes(void);
+/* Deliberately corrupt one valid live array's metadata for child-process
+ * fail-closed tests. Not linked into production or exposed to Oreslang.
+ */
+void oreslang_int_array_test_corrupt_length(
+    OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle,
+    uint64_t impossible_length);
+/* Test-only corruption of region aggregate counters; verifies no unsafe
+ * abandonment, quota bypass or new owner publication with forged metadata.
+ */
+void oreslang_int_array_test_corrupt_region_accounting(
+    OresNativeIntArrayRegion* region, uint64_t live, uint64_t reserved);
 #endif
 #ifdef __cplusplus
 }

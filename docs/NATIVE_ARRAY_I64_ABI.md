@@ -78,12 +78,67 @@ storage. The token is **not** a cryptographic capability or authorization
 credential. A handle is only valid with its original region while the slot
 remains live. All element reads/writes are bounds-checked. No element pointer
 escapes. Destroying an array zeroizes all reserved storage before freeing it.
+Growth likewise allocates a fresh zero-filled buffer, copies live elements,
+and scrubs the entire old capacity **before** freeing the old buffer (rather
+than relying on `realloc`, which may release the old block without wiping).
+A failed growth leaves existing values, length and reservation metadata
+unchanged. The test-only backing-storage scrub counter verifies each growth
+and final destruction, separately from metadata wiping.
+
+Every live-handle operation first validates the internal slot invariants:
+`length <= capacity <= 65,536`, the capacity fits the region reservation
+accounting, and backing storage is present exactly when capacity is nonzero.
+This includes no-op `try_reserve`, `try_add` without growth, reads, writes
+and destruction; corrupt metadata triggers a process abort rather than being
+treated as quota exhaustion or successful access. Recycled slots must have
+fully cleared metadata. Test-only corrupted-length injection verifies the
+fail-closed behavior in child processes on each access path; it is unavailable
+in production runtime builds.
+
+Owner-creation, reservation, destruction, bulk staging, transactional
+commit (including an empty commit), and region close also reconcile the aggregate `live_count` and `reserved_elements` counters with
+all 64 actual slot records. Inactive slots must have zero tokens, capacities,
+lengths **and** null backing pointers. Inconsistent accounting aborts before
+any new handle is issued, storage is resized/dropped, or a region is freed.
+This is especially important on `region_close`: trusting falsified zero
+counters would otherwise abandon live backing allocations without zeroizing
+them. The bounded scan is not performed on hot-path element reads/writes.
+Nine test-only poisoned-counter death tests exercise these boundaries,
+including a commit into an empty destination and a zero-count commit.
+The full scan occurs before any transaction owner slot can be published.
 Closing a region requires every owned array to have been dropped.
 
 Invalid inputs, exhaustion, stale/cross-region handles, allocation failure
 and region-close-with-live-owners abort deliberately. This is a low-level
 compiler-only contract analogous to `NativeOwnedI64Region`, not a recoverable
-guest `Result` API. The eventual lowering must supply error/unwind and drop
+guest `Result` API.
+
+The LLVM compiler now retains the *exact checked status* in a compiler-owned
+i32 slot on every native region-open, owner-create and `Array<int>.add`
+resource-failure edge. Only `LIMIT=1` and `NO_MEMORY=2` are admitted into
+their separately named post-cleanup terminal blocks; an unexpected status
+also terminates. The status is saved **before** the shared reverse-order
+owner destruction and region closure, so later typed error propagation
+cannot confuse the cause with cleanup effects. All three terminal blocks
+currently `abort`: returning normally would expose destroyed owners.
+The compiler's validated LIMIT and NO_MEMORY blocks now call a dedicated
+`oreslang_int_array_unhandled_resource_failure(uint32_t status)` ABI
+**after** reverse owner drops and region close; the failed region-open path
+also calls it after independent region cleanup. The ABI is allocation-free,
+non-returning and accepts only the two defined recoverable resource status
+tags, rejecting any other tag as an invariant failure. This provides a
+typed, value-only terminal error handoff that native test wrappers can
+observe without touching guest-owned data. It is not a catch frame or
+supervisor mailbox delivery: the current runtime still aborts, and no guest
+frame resumes. Tests verify exact LIMIT vs NO_MEMORY identity and zero
+double-drop/leaks *before* the terminal handoff.
+
+These status blocks are **not** yet source-visible `throw`, `trap`,
+`Option` or `Result` semantics. The eventual lowering must supply a
+well-defined typed guest exception/unwind handler and error-payload lifetime,
+and must not accidentally catch `raise` or `panic`.
+
+The eventual lowering must supply error/unwind and drop
 glue when the full Oreslang language semantics demand it.
 
 ## Recoverable internal resource API and staging contract
@@ -98,8 +153,11 @@ ordinary resource exhaustion from ownership corruption.
   output place when allocation or slot admission fails.
 - `try_reserve(region, handle, capacity)` and
   `try_add(region, handle, value)` leave length, previously committed
-  elements, and region reservations unchanged on failure. No-op reserve is
-  always successful. Over-limit size/count/budget returns `LIMIT`;
+  elements, and region reservations unchanged on failure. When geometric
+  growth for `try_add` would exceed the aggregate region budget but one
+  additional element fits, it retries with the exact minimum required
+  capacity. Failed fallback allocation leaves previously committed data
+  unchanged. No-op reserve on an internally consistent live owner is always successful. Over-limit size/count/budget returns `LIMIT`;
   exhausted native memory returns `NO_MEMORY`.
 - `try_prepare_many(region, n, out)` acquires up to 64 independent empty
   arrays without publishing any output handle until all acquisitions pass.
@@ -114,11 +172,16 @@ ordinary resource exhaustion from ownership corruption.
   leaves existing published arrays untouched, and does not modify the caller's
   output handle slots. Filling uses exact-length reservations, not repeated
   geometric append allocations.
-- `commit_many(region, n, destinations, sources)` validates all source
-  tokens, destination tokens, uniqueness and pointer aliases **before**
-  performing any mutation. On success, it drops old destination arrays,
-  moves staged tokens to the destination owner slots, and disarms source slots
-  with zero. It performs no allocation and has no recoverable error exit.
+- `commit_many(region, n, destinations, sources)` first validates
+  **the entire region's metadata and aggregate accounting**, including
+  unrelated live slots, before checking selected source/destination tokens,
+  uniqueness and aliases. This applies even when the destination was
+  previously zero and when `n=0`; neither case necessarily drops an
+  existing owner. The bounded whole-region preflight prevents successful
+  publication under forged counters or corrupt unrelated array metadata.
+  It then drops old destination arrays, moves staged tokens to destination
+  slots and disarms source slots with zero. No allocation or recoverable
+  error exit occurs.
 
 **Safety contract:** invalid/stale/foreign handles, duplicate mutable owner
 places and token exhaustion still abort, including in `try_*` functions.
@@ -213,11 +276,148 @@ test includes whole-class move chains, guarded returns, fresh later
 allocations, stale source/duplicate move/immutable destination rejection,
 and normal plus ASan+UBSan fault injection at every allocation point.
 
+## Restricted direct Array<int> field ownership moves
+
+A synchronous, straight-line native function may transfer a live lexical
+`let mut Array<int>` owner into an exclusively held mutable class field:
+
+```oreslang
+let mut Shelf shelf = new Shelf();
+let mut Array<int> staged = new Array<int>();
+staged.add(42);
+shelf.first = rt take(staged);
+return shelf.first.get(0);
+```
+
+This is an **infallible owner-handle transfer**, not a copy.
+The compiler verifies a live, uniquely mutable class destination and
+a direct named, live, unborrowed lexical `Array<int>` source. It drops
+the superseded destination owner, zeroes its original failure-cleanup
+shadow, transfers the incoming opaque handle and disarms the lexical
+source slot. The incoming array's original shadow remains the cleanup
+authority if any **later** checked resource allocation fails; normal
+exit drops each current owner exactly once. Shadow provenance is also
+propagated across whole-class `rt take` transfers.
+
+Implicit copies, scalar sources, second moves, stale lexical reads,
+borrowed destinations and conditional transfers are rejected before IR.
+Branch-dependent ownership phi slots are not yet implemented; this
+first field-move slice is restricted to straight-line code, with
+deferred field moves remaining unsupported. Four sequential field
+assignments are **not** an atomic four-owner transaction. Full linked
+queue initialization still requires batch preparation, a single
+`commit_many` and publishing `ready` only after successful commit.
+
+Source-compiled Linux regression tests cover repeated field replacement,
+replacements on previously moved classes and precise no-IR negatives.
+Deterministic allocation failures *after* a replacement must destroy the
+superseded handle and remaining live owners exactly once; Clang
+ASan+UBSan runs the same compiler-generated guest programs.
+
+## Native/runtime linker symbol admission
+
+Compiler-owned C runtime imports and generated exports must not share an
+unqualified ELF/Wasm linker symbol with a source function. LLVM
+`Function::Create` can otherwise silently rename the guest function to a
+numbered suffix such as `abort.1`, violating the native source-to-symbol
+identity contract. The frontend now rejects unqualified source functions
+named `abort` or `__oreslang_guest_main`, or starting with
+`oreslang_int_array_`, `oreslang_owned_i64_region_`,
+`ores_actor_i64_heap_`, `oreslang_source_actor_`,
+`oreslang_actor_`, or `oreslang_wasm_actor_`. Existing
+`oreslang_int_array_` rejection is retained regardless of module name.
+Other names are checked when they would generate an unqualified linker
+symbol. Module-qualified user functions have distinct symbol names.
+
+The native class array source gate asserts seven additional forbidden
+symbol families are rejected **without IR**, rather than inspecting
+possibly auto-renamed generated functions. The same gate also constructs
+64 owned arrays across four classes and transfers all four complete
+classes without allocating any further handle. All sixty-four original
+handles are subsequently destroyed exactly once.
+
+This is a source/linker ABI namespace invariant, **not** guest-level
+exception handling, typed array allocation recovery or actor supervisor
+delivery. The checked resource failure cleanup continues to use trusted
+`abort` after exact-once destruction until typed error propagation is
+implemented.
+
+## Compiler-owned four-array filled transaction
+
+The LLVM compiler exposes one deliberately restricted source statement for
+classes with **exactly four** exclusively owned `Array<int>` fields:
+
+```oreslang
+define class QueueStorage as
+  let mut Array<int> previous = new Array<int>();
+  let mut Array<int> following = new Array<int>();
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> occupied = new Array<int>();
+  let int ready = 0;
+end
+pub fnc main(): int {
+  let mut QueueStorage q = new QueueStorage();
+  rt array_commit_filled(q, 8, -1, -1, 0, 0);
+  q.ready = 1;
+  return 42;
+}
+```
+
+The compiler recognizes `rt array_commit_filled(owner, length, v0, v1, v2,
+v3);` as a **statement intrinsic**, not a guest-callable function. The four
+destination fields are selected in **class declaration order**, not by
+field name. A native ownership pass requires a live exclusively mutable
+whole-class owner (no loans, partial moves or aliases) and four owned
+array fields. Length and fill expressions must be pure scalar
+expressions: no calls, `rt take`, or borrows. Conditional/deferred
+transactions are not admitted until branch-sensitive cleanup is proven.
+A declared `using` effect signature must include `alloc`.
+
+All inputs are evaluated *before* allocation. The compiler reserves four
+additional initialized-zero owner shadows, calls the trusted runtime
+`try_prepare_filled_many` once, and branches on its actual status. On
+success it emits exactly one `commit_many`, which validates all
+destination/source slots before changing any and never allocates.
+Because `commit_many` disarms each staged source slot, the compiler
+must **restore the hidden cleanup shadow** from each published
+destination handle immediately after commit returns. It then zeros the
+obsolete owner shadows; the new shadows remain the sole cleanup
+authority if a later checked operation fails. Missing this restoration
+would leak committed owners and abort when closing a live region.
+The user's `ready` scalar may be published only after commit.
+
+On a staging failure, the runtime rolls back all partially prepared
+arrays and leaves both the four destination slots and the staged-output
+slots unchanged. The compiler records the `LIMIT` or `NO_MEMORY` status
+and runs its pre-existing exact-once cleanup. That cleanup currently
+**aborts after releasing resources**; it does NOT offer recoverable guest
+`throw`, `trap` or `Result` handling. This is single-owner serialized
+atomic publication, not synchronization across concurrent threads.
+
+At length 65536, four replacement arrays reserve exactly 262144 elements,
+the entire per-region budget, so initialization succeeds only if old
+destination arrays reserve no elements and no other arrays consume the
+budget. A second fully populated 65536-element replacement cannot stage
+in the same region: it fails with `LIMIT` and cannot publish a partial
+replacement. Separate staging regions and ownership transfer across
+regions remain unsupported.
+
+The exact source -> LLVM -> Clang test gates include normal and
+ASan+UBSan execution at length 65536, repeated smaller transactions,
+transactions after a whole-class move, invalid syntax and ownership
+rejection without IR, and deterministic fault injection at all handle
+and backing-buffer allocation points. The native queue's exact source
+requires additional method, bool, loop and Option support, so its
+strict fail-closed fixtures remain enabled.
+
 ## Ownership and concurrency
 
 One owner invokes this ABI serially. It contains no mutexes and is **not**
 safe for multi-threaded shared access; it neither serializes actor turns nor
-implements reader/writer locking. The compiler must prevent shared writable
+implements reader/writer locking. A separate native CTest creates and drops
+arrays concurrently in independent thread-owned regions, then verifies all
+issued process-global tokens are unique; this does not admit shared access
+to one region. The compiler must prevent shared writable
 aliases and an owner move/drop while any loan is live. Actor-state queues
 must still enforce the single-flight execution invariant independently.
 

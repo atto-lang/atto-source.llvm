@@ -43,7 +43,7 @@ bool reserved(std::string_view name) {
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
-        "for", "of", "loop", "block", "break", "continue", "yield",
+        "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
@@ -155,9 +155,11 @@ bool native_pure_scalar_tree(const Expression& expr) {
 
 class Parser {
 public:
-    explicit Parser(std::string_view source, bool experimental_owned_int)
+    explicit Parser(std::string_view source, bool experimental_owned_int,
+                    bool experimental_rt_scalar_loop)
         : lexer_(source), token_(lexer_.next()),
-          experimental_owned_int_(experimental_owned_int) {}
+          experimental_owned_int_(experimental_owned_int),
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
     Program parse() {
         Program program;
@@ -511,6 +513,19 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
+                if (token_.text == "while" || token_.text == "for" ||
+                        token_.text == "loop") {
+                    fail("native realtime source loop requires verified LLVM continuation lowering");
+                }
+                if (token_.text == "rt") {
+                    advance();
+                    if (token_.text == "cooperate") {
+                        throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+                    }
+                    fail("unsupported native runtime operation in conditional arm");
+                }
                 Statement statement;
                 statement.offset = token_.offset;
                 if (finally_scope && (token_.text == "return" ||
@@ -557,6 +572,51 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "while" && experimental_rt_scalar_loop_) {
+                if (value.scalar_while || value.locals.size() != 1 ||
+                        !value.statements.empty() || !value.early_returns.empty() ||
+                        !value.actor_spawns.empty() || !value.actor_actions.empty() ||
+                        value.has_declared_effects || !value.parameters.empty() ||
+                        value.returns_void)
+                    fail("experimental scalar loop requires one local and no effects");
+                const LocalBinding& local = value.locals.front();
+                if (!local.owner_mutable || local.heap_owned || local.int_array ||
+                        !local.class_name.empty() || !local.initializer ||
+                        local.initializer->kind != Expression::Kind::Integer)
+                    fail("experimental scalar loop requires val scalar integer initializer");
+                auto loop = std::make_unique<ScalarWhileLoop>();
+                loop->counter = local.name;
+                loop->initial = local.initializer->integer;
+                require("while");
+                require("(");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop condition must read its counter");
+                require("<");
+                loop->upper_bound = integer_literal();
+                require(")");
+                require("{");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop must update its counter");
+                require("=");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop cannot read another owner");
+                require("+");
+                if (integer_literal() != 1)
+                    fail("experimental scalar loop increment must be exactly one");
+                require(";");
+                require("}");
+                if (loop->initial < 0 || loop->upper_bound < loop->initial ||
+                        loop->upper_bound > 1000000000LL)
+                    fail("experimental scalar loop requires bounded nonnegative i64 range");
+                value.scalar_while = std::move(loop);
+                if (token_.text != "return")
+                    fail("experimental scalar loop must be followed by a single return");
+                continue;
+            }
+            if (token_.text == "while" || token_.text == "for" ||
+                    token_.text == "loop") {
+                fail("native realtime source loop requires verified LLVM continuation lowering");
+            }
             if (token_.text == "try") {
                 if (terminal_try_finally || return_guards_started)
                     fail("native terminal try/finally must be a single return-only scope");
@@ -735,6 +795,35 @@ private:
                                                value.actor_stops.size() - 1});
                 continue;
             }
+            if (token_.text == "rt") {
+                const auto intrinsic_offset = token_.offset;
+                advance();
+                if (accept("array_commit_filled")) {
+                    // Restricted, compiler-only transaction over four
+                    // owned array fields in declaration order.
+                    Statement effect;
+                    effect.kind = Statement::Kind::ArrayCommitFilled;
+                    effect.offset = intrinsic_offset;
+                    require("(");
+                    effect.receiver = identifier();
+                    require(",");
+                    effect.array_commit_length = expression();
+                    for (std::size_t i = 0; i < 4; ++i) {
+                        require(",");
+                        effect.array_commit_values.push_back(expression());
+                    }
+                    require(")");
+                    require(";");
+                    value.statements.push_back(std::move(effect));
+                    continue;
+                }
+                if (token_.text == "cooperate") {
+                    throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+                }
+                fail("native rt statement unsupported until suspension lowering");
+            }
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
@@ -775,6 +864,10 @@ private:
         require("return");
         if (!value.returns_void) {
             value.result = expression();
+            if (value.scalar_while &&
+                    (value.result->kind != Expression::Kind::Variable ||
+                     value.result->name != value.scalar_while->counter))
+                fail("experimental scalar loop must return the counter");
             if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
                 fail("native protected try return requires nonthrowing scalar/field read");
         }
@@ -864,6 +957,11 @@ private:
             const auto offset = token_.offset;
             advance();
             const auto operation = token_.text;
+            if (operation == "cooperate") {
+                throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
@@ -1004,7 +1102,7 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::vector<std::string>>& functions) {
+                                    const std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>>& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1023,42 +1121,40 @@ private:
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
-                if (found == functions.end() || found->second.size() != expr.arguments.size()) {
+                if (found == functions.end() ||
+                    found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
                                              + expr.name + "' at byte "
                                              + std::to_string(expr.offset));
                 }
-                if (!expr.argument_names.empty()
-                        && expr.argument_names.size() != expr.arguments.size()) {
+                if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
                     throw std::runtime_error("invalid named call argument layout");
-                }
-                std::vector<bool> claimed(found->second.size(), false);
-                bool named_seen = false;
+                const auto& formals = found->second.at(expr.arguments.size());
+                std::vector<bool> bound(formals.size(), false);
+                bool saw_named = false;
                 std::size_t positional = 0;
                 for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
                     const std::string label = expr.argument_names.empty()
-                            ? std::string{} : expr.argument_names[i];
-                    std::size_t target = positional;
+                        ? std::string{} : expr.argument_names[i];
+                    std::size_t slot = positional;
                     if (!label.empty()) {
-                        named_seen = true;
-                        const auto it = std::find(found->second.begin(), found->second.end(), label);
-                        if (it == found->second.end()) {
+                        saw_named = true;
+                        auto it = std::find(formals.begin(), formals.end(), label);
+                        if (it == formals.end())
                             throw std::runtime_error("unknown named argument '" + label
                                                      + "' for " + expr.name);
-                        }
-                        target = static_cast<std::size_t>(it - found->second.begin());
+                        slot = static_cast<std::size_t>(it - formals.begin());
                     } else {
-                        if (named_seen) {
+                        if (saw_named)
                             throw std::runtime_error("positional argument after named argument");
-                        }
                         ++positional;
                     }
-                    if (claimed[target]) {
+                    if (slot >= formals.size() || bound[slot])
                         throw std::runtime_error("duplicate binding of parameter '"
-                                                 + found->second[target] + "'");
-                    }
-                    claimed[target] = true;
-                    // Lexical source order is also the ownership/effect-check order.
+                                                 + formals[slot] + "'");
+                    bound[slot] = true;
+                    // Check nested calls in lexical order, not formal-slot order.
                     validate_expression(*expr.arguments[i], parameters, functions);
                 }
                 return;
@@ -1116,9 +1212,20 @@ private:
                 throw std::runtime_error(
                     "using effects require transitive call summaries");
         }
-        for (const auto& stmt : fn.statements)
+        for (const auto& stmt : fn.statements) {
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
+                    !fn.declared_effects.has(FunctionEffect::Alloc))
+                throw std::runtime_error("filled array commit violates using signature without alloc");
             if (contains_callable_invocation(stmt.expression.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                if (contains_callable_invocation(stmt.array_commit_length.get()))
+                    throw std::runtime_error("filled array commit requires pure scalar length");
+                for (const auto& item : stmt.array_commit_values)
+                    if (contains_callable_invocation(item.get()))
+                        throw std::runtime_error("filled array commit requires pure scalar fills");
+            }
+        }
         for (const auto& guard : fn.early_returns)
             if (contains_callable_invocation(guard.lhs.get()) ||
                 contains_callable_invocation(guard.rhs.get()) ||
@@ -1134,22 +1241,45 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
-        std::unordered_map<std::string, std::vector<std::string>> functions;
+        std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
-            // Compiler-owned ABI imports must never be shadowed by a guest.
+            // Compiler-owned ABI imports and generated exports may be
+            // inserted before source function definitions. LLVM silently
+            // renames duplicate Function::Create symbols (e.g. abort.1),
+            // which would disconnect source identity from the actual linker
+            // symbol. Reject unqualified native/wasm symbols *before* IR.
+            // Module-qualified names are emitted as module.name and do not
+            // collide at the ELF/Wasm symbol boundary.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (program.module.empty()) {
+                const bool runtime_symbol =
+                    fn.name == "abort" ||
+                    fn.name == "__oreslang_guest_main" ||
+                    fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                    fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                    fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
+                if (runtime_symbol)
+                    throw std::runtime_error("reserved native runtime ABI symbol '" +
+                        fn.name + "'");
+            }
             if (std::count_if(fn.locals.begin(), fn.locals.end(),
                     [](const LocalBinding& local) { return local.int_array; }) > 64)
                 throw std::runtime_error("native Array<int> owner limit exceeded (64)");
-            std::vector<std::string> formal_names;
-            formal_names.reserve(fn.parameters.size());
-            for (const auto& param : fn.parameters) formal_names.push_back(param.name);
-            if (!functions.emplace(fn.name, std::move(formal_names)).second) {
-                throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
-                                         + std::to_string(fn.offset));
-            }
+            // Overload identity is strictly name and explicit argument count.
+            // Parameter types, borrow modes and returns cannot select a slot.
+            if (fn.name == "main" && functions.count("main"))
+                throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
+            std::vector<std::string> labels;
+            for (const auto& param : fn.parameters) labels.push_back(param.name);
+            if (!functions[fn.name].emplace(fn.parameters.size(), std::move(labels)).second)
+                throw std::runtime_error("function '" + fn.name + "' already has arity "
+                    + std::to_string(fn.parameters.size()) +
+                    "; parameter and return types do not select overloads at byte " +
+                    std::to_string(fn.offset));
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) {
                 if (!params.insert(param.name).second) {
@@ -1240,6 +1370,15 @@ private:
                     // Neither arm's lexical locals escape into the parent scope.
                     return;
                 }
+                if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                    if (!names.count(stmt.receiver))
+                        throw std::runtime_error("unknown array commit class receiver '" +
+                            stmt.receiver + "'");
+                    validate_expression(*stmt.array_commit_length, names, functions);
+                    for (const auto& item : stmt.array_commit_values)
+                        validate_expression(*item, names, functions);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
                     validate_expression(*local.initializer, names, functions);
@@ -1327,12 +1466,20 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    bool experimental_rt_scalar_loop_;
 };
 
 } // namespace
 
-Program parse_program(std::string_view source, bool experimental_owned_int) {
-    Program program = Parser(source, experimental_owned_int).parse();
+Program parse_program(std::string_view source, bool experimental_owned_int,
+                      bool experimental_rt_scalar_loop) {
+    Program program = Parser(source, experimental_owned_int,
+                             experimental_rt_scalar_loop).parse();
+    if (experimental_rt_scalar_loop &&
+            (program.functions.size() != 1 || !program.functions.front().scalar_while ||
+             !program.classes.empty() || !program.actors.empty() ||
+             !program.module.empty()))
+        throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
     // LLVM lowering is prohibited unless the native subset has passed both
     // name/arity checking and flow-sensitive explicit ownership admission.
     validate_i64_ownership(program);

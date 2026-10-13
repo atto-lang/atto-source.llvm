@@ -20,9 +20,7 @@ struct Expression {
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
-    // Call-site labels parallel to arguments, empty for positional arguments.
-    // Retain lexical argument order through validation and IR lowering.
-    std::vector<std::string> argument_names;
+    std::vector<std::string> argument_names; // indexed in lexical source order
 };
 
 struct Parameter {
@@ -95,7 +93,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled };
     Kind kind;
     // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
     // Non-Copy branch-local classes are still rejected until drop glue exists.
@@ -103,6 +101,11 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // Dedicated compiler intrinsic, never lowered as a guest-callable
+    // function: rt array_commit_filled(class_owner, length, v0, v1, v2, v3).
+    // Exactly four Array<int> fields in class declaration order.
+    std::unique_ptr<Expression> array_commit_length;
+    std::vector<std::unique_ptr<Expression>> array_commit_values;
     std::size_t offset = 0;
     // A bounded synchronous if/else statement. Arms contain checked field
     // writes or direct calls; local declarations and suspension fail closed.
@@ -122,8 +125,18 @@ struct GuardedReturn {
     std::size_t offset = 0;
 };
 
+// Experimental LLVM AOT-only, single-owner scalar loop frame. The grammar
+// admits only one val i64 counter, a constant upper bound and a +1 body.
+// No borrowed pointer, object owner, dynamic call or cleanup crosses a yield.
+struct ScalarWhileLoop {
+    std::string counter;
+    std::int64_t initial = 0;
+    std::int64_t upper_bound = 0;
+};
+
 struct Function {
     std::string name;
+    std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
     std::vector<Statement> statements;
@@ -162,6 +175,7 @@ struct Program {
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32 and source-level await/suspension.
-Program parse_program(std::string_view source, bool experimental_owned_int = false);
+Program parse_program(std::string_view source, bool experimental_owned_int = false,
+                      bool experimental_rt_scalar_loop = false);
 
 } // namespace oreslang

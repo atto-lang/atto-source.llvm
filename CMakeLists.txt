@@ -16,6 +16,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+    src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
 )
 
 target_include_directories(oreslang-llvmc PRIVATE
@@ -176,6 +177,22 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_unique_parallel_tokens
         COMMAND oreslang-owned-i64-token-concurrent-regions-test)
     set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
+
+    # Independent thread-confined regions may allocate concurrently. The
+    # process-global handle allocator must never issue duplicate tokens.
+    add_executable(oreslang-native-int-array-token-concurrent-regions-test
+        tests/native_int_array_token_concurrency_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-token-concurrent-regions-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-int-array-token-concurrent-regions-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-native-int-array-token-concurrent-regions-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-native-int-array-token-concurrent-regions-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_int_array_unique_parallel_tokens
+        COMMAND oreslang-native-int-array-token-concurrent-regions-test)
+    set_tests_properties(native_int_array_unique_parallel_tokens PROPERTIES TIMEOUT 30)
     # Header-only native arena proof: independent actor byte regions without
     # tracing GC. This is not yet a compiled Oreslang actor object heap.
     add_executable(oreslang-actor-owned-heap-test tests/actor_owned_heap_test.cpp)
@@ -247,6 +264,20 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # This isolated AOT source-to-native frame test does not relax the nine
+    # default compiler-negative RT admission contracts.
+    if(ORE_CLANG)
+        add_test(NAME native_rt_scalar_frame_aot_two_tasks
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_aot.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
+        set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 120)
+    else()
+        message(WARNING "Experimental scalar-loop AOT gate requires clang")
+    endif()
     find_program(ORE_NODE NAMES node nodejs)
     if(ORE_CLANG AND ORE_NODE)
         add_test(NAME wasm32_source_class_ownership_runtime
@@ -284,6 +315,36 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+
+    # Reject all unsupported source-level scheduler suspension until verified
+    # heap-owned continuations exist. The harness rejects any partial LLVM IR.
+    oreslang_contract_test(native_rt_while_loop_failclosed
+        native-rt-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_for_loop_failclosed
+        native-rt-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_unbounded_loop_failclosed
+        native-rt-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_failclosed
+        native-rt-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_expression_failclosed
+        native-rt-cooperate-expression-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_nested_while_failclosed
+        native-rt-nested-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_for_failclosed
+        native-rt-nested-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_loop_failclosed
+        native-rt-nested-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_cooperate_failclosed
+        native-rt-nested-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
     add_executable(oreslang-ownership-cfg-dataflow-test
         tests/ownership_cfg_dataflow_test.cpp)
@@ -381,17 +442,19 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
-            "$<TARGET_FILE:oreslang-llvmc>"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
+          "$<TARGET_FILE:oreslang-llvmc>"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
     set_tests_properties(native_named_call_lexical_ir_order PROPERTIES TIMEOUT 30)
     if(ORE_CLANG)
         oreslang_contract_test(native_named_call_reordered_guest named-call-reordered-main.ores
             --run 43 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_named_call_mixed_guest named-call-mixed-main.ores
             --run 43 --clang "${ORE_CLANG}")
-        oreslang_contract_test(native_named_call_mut_borrow_binding
-            named-call-mut-borrow-native.ores --run 7 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_mut_borrow_binding named-call-mut-borrow-native.ores
+            --run 7 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_overload_arity_guest named-call-arity-overload-main.ores
+            --run 43 --clang "${ORE_CLANG}")
     endif()
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
     if(ORE_CLANG)
@@ -884,18 +947,43 @@ if(BUILD_TESTING)
         set_tests_properties(native_pinned_actor_heap_suspend_cancel_quiescence PROPERTIES TIMEOUT 30)
     endif()
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
-    oreslang_contract_test(reject_duplicates duplicate-function.ores --diagnostic "duplicate function")
-    oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
-    # Named calls are bound against declaration labels before native lowering.
     oreslang_contract_test(native_named_call_unknown_label named-call-unknown-reject.ores
         --diagnostic "unknown named argument")
     oreslang_contract_test(native_named_call_duplicate_slot named-call-duplicate-reject.ores
         --diagnostic "duplicate binding of parameter")
     oreslang_contract_test(native_named_call_positional_after_named named-call-positional-after-named-reject.ores
         --diagnostic "positional argument cannot follow named argument")
-    oreslang_contract_test(native_named_call_mut_borrow_conflict
-        named-call-mut-borrow-after-loan-reject.ores
+    oreslang_contract_test(native_named_call_mut_borrow_conflict named-call-mut-borrow-after-loan-reject.ores
         --diagnostic "field read conflicts with active mutable borrow")
+    oreslang_contract_test(reject_duplicates duplicate-function.ores
+        --diagnostic "already has arity 0")
+    oreslang_contract_test(reject_same_arity_different_names native-name-arity-duplicate.ores
+        --diagnostic "already has arity 1")
+    # Audit canonical name+arity selection through the ownership checker,
+    # not merely LLVM symbol generation. No type/mode scoring or loan escapes.
+    oreslang_contract_test(native_name_arity_conflicting_loans native-name-arity-conflicting-loans.ores
+        --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_name_arity_nested_loan_conflict native-name-arity-nested-loan-conflict.ores
+        --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_name_arity_mode_mismatch native-name-arity-borrow-mode-mismatch.ores
+        --diagnostic "borrow mode does not match borrowed parameter")
+    oreslang_contract_test(native_name_arity_borrow_mode_duplicate native-name-arity-duplicate-borrow-modes.ores
+        --diagnostic "already has arity 1")
+    oreslang_contract_test(native_name_arity_main_overload_reject native-name-arity-overloaded-main.ores
+        --diagnostic "main cannot be overloaded")
+    oreslang_contract_test(native_name_arity_gap_reject native-name-arity-gap-reject.ores
+        --diagnostic "wrong call arity")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_compiled_name_arity_overloads
+            native-name-arity-overloads.ores
+            --ir "pick\$arity0" --run 24 --clang "${ORE_CLANG}")
+        set_tests_properties(native_compiled_name_arity_overloads PROPERTIES TIMEOUT 60)
+        oreslang_contract_test(native_compiled_name_arity_borrow_abi
+            native-name-arity-borrow-execute.ores
+            --ir "read\$arity1" --run 41 --clang "${ORE_CLANG}")
+        set_tests_properties(native_compiled_name_arity_borrow_abi PROPERTIES TIMEOUT 60)
+    endif()
+    oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
     # Source-level bounded class ownership and per-call shared/exclusive loans.
@@ -1368,4 +1456,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_versioned_state_logical_races
         PROPERTIES TIMEOUT 20)
     set_tests_properties(native_actor_state_scope_nested_loan_fencing PROPERTIES TIMEOUT 20)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(oreslang-refreshed-control-data-lane-test tests/native_actor_control_data_lane_test.cpp)
+    target_include_directories(oreslang-refreshed-control-data-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-refreshed-control-data-lane-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-refreshed-control-data-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME refreshed_actor_control_data_lane COMMAND oreslang-refreshed-control-data-lane-test)
+    set_tests_properties(refreshed_actor_control_data_lane PROPERTIES TIMEOUT 30)
 endif()
