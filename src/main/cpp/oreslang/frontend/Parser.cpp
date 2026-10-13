@@ -465,6 +465,9 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
+                // Nominal Result is a recognized source type boundary, never
+                // an i64 overload or structurally inferred class parameter.
+                reject_unlowered_result_type();
                 if (!accept("int")) parameter.class_name = identifier();
                 parameter.name = identifier();
                 value.parameters.push_back(std::move(parameter));
@@ -472,6 +475,7 @@ private:
             require(")");
         }
         require(":");
+        reject_unlowered_result_type();
         value.returns_void = accept("void");
         if (!value.returns_void) require("int");
         if (accept("using")) {
@@ -1213,6 +1217,24 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    // Parse the first closed nominal Result specialization before rejecting
+    // its lowering. No Result<void,ArrayError> value can become an i64 by
+    // falling through the older scalar/class parser. This is an explicit
+    // no-IR gate, NOT implementation of a guest Result ABI.
+    void reject_unlowered_result_type() {
+        if (!accept("Result")) return;
+        require("<");
+        if (!accept("void")) {
+            fail("native generic Result<T,E> requires source tagged-value lowering");
+        }
+        require(",");
+        if (!accept("ArrayError")) {
+            fail("native Result<void,E> requires nominal ArrayError specialization and tagged lowering");
+        }
+        require(">");
+        fail("native Result<void, ArrayError> requires tagged construction, must-use proof and match lowering; no LLVM IR");
     }
 
     std::string identifier() {
