@@ -52,7 +52,41 @@ int main() {
         "duplicate sealed actor state block");
     must_reject(
         "define actor Counter as state { value: int = 0; } pub get(): int { return value; } end",
-        "state methods require sealed handle_state");
+        "expected 'self'");
+
+    // Parsed as a dedicated, non-reifiable reader/writer state callback AST,
+    // not an ordinary actor on_message or host compiler function.
+    must_reject(R"(
+        define actor Counter as
+            state { value: int = 0 }
+            pub get(): int {
+                return self.handle_state(critical-read |s| -> s.value);
+            }
+            pub increment(): int {
+                return self.handle_state(critical-write |s| -> {
+                    s.value = s.value + 1;
+                    return s.value;
+                });
+            }
+        end
+    )", "native sealed actor state AST is recognized");
+
+    must_reject(
+        "define actor Counter as state { value: int = 0; } "
+        "pub get(): int { return self.handle_state(critical-read |s| -> s.missing); } end",
+        "unknown sealed actor state field");
+    must_reject(
+        "define actor Counter as state { value: int = 0; } "
+        "pub get(): int { return self.handle_state(critical-read |s, t| -> s.value); } end",
+        "expected '|'");
+    must_reject(
+        "define actor Counter as state { value: int = 0; } "
+        "pub get(): int { return self.handle_state(critical-read |self| -> self.value); } end",
+        "expected non-keyword identifier");
+    must_reject(
+        "define actor Counter as state { value: int = 0; } "
+        "pub get(): int { return self.handle_state(critical-write |s| -> s.value); } end",
+        "requires a scoped write body");
 
     // An ordinary source function must remain unaffected by this new AST.
     auto program = oreslang::parse_program("pub fnc main(): int { return 0; }");
