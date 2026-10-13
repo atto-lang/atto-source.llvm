@@ -292,6 +292,24 @@ if(BUILD_TESTING)
                 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_tests_properties(wasm32_source_actor_guest_lifecycle PROPERTIES TIMEOUT 120)
     endif()
+    # First real compiler-emitted AOT while continuation. The host owns the
+    # frame and schedules finite reductions; actor/mailbox integration is not
+    # claimed until generated actor continuations use the carrier ABI.
+    find_program(ORE_RT_AOT_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    find_program(ORE_RT_AOT_CXX NAMES clang++-18 clang++-19 clang++ clang++-17 clang++-16 clang++-15 clang++-14)
+    if(NOT ORE_RT_AOT_CLANG OR NOT ORE_RT_AOT_CXX)
+        message(FATAL_ERROR "AOT scalar continuation requires Clang and Clang++ to run")
+    endif()
+    add_test(NAME native_source_scalar_while_compiler_aot_resume
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_aot_scalar_while.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_RT_AOT_CLANG}"
+            --cxx "${ORE_RT_AOT_CXX}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_source_scalar_while_compiler_aot_resume
+        PROPERTIES TIMEOUT 120)
+
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
