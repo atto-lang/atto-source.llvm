@@ -101,10 +101,9 @@ public:
                               std::optional<Kind> origin = std::nullopt,
                               std::uint32_t origin_code = 0) {
         std::lock_guard<std::mutex> lock(mu_);
-        Slot& slot = require(actor);
-        if (slot.has_event) return false;
-        // Invalid enum tags can arrive from native FFI/casts. Never accept
-        // them as legitimate terminal events or acknowledge them silently.
+        // Validate and normalize before considering duplicate publication:
+        // even a duplicate must not let a forged invalid effect slip through
+        // the low-level CONTROL entrypoint unnoticed.
         switch (kind) {
             case Kind::Throw: case Kind::Raise: case Kind::Panic:
             case Kind::Cancel: case Kind::HostFailure: break;
@@ -116,10 +115,19 @@ public:
             case Kind::Cancel: case Kind::HostFailure: break;
             default: throw std::invalid_argument("invalid supervisor origin kind");
         }
-        if (original != kind && !(kind == Kind::Panic
+        // Every route into actor supervision, including direct lane writers,
+        // delivers unhandled Throw/Raise as Panic. Do NOT change origin_kind.
+        if (kind == Kind::Throw || kind == Kind::Raise) {
+            if (original != kind) {
+                throw std::invalid_argument("actor terminal origin contradicts effect");
+            }
+            kind = Kind::Panic;
+        } else if (original != kind && !(kind == Kind::Panic
                 && (original == Kind::Throw || original == Kind::Raise))) {
             throw std::invalid_argument("invalid supervisor terminal/origin pair");
         }
+        Slot& slot = require(actor);
+        if (slot.has_event) return false;
         slot.kind = kind;
         slot.origin_kind = original;
         slot.origin_code = origin_code;
