@@ -66,9 +66,28 @@ def main():
                           "// @derive(Eq) in comments is not active metadata\n"
                           + "/* macro_rules! fake { () => { 42 }; } */\n" + BASE,
                           target)
-            if good.returncode or "define" not in good.stdout:
+            if good.returncode or "define i64 @main" not in good.stdout:
                 failures.append("positive control failed for " + target +
                                 ": " + good.stderr[:350])
+            if _good_files:
+                failures.append("positive control wrote unexpected files for " + target
+                                + ": " + ", ".join(_good_files))
+            if target == "wasm32" and 'target triple = "wasm32-unknown-unknown"' not in good.stdout:
+                failures.append("wasm32 positive control omitted certified target triple")
+
+            # Positive native baseline: valid, unannotated typed calls must
+            # remain compilable while unsupported metadata fails closed.
+            calls, call_files = invoke(args.compiler, directory,
+                                       "typed_calls_" + target,
+                                       "pub fnc add(int a, int b): int { return a + b; }\\n"
+                                       "pub fnc main(): int { return add(20, 22); }\\n",
+                                       target)
+            if calls.returncode or "define i64 @main" not in calls.stdout or "define i64 @add" not in calls.stdout:
+                failures.append("typed call control failed for " + target
+                                + ": " + calls.stderr[:350])
+            if call_files:
+                failures.append("typed call control wrote unexpected files for " + target
+                                + ": " + ", ".join(call_files))
             for label, source in NEGATIVE_CASES.items():
                 result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
                 if result.returncode == 0:
