@@ -325,6 +325,10 @@ private:
             const bool legacy_let = accept("let");
             ClassField field;
             if (!legacy_let) field.final_field = accept("final");
+            // 'final const' is a literal-only compatibility spelling of
+            // 'final' for class fields. The native subset already requires
+            // i64 literals, so both spellings produce identical field slots.
+            if (field.final_field) accept("const");
             if (legacy_let && accept("mut")) {
                 require("Array");
                 require("<");
