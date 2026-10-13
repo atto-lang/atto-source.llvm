@@ -23,6 +23,16 @@ struct EffectStatus {
     std::uint32_t code = 0;
 };
 
+constexpr bool effect_kind_valid(EffectKind kind) noexcept {
+    switch (kind) {
+        case EffectKind::Return: case EffectKind::Throw:
+        case EffectKind::Raise: case EffectKind::Panic:
+        case EffectKind::Cancel: case EffectKind::Fatal:
+            return true;
+    }
+    return false;
+}
+
 constexpr unsigned effect_rank(EffectKind kind) noexcept {
     switch (kind) {
         case EffectKind::Return: return 0;
@@ -62,7 +72,11 @@ public:
     // downgraded by ordinary cleanup throws.
     Summary finish(EffectStatus current = {}) noexcept {
         Summary result{};
-        result.primary = current;
+        // Invalid native tags can arrive via FFI or corrupted compiler
+        // output. Normalize before any cleanup callback executes; never
+        // propagate a fabricated effect discriminator as guest-visible data.
+        result.primary = effect_kind_valid(current.kind)
+                ? current : EffectStatus{EffectKind::Fatal, 0xFFFFFFFDu};
         if (finished_) {
             result.primary = {EffectKind::Fatal, 0xFFFFFFFEu};
             return result;
@@ -70,7 +84,10 @@ public:
         finished_ = true;
         while (count_ != 0) {
             Entry cleanup = stack_[--count_];
-            const EffectStatus next = cleanup.callback(cleanup.context);
+            const EffectStatus reported = cleanup.callback(cleanup.context);
+            // Fail closed if guest/FFI code manufactures an invalid tag.
+            const EffectStatus next = effect_kind_valid(reported.kind)
+                    ? reported : EffectStatus{EffectKind::Fatal, 0xFFFFFFFDu};
             if (next.kind == EffectKind::Return) continue;
             if (effect_rank(next.kind) > effect_rank(result.primary.kind)) {
                 append_secondary(result, result.primary);
