@@ -753,7 +753,27 @@ private:
                 continue;
             }
             if (token_.text == "rt") {
+                const auto intrinsic_offset = token_.offset;
                 advance();
+                if (accept("array_commit_filled")) {
+                    // Restricted, compiler-only transaction over four
+                    // owned array fields in declaration order.
+                    Statement effect;
+                    effect.kind = Statement::Kind::ArrayCommitFilled;
+                    effect.offset = intrinsic_offset;
+                    require("(");
+                    effect.receiver = identifier();
+                    require(",");
+                    effect.array_commit_length = expression();
+                    for (std::size_t i = 0; i < 4; ++i) {
+                        require(",");
+                        effect.array_commit_values.push_back(expression());
+                    }
+                    require(")");
+                    require(";");
+                    value.statements.push_back(std::move(effect));
+                    continue;
+                }
                 if (token_.text == "cooperate") {
                     throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
@@ -1094,9 +1114,20 @@ private:
                 throw std::runtime_error(
                     "using effects require transitive call summaries");
         }
-        for (const auto& stmt : fn.statements)
+        for (const auto& stmt : fn.statements) {
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
+                    !fn.declared_effects.has(FunctionEffect::Alloc))
+                throw std::runtime_error("filled array commit violates using signature without alloc");
             if (contains_callable_invocation(stmt.expression.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                if (contains_callable_invocation(stmt.array_commit_length.get()))
+                    throw std::runtime_error("filled array commit requires pure scalar length");
+                for (const auto& item : stmt.array_commit_values)
+                    if (contains_callable_invocation(item.get()))
+                        throw std::runtime_error("filled array commit requires pure scalar fills");
+            }
+        }
         for (const auto& guard : fn.early_returns)
             if (contains_callable_invocation(guard.lhs.get()) ||
                 contains_callable_invocation(guard.rhs.get()) ||
@@ -1237,6 +1268,15 @@ private:
                     for (const auto& action : stmt.else_statements)
                         check_statement_names(action, else_names);
                     // Neither arm's lexical locals escape into the parent scope.
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                    if (!names.count(stmt.receiver))
+                        throw std::runtime_error("unknown array commit class receiver '" +
+                            stmt.receiver + "'");
+                    validate_expression(*stmt.array_commit_length, names, functions);
+                    for (const auto& item : stmt.array_commit_values)
+                        validate_expression(*item, names, functions);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
