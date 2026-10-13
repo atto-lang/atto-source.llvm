@@ -2,6 +2,7 @@
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -44,6 +45,8 @@ struct RegionMoveLowering {
     llvm::FunctionCallee array_add, array_get, array_set, array_length;
     const std::unordered_set<std::string>* array_names = nullptr;
     const std::unordered_set<std::string>* array_fields = nullptr;
+    llvm::BasicBlock* resource_failure = nullptr;
+    const std::unordered_map<std::string, llvm::Value*>* owned_failure_handles = nullptr;
 };
 
 // Only a lexical named array or a direct class-owned array field is legal.
@@ -116,9 +119,17 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {moves->array_region, handle, args[0]}, "array.get");
-            if (expr.name == "add" && args.size() == 1)
-                return builder.CreateCall(moves->array_add,
-                    {moves->array_region, handle, args[0]});
+            if (expr.name == "add" && args.size() == 1) {
+                llvm::Value* status = builder.CreateCall(moves->array_add,
+                    {moves->array_region, handle, args[0]}, "array.add.status");
+                llvm::BasicBlock* proceed = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.add.ok", builder.GetInsertBlock()->getParent());
+                builder.CreateCondBr(builder.CreateICmpEQ(status,
+                    llvm::ConstantInt::get(status->getType(), 0), "array.add.success"),
+                    proceed, moves->resource_failure);
+                builder.SetInsertPoint(proceed);
+                return llvm::ConstantInt::get(i64, 0);
+            }
             if (expr.name == "set" && args.size() == 2)
                 return builder.CreateCall(moves->array_set,
                     {moves->array_region, handle, args[0], args[1]});
@@ -166,6 +177,11 @@ llvm::Value* lower(const Expression& expr,
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0),
                         storage.at(expr.left->name));
                     builder.CreateStore(builder.getFalse(), found->second);
+                    if (moves->owned_failure_handles) {
+                        const auto shadow = moves->owned_failure_handles->find(expr.left->name);
+                        if (shadow != moves->owned_failure_handles->end())
+                            builder.CreateStore(llvm::ConstantInt::get(i64, 0), shadow->second);
+                    }
                     return value;
                 }
             }
@@ -310,15 +326,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 });
         });
     llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
-                         arrayLength, arrayDrop, arrayClose;
+                         arrayLength, arrayDrop, arrayClose, arrayAbort;
     if (has_array_bindings) {
         auto* voidTy = llvm::Type::getVoidTy(context);
-        arrayOpen = module.getOrInsertFunction("oreslang_int_array_region_open",
-            llvm::FunctionType::get(native_ptr, {}, false));
-        arrayNew = module.getOrInsertFunction("oreslang_int_array_new",
-            llvm::FunctionType::get(i64, {native_ptr}, false));
-        arrayAdd = module.getOrInsertFunction("oreslang_int_array_add",
-            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false));
+        auto* i32 = llvm::Type::getInt32Ty(context);
+        arrayOpen = module.getOrInsertFunction("oreslang_int_array_try_region_open",
+            llvm::FunctionType::get(i32, {native_ptr}, false));
+        arrayNew = module.getOrInsertFunction("oreslang_int_array_try_new",
+            llvm::FunctionType::get(i32, {native_ptr, native_ptr}, false));
+        arrayAdd = module.getOrInsertFunction("oreslang_int_array_try_add",
+            llvm::FunctionType::get(i32, {native_ptr, i64, i64}, false));
+        arrayAbort = module.getOrInsertFunction("abort",
+            llvm::FunctionType::get(voidTy, {}, false));
         arrayGet = module.getOrInsertFunction("oreslang_int_array_get",
             llvm::FunctionType::get(i64, {native_ptr, i64, i64}, false));
         arraySet = module.getOrInsertFunction("oreslang_int_array_set",
