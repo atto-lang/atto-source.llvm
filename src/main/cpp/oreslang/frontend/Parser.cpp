@@ -1012,6 +1012,22 @@ private:
         return result;
     }
 
+    static void expression_calls(const Expression& expression, std::unordered_set<std::string>& calls) {
+        if (expression.kind == Expression::Kind::Call) calls.insert(expression.name);
+        if (expression.left) expression_calls(*expression.left, calls);
+        if (expression.right) expression_calls(*expression.right, calls);
+        for (const auto& argument : expression.arguments) expression_calls(*argument, calls);
+    }
+
+    static void forbid_actor_lifecycle_calls(const Expression& expression,
+                                             const std::unordered_set<std::string>& forbidden) {
+        std::unordered_set<std::string> calls;
+        expression_calls(expression, calls);
+        for (const auto& call : calls)
+            if (forbidden.count(call))
+                throw std::runtime_error("actor method cannot call lifecycle entry function '" + call + "'");
+    }
+
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
                                     const std::unordered_map<std::string, std::size_t>& functions) {
@@ -1171,6 +1187,29 @@ private:
                 }
             }
         }
+        std::unordered_set<std::string> lifecycleFunctions{"main"};
+        std::unordered_map<std::string, std::unordered_set<std::string>> callGraph;
+        for (const auto& fn : program.functions) {
+            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() || !fn.actor_stops.empty()
+                || !fn.pipeline_actors.empty() || !fn.ready_await_actor.empty()
+                || !fn.pipeline_expect_actor.empty() || !fn.pipeline_cancel_actor.empty())
+                lifecycleFunctions.insert(fn.name);
+            auto& calls = callGraph[fn.name];
+            expression_calls(*fn.result, calls);
+            for (const auto& local : fn.locals) expression_calls(*local.initializer, calls);
+            for (const auto& send : fn.actor_sends)
+                if (send.payload) expression_calls(*send.payload, calls);
+        }
+        bool changed;
+        do {
+            changed = false;
+            for (const auto& entry : callGraph)
+                if (!lifecycleFunctions.count(entry.first))
+                    for (const auto& callee : entry.second)
+                        if (lifecycleFunctions.count(callee)) {
+                            lifecycleFunctions.insert(entry.first); changed = true; break;
+                        }
+        } while (changed);
         for (const auto& fn : program.functions) {
             std::unordered_set<std::string> available(fn.parameters.begin(),
                                                       fn.parameters.end());
@@ -1232,8 +1271,12 @@ private:
                     if (!found->transform_pipe) {
                         if (contract.empty()) contract = found->messages_type;
                         else if (contract != found->messages_type
-                                 && std::none_of(program.actors.begin(), program.actors.end(),
-                                        [](const Actor& a) { return a.transform_pipe; }))
+                                 && std::none_of(fn.pipeline_actors.begin(), fn.pipeline_actors.end(),
+                                        [&](const std::string& ref) {
+                                            const auto stage = std::find_if(program.actors.begin(), program.actors.end(),
+                                                [&](const Actor& a) { return a.name == actorTypes.at(ref); });
+                                            return stage->transform_pipe;
+                                        }))
                             throw std::runtime_error("pipeline actor message domains must match");
                     }
                 }
@@ -1446,6 +1489,11 @@ private:
             }
             std::unordered_set<std::string> methods;
             for (const auto& method : actor.methods) {
+                forbid_actor_lifecycle_calls(*method.result, lifecycleFunctions);
+                for (const auto& local : method.locals)
+                    forbid_actor_lifecycle_calls(*local.initializer, lifecycleFunctions);
+                for (const auto& arm : method.tagged_arms)
+                    if (arm.route_payload) forbid_actor_lifecycle_calls(*arm.route_payload, lifecycleFunctions);
                 // Neither ordinary actor methods nor the legacy boolean
                 // receive matcher may touch actor state outside a scoped
                 // handle_state callback. Reject before the LLVM lowering

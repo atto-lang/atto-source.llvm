@@ -318,8 +318,23 @@ std::string emit_verified_llvm_ir(const Program& source) {
     auto* nominalTy = llvm::StructType::get(context, {ptr, i32});
     for (const auto& actor : source.actors) {
         const auto pipeline = pipelineWireCases.find(actor.name);
+        std::vector<std::string> standaloneCases;
+        if (pipeline == pipelineWireCases.end() && actor.transform_pipe) {
+            std::set<std::string> alternatives;
+            for (const auto& domain : {actor.forward_messages_type, actor.backward_messages_type}) {
+                for (const auto& pattern : source.tagged_patterns)
+                    if (pattern.name == domain)
+                        alternatives.insert(pattern.alternatives.begin(), pattern.alternatives.end());
+                for (const auto& enumeration : source.enums)
+                    if (enumeration.name == domain)
+                        for (const auto& item : enumeration.cases)
+                            alternatives.insert(enumeration.name + "." + item.name);
+            }
+            standaloneCases.assign(alternatives.begin(), alternatives.end());
+        }
         auto cases = tagged_cases(source, actor,
-            pipeline == pipelineWireCases.end() ? nullptr : &pipeline->second);
+            pipeline != pipelineWireCases.end() ? &pipeline->second
+                : actor.transform_pipe ? &standaloneCases : nullptr);
         if (cases.empty()) continue;
         std::vector<llvm::Constant*> contracts, identities;
         const auto prefix = actor.name + ".tagged.";

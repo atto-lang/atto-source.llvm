@@ -2,10 +2,10 @@
 // The LLVM source compiler must reject before emitting IR until
 // scheduler-bound PipelineContext guest lowering exists.
 define actor Worker as {
-    let total: int = 0;
+    state { total: int = 0; }
     pub fnc on_message(int n): int {
         self.backward(n);
-        return total;
+        return 0;
     }
 }
 pub fnc main(): int {
