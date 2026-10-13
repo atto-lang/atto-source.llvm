@@ -64,9 +64,12 @@ unknown members, wrong arities, alias shadowing, and unscoped borrows.
 These checks do **not** prove `Any` or `bool` native execution: compiler codegen
 continues to reject all imported `std/assert` programs before LLVM IR emission.
 
-The native `EffectUnwind` helper has been hardened with 36 pairwise effect
-precedence scenarios. An already-pending terminal effect remains primary;
-ordinary cleanup throws retain the most recent ordinary failure and preserve
+The native `EffectUnwind` helper has been hardened with 49 pairwise effect
+precedence scenarios, including `ProcessExit`. An already-pending terminal
+effect remains primary; a deferred process exit also cannot replace an earlier
+ordinary throw with an apparently successful exit status. Unknown native effect
+tags become terminal `Fatal` statuses instead of being silently admitted.
+Ordinary cleanup throws retain the most recent ordinary failure and preserve
 previous failures as secondary diagnostics. Only ordinary `Throw` is marked
 eligible for future `trap` capture. This helper is not yet emitted by the
 Oreslang compiler. Actual guest-to-guest parity remains a release gate.
