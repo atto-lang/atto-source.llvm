@@ -1,14 +1,17 @@
 #include "oreslang/frontend/NominalOverloadSelector.hpp"
-#include <cassert>
 #include <stdexcept>
 #include <vector>
 
 using namespace oreslang;
 
+static void check(bool condition) {
+    if (!condition) throw std::runtime_error("nominal selector regression failed");
+}
+
 template <typename F> void must_reject(F fn) {
     bool rejected = false;
     try { fn(); } catch (const std::invalid_argument&) { rejected = true; }
-    assert(rejected);
+    check(rejected);
 }
 
 int main() {
@@ -23,12 +26,12 @@ int main() {
         {"root", "x", {integer}}, {"root", "x", {boolean}}
     };
     validate_nominal_overload_family(cases);
-    assert(resolve_nominal_overload_static(cases, {a}) == 0);
-    assert(resolve_nominal_overload_static(cases, {b}) == 1);
-    assert(resolve_nominal_overload_static(cases, {integer}) == 2);
-    assert(resolve_nominal_overload_static(cases, {boolean}) == 3);
-    assert(nominal_overload_link_key(cases[0]) != nominal_overload_link_key(cases[1]));
-    assert(nominal_overload_link_key(cases[2]) != nominal_overload_link_key(cases[3]));
+    check(resolve_nominal_overload_static(cases, {a}) == 0);
+    check(resolve_nominal_overload_static(cases, {b}) == 1);
+    check(resolve_nominal_overload_static(cases, {integer}) == 2);
+    check(resolve_nominal_overload_static(cases, {boolean}) == 3);
+    check(nominal_overload_link_key(cases[0]) != nominal_overload_link_key(cases[1]));
+    check(nominal_overload_link_key(cases[2]) != nominal_overload_link_key(cases[3]));
 
     // Missing tags do not authorize inspecting runtime values.
     must_reject([&] { resolve_nominal_overload_static(cases, {std::nullopt}); });
