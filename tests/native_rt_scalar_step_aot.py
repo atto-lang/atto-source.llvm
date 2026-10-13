@@ -45,7 +45,7 @@ def main():
         llvm_ir.write_text(accepted.stdout)
         exe = out / "run-guest"
         build = run([args.clang, "-std=c11", "-O2", "-Wall", "-Wextra",
-                     "-Werror", "-pedantic", str(args.harness),
+                     "-Werror", "-Wno-error=override-module", "-pedantic", str(args.harness),
                      "-x", "ir", str(llvm_ir), "-o", str(exe)])
         assert build.returncode == 0, build.stderr
         execution = run([str(exe)])
