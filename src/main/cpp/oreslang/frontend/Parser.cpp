@@ -1321,13 +1321,31 @@ private:
                 for (const auto& binding : fn.locals)
                     if (binding.name == "Assert")
                         throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                // Not all lexical bindings are recorded in fn.locals.
+                // Catch identifiers, continuation counters and actor refs
+                // must not hijack a sealed module qualifier either.
+                if (fn.catch_binding == "Assert" ||
+                    (fn.scalar_while && fn.scalar_while->counter == "Assert"))
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                for (const auto& spawned : fn.actor_spawns)
+                    if (spawned.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
             }
             for (const auto& cls : program.classes)
                 if (cls.name == "Assert")
                     throw std::runtime_error("sealed Assert module alias cannot be shadowed");
-            for (const auto& actor : program.actors)
+            for (const auto& actor : program.actors) {
                 if (actor.name == "Assert")
                     throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                // Actor-local fields and implicit entrypoint parameters
+                // inhabit a different scope than ordinary file fncs.
+                for (const auto& field : actor.fields)
+                    if (field.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                for (const auto& param : actor.on_message.parameters)
+                    if (param.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            }
         }
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
