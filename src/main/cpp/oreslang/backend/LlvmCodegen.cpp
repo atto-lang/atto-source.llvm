@@ -467,6 +467,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
                      llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
                     spawn.name + ".native.actor.ref");
             }
+            const auto spawnedActor = std::find_if(source.actors.begin(), source.actors.end(),
+                [&](const Actor& actor) { return actor.name == spawn.actor_type; });
+            if (spawnedActor->pipe_role) {
+                auto setRole = module.getOrInsertFunction("oreslang_source_actor_pipeline_set_role",
+                    llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr, i64}, false));
+                builder.CreateCall(setRole, {ref, llvm::ConstantInt::get(i64, spawnedActor->pipe_role)});
+            }
             actorRefs.emplace(spawn.name, ref);
             actorRefTypes.emplace(spawn.name, spawn.actor_type);
         }
@@ -829,7 +836,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             throw std::runtime_error("LLVM pipeline route type contract mismatch");
                         llvm::Value* routed = lower(*arm.route_payload, builder, i64,
                                                     armParameters, locals, declarations);
-                        builder.CreateCall(pipelineEmit, {
+                        if (arm.route_direction == "respond") {
+                            auto respond = module.getOrInsertFunction("oreslang_source_actor_pipeline_respond_i64",
+                                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
+                            builder.CreateCall(respond, {routed});
+                        } else builder.CreateCall(pipelineEmit, {
                             llvm::ConstantInt::get(i64,
                                 arm.route_direction == "forward" ? 1 : 2),
                             llvm::ConstantInt::get(i64,
@@ -1002,9 +1013,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
             auto* callback = actorMessageHandlers.at(actor.name);
             auto* forward = module.getFunction(symbol + "_receive_forward");
             auto* backward = module.getFunction(symbol + "_receive_backward");
-            if (!forward || !backward
+            if (!forward || (actor.pipe_role != 3 && !backward)
                     || forward->getFunctionType() != callback->getFunctionType()
-                    || backward->getFunctionType() != callback->getFunctionType())
+                    || (backward && backward->getFunctionType() != callback->getFunctionType()))
                 throw std::runtime_error("transform pipe callback ABI mismatch");
             auto* entry = llvm::BasicBlock::Create(context, "direction.entry", callback);
             auto* forwardBlock = llvm::BasicBlock::Create(context, "direction.forward", callback);
@@ -1016,8 +1027,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 llvm::FunctionType::get(i64, {}, false));
             auto* direction = dispatch.CreateCall(ingress, {}, "scheduler.ingress");
             auto* branches = dispatch.CreateSwitch(direction, invalid, 2);
-            branches->addCase(llvm::ConstantInt::get(i64, 1), forwardBlock);
-            branches->addCase(llvm::ConstantInt::get(i64, 2), backwardBlock);
+            branches->addCase(llvm::ConstantInt::get(i64, actor.pipe_role == 1 ? 0 : 1), forwardBlock);
+            if (backward) branches->addCase(llvm::ConstantInt::get(i64, 2), backwardBlock);
             std::vector<llvm::Value*> arguments;
             for (auto& arg : callback->args()) arguments.push_back(&arg);
             // Reject an intact but directionally incorrect nominal frame
@@ -1052,8 +1063,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
             };
             permitCases(forwardBlock, actor.forward_messages_type, forward,
                         "dispatch.allowed.forward");
-            permitCases(backwardBlock, actor.backward_messages_type, backward,
+            if (backward) permitCases(backwardBlock, actor.backward_messages_type, backward,
                         "dispatch.allowed.backward");
+            else { dispatch.SetInsertPoint(backwardBlock); dispatch.CreateBr(invalid); }
             dispatch.SetInsertPoint(invalid);
             auto reject = module.getOrInsertFunction(
                 "oreslang_source_actor_pipeline_reject_delivery",
@@ -1102,6 +1114,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
                             && name != "oreslang_source_actor_pipeline_ingress"
+                            && name != "oreslang_source_actor_pipeline_set_role"
+                            && name != "oreslang_source_actor_pipeline_respond_i64"
                             && name != "oreslang_source_actor_pipeline_reject_delivery"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_pipeline_expect_status"

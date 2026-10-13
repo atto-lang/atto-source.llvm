@@ -303,7 +303,7 @@ if(BUILD_TESTING)
         --diagnostic "receive_forward parameter type must match declared message domain")
     oreslang_contract_test(reject_transform_pipe_scalar_return
         transform-pipe-return-value-reject.ores
-        --diagnostic "expected ';'")
+        --diagnostic "must return void")
     oreslang_contract_test(reject_transform_pipe_unknown_domain
         transform-pipe-unknown-domain-reject.ores
         --diagnostic "unknown transform pipe message domain")
@@ -615,6 +615,29 @@ if(BUILD_TESTING)
             endif()
         endforeach()
     endforeach()
+    if(ORE_CLANG)
+        foreach(style dot colon operator)
+            oreslang_contract_test(native_exec_explicit_pipe_fifteen_${style}
+                source-pipe-explicit-fifteen-${style}.ores
+                --run 43 --clang "${ORE_CLANG}" --runs 10
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+                --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=15 typed=1 forward=14 backward=14 result=30" --stderr-count 1)
+        endforeach()
+        oreslang_contract_test(native_exec_explicit_pipe_overlap
+            source-pipe-explicit-overlap.ores --run 43 --clang "${ORE_CLANG}" --runs 10
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=15 typed=1 forward=14 backward=14 result=44" --stderr-count 1)
+        oreslang_contract_test(native_exec_explicit_pipe_missing_response
+            source-pipe-explicit-missing-response.ores --run 71 --clang "${ORE_CLANG}" --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=1" --stderr-count 1)
+    endif()
     oreslang_contract_test(native_ir_sixteen_actor_bidirectional_pipeline
         source-actor-pipeline-sixteen-stage.ores
         --ir "oreslang_source_actor_pipeline_connect_many")

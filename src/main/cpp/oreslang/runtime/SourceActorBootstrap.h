@@ -131,6 +131,8 @@ void* oreslang_source_actor_spawn_tagged_variants(
 void oreslang_source_actor_pipeline_connect_many(void* const* stages, uint64_t count);
 /* Legacy C embedding ABI; guest LLVM lowering always uses connect_many. */
 void oreslang_source_actor_pipeline_connect(void* source, void* transform, void* sink);
+void oreslang_source_actor_pipeline_set_role(void* actor, uint64_t role);
+void oreslang_source_actor_pipeline_respond_i64(int64_t value);
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                                uint64_t variant, int64_t value);
 /* Read-only, scheduler-authored DATA direction for the currently running

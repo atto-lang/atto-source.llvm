@@ -142,6 +142,9 @@ public:
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
+            } else if (token_.text == "source" || token_.text == "sink") {
+                unsigned role = token_.text == "source" ? 1 : 3; advance();
+                require("pipe"); require("actor"); program.actors.push_back(actor(true, role));
             } else if (accept("actor")) {
                 program.actors.push_back(actor());
             } else if (accept("transform")) {
@@ -161,7 +164,10 @@ public:
             if (accept("declare")) {
                 program.message_patterns.push_back(message_pattern());
             } else if (accept("define")) {
-                if (accept("actor")) program.actors.push_back(actor());
+                if (token_.text == "source" || token_.text == "sink") {
+                    unsigned role = token_.text == "source" ? 1 : 3; advance();
+                    require("pipe"); require("actor"); program.actors.push_back(actor(true, role));
+                } else if (accept("actor")) program.actors.push_back(actor());
                 else if (accept("transform")) {
                     require("pipe"); require("actor");
                     program.actors.push_back(actor(true));
@@ -341,10 +347,11 @@ private:
         return pattern;
     }
 
-    Actor actor(bool transform_pipe = false) {
+    Actor actor(bool transform_pipe = false, unsigned role = 2) {
         Actor value;
         value.offset = token_.offset;
         value.transform_pipe = transform_pipe;
+        value.pipe_role = transform_pipe ? role : 0;
         value.name = identifier();
         if (transform_pipe) {
             require("<");
@@ -371,6 +378,7 @@ private:
             value.messages_type = identifier();
             require(">");
         }
+        if (value.pipe_role == 1) value.messages_type = value.forward_messages_type;
         require("as");
         const bool braced = accept("{");
         // Actor data lives only in a single declared fixed-key state map.
@@ -766,6 +774,7 @@ private:
                         require(".");
                         if (accept("forward")) arm.route_direction = "forward";
                         else if (accept("backward")) arm.route_direction = "backward";
+                        else if (accept("respond")) arm.route_direction = "respond";
                         else fail("unsupported self pipeline operation");
                         require("(");
                         arm.route_variant = identifier();
@@ -845,7 +854,10 @@ private:
         if (actor_method && !value.is_receiver && token_.text == "const")
             value.method_state_loan = parse_scoped_state_loan();
         if (value.is_receiver && (token_.text == "}" || (transform_pipe && token_.text == "return"))) {
-            if (accept("return")) require(";");
+            if (accept("return")) {
+                if (token_.text != ";") fail("directional receive handler must return void");
+                require(";");
+            }
             value.result = make_expression(Expression::Kind::Integer, token_.offset);
             value.result->integer = 0;
         } else {
@@ -1175,6 +1187,11 @@ private:
                 if (!liveActors.insert(spawn.name).second ||
                     !available.insert(spawn.name).second)
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
+                const auto spawnedActor = std::find_if(program.actors.begin(), program.actors.end(),
+                    [&](const Actor& actor) { return actor.name == spawn.actor_type; });
+                if (spawnedActor->transform_pipe && std::find(fn.pipeline_actors.begin(), fn.pipeline_actors.end(), spawn.name)
+                        == fn.pipeline_actors.end())
+                    throw std::runtime_error("pipe actor spawn requires registered pipeline topology");
                 actorTypes.emplace(spawn.name, spawn.actor_type);
             }
             if (!fn.ready_await_actor.empty()) {
@@ -1227,9 +1244,15 @@ private:
                 const auto& lastType = actorTypes.at(fn.pipeline_actors.back());
                 for (const auto& actor : program.actors)
                     if ((actor.name == firstType || actor.name == lastType)
-                            && actor.transform_pipe)
+                            && actor.pipe_role == 2)
                         throw std::runtime_error(
                             "transform pipe actor must be an interior pipeline stage");
+                for (const auto& actor : program.actors)
+                    if ((actor.pipe_role == 1 && actor.name != firstType)
+                        || (actor.pipe_role == 3 && actor.name != lastType)) {
+                        if (uniqueTypes.count(actor.name))
+                            throw std::runtime_error("source and sink pipe actors require matching endpoint positions");
+                    }
                 for (std::size_t i = 0; i < fn.pipeline_actors.size(); ++i) {
                     const auto& type = actorTypes.at(fn.pipeline_actors[i]);
                     const auto upstream = i ? actorTypes.at(fn.pipeline_actors[i-1]) : "";
@@ -1376,7 +1399,10 @@ private:
                         [](const Function& f) { return f.name == "receive_forward"; });
                     const auto backward = std::count_if(actor.methods.begin(), actor.methods.end(),
                         [](const Function& f) { return f.name == "receive_backward"; });
-                    if (count != 2 || forward != 1 || backward != 1)
+                    if (actor.pipe_role == 3) {
+                        if (count != 1 || forward != 1 || backward != 0)
+                            throw std::runtime_error("sink pipe actor requires exactly one receive_forward");
+                    } else if (count != 2 || forward != 1 || backward != 1)
                         throw std::runtime_error("transform pipe actor requires exactly one receive_forward and receive_backward");
                 } else if (count != 1)
                     throw std::runtime_error("typed actor requires exactly one receive with its declared message domain");
@@ -1646,8 +1672,8 @@ private:
                             }
                             if (!arm.route_direction.empty()) {
                                 if (actor.transform_pipe
-                                    && ((method.name == "receive_forward" && arm.route_direction != "forward")
-                                        || (method.name == "receive_backward" && arm.route_direction != "backward")))
+                                    && ((method.name == "receive_forward" && arm.route_direction != (actor.pipe_role == 3 ? "backward" : "forward"))
+                                        || (method.name == "receive_backward" && arm.route_direction != (actor.pipe_role == 1 ? "respond" : "backward"))))
                                     throw std::runtime_error("transform handler must emit in its ingress direction");
                                 const auto role = pipelineRoles.find(actor.name);
                                 if (role == pipelineRoles.end())
@@ -1658,45 +1684,59 @@ private:
                                     throw std::runtime_error("pipeline route direction is not authorized for actor role");
                                 if (!arm.route_payload || arm.tuple_destructure)
                                     throw std::runtime_error("pipeline route requires scalar payload expression");
-                                if (arm.route_variant.find('.') == std::string::npos
-                                        || !allowed.count(arm.route_variant))
-                                    throw std::runtime_error("pipeline route outside nominal message contract");
-                                const auto neighbor = pipelineNeighbors.find(actor.name);
-                                if (neighbor == pipelineNeighbors.end())
-                                    throw std::runtime_error("pipeline route lacks a registered neighbor");
-                                const std::string& targetName =
-                                    arm.route_direction == "forward"
-                                        ? neighbor->second.second : neighbor->second.first;
-                                const auto receiver = std::find_if(
-                                    program.actors.begin(), program.actors.end(),
-                                    [&](const Actor& other) { return other.name == targetName; });
-                                if (targetName.empty() || receiver == program.actors.end())
-                                    throw std::runtime_error("pipeline route has no target actor");
-                                const std::string recipientDomain = !receiver->transform_pipe
-                                    ? receiver->messages_type
-                                    : arm.route_direction == "forward"
-                                        ? receiver->forward_messages_type
-                                        : receiver->backward_messages_type;
-                                bool recipientAccepts = false;
-                                for (const auto& pattern : program.tagged_patterns)
-                                    if (pattern.name == recipientDomain
-                                        && std::find(pattern.alternatives.begin(),
-                                                      pattern.alternatives.end(),
-                                                      arm.route_variant) != pattern.alternatives.end())
-                                        recipientAccepts = true;
-                                if (const auto en = enumNames.find(recipientDomain);
-                                        en != enumNames.end()) {
-                                    const auto& prefix = recipientDomain + ".";
-                                    if (arm.route_variant.rfind(prefix, 0) == 0)
-                                        recipientAccepts = std::any_of(
-                                            en->second->cases.begin(), en->second->cases.end(),
-                                            [&](const EnumCase& c) {
-                                                return arm.route_variant == prefix + c.name;
-                                            });
+                                auto outputAllowed = allowed;
+                                if (actor.pipe_role == 3) {
+                                    outputAllowed.clear();
+                                    for (const auto& pattern : program.tagged_patterns)
+                                        if (pattern.name == actor.backward_messages_type)
+                                            outputAllowed.insert(pattern.alternatives.begin(), pattern.alternatives.end());
+                                    if (const auto en = enumNames.find(actor.backward_messages_type); en != enumNames.end())
+                                        for (const auto& c : en->second->cases) outputAllowed.insert(en->first + "." + c.name);
                                 }
-                                if (!recipientAccepts)
-                                    throw std::runtime_error(
-                                        "pipeline destination ingress domain rejects routed case");
+                                if (arm.route_variant.find('.') == std::string::npos
+                                        || !outputAllowed.count(arm.route_variant))
+                                    throw std::runtime_error("pipeline route outside nominal message contract");
+                                if (arm.route_direction == "respond") {
+                                    if (actor.pipe_role != 1 || method.name != "receive_backward")
+                                        throw std::runtime_error("explicit pipeline response requires source backward handler");
+                                } else {
+                                    const auto neighbor = pipelineNeighbors.find(actor.name);
+                                    if (neighbor == pipelineNeighbors.end())
+                                        throw std::runtime_error("pipeline route lacks a registered neighbor");
+                                    const std::string& targetName =
+                                        arm.route_direction == "forward"
+                                            ? neighbor->second.second : neighbor->second.first;
+                                    const auto receiver = std::find_if(
+                                        program.actors.begin(), program.actors.end(),
+                                        [&](const Actor& other) { return other.name == targetName; });
+                                    if (targetName.empty() || receiver == program.actors.end())
+                                        throw std::runtime_error("pipeline route has no target actor");
+                                    const std::string recipientDomain = !receiver->transform_pipe
+                                        ? receiver->messages_type
+                                        : arm.route_direction == "forward"
+                                            ? receiver->forward_messages_type
+                                            : receiver->backward_messages_type;
+                                    bool recipientAccepts = false;
+                                    for (const auto& pattern : program.tagged_patterns)
+                                        if (pattern.name == recipientDomain
+                                            && std::find(pattern.alternatives.begin(),
+                                                          pattern.alternatives.end(),
+                                                          arm.route_variant) != pattern.alternatives.end())
+                                            recipientAccepts = true;
+                                    if (const auto en = enumNames.find(recipientDomain);
+                                            en != enumNames.end()) {
+                                        const auto& prefix = recipientDomain + ".";
+                                        if (arm.route_variant.rfind(prefix, 0) == 0)
+                                            recipientAccepts = std::any_of(
+                                                en->second->cases.begin(), en->second->cases.end(),
+                                                [&](const EnumCase& c) {
+                                                    return arm.route_variant == prefix + c.name;
+                                                });
+                                    }
+                                    if (!recipientAccepts)
+                                        throw std::runtime_error(
+                                            "pipeline destination ingress domain rejects routed case");
+                                }
                                 const auto output = enumNames.at(arm.route_variant.substr(0,
                                     arm.route_variant.find('.')));
                                 const auto outputCase = std::find_if(output->cases.begin(),

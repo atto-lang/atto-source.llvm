@@ -10,258 +10,258 @@ define match pattern PipeMessages as
 end
 
 define actor Stage0<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage1<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage2<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage3<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage4<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage5<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage6<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage7<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage8<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage9<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage10<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage11<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage12<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage13<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage14<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Stage15<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
             on Signal.Result as n {
-                value = n + 1;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 pub fnc main(): int {

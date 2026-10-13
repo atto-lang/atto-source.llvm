@@ -65,6 +65,7 @@ typedef struct SourceActor {
     uint64_t id;
     struct SourceActor* upstream;
     struct SourceActor* downstream;
+    uint64_t pipeline_role;
     size_t pipeline_index; /* bound once at compiler-owned registration */
     OresActorI64Heap* heap;
     OresNativeActorRef ref;
@@ -127,6 +128,8 @@ static SourceActorGroup group = {
  * is executing. A source program cannot forge it through message bytes. */
 static _Thread_local SourceActor* active_pipeline_actor;
 static _Thread_local uint8_t active_pipeline_ingress;
+static _Thread_local int active_pipeline_response_set;
+static _Thread_local int64_t active_pipeline_response;
 static _Thread_local uint64_t active_pipeline_flow_id;
 static _Thread_local uint64_t active_pipeline_message_id;
 
@@ -284,6 +287,9 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         if (instance->on_variant) {
             SourceActor* prior = active_pipeline_actor;
             uint8_t prior_ingress = active_pipeline_ingress;
+            int prior_response_set = active_pipeline_response_set;
+            int64_t prior_response = active_pipeline_response;
+            active_pipeline_response_set = 0;
             uint64_t prior_flow_id = active_pipeline_flow_id;
             uint64_t prior_message_id = active_pipeline_message_id;
             if (instance->upstream || instance->downstream) {
@@ -307,6 +313,12 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
             result = instance->on_variant(instance->heap, turn.domain, turn.epoch,
                     accepted->variant_index, accepted->packet.bytes,
                     accepted->packet.size);
+            if (instance->pipeline_role == 1 && accepted->direction == 2) {
+                if (!active_pipeline_response_set) pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
+                else result = active_pipeline_response;
+            }
+            active_pipeline_response_set = prior_response_set;
+            active_pipeline_response = prior_response;
             active_pipeline_ingress = prior_ingress;
             active_pipeline_actor = prior;
             active_pipeline_flow_id = prior_flow_id;
@@ -938,6 +950,9 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
             && actor->variant_count == first->variant_count
             && actor->ref.actor_slot < group.next_slot
             && group.actors[actor->ref.actor_slot] == actor);
+        ensure(actor->pipeline_role == 0
+            || (i == 0 ? actor->pipeline_role == 1
+                : i + 1 == count ? actor->pipeline_role == 3 : actor->pipeline_role == 2));
         for (size_t k = 0; k < i; ++k) ensure(stages[k] != actor);
         for (size_t v = 0; v < first->variant_count; ++v) {
             const SourceVariantContract* lhs = &first->variants[v];
@@ -1013,6 +1028,25 @@ static size_t pipeline_write_string(uint8_t* dst, const char* s) {
     else { dst[off++] = 0xda; dst[off++] = 1; dst[off++] = 0; }
     memcpy(dst + off, s, n);
     return off + n;
+}
+void oreslang_source_actor_pipeline_set_role(void* opaque, uint64_t role) {
+    ensure(!active_pipeline_actor && role >= 1 && role <= 3);
+    group_lock();
+    SourceActor* actor = source_resolve_locked(opaque);
+    ensure(actor && !actor->pipeline_role && !actor->upstream && !actor->downstream
+        && group.pipeline_count == 0);
+    actor->pipeline_role = role;
+    group_unlock();
+}
+void oreslang_source_actor_pipeline_respond_i64(int64_t value) {
+    SourceActor* actor = active_pipeline_actor;
+    ensure(actor && actor->pipeline_role == 1 && actor->pipeline_index == 0
+        && active_pipeline_ingress == 2 && active_pipeline_flow_id != 0);
+    if (active_pipeline_response_set) {
+        pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE); return;
+    }
+    active_pipeline_response = value;
+    active_pipeline_response_set = 1;
 }
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                               uint64_t variant, int64_t value) {

@@ -9,61 +9,61 @@ define match pattern PipeMessages as
 end
 
 define actor Source<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = value + n;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = state.value + n; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n { value = value + n; }
         }
-        return value;
+        return next;
     }
 end
 define actor TransformA<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n * 2;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n * 2; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 5;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 5; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor TransformB<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 4;
-                self.forward(Signal.Data(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 4; return state.value; });
+                self.forward(Signal.Data(next));
             }
             on Signal.Result as n {
-                value = n + 2;
-                self.backward(Signal.Result(value));
+                const next = self.handle_state(critical |state| -> { state.value = n + 2; return state.value; });
+                self.backward(Signal.Result(next));
             }
         }
-        return value;
+        return next;
     }
 end
 define actor Sink<messages=PipeMessages> as
-    let value: int = 0;
-    receive(PipeMessages m) {
+    state { value: int = 0; }
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
-                value = n + 3;
+                const next = self.handle_state(critical |state| -> { state.value = n + 3; return state.value; });
                 // Sink deliberately omitted required typed backward hop.
             }
             on Signal.Result as n { value = n; }
         }
-        return value;
+        return next;
     }
 end
 pub fnc main(): int {
