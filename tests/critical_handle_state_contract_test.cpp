@@ -78,16 +78,16 @@ int main() {
             == CriticalStateAdmission::Accept);
 
     c.inferred = row(READ | SUSPEND);
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | WRITE | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
     c.continuation_generation_fenced = true;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | WRITE | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = true;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | WRITE | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = false;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | WRITE | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
 
     // Neither out-of-range enum modes nor future/unknown effect bits can
