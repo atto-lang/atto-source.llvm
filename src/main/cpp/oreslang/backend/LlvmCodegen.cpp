@@ -22,6 +22,9 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
+#if LLVM_VERSION_MAJOR >= 21
+#include "llvm/TargetParser/Triple.h"
+#endif
 
 namespace oreslang {
 
@@ -332,7 +335,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         const auto profile = TargetAbi::parse("wasm32-unknown-unknown");
         if (!profile.experimental_wasm32_ir())
             throw std::runtime_error("wasm32 target profile is not enabled");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
         module.setTargetTriple(std::string(profile.triple()));
+#endif
         module.setDataLayout("e-m:e-p:32:32-i64:64-n32:64-S128");
         const auto& actual = module.getDataLayout();
         if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
