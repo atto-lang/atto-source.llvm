@@ -19,7 +19,13 @@ no LLVM IR on stdout, **no unexpected generated files** in an isolated
 working directory, and a diagnostic under both host and wasm32 targets. It
 also checks that attribute-shaped source comments remain inert and that
 ordinary unannotated typed functions/calls still emit valid `main` and helper
-functions (including the certified wasm32 target triple).
+functions (including the certified wasm32 target triple). For the host
+target, the gate additionally links the compiler-generated LLVM IR with
+Clang and executes both the literal-return and typed helper-call programs,
+requiring exit code 42 without output. This is **actual guest-native
+execution**, not a host-side callback or JVM interpreter packaging.
+The wasm32 path currently checks verified IR/triple only; Wasm module
+execution requires a separate gate.
 
 ## Required future implementation (shared contract)
 
