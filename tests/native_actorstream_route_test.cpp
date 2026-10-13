@@ -96,11 +96,66 @@ static void physical_done_phase_matrix(std::size_t n) {
         }
     }
 }
+static void authenticated_typed_reply(std::size_t n) {
+    auto actors = ids(n);
+    Route route(actors, "canonical-domain-v2");
+    advance_to(route, actors, 2*n-1, "canonical-domain-v2");
+    std::vector<std::uint8_t> reply{0x92, 0xa1, 0x52, 0x13};
+    rejected([&] { route.completed_reply(); });
+    rejected([&] { route.complete_source_with_reply(
+        actors[0], 99999, "canonical-domain-v2", reply); });
+    rejected([&] { route.complete_source_with_reply(
+        actors[0], actors[1], "wrong-domain", reply); });
+    rejected([&] { route.complete_source_with_reply(
+        actors[0], actors[1], "canonical-domain-v2", {}); });
+    check(route.phase() == 2*n-1, "invalid reply advanced source terminal phase");
+    route.complete_source_with_reply(
+        actors[0], actors[1], "canonical-domain-v2", reply);
+    check(route.phase() == 2*n, "authenticated result did not finish source");
+    rejected([&] { route.complete_source_with_reply(
+        actors[0], actors[1], "canonical-domain-v2", reply); });
+    reply[0] = 0x00; // corrupt caller-owned buffer after publication
+    rejected([&] { route.completed_reply(); });
+    for (auto id : actors) route.physical_done(id, true);
+    auto result = route.completed_reply();
+    check(result.size() == 4 && result[0] == 0x92,
+          "source's immutable owned reply was corrupted by caller alias");
+    result[1] = 0x00;
+    check(route.completed_reply()[1] == 0xa1,
+          "caller modified runtime-owned completed reply through an alias");
+    check(route.done() == Route::Done::Succeeded,
+          "typed final payload prevented whole-pipeline DONE");
+    route.fail();
+    check(route.completed_reply()[0] == 0x92,
+          "late post-success failure invalidated already-finalized result");
+}
+static void reply_failure_is_not_a_result() {
+    auto actors = ids(3);
+    Route route(actors, "domain");
+    advance_to(route, actors, 5, "domain");
+    route.complete_source_with_reply(
+        actors[0], actors[1], "domain", {0x92, 0xa1, 0x52});
+    route.physical_done(actors[0], true);
+    route.fail();
+    route.physical_done(actors[1], true);
+    route.physical_done(actors[2], true);
+    check(route.done() == Route::Done::Failed, "failure did not abort reply");
+    rejected([&] { route.completed_reply(); });
+
+    Route legacy(actors, "domain");
+    advance_to(legacy, actors, 6, "domain");
+    for (auto actor : actors) legacy.physical_done(actor, true);
+    check(legacy.done() == Route::Done::Succeeded,
+          "legacy control-plane route stopped working");
+    rejected([&] { legacy.completed_reply(); });
+}
 int main() {
     for (auto n: {2u, 3u, 4u, 15u, 16u}) {
         roundtrip(n);
         physical_done_phase_matrix(n);
+        authenticated_typed_reply(n);
     }
+    reply_failure_is_not_a_result();
     for (auto n: {1u, 17u}) {
         try { Route invalid(ids(n), "PipeMessages"); }
         catch (const std::invalid_argument&) { continue; }

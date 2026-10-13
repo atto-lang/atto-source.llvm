@@ -133,6 +133,39 @@ public:
         ++phase_;
     }
 
+    // The compiler-owned mailbox codec must verify the canonical typed
+    // MessagePack reply BEFORE calling this trusted scheduler-only boundary.
+    // The route copies bytes atomically with the source completion phase.
+    // No guest can supply sender identities, stage IDs or this commitment.
+    void complete_source_with_reply(
+            std::uint64_t actor, std::uint64_t actual_sender,
+            const std::string& domain, const std::vector<std::uint8_t>& frame) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (domain != domain_ || frame.empty() || frame.size() > max_reply_bytes_)
+            throw std::invalid_argument("invalid canonical nominal pipeline reply");
+        if (aborted_ || claimed_ || actor != actors_.front() ||
+            actual_sender != actors_[1] || phase_ != 2 * actors_.size() - 1 ||
+            physically_done_[0] || reply_attested_)
+            throw std::logic_error("source reply lacks authorized final return");
+        // Allocate before advancing the terminal phase: an allocation failure
+        // must not publish source completion with a missing result receipt.
+        std::vector<std::uint8_t> owned(frame);
+        reply_frame_.swap(owned);
+        reply_attested_ = true;
+        ++phase_;
+    }
+
+    // No partial result observation: successful physical DONE from EVERY stage
+    // is required. A failed, premature or legacy payloadless route cannot
+    // expose nominal reply bytes.
+    std::vector<std::uint8_t> completed_reply() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (aborted_ || done_count_ != actors_.size() ||
+            phase_ != 2 * actors_.size() || !reply_attested_)
+            throw std::logic_error("pipeline typed result is not committed and finalized");
+        return reply_frame_; // return a copy, never an aliased mutable buffer
+    }
+
     // Physical finalization releases ONLY that actor's routing fence. A
     // completed source must never unregister still-live downstream actors.
     void physical_done(std::uint64_t actor, bool successful) {
@@ -247,6 +280,11 @@ private:
     bool aborted_ = false;
     Direction reserved_direction_ = Direction::Root;
     std::uint64_t reserved_destination_ = 0;
+    // Bound the outstanding runtime-owned copied result, not arbitrary guest
+    // message storage. Schema-level length checks happen before this call.
+    static constexpr std::size_t max_reply_bytes_ = 1024 * 1024;
+    bool reply_attested_ = false;
+    std::vector<std::uint8_t> reply_frame_;
 };
 
 } // namespace oreslang::runtime

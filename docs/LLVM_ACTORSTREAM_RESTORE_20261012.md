@@ -137,3 +137,35 @@ route contract. Source-compiled LLVM guest pipelines, scheduler-integrated
 exact publication receipts, all-stage native physical STOP/DONE evidence,
 full current-head CTest/ASan, and same-source Java/LLVM trace conformance
 remain unverified. Leave PR #262 in draft until those gates are closed.
+
+## Typed final-result receipt — native host contract (2026-10-12)
+
+The bounded `NativeActorStreamRoute` adds `complete_source_with_reply`
+and `completed_reply`, without claiming that the compiler emits either API.
+
+- Only a trusted scheduler possessing the **actual source identity, immediate
+  downstream sender**, and exact closed nominal mailbox domain can commit the
+  final reply. The runtime must first validate the real canonical MessagePack
+  v2 payload against the compiler-owned schema and provide its owned frame.
+  These fields are not supplied from guest message bytes.
+- Result commitment and source terminal phase advance are serialized by the
+  same mutex. The frame is copied before the route reaches terminal phase;
+  failed allocation cannot publish a missing final result. Empty and
+  over-1MiB result frames are rejected. This is an additional bound, not
+  permission to bypass the mailbox's tighter schema quotas.
+- `completed_reply()` releases only a fresh copy and only **after the
+  full forward/backward route and every physical stage DONE have succeeded**.
+  A pending/failed route, forged sender, late duplicate, or old legacy
+  payloadless completion cannot masquerade as a typed result.
+- The legacy `complete_source` remains for existing control-plane tests.
+  No inferred final payload is produced on that path.
+- Adversarial native tests cover 2/3/4/15/16 actors, wrong domain/sender,
+  empty reply, duplicate commitment, mutable caller buffer, returned buffer
+  mutation, premature result reads, route failure after reply, and late
+  failure after fully committed success.
+
+**Integration gap:** This C++ contract is a host-only state machine. LLVM
+must still lower actual guest return envelopes, bind them to scheduler-owned
+actor IDs and canonical MessagePack codecs, and execute source-compiled
+`PipelinePlanner`/`PipelineController`/`PipelineRunner`. A host test does
+not demonstrate equivalent source-compiled LLVM guest behavior.
