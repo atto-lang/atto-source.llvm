@@ -7,8 +7,8 @@ import tempfile
 
 SUCCESSES = {
     "canonical": """define class Foo as
-  int a: 13;
-  final int b: 29;
+  int a: 13
+  final int b: 29
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -16,8 +16,8 @@ pub fnc main(): int {
 }
 """,
     "compatibility": """define class Foo as
-  int a = 13;
-  final int b = 29;
+  int a = 13
+  final int b = 29
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -36,6 +36,11 @@ pub fnc main(): int {
 """,
 }
 REJECTIONS = {
+    "same-line-field-without-semicolon": ("""define class Foo as
+  int a: 5 int b: 9
+end
+pub fnc main(): int { return 0; }
+""", "class field requires ';' or a line break"),
     "final-reassign": ("""define class Foo as
   final int a: 5;
 end
