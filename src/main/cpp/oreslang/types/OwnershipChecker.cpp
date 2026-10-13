@@ -178,6 +178,38 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
         release(*it, locals);
 }
 
+// Methods are synchronous, call-scoped class loans with internal symbols.
+bool check_class_method_call(const Expression& expr, Locals& locals,
+                             const Functions& functions, bool value_required) {
+    if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+        return false;
+    const auto where = locals.find(expr.left->name);
+    if (where == locals.end() || where->second.class_name.empty())
+        return false;
+    const std::string cls = where->second.class_name;
+    const auto signature = native_function_slot(
+        native_class_method_name(cls, expr.name), expr.arguments.size() + 1);
+    const auto method = functions.find(signature);
+    if (method == functions.end() || method->second->class_method_owner != cls)
+        reject(expr, "unknown native class method or wrong arity '" + cls + "." +
+                     expr.name + "'");
+    if (value_required && method->second->returns_void)
+        reject(expr, "void class method cannot be used as int expression");
+    const bool exclusive = method->second->class_method_mutable;
+    Expression loan;
+    loan.kind = exclusive ? Expression::Kind::BorrowMut : Expression::Kind::Borrow;
+    loan.offset = expr.offset;
+    loan.left = std::make_unique<Expression>();
+    loan.left->kind = Expression::Kind::Variable;
+    loan.left->name = expr.left->name;
+    loan.left->offset = expr.left->offset;
+    const Loan acquired = acquire(loan, exclusive ? Mode::BorrowMut : Mode::Borrow, locals);
+    for (const auto& arg : expr.arguments)
+        check_value(*arg, locals, functions);
+    release(acquired, locals);
+    return true;
+}
+
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
@@ -266,6 +298,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.right, locals, functions);
             return;
         case Expression::Kind::ArrayCall: {
+            if (check_class_method_call(expr, locals, functions, true))
+                return;
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
             array_owner(*expr.left, locals, false);
@@ -374,6 +408,10 @@ void validate_i64_ownership(const Program& program) {
         class_arrays.emplace(cls.name, std::move(arrays));
     }
     for (const auto& function : program.functions) {
+        if (!function.class_method_owner.empty() &&
+                !class_arrays.at(function.class_method_owner).empty())
+            throw std::runtime_error(
+                "native class method on Array<int>-owning class requires region-borrow ABI lowering");
         Locals locals;
         for (const auto& param : function.parameters) {
             if (!param.class_name.empty()) {
@@ -510,6 +548,8 @@ void validate_i64_ownership(const Program& program) {
             } else if (stmt.kind == Statement::Kind::Call) {
                 const Expression& call = *stmt.expression;
                 if (call.kind == Expression::Kind::ArrayCall) {
+                    if (check_class_method_call(call, state, functions, false))
+                        return;
                     if (!call.left)
                         reject(call, "native Array<int> mutation requires a named owner");
                     array_owner(*call.left, state, true);
