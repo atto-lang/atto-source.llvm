@@ -172,11 +172,16 @@ ordinary resource exhaustion from ownership corruption.
   leaves existing published arrays untouched, and does not modify the caller's
   output handle slots. Filling uses exact-length reservations, not repeated
   geometric append allocations.
-- `commit_many(region, n, destinations, sources)` validates all source
-  tokens, destination tokens, uniqueness and pointer aliases **before**
-  performing any mutation. On success, it drops old destination arrays,
-  moves staged tokens to the destination owner slots, and disarms source slots
-  with zero. It performs no allocation and has no recoverable error exit.
+- `commit_many(region, n, destinations, sources)` first validates
+  **the entire region's metadata and aggregate accounting**, including
+  unrelated live slots, before checking selected source/destination tokens,
+  uniqueness and aliases. This applies even when the destination was
+  previously zero and when `n=0`; neither case necessarily drops an
+  existing owner. The bounded whole-region preflight prevents successful
+  publication under forged counters or corrupt unrelated array metadata.
+  It then drops old destination arrays, moves staged tokens to destination
+  slots and disarms source slots with zero. No allocation or recoverable
+  error exit occurs.
 
 **Safety contract:** invalid/stale/foreign handles, duplicate mutable owner
 places and token exhaustion still abort, including in `try_*` functions.

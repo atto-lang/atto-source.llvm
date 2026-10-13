@@ -113,6 +113,10 @@ static void prepare_rollback_and_commit(void) {
     OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
     OresNativeIntArrayHandle survivor = oreslang_int_array_new(r);
     oreslang_int_array_add(r, survivor, 29);
+    // The empty commit must be valid for an otherwise healthy region
+    // containing unrelated live arrays.
+    oreslang_int_array_commit_many(r, 0, NULL, NULL);
+    check(oreslang_int_array_get(r, survivor, 0) == 29);
 
     OresNativeIntArrayHandle outputs[4] = {91, 92, 93, 94};
     fail_on_attempt(2);
@@ -426,6 +430,39 @@ static void must_abort_on_corrupt_region_accounting(int kind) {
     check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
+static void must_abort_on_corrupt_commit_region(int kind) {
+    pid_t pid = fork();
+    check(pid >= 0);
+    if (pid == 0) {
+        struct rlimit no_core = {0, 0};
+        (void)setrlimit(RLIMIT_CORE, &no_core);
+        reset_injection();
+        OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+        OresNativeIntArrayHandle unrelated = oreslang_int_array_new(r);
+        OresNativeIntArrayHandle staged = oreslang_int_array_new(r);
+        check(oreslang_int_array_try_add(r, unrelated, 17) == ORES_NATIVE_ARRAY_OK);
+        check(oreslang_int_array_try_add(r, staged, 23) == ORES_NATIVE_ARRAY_OK);
+        OresNativeIntArrayHandle destination = 0;
+        OresNativeIntArrayHandle* destinations[1] = {&destination};
+        OresNativeIntArrayHandle* sources[1] = {&staged};
+        if (kind == 0 || kind == 2) {
+            /* Forged live-count with otherwise individually valid slots. */
+            oreslang_int_array_test_corrupt_region_accounting(r, 3, 8);
+        } else {
+            /* A corrupted slot not named in the transaction. */
+            oreslang_int_array_test_corrupt_length(r, unrelated, 5);
+        }
+        if (kind < 2)
+            oreslang_int_array_commit_many(r, 1, destinations, sources);
+        else
+            oreslang_int_array_commit_many(r, 0, NULL, NULL);
+        _exit(0);
+    }
+    int status = 0;
+    check(waitpid(pid, &status, 0) == pid);
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
 static void must_abort_on_invalid_transaction(int kind) {
     pid_t pid = fork();
     check(pid >= 0);
@@ -480,6 +517,7 @@ int main(void) {
     for (int i = 0; i < 6; ++i) must_abort_on_invalid_transaction(i);
     for (int i = 0; i < 6; ++i) must_abort_on_corrupt_array_metadata(i);
     for (int i = 0; i < 9; ++i) must_abort_on_corrupt_region_accounting(i);
+    for (int i = 0; i < 4; ++i) must_abort_on_corrupt_commit_region(i);
 #endif
     return 0;
 }
