@@ -330,7 +330,6 @@ private:
                 fail("native scalar constructor must be the last class member");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            (void)public_member;
             // Bounded native subset: fixed scalar slots and mutable owned
             // Array<int> handles. General object/member lowering remains
             // unsupported, and must fail before LLVM IR is generated.
@@ -352,6 +351,7 @@ private:
             ClassField field;
             field.fixed_binding = fixed;
             field.mutable_referent = mutable_referent;
+            field.public_member = public_member;
             if (accept("Array")) {
                 if (!mutable_referent)
                     fail("native Array<int> field requires mut referent capability");
