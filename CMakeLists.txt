@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Generated, verifiable LLVM IR for the primitive scalar ABI only.
+    # Compiled guest std/assert linking is a separate milestone.
+    add_executable(oreslang-assert-scalar-ir-driver
+        tests/native_assert_scalar_ir_driver.cpp
+        src/main/cpp/oreslang/backend/NativeAssertScalarIR.cpp)
+    target_include_directories(oreslang-assert-scalar-ir-driver PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-assert-scalar-ir-driver PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-assert-scalar-ir-driver PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_scalar_ir_module_verifies
+        COMMAND oreslang-assert-scalar-ir-driver)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
