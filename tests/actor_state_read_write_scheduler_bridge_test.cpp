@@ -1,3 +1,4 @@
+#define ORESLANG_RW_INTERNAL_TEST_HOOKS 1
 #include "oreslang/runtime/ActorStateReadWriteSchedulerBridge.hpp"
 
 #include <atomic>
@@ -94,9 +95,19 @@ extern "C" void on_state(void* raw, size_t actor, OresNativeActorStateWake wake)
     // entrypoint to release this already-dispatched grant while the actor
     // callback is still running. Only bridge.complete() owns that release.
     bool legacy_completion_denied = false;
-    try { s.registry.complete(wake.incarnation, wake.continuation_id); }
+    try { s.registry.complete_undispatched_for_test(wake.incarnation, wake.continuation_id); }
     catch (const std::logic_error&) { legacy_completion_denied = true; }
     if (!legacy_completion_denied ||
+            !s.registry.admitted(wake.incarnation, wake.continuation_id, Mode::Read)) {
+        s.failures.fetch_add(1);
+        return;
+    }
+    // Retirement cannot revoke a dispatched loan while the actor turn is
+    // running. It must reject without changing ticket or wake state.
+    bool retirement_denied = false;
+    try { s.registry.retire(); }
+    catch (const std::logic_error&) { retirement_denied = true; }
+    if (!retirement_denied ||
             !s.registry.admitted(wake.incarnation, wake.continuation_id, Mode::Read)) {
         s.failures.fetch_add(1);
         return;
