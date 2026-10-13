@@ -105,6 +105,15 @@ ordinary resource exhaustion from ownership corruption.
   arrays without publishing any output handle until all acquisitions pass.
   On any failure, it drops all staged handles in reverse acquisition order
   and preserves all pre-existing region arrays.
+- `try_prepare_filled_many(region, n, lengths, initial_values, out)`
+  atomically stages up to 64 fully populated arrays with exactly the requested
+  lengths and default values. It checks all declared sizes and their aggregate
+  reservation cost against the region budget **before** consuming a handle
+  or allocating backing storage. Every slot or backing-allocation failure
+  drops previously staged owners in reverse order, zeroizes their filled data,
+  leaves existing published arrays untouched, and does not modify the caller's
+  output handle slots. Filling uses exact-length reservations, not repeated
+  geometric append allocations.
 - `commit_many(region, n, destinations, sources)` validates all source
   tokens, destination tokens, uniqueness and pointer aliases **before**
   performing any mutation. On success, it drops old destination arrays,
@@ -124,7 +133,10 @@ must never appear in a production runtime. The dedicated
 `native_int_array_transaction_recovery` CTest verifies fault injection,
 prepared-owner rollback, old-value preservation, full 64-slot recovery,
 atomic owner transfer, quota exhaustion, and adversarial alias/stale-token
-rejections. LLVM guest-source, exceptional unwind, recoverable `Result`
+rejections. The filled-array audit injects failures at **all eight** slot and
+backing-storage allocation edges for a four-array queue initialization, then
+verifies old values, untouched output slots, full aggregate quota recovery,
+and an allocation-free four-owner commit. LLVM guest-source, exceptional unwind, recoverable `Result`
 conversion, and multi-field class replacement lowering are **not** implemented
 by this substrate change.
 
