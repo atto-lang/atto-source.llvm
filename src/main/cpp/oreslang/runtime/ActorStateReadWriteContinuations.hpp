@@ -116,12 +116,15 @@ private:
     }
 
 public:
-    // Legacy host-only completion is retained for undelivered/acknowledged
-    // test tickets. It refuses already dispatched callbacks; production
-    // guests must use the bridge's owning scheduler scope.
-    void complete(std::uint64_t incarnation, std::uint64_t continuation_id) {
+    // Only native, explicitly opted-in test harnesses can synthesize
+    // completion without receiving a scheduler-owned wake. Production builds
+    // have no host completion entrypoint, including pre-dispatch READY tickets.
+#if defined(ORESLANG_RW_INTERNAL_TEST_HOOKS)
+    void complete_undispatched_for_test(
+            std::uint64_t incarnation, std::uint64_t continuation_id) {
         complete_impl(incarnation, continuation_id, false);
     }
+#endif
 
 private:
     void complete_impl(std::uint64_t incarnation,
@@ -171,6 +174,17 @@ public:
     void retire() {
         std::lock_guard<std::mutex> lock(mu_);
         if (retired_) return;
+        // A currently dispatched callback may still use state. A retiring
+        // actor must first fence its guest lane and drain executing loans;
+        // revoking live authority here could reclaim storage under a guest.
+        // This check and completion share mu_, preventing a retirement race.
+        for (const auto& [id, entry] : entries_) {
+            (void)id;
+            if (entry.dispatched) {
+                throw std::logic_error(
+                    "actor state retirement requires dispatched loan quiescence");
+            }
+        }
         // Gate retirement reserves cancellation storage before mutating.
         (void)gate_.retire();
         retired_ = true;
