@@ -107,7 +107,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -157,7 +157,7 @@ class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
                     bool experimental_rt_scalar_loop)
-        : lexer_(source), token_(lexer_.next()),
+        : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
@@ -284,9 +284,10 @@ private:
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
-            require("let");
+            const bool legacy_let = accept("let");
             ClassField field;
-            if (accept("mut")) {
+            if (!legacy_let) field.final_field = accept("final");
+            if (legacy_let && accept("mut")) {
                 require("Array");
                 require("<");
                 require("int");
@@ -295,30 +296,46 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 require("new");
                 require("Array");
                 require("<");
                 require("int");
                 require(">");
                 require("(");
+                const std::size_t initializer_end = token_.offset + token_.text.size();
                 require(")");
+                class_field_terminator(initializer_end);
             } else {
                 require("int");
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 if (token_.kind != Kind::Integer)
                     fail("class field requires i64 literal initializer");
+                const std::size_t initializer_end = token_.offset + token_.text.size();
                 field.initial = integer_literal();
+                class_field_terminator(initializer_end);
             }
-            require(";");
             result.fields.push_back(std::move(field));
         }
         if (result.fields.empty()) fail("native class requires at least one field");
         require("end");
         return result;
+    }
+
+    void class_field_terminator(std::size_t initializer_end) {
+        if (accept(";")) return;
+        if (token_.kind == Kind::End || token_.offset < initializer_end)
+            fail("class field requires ';' or a line break");
+        // Unlike expression statements, native class fields may omit ';'
+        // only at a real lexical line boundary. A same-line next member is
+        // never silently admitted by whitespace or comments alone.
+        const auto gap = source_.substr(initializer_end, token_.offset - initializer_end);
+        if (gap.find('\n') == std::string_view::npos &&
+                gap.find('\r') == std::string_view::npos)
+            fail("class field requires ';' or a line break");
     }
 
     std::int64_t integer_literal() {
@@ -935,7 +952,16 @@ private:
 
     std::unique_ptr<Expression> product() {
         auto left = unary();
-        while (token_.text == "*") {
+        while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
+            // Java defines int/int division as a FLOAT result; this native
+            // source compiler lowers expressions only to signed i64. Reject
+            // at the operator before either lowering or emitting partial IR.
+            if (token_.text == "/")
+                fail("native floating division unsupported: int/int yields float in Java; "
+                     "LLVM float typing and zero-divisor semantics are not implemented");
+            if (token_.text == "%")
+                fail("native integer remainder unsupported: zero-divisor and overflow contracts "
+                     "are not implemented");
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::Multiply, offset);
@@ -1017,8 +1043,22 @@ private:
         expr->name = identifier();
         if (accept("(")) {
             expr->kind = Expression::Kind::Call;
+            bool named_seen = false;
+            std::unordered_set<std::string> labels;
             if (!accept(")")) {
                 do {
+                    if (named_argument_ahead()) {
+                        std::string label = identifier();
+                        require(":");
+                        if (!labels.insert(label).second) {
+                            fail("duplicate named argument '" + label + "'");
+                        }
+                        named_seen = true;
+                        expr->argument_names.push_back(std::move(label));
+                    } else {
+                        if (named_seen) fail("positional argument cannot follow named argument");
+                        expr->argument_names.emplace_back();
+                    }
                     expr->arguments.push_back(expression());
                 } while (accept(","));
                 require(")");
@@ -1036,6 +1076,9 @@ private:
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
+                        if (named_argument_ahead()) {
+                            fail("native array method arguments have no named parameter contract");
+                        }
                         field->arguments.push_back(expression());
                     } while (accept(","));
                     require(")");
@@ -1045,6 +1088,12 @@ private:
             if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
+    }
+
+    bool named_argument_ahead() const {
+        if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
+        Lexer lookahead = lexer_;
+        return lookahead.next().text == ":";
     }
 
     bool accept(std::string_view text) {
@@ -1079,7 +1128,7 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::unordered_set<std::size_t>>& functions) {
+                                    const std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>>& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1098,13 +1147,41 @@ private:
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
-                if (found == functions.end() || found->second.count(expr.arguments.size()) == 0) {
+                if (found == functions.end() ||
+                    found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
                                              + expr.name + "' at byte "
                                              + std::to_string(expr.offset));
                 }
-                for (const auto& arg : expr.arguments) {
-                    validate_expression(*arg, parameters, functions);
+                if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
+                    throw std::runtime_error("invalid named call argument layout");
+                const auto& formals = found->second.at(expr.arguments.size());
+                std::vector<bool> bound(formals.size(), false);
+                bool saw_named = false;
+                std::size_t positional = 0;
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const std::string label = expr.argument_names.empty()
+                        ? std::string{} : expr.argument_names[i];
+                    std::size_t slot = positional;
+                    if (!label.empty()) {
+                        saw_named = true;
+                        auto it = std::find(formals.begin(), formals.end(), label);
+                        if (it == formals.end())
+                            throw std::runtime_error("unknown named argument '" + label
+                                                     + "' for " + expr.name);
+                        slot = static_cast<std::size_t>(it - formals.begin());
+                    } else {
+                        if (saw_named)
+                            throw std::runtime_error("positional argument after named argument");
+                        ++positional;
+                    }
+                    if (slot >= formals.size() || bound[slot])
+                        throw std::runtime_error("duplicate binding of parameter '"
+                                                 + formals[slot] + "'");
+                    bound[slot] = true;
+                    // Check nested calls in lexical order, not formal-slot order.
+                    validate_expression(*expr.arguments[i], parameters, functions);
                 }
                 return;
             }
@@ -1190,7 +1267,7 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
-        std::unordered_map<std::string, std::unordered_set<std::size_t>> functions;
+        std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
             // Compiler-owned ABI imports and generated exports may be
@@ -1222,7 +1299,9 @@ private:
             // Parameter types, borrow modes and returns cannot select a slot.
             if (fn.name == "main" && functions.count("main"))
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
-            if (!functions[fn.name].insert(fn.parameters.size()).second)
+            std::vector<std::string> labels;
+            for (const auto& param : fn.parameters) labels.push_back(param.name);
+            if (!functions[fn.name].emplace(fn.parameters.size(), std::move(labels)).second)
                 throw std::runtime_error("function '" + fn.name + "' already has arity "
                     + std::to_string(fn.parameters.size()) +
                     "; parameter and return types do not select overloads at byte " +
@@ -1410,6 +1489,7 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::string_view source_;
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;

@@ -214,11 +214,51 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
-            std::vector<llvm::Value*> arguments;
-            for (const auto& arg : expr.arguments)
-                arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
-            return builder.CreateCall(callee, arguments,
+            if (callee->arg_size() != expr.arguments.size()) {
+                throw std::runtime_error("native named call argument count mismatch");
+            }
+            if (!expr.argument_names.empty()
+                    && expr.argument_names.size() != expr.arguments.size()) {
+                throw std::runtime_error("invalid native call label layout");
+            }
+            std::vector<llvm::Value*> ordered(expr.arguments.size(), nullptr);
+            std::vector<bool> filled(expr.arguments.size(), false);
+            std::size_t positional = 0;
+            bool named_seen = false;
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                const std::string label = expr.argument_names.empty()
+                        ? std::string{} : expr.argument_names[i];
+                std::size_t target;
+                if (!label.empty()) {
+                    named_seen = true;
+                    target = 0;
+                    bool matched = false;
+                    for (const auto& formal : callee->args()) {
+                        if (formal.getName().str() == label) {
+                            matched = true;
+                            break;
+                        }
+                        ++target;
+                    }
+                    if (!matched) {
+                        throw std::runtime_error("unknown native named argument '" + label + "'");
+                    }
+                } else {
+                    if (named_seen) {
+                        throw std::runtime_error("native positional argument after named argument");
+                    }
+                    target = positional++;
+                }
+                if (target >= ordered.size() || filled[target]) {
+                    throw std::runtime_error("duplicate native named call binding");
+                }
+                filled[target] = true;
+                // Emit instructions in source order, not in formal-slot order.
+                ordered[target] = lower(*expr.arguments[i], builder, i64,
+                                        storage, field_storage, functions, moves);
+            }
+            return builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
         }
     }
@@ -448,8 +488,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
-            llvm::Function::Create(signature, llvm::Function::ExternalLinkage, symbol, module));
+        llvm::Function* declaration = llvm::Function::Create(
+            signature, llvm::Function::ExternalLinkage, symbol, module);
+        // Forward references must already expose parameter labels.
+        std::size_t label_index = 0;
+        for (auto& formal : declaration->args())
+            formal.setName(fn.parameters[label_index++].name);
+        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));

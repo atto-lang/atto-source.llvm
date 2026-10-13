@@ -29,6 +29,24 @@ Oreslang integer API.
 - A generic `Result<T,E>` with nontrivial payloads requires recursive
   exhaustiveness and ownership/drop-glue, beyond this finite specialization.
 
+## Canonical, versioned closed-result transport (host codec only)
+
+The closed specialization has a portable **three-byte** v1 encoding:
+`[version=1, variant, error]`. Its only accepted byte sequences are
+`01 00 00` (Ok), `01 01 01` (Err(Limit)), and `01 01 02`
+(Err(NoMemory)). A success carries a **zero** error byte, not stale
+memory; a failure always carries a nominal ArrayError tag. All other
+representations, lengths, unknown versions, and null inputs fail decoding
+without modifying the caller's output. Encoding likewise refuses forged
+variant/error discriminants before writing any output bytes. Neither
+C++ struct layout nor byte-order-dependent padding enters this format.
+
+The 65,536 variant/error byte pairs are exhaustively tested. This
+format is a **host-level wire proposal for this closed specialization**,
+not proof that the Java/GraalVM guest compiler accepts it, nor a general
+`Result<T,E>` representation. Version negotiation and a shared Java
+implementation must be verified before exposing it as a stable wire API.
+
 ## Verification
 
 `NativeArrayResultContract.hpp` and

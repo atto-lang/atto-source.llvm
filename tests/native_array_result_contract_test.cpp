@@ -93,6 +93,53 @@ int main() {
     CHECK(prove_array_append_match(nullptr, 0) == MatchProof::BadArity);
     CHECK(prove_array_append_match(nullptr, 1) == MatchProof::BadArity);
 
+    // The canonical wire domain is three bytes: v1, nominal variant,
+    // nominal error. Cross-language implementations must match these bytes.
+    std::uint8_t wire[kAppendResultWireSize] = {0xa5, 0xa5, 0xa5};
+    AppendResult decoded{ResultVariant::Err, ArrayError::NoMemory};
+    for (const auto expected : {AppendResult{ResultVariant::Ok, ArrayError::Limit},
+                                AppendResult{ResultVariant::Err, ArrayError::Limit},
+                                AppendResult{ResultVariant::Err, ArrayError::NoMemory}}) {
+        CHECK(encode_append_result(expected, wire));
+        CHECK(wire[0] == 1);
+        CHECK(wire[1] == (expected.variant == ResultVariant::Ok ? 0 : 1));
+        CHECK(wire[2] == (expected.variant == ResultVariant::Ok ? 0 :
+                         static_cast<std::uint8_t>(expected.error)));
+        CHECK(decode_append_result(wire, sizeof(wire), decoded));
+        CHECK(decoded.variant == expected.variant);
+        if (expected.variant == ResultVariant::Err)
+            CHECK(decoded.error == expected.error);
+    }
+    // Reject every noncanonical variant/error combination and unsupported
+    // versions, leaving an existing output unchanged on failure.
+    for (unsigned variant = 0; variant != 256; ++variant) {
+        for (unsigned error = 0; error != 256; ++error) {
+            const std::uint8_t candidate[3] = {
+                1, static_cast<std::uint8_t>(variant),
+                static_cast<std::uint8_t>(error)};
+            AppendResult sentinel{ResultVariant::Err, ArrayError::NoMemory};
+            const bool valid = (variant == 0 && error == 0) ||
+                               (variant == 1 && (error == 1 || error == 2));
+            CHECK(decode_append_result(candidate, 3, sentinel) == valid);
+            if (!valid) {
+                CHECK(sentinel.variant == ResultVariant::Err);
+                CHECK(sentinel.error == ArrayError::NoMemory);
+            }
+        }
+    }
+    const std::uint8_t bad_version[] = {2, 1, 1};
+    CHECK(!decode_append_result(bad_version, 3, decoded));
+    CHECK(!decode_append_result(nullptr, 3, decoded));
+    CHECK(!decode_append_result(wire, 2, decoded));
+    CHECK(!decode_append_result(wire, 4, decoded));
+    for (const auto bad : {
+            AppendResult{static_cast<ResultVariant>(0xff), ArrayError::Limit},
+            AppendResult{ResultVariant::Err, static_cast<ArrayError>(0xff)}}) {
+        std::uint8_t sentinel[] = {0xa5, 0xa5, 0xa5};
+        CHECK(!encode_append_result(bad, sentinel));
+        CHECK(sentinel[0] == 0xa5 && sentinel[1] == 0xa5 && sentinel[2] == 0xa5);
+    }
+
     // Enumerate all 5^3 three-arm combinations: every proof must either
     // establish exactly all three inhabitants, or reject false coverage.
     for (unsigned a = 0; a < 5; ++a)
