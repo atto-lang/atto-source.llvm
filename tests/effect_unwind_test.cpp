@@ -88,10 +88,11 @@ int main() {
 
     constexpr EffectKind kinds[] = {
         EffectKind::Return, EffectKind::Throw, EffectKind::Raise,
-        EffectKind::Panic, EffectKind::Cancel, EffectKind::Fatal
+        EffectKind::Panic, EffectKind::Cancel, EffectKind::Fatal,
+        EffectKind::ProcessExit
     };
     // Exhaustively check every pair of initial and cleanup effect kinds.
-    // This is an executable finite-state precedence model (6 * 6 cases).
+    // This is an executable finite-state precedence model (7 * 7 cases).
     for (const EffectKind pending : kinds) {
         for (const EffectKind deferred : kinds) {
             std::vector<int> executed;
@@ -100,23 +101,66 @@ int main() {
             oreslang::EffectUnwind<1> pair;
             CHECK(pair.push(run_step, &only));
             const auto actual = pair.finish({pending, 100});
+            const bool preserve_pending =
+                oreslang::effect_is_terminal(pending) ||
+                (pending == EffectKind::Throw &&
+                 deferred == EffectKind::ProcessExit);
             const EffectKind expected = deferred == EffectKind::Return
-                || oreslang::effect_is_terminal(pending) ? pending : deferred;
+                || preserve_pending ? pending : deferred;
             CHECK(actual.primary.kind == expected);
             const bool cleanup_becomes_primary =
-                deferred != EffectKind::Return
-                && !oreslang::effect_is_terminal(pending);
+                deferred != EffectKind::Return && !preserve_pending;
             CHECK(actual.primary.code == (cleanup_becomes_primary ? 200u : 100u));
             CHECK(actual.secondary_count ==
                 ((pending != EffectKind::Return && deferred != EffectKind::Return) ? 1u : 0u));
             if (actual.secondary_count != 0) {
                 CHECK(actual.secondary[0].kind ==
-                    (oreslang::effect_is_terminal(pending) ? deferred : pending));
+                    (preserve_pending ? deferred : pending));
             }
             CHECK(executed == std::vector<int>({42}));
             CHECK(pair.remaining() == 0);
         }
     }
+    // A deferred exit(0) cannot downgrade an already-failing Oreslang
+    // function. But on normal return an explicit exit takes effect.
+    std::vector<int> exit_order;
+    Step exit_action{&exit_order, 1, {EffectKind::ProcessExit, 0}};
+    oreslang::EffectUnwind<1> prior_throw;
+    CHECK(prior_throw.push(run_step, &exit_action));
+    const auto preserved = prior_throw.finish({EffectKind::Throw, 77});
+    CHECK(preserved.primary.kind == EffectKind::Throw);
+    CHECK(preserved.primary.code == 77);
+    CHECK(preserved.secondary_count == 1);
+    CHECK(preserved.secondary[0].kind == EffectKind::ProcessExit);
+    CHECK(preserved.secondary[0].code == 0);
+
+    oreslang::EffectUnwind<1> normal_return;
+    CHECK(normal_return.push(run_step, &exit_action));
+    const auto exited = normal_return.finish();
+    CHECK(exited.primary.kind == EffectKind::ProcessExit);
+    CHECK(exited.primary.code == 0);
+
+    // Unknown native/FFI tags must never be interpreted as a normal return
+    // or converted to Option.None. Normalize them to a terminal host failure.
+    constexpr auto forged = static_cast<EffectKind>(0xff);
+    CHECK(!oreslang::effect_kind_valid(forged));
+    CHECK(!oreslang::native_trap_admits(forged));
+    oreslang::EffectUnwind<0> invalid_pending;
+    const auto incoming = invalid_pending.finish({forged, 12});
+    CHECK(incoming.primary.kind == EffectKind::Fatal);
+    CHECK(incoming.primary.code == 0xFFFFFFFDu);
+
+    std::vector<int> invalid_order;
+    Step invalid_callback{&invalid_order, 1, {forged, 42}};
+    oreslang::EffectUnwind<1> invalid_cleanup;
+    CHECK(invalid_cleanup.push(run_step, &invalid_callback));
+    const auto outgoing = invalid_cleanup.finish({EffectKind::Throw, 17});
+    CHECK(outgoing.primary.kind == EffectKind::Fatal);
+    CHECK(outgoing.primary.code == 0xFFFFFFFDu);
+    CHECK(outgoing.secondary_count == 1);
+    CHECK(outgoing.secondary[0].kind == EffectKind::Throw);
+    CHECK(outgoing.secondary[0].code == 17);
+
     CHECK(oreslang::native_trap_admits(EffectKind::Throw));
     for (const EffectKind kind : kinds)
         if (kind != EffectKind::Throw)
