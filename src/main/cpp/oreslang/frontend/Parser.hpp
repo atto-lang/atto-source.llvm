@@ -37,6 +37,9 @@ struct LocalBinding {
     bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
+    // Evaluated exactly once, before any class field is initialized.
+    // Native constructors currently accept pure scalar i64 arguments only.
+    std::vector<std::unique_ptr<Expression>> constructor_arguments;
     // Restricted local stack-only explicit class move.
     bool move_class = false;
     std::string move_source;
@@ -48,6 +51,9 @@ struct LocalBinding {
 struct ClassField {
     std::string name;
     std::int64_t initial = 0;
+    // Pure i64 expression over this class's constructor parameters.
+    // All fields are evaluated in declaration order, without self access.
+    std::unique_ptr<Expression> initializer_expression;
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool fixed_binding = false; // final/const/val: no writes or destructive field take
     bool mutable_referent = false; // mut capability (required for Array<int>)
@@ -58,6 +64,8 @@ struct ClassDecl {
     // Up to 16 scalar i64 or owned Array<int> fields.
     // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
+    bool explicit_constructor = false;
+    std::vector<std::string> constructor_parameters;
 };
 
 // Native source value categories. Future<T> remains a no-IR boundary
