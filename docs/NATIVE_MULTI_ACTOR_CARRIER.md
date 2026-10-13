@@ -14,10 +14,14 @@ single capacity-eight FIFO of runnable actor tickets.
 - **CONTROL:** per-actor cancel requests and carrier stop bypass bounded
   user mailboxes. The worker checks them between dispatch slices and invokes
   the owner-thread cancel callback **before** advertising retired.
-- **Lifetime:** `Producer` holds a weak lifetime reference; stale generation
-  tickets, completed cancellation tickets, and sends after carrier teardown
-  are rejected. The caller retains every actor state and frame until join.
-  The registered slot is never reused by this prototype.
+- **Lifetime:** `Producer` holds a weak lifetime reference. Actor
+  generations are minted from a process-wide, non-wrapping atomic namespace:
+  a ticket from a prior carrier instance cannot name an actor in a newer
+  instance even when the 1-based slot matches. Stale tickets, completed
+  cancellation tickets, and sends after carrier teardown are rejected.
+  The caller retains every actor state and frame until join. Registered
+  slots are never reused within this prototype. ActorToken is a checked
+  routing identity, **not** an unforgeable security capability.
 - **Accounting:** admitted messages are counted once; completing a physical
   slice does not imply logical message completion. After join,
   `abandoned = accepted - completed`.
