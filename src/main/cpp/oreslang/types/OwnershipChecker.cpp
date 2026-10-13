@@ -455,6 +455,28 @@ void validate_i64_ownership(const Program& program) {
                 state.emplace(local.name, LocalOwnership{});
                 return;
             }
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                const auto found = state.find(stmt.receiver);
+                if (found == state.end() || found->second.class_name.empty())
+                    throw std::runtime_error("ownership violation: filled array commit requires named class owner");
+                auto& recv = found->second;
+                if (recv.class_array_fields.size() != 4)
+                    throw std::runtime_error("ownership violation: filled array commit requires exactly four owned Array<int> fields");
+                if (recv.mode != Mode::Value || !recv.mutable_owner ||
+                        recv.moved || !recv.moved_fields.empty() ||
+                        recv.exclusive_loan || recv.shared_loans != 0)
+                    throw std::runtime_error("ownership violation: filled array commit requires live exclusive mutable whole class");
+                if (conditional_effects)
+                    throw std::runtime_error("ownership violation: filled array commit requires straight-line ownership CFG");
+                // Evaluate every input as a pure scalar before allocation.
+                // Calls, borrows and moves cannot be hidden in length/fills.
+                check_pure_guard(*stmt.array_commit_length, state, functions);
+                if (stmt.array_commit_values.size() != 4)
+                    throw std::runtime_error("invalid compiler-owned filled array commit arity");
+                for (const auto& v : stmt.array_commit_values)
+                    check_pure_guard(*v, state, functions);
+                return;
+            }
             if (stmt.kind == Statement::Kind::FieldWrite) {
                 auto& recv = checked_field(stmt.receiver, stmt.field, stmt.offset, state);
                 if (recv.class_array_fields.count(stmt.field)) {
