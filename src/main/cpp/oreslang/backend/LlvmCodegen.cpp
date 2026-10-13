@@ -19,7 +19,11 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#if __has_include("llvm/TargetParser/Host.h")
+#include "llvm/TargetParser/Host.h"
+#else
 #include "llvm/Support/Host.h"
+#endif
 #include "llvm/Support/raw_ostream.h"
 
 namespace oreslang {
