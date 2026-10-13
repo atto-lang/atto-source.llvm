@@ -201,8 +201,7 @@ public:
                 program.actors.push_back(std::move(actor));
             } else {
                 if (defined) fail("expected module, class or actor after 'define'");
-                if (leading_private || after_define_private)
-                    fail("private native function modifier must not change export linkage");
+                // Explicit 'private fnc' is equivalent to the private default.
                 program.functions.push_back(function(exported));
             }
         }
