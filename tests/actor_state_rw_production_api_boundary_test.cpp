@@ -1,41 +1,53 @@
 #include "oreslang/runtime/ActorStateReadWriteContinuations.hpp"
 
-#include <concepts>
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 using Registry = oreslang::runtime::ActorStateReadWriteContinuations;
 
-// Compile as an ordinary production consumer, without the internal test
-// hook. Keeping these capabilities unnameable is part of actor isolation.
+// C++17 SFINAE verification from an ordinary production translation unit.
+// Private dispatch methods and the explicitly test-only completion helper
+// must be inaccessible, even if the implementation is refactored.
+template <typename T, typename = void>
+struct HasHostCompletion : std::false_type {};
 template <typename T>
-concept HasHostCompletion = requires(T& registry, std::uint64_t incarnation) {
-    registry.complete(incarnation, 1);
-};
+struct HasHostCompletion<T, std::void_t<decltype(
+        std::declval<T&>().complete(std::uint64_t{}, std::uint64_t{}))>>
+        : std::true_type {};
 
+template <typename T, typename = void>
+struct HasTestCompletion : std::false_type {};
 template <typename T>
-concept HasTestCompletion = requires(T& registry, std::uint64_t incarnation) {
-    registry.complete_undispatched_for_test(incarnation, 1);
-};
+struct HasTestCompletion<T, std::void_t<decltype(
+        std::declval<T&>().complete_undispatched_for_test(
+                std::uint64_t{}, std::uint64_t{}))>>
+        : std::true_type {};
 
+template <typename T, typename = void>
+struct HasRawDispatchClaim : std::false_type {};
 template <typename T>
-concept HasRawDispatchClaim =
-        requires(T& registry, const typename T::Notification& wake, typename T::Mode mode) {
-    { registry.try_claim_ready(wake, mode) } -> std::same_as<bool>;
-};
+struct HasRawDispatchClaim<T, std::void_t<decltype(
+        std::declval<T&>().try_claim_ready(
+                std::declval<const typename T::Notification&>(),
+                std::declval<typename T::Mode>()))>>
+        : std::true_type {};
 
+template <typename T, typename = void>
+struct HasRawDispatchedCompletion : std::false_type {};
 template <typename T>
-concept HasRawDispatchedCompletion =
-        requires(T& registry, std::uint64_t incarnation) {
-    registry.complete_dispatched(incarnation, 1);
-};
+struct HasRawDispatchedCompletion<T, std::void_t<decltype(
+        std::declval<T&>().complete_dispatched(
+                std::uint64_t{}, std::uint64_t{}))>>
+        : std::true_type {};
 
-static_assert(!HasHostCompletion<Registry>,
+static_assert(!HasHostCompletion<Registry>::value,
               "production callers must never release state tickets directly");
-static_assert(!HasTestCompletion<Registry>,
-              "test-only completion capability must not leak into production");
-static_assert(!HasRawDispatchClaim<Registry>,
+static_assert(!HasTestCompletion<Registry>::value,
+              "test-only completion must not leak into production");
+static_assert(!HasRawDispatchClaim<Registry>::value,
               "only the scheduler bridge may claim a READY continuation");
-static_assert(!HasRawDispatchedCompletion<Registry>,
-              "only the owning scheduler bridge may complete a guest loan");
+static_assert(!HasRawDispatchedCompletion<Registry>::value,
+              "only the scheduler bridge may complete a dispatched loan");
 
 int main() { return 0; }
