@@ -15,6 +15,15 @@ int main() {
     callback.one_state_parameter = true;
     callback.inferred = declared;
 
+    // A forged or absent continuation fence must not advance scope
+    // generation or produce a capability token.
+    CriticalStateLoan unfenced;
+    CHECK(unfenced.begin(state, 123, 900, callback, declared)
+            == CriticalStateAdmission::MissingContinuationFence);
+    CHECK(!unfenced.active() && unfenced.token() == 0);
+    CHECK(state.generation == 0 && state.depth == 0 && !state.active);
+    callback.continuation_generation_fenced = true;
+
     CHECK(ores_actor_state_ready_to_suspend(&state, 123) == ORES_ACTOR_STATE_OK);
     CHECK(ores_actor_state_ready_to_suspend(&state, 124) == ORES_ACTOR_STATE_WRONG_OWNER);
     CriticalStateLoan outer;
