@@ -24,17 +24,29 @@ static void match(BoolResult actual, BoolResult expected) {
 }
 
 static void compare(Scalar a, Scalar b, std::uint8_t throwing) {
-    BoolResult actual{};
-    oreslang_assert_equal_scalar_v0(&a, &b, throwing, &actual);
+    struct Guarded {
+        std::uint64_t before = 0xACEDFACE12345678ull;
+        BoolResult result = {0xDEADBEEFu, 0xff, 0xff, 0xff, 0xff};
+        std::uint64_t after = 0x0123456789ABCDEFull;
+    } guarded;
+    oreslang_assert_equal_scalar_v0(&a, &b, throwing, &guarded.result);
+    CHECK(guarded.before == 0xACEDFACE12345678ull);
+    CHECK(guarded.after == 0x0123456789ABCDEFull);
+    const BoolResult actual = guarded.result;
     const BoolResult expected = throwing > 1 ? malformed() :
         equal(a, b, throwing == 1);
     match(actual, expected);
 }
 
 static void trap_compare(BoolResult status) {
-    BoolResult actual{};
+    BoolResult actual = {0xDEADBEEFu, 0xff, 0xff, 0xff, 0xff};
     oreslang_assert_trap_bool_v0(&status, &actual);
     match(actual, trap(status));
+    // Emitted code must load input before writing its output. This is a
+    // defined caller-owned in-place transformation, not a stale-read branch.
+    BoolResult in_place = status;
+    oreslang_assert_trap_bool_v0(&in_place, &in_place);
+    match(in_place, trap(status));
 }
 
 int main() {
@@ -93,4 +105,52 @@ int main() {
     corrupt = effect(EffectKind::Throw, 4);
     corrupt.present = 1;
     trap_compare(corrupt);
+
+    // Deterministic, reproducible differential fuzz across valid and
+    // hostile scalar tags, reserved bytes, payloads, throw flags and
+    // effect-result fields. All observed IR results must exactly match
+    // the merged NativeAssertScalarAbi.hpp implementation at O0 and O2.
+    std::uint64_t seed = 0xF17E0B1D5EED1234ull;
+    auto next = [&seed]() -> std::uint64_t {
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        return seed * 0x2545F4914F6CDD1Dull;
+    };
+    for (unsigned iteration = 0; iteration < 16384; ++iteration) {
+        Scalar a = i64(static_cast<std::int64_t>(next()));
+        Scalar b = i64(static_cast<std::int64_t>(next()));
+        if (iteration % 4 == 0) {
+            a = boolean((next() & 1u) != 0);
+            b = boolean((next() & 1u) != 0);
+        } else if (iteration % 4 == 1) {
+            b = a;
+        } else if (iteration % 4 == 2) {
+            a.tag = static_cast<std::uint8_t>(next());
+        } else {
+            b.reserved[(next() % b.reserved.size())] =
+                static_cast<std::uint8_t>((next() % 255u) + 1u);
+        }
+        compare(a, b, static_cast<std::uint8_t>(next() % 4u));
+        BoolResult tested = effect(EffectKind::Throw,
+                                   static_cast<std::uint32_t>(next()));
+        if (iteration % 8 == 0)
+            tested = some((next() & 1u) != 0);
+        if (iteration % 8 == 1)
+            tested.effect = static_cast<std::uint8_t>(next());
+        if (iteration % 8 == 2)
+            tested.present = static_cast<std::uint8_t>(next());
+        if (iteration % 8 == 3)
+            tested.value = static_cast<std::uint8_t>(next());
+        if (iteration % 8 == 4)
+            tested.reserved = static_cast<std::uint8_t>(next());
+        if (iteration % 8 == 5)
+            tested.code = static_cast<std::uint32_t>(next());
+        if (iteration % 8 == 6)
+            tested = effect(EffectKind::ProcessExit, 0);
+        if (iteration % 8 == 7)
+            tested = effect(EffectKind::Fatal,
+                            static_cast<std::uint32_t>(next()));
+        trap_compare(tested);
+    }
 }
