@@ -114,8 +114,9 @@ ordinary resource exhaustion from ownership corruption.
   output place when allocation or slot admission fails.
 - `try_reserve(region, handle, capacity)` and
   `try_add(region, handle, value)` leave length, previously committed
-  elements, and region reservations unchanged on failure. No-op reserve is
-  always successful. Over-limit size/count/budget returns `LIMIT`;
+  elements, and region reservations unchanged on failure. No-op reserve on
+  an internally consistent live owner is always successful. Over-limit
+  size/count/budget returns `LIMIT`;
   exhausted native memory returns `NO_MEMORY`.
 - `try_prepare_many(region, n, out)` acquires up to 64 independent empty
   arrays without publishing any output handle until all acquisitions pass.
