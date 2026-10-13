@@ -264,6 +264,20 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # This isolated AOT source-to-native frame test does not relax the nine
+    # default compiler-negative RT admission contracts.
+    if(ORE_CLANG)
+        add_test(NAME native_rt_scalar_frame_aot_two_tasks
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_aot.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
+        set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 120)
+    else()
+        message(WARNING "Experimental scalar-loop AOT gate requires clang")
+    endif()
     find_program(ORE_NODE NAMES node nodejs)
     if(ORE_CLANG AND ORE_NODE)
         add_test(NAME wasm32_source_class_ownership_runtime
