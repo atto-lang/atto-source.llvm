@@ -94,3 +94,8 @@ native-runtime-backed handle read cannot be used in the `throw` payload,
 scoped `defer` expression, catch return, or `finally` update. Such reads
 can invoke runtime ABIs and invalidate the current nonthrowing proof.
 Nonexceptional source paths remain unchanged.
+
+The caught-i64 exception slice is explicitly **host native only**. The
+wasm32 target rejects such programs before IR emission because its exception
+and cleanup admission has not been certified; this is tested as a negative
+compiler target case.

@@ -403,6 +403,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_caught_throw_finally_array_size
         native-caught-throw-finally-array-size-reject.ores
         --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_wasm32
+        native-caught-throw-payload.ores --target wasm32
+        --diagnostic "wasm32 native caught-throw guest unsupported")
     oreslang_contract_test(reject_finally_return_override
         native-finally-return-reject.ores --diagnostic "cannot escape finally")
     oreslang_contract_test(reject_finally_break_override

@@ -221,6 +221,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 if (field.int_array)
                     throw std::runtime_error("wasm32 class Array<int> owned fields are not implemented");
         for (const auto& fn : source.functions) {
+            // A host-only caught-i64 CFG is not a certified wasm guest
+            // exception ABI, even if an LLVM optimizer could emit its blocks.
+            if (fn.caught_throw_value)
+                throw std::runtime_error("wasm32 native caught-throw guest unsupported");
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
