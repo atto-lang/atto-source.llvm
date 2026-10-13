@@ -30,6 +30,12 @@ NEGATIVE = {
     "local-type-first": (
         "fnc make(): int { let Result<void, ArrayError> outcome = Ok(); return 0; }",
         "native Result<void, ArrayError> requires tagged construction"),
+    "spoof-result-class": (
+        "define class Result as\\n  int code: 1\\nend\\npub fnc main(): int { return 0; }",
+        "native builtin Result/Option names cannot be redefined as classes"),
+    "spoof-option-class": (
+        "define class Option as\\n  int code: 1\\nend\\npub fnc main(): int { return 0; }",
+        "native builtin Result/Option names cannot be redefined as classes"),
 }
 
 CONTROL = "pub fnc main(): int { return 42; }"
