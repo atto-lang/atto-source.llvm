@@ -21,7 +21,7 @@ POSITIVES = {
     # Exact admitted boundary: four independently constructed classes, each
     # owning sixteen arrays. This tests all 64 handles and reverse-order drop.
     "exact-64-owned-array-limit": ("""define class Slot16 as
-""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\\n"
+""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
              for i in range(16)) + """end
 pub fnc main(): int {
   let mut Slot16 a = new Slot16();
