@@ -107,3 +107,25 @@ A negative CTest fixture covers this before LLVM IR generation.
 
 The PR remains merge-conflicted and its current native checks lack
 executed CI evidence.
+
+## Native field visibility admission (2026-10-13)
+
+In the bounded LLVM ordinary-class subset there are no compiled instance
+methods or constructor-body member accesses. Every supported field
+projection originates in a free function. A class field without `pub`
+must therefore be rejected for all such projections; it is not sufficient
+to enforce only `final` assignment and take restrictions.
+
+Parser field declarations retain explicit `pub` metadata. The native
+ownership checker carries the public-slot set through class parameters,
+newly constructed owners and moved owners. Its checked field-access path
+rejects private reads, writes and takes before LLVM IR is emitted, while
+the owned Array<int> path also rejects private field access (including
+`.size`). No public exposure is implied merely by an owned class
+reference or an exclusive borrow.
+
+The CTest manifest now registers four negative fixtures for those cases.
+Previously public member guest programs remain the positive cases.
+These edits are **unverified** pending a conflict-aware integration with
+main, a real CMake/CTest run and native ASan/UBSan. A mergeable PR status
+would not substitute for those gates.
