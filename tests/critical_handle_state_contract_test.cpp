@@ -104,5 +104,22 @@ int main() {
             == CriticalStateAdmission::InvalidEffectMetadata);
     CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::InvalidEffectMetadata);
+
+    // Acquiring a state capability is an effect even when the callback
+    // infers no reads or writes. Runtime metadata must not mint authority.
+    c.inferred = row(0);
+    c.state_mode = CriticalStateMode::Read;
+    c.callback_critical = false;
+    CHECK(admit_critical_handle_state(c, row(WRITE))
+            == CriticalStateAdmission::EffectExceedsWith);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::Accept);
+    c.state_mode = CriticalStateMode::Write;
+    c.callback_critical = true;
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::EffectExceedsWith);
+    CHECK(admit_critical_handle_state(c, row(WRITE))
+            == CriticalStateAdmission::Accept);
+
     return 0;
 }
