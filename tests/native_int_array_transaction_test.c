@@ -398,6 +398,24 @@ static void must_abort_on_corrupt_region_accounting(int kind) {
         } else if (kind == 6) {
             oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
             (void)oreslang_int_array_try_reserve(r, a, 8);
+        } else if (kind == 7) {
+            /* Without a full pre-commit scan this succeeded: selected
+             * slot metadata looked valid even though the region's total
+             * reserved quota was forged. No old destination is dropped,
+             * so no other checked boundary catches the corruption.
+             */
+            OresNativeIntArrayHandle dest = 0;
+            OresNativeIntArrayHandle staged = a;
+            OresNativeIntArrayHandle* dests[1] = {&dest};
+            OresNativeIntArrayHandle* srcs[1] = {&staged};
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            oreslang_int_array_commit_many(r, 1, dests, srcs);
+        } else if (kind == 8) {
+            /* Even an empty transaction is a trusted owner boundary,
+             * not a way to silently accept corrupt region accounting.
+             */
+            oreslang_int_array_test_corrupt_region_accounting(r, 0, 0);
+            oreslang_int_array_commit_many(r, 0, NULL, NULL);
         } else {
             abort();
         }
@@ -461,7 +479,7 @@ int main(void) {
 #if defined(__unix__) || defined(__APPLE__)
     for (int i = 0; i < 6; ++i) must_abort_on_invalid_transaction(i);
     for (int i = 0; i < 6; ++i) must_abort_on_corrupt_array_metadata(i);
-    for (int i = 0; i < 7; ++i) must_abort_on_corrupt_region_accounting(i);
+    for (int i = 0; i < 9; ++i) must_abort_on_corrupt_region_accounting(i);
 #endif
     return 0;
 }

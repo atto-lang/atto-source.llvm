@@ -433,6 +433,12 @@ void oreslang_int_array_commit_many(
         OresNativeIntArrayHandle* const sources[]) {
     if (!region || n > MAX_ARRAY_SLOTS ||
             (n && (!destinations || !sources))) fail_closed();
+    /* This is an ownership-publication boundary, including n == 0. Handle
+     * lookups alone validate only the selected slots and cannot detect a
+     * mismatched live_count/reservation for an unrelated owner. Reconcile
+     * the whole bounded region before inspecting or changing any owner slot.
+     */
+    validate_region_accounting(region);
     OresNativeIntArrayHandle old[MAX_ARRAY_SLOTS] = {0};
     OresNativeIntArrayHandle next[MAX_ARRAY_SLOTS] = {0};
     for (uint64_t i = 0; i < n; ++i) {

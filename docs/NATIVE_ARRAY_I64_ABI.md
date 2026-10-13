@@ -95,15 +95,17 @@ fully cleared metadata. Test-only corrupted-length injection verifies the
 fail-closed behavior in child processes on each access path; it is unavailable
 in production runtime builds.
 
-Owner-creation, reservation, destruction, bulk staging and region close also
-reconcile the aggregate `live_count` and `reserved_elements` counters with
+Owner-creation, reservation, destruction, bulk staging, transactional
+commit (including an empty commit), and region close also reconcile the aggregate `live_count` and `reserved_elements` counters with
 all 64 actual slot records. Inactive slots must have zero tokens, capacities,
 lengths **and** null backing pointers. Inconsistent accounting aborts before
 any new handle is issued, storage is resized/dropped, or a region is freed.
 This is especially important on `region_close`: trusting falsified zero
 counters would otherwise abandon live backing allocations without zeroizing
 them. The bounded scan is not performed on hot-path element reads/writes.
-Seven test-only poisoned-counter death tests exercise these boundaries.
+Nine test-only poisoned-counter death tests exercise these boundaries,
+including a commit into an empty destination and a zero-count commit.
+The full scan occurs before any transaction owner slot can be published.
 Closing a region requires every owned array to have been dropped.
 
 Invalid inputs, exhaustion, stale/cross-region handles, allocation failure
