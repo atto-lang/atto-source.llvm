@@ -140,16 +140,18 @@ public:
     void complete_source_with_reply(
             std::uint64_t actor, std::uint64_t actual_sender,
             const std::string& domain, const std::vector<std::uint8_t>& frame) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        // Bound and copy caller-owned bytes before taking the scheduler route
+        // mutex. The expensive allocation/copy must not hold up physical DONE
+        // or fatal CONTROL publication on another carrier. Domain is immutable.
+        // Allocation failure cannot advance the source completion phase.
         if (domain != domain_ || frame.empty() || frame.size() > max_reply_bytes_)
             throw std::invalid_argument("invalid canonical nominal pipeline reply");
+        std::vector<std::uint8_t> owned(frame);
+        std::lock_guard<std::mutex> lock(mutex_);
         if (aborted_ || claimed_ || actor != actors_.front() ||
             actual_sender != actors_[1] || phase_ != 2 * actors_.size() - 1 ||
             physically_done_[0] || reply_attested_)
             throw std::logic_error("source reply lacks authorized final return");
-        // Allocate before advancing the terminal phase: an allocation failure
-        // must not publish source completion with a missing result receipt.
-        std::vector<std::uint8_t> owned(frame);
         reply_frame_.swap(owned);
         reply_attested_ = true;
         ++phase_;
