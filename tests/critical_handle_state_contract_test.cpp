@@ -73,6 +73,8 @@ int main() {
     CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::EffectExceedsWith);
     CHECK(admit_critical_handle_state(c, row(READ | IO))
+            == CriticalStateAdmission::EffectExceedsWith);
+    CHECK(admit_critical_handle_state(c, row(READ | WRITE | IO))
             == CriticalStateAdmission::Accept);
 
     c.inferred = row(READ | SUSPEND);
