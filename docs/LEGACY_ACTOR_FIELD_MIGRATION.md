@@ -20,7 +20,7 @@ targeted 45-test funded using-capability gate:
 | Intended existing coverage | Confirmed affected fixture |
 |---|---|
 | Owned actor heap fields | `actor-owned-fields.ores` |
-| Duplicate-field rejection | `actor-duplicate-field.ores` |
+| Duplicate-state-key rejection (migrated; focused CI green) | `actor-duplicate-field.ores` |
 | Immutable-field write rejection | `actor-immutable-write.ores` |
 | Local/field shadow rejection | `actor-field-shadow.ores` |
 | Unknown field rejection | `actor-unknown-field.ores` |
@@ -62,3 +62,21 @@ https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/
 (57 selected native CTests) and
 https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314867754
 (27 focused JDK25 compiler checks).
+
+## First migrated historical regression — October 12, 2026
+
+`actor-duplicate-field.ores` now declares two identical keys inside one
+`state { ... }` map, rather than using prohibited legacy instance fields.
+The LLVM source checker distinguishes `duplicate actor state key` from
+older `duplicate actor field` diagnostics; the corresponding historical
+CTest asserts this exact failure before emitting LLVM IR.
+
+A real funded GitHub Actions runner compiled the updated LLVM frontend and
+passed **27/27 focused CTests**, including the new duplicate-state admission
+negative test, three compiled 15-actor guest pipelines, the optimized Python
+safety canary, and Clang ASan/UBSan:
+https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38326659916
+
+This was a **47-blob SHA-pinned focused native build**, not the complete
+historical source tree or full CMake/CTest suite. The remaining legacy
+fixtures in the inventory need source migration and original intent tests.
