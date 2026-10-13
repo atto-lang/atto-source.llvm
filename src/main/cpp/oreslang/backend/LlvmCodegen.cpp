@@ -29,6 +29,11 @@ std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
 }
 
+// Source identifier grammar excludes $, so this selector cannot alias source names.
+std::string native_function_slot(const std::string& name, std::size_t arity) {
+    return name + "$arity" + std::to_string(arity);
+}
+
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
 // caller-owned slot pointers: passing them to nested borrowed parameters is
@@ -206,7 +211,7 @@ llvm::Value* lower(const Expression& expr,
             std::vector<llvm::Value*> arguments;
             for (const auto& arg : expr.arguments)
                 arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
-            llvm::Function* callee = functions.at(expr.name);
+            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
             return builder.CreateCall(callee, arguments,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
         }
@@ -397,12 +402,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         field_indices.emplace(cls.name, std::move(indices));
     }
 
+    // Preserve old external symbols for unique functions. Overloaded families
+    // receive deterministic per-arity export names instead of LLVM .1 suffixes.
+    std::unordered_map<std::string, std::size_t> family_sizes;
+    for (const auto& fn : source.functions) ++family_sizes[fn.name];
+
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
     for (const auto& fn : source.functions) {
-        const std::string symbol = native_main && source.module.empty() && fn.name == "main"
+        const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name);
+        const std::string symbol = family_sizes.at(fn.name) > 1
+            ? base_symbol + "$arity" + std::to_string(fn.parameters.size())
+            : base_symbol;
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
@@ -411,11 +424,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
-        declarations.emplace(fn.name, llvm::Function::Create(
-            signature, llvm::Function::ExternalLinkage, symbol, module));
+        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
+            llvm::Function::Create(signature, llvm::Function::ExternalLinkage, symbol, module));
     }
     for (const auto& fn : source.functions) {
-        llvm::Function* function = declarations.at(fn.name);
+        llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         std::unordered_map<std::string, llvm::Value*> storage;
@@ -1062,7 +1075,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::Function::ExternalLinkage, "main", module);
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
-        llvm::Function* guest = declarations.at("main");
+        llvm::Function* guest = declarations.at(native_function_slot("main", 0));
         llvm::Value* result = builder.CreateCall(guest);
         if (main_it->returns_void) {
             builder.CreateRet(llvm::ConstantInt::get(i32, 0));
