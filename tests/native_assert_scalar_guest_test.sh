@@ -40,7 +40,11 @@ int main() {
     std::cout << "ASSERT_NATIVE_COMPILED_GUEST_PASS\n";
 }
 CPP
-clang++ -std=c++17 -O2 "$work/host.cpp" -x ir "$work/guest.ll" -o "$work/run"
+guest_flags=(-O2)
+if test "${ASSERT_NATIVE_SANITIZE:-0}" = 1; then
+  guest_flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+fi
+clang++ -std=c++17 "${guest_flags[@]}" "$work/host.cpp" -x ir "$work/guest.ll" -o "$work/run"
 "$work/run" | grep -Fx ASSERT_NATIVE_COMPILED_GUEST_PASS
 
 expect_reject() {

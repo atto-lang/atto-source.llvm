@@ -8,7 +8,13 @@ permissions:
 jobs:
   native-guest:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [debug, release, sanitizer]
+    env:
+      ASSERT_NATIVE_SANITIZE: ${{ matrix.build == 'sanitizer' && '1' || '0' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -27,7 +33,7 @@ jobs:
           src/main/cpp/oreslang/frontend/Parser.hpp 56b9443e2aa522dfd5659c9e6f133a4559edf15c
           src/main/cpp/oreslang/types/OwnershipChecker.cpp 553d52363f17450ac45ee061276fa61753d5b5ad
           src/main/cpp/oreslang/backend/LlvmCodegen.cpp 3f69ffdd8f3ae4702c605a4d3a09548ea4f9714f
-          tests/native_assert_scalar_guest_test.sh 101d798dd457d26c8c2c768506f6d05efdec8213
+          tests/native_assert_scalar_guest_test.sh d4feb6bfe1127a768345dcee91865e9fb2d9ce90
           tests/native_assert_ast_seal_test.cpp b4015263bb5b6335f4080b525c669dd1a08e85b8
           HASHES
           echo ASSERT_NATIVE_SCALAR_EXACT_FILES_PASS
@@ -39,8 +45,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          g++ -std=c++17 -O0 -Isrc/main/cpp \
-            $(llvm-config --cxxflags) -fexceptions \
+          flags=(-O0)
+          case "${{ matrix.build }}" in
+            release) flags=(-O2 -DNDEBUG) ;;
+            sanitizer) flags=(-O1 -fsanitize=address,undefined -fno-omit-frame-pointer) ;;
+          esac
+          g++ -std=c++17 -Isrc/main/cpp \
+            $(llvm-config --cxxflags) -fexceptions "${flags[@]}" \
             src/main/cpp/oreslang/main.cpp \
             src/main/cpp/oreslang/frontend/Parser.cpp \
             src/main/cpp/oreslang/types/OwnershipChecker.cpp \
@@ -51,8 +62,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          g++ -std=c++17 -O0 -Isrc/main/cpp \
-            $(llvm-config --cxxflags) -fexceptions \
+          flags=(-O0)
+          case "${{ matrix.build }}" in
+            release) flags=(-O2 -DNDEBUG) ;;
+            sanitizer) flags=(-O1 -fsanitize=address,undefined -fno-omit-frame-pointer) ;;
+          esac
+          g++ -std=c++17 -Isrc/main/cpp \
+            $(llvm-config --cxxflags) -fexceptions "${flags[@]}" \
             tests/native_assert_ast_seal_test.cpp \
             src/main/cpp/oreslang/frontend/Parser.cpp \
             src/main/cpp/oreslang/types/OwnershipChecker.cpp \
