@@ -346,7 +346,6 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_with_using_omitted_effect_clause
         actor-with-using-no-effect-reject.ores
         --diagnostic "actor state loan requires with effect declaration")
-
     # Granting a read/write capability is an effect even when its body does
     # not perform a field operation. Enforce at source admission, not merely
     # via IR read/write detection.
@@ -368,6 +367,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_noop_using_write_with_write_effect
         actor-loan-noop-using-write-positive.ores
         --ir-not "call .*@ores_actor_i64_heap_field_write")
+
 
     oreslang_contract_test(native_with_using_read_no_mutation
         actor-with-using-read-positive.ores
@@ -393,7 +393,8 @@ if(BUILD_TESTING)
 
     oreslang_contract_test(native_with_using_write_only
         actor-with-using-write-only-positive.ores
-        --ir "call void @ores_actor_i64_heap_field_write")
+        --ir "call void @ores_actor_i64_heap_field_write"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
     oreslang_contract_test(reject_with_direct_handle_read_missing_effect
         actor-with-using-read-outside-bound-reject.ores
         --diagnostic "with clause omits state.read effect")
