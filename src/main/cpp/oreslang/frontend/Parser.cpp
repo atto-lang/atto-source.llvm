@@ -317,6 +317,8 @@ private:
                 }
                 require("{");
                 if (accept("return")) require(";");
+                if (token_.text != "}")
+                    fail("native scalar constructor body must be empty or contain only 'return;'");
                 require("}");
                 // Native currently accepts a pure initializer-only constructor
                 // body. Field initialization is ordered and never sees self.
