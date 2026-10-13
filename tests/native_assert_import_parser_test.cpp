@@ -237,6 +237,19 @@ int main() {
             "pub fnc main(): int { return 0; }",
             "native sealed Assert named arguments require verified typed signature");
 
+        // Source 'is' is reference identity, not tagged scalar 'eq'.
+        // Reject until native ownership and reference identity are lowered.
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert.same(1, 1); } "
+            "pub fnc main(): int { return 0; }",
+            "native sealed Assert identity requires reference-identity ABI lowering");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert::same_throws(1, 1); } "
+            "pub fnc main(): int { return 0; }",
+            "native sealed Assert identity requires reference-identity ABI lowering");
+
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {
