@@ -37,6 +37,12 @@ Unannotated local/private callables **infer** transitive exceptional effects; th
 
 The `Assert.equal_throws` and similar source-library names are naming conventions for ordinary error-producing operations, **not signature effect metadata**. The existing `rt fail` assertion path will need a typed `throw<AssertionError>` classification before typed source exception release. Deliberate validation errors should throw; invariant failures can panic. Security-sensitive invariant checks must never be compiled away as debug-only assertions.
 
+## `defer` / `recover` exact boundary rule
+
+A `defer` is cleanup only; **a `recover` handler explicitly attached to an eligible deferred-unwind scope** can handle a current `Raise` effect. For a raise, unwind enters inner cleanup scopes in LIFO order, then considers the nearest eligible `defer+recover` attached to the current dynamic continuation. Ordinary `try/catch`, `trap`, and unrelated `defer` blocks never handle it. Recovery consumes the raise only after it produces an explicit valid replacement outcome for the enclosing scope; it does **not** resume at the failed program counter or re-execute a partially completed operation. The compiler must validate a recovery capability, complete return value, actor-state/borrow/lock consistency, and one-shot continuation ownership. If a recover handler itself throws/raises/panics, ordinary precedence and the next eligible outer boundary apply. A `recover` never handles `Panic`, `Cancel`, `HostFatal`, or explicit process termination.
+
+This specifies **semantic behavior, not yet a finalized `recover` grammar**. The parser must fail closed rather than accepting ambiguous statement syntax. Recovery can complete a failed non-actor function or actor turn only when its explicit replacement is well-typed and state-safe; otherwise the effect continues outward to the next eligible boundary.
+
 ## Lexical and actor boundaries
 
 1. An ordinary throw first seeks the nearest matching `catch` in the same dynamic continuation; unmatched catches are skipped. On escape from a `trap` callable, it becomes `None` after cleanup. Otherwise it remains a typed `Throw` and unwinds.
