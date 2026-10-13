@@ -1059,7 +1059,14 @@ private:
             fail("expected int expression");
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
-        expr->name = identifier();
+        // Only an implicit method receiver may bind this reserved word;
+        // name validation below rejects unbound self in free functions.
+        if (token_.text == "self") {
+            expr->name = "self";
+            advance();
+        } else {
+            expr->name = identifier();
+        }
         if (accept("(")) {
             expr->kind = Expression::Kind::Call;
             if (!accept(")")) {
