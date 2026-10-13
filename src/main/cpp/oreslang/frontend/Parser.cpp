@@ -1134,6 +1134,15 @@ private:
                 }
                 if (call->arguments.size() != static_cast<std::size_t>(arity))
                     fail("wrong sealed Assert member arity for '" + member + "'");
+                // The native expression AST still represents only i64
+                // operands; the parsed bool return contract does not prove
+                // a bool parameter, and an import string literal is not a
+                // general source String expression. Reject rather than
+                // silently coerce integer arguments to bool or String.
+                if (member == "true" || member == "true_throws" ||
+                    member == "false" || member == "false_throws" ||
+                    member == "fail")
+                    fail("native sealed Assert member requires typed bool/String argument lowering");
                 expr = std::move(call);
             } else {
                 if (double_colon)
