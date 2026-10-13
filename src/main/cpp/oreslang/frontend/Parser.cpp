@@ -138,6 +138,21 @@ bool nonthrowing_protected_read(const Expression& expr) {
            expr.left->kind == Expression::Kind::Variable;
 }
 
+// Arithmetic over checked scalar reads is nonthrowing. Never admit
+// general calls, array mutations, ownership transfers, or suspension.
+bool native_pure_scalar_tree(const Expression& expr) {
+    if (nonthrowing_protected_read(expr)) return true;
+    if (expr.kind == Expression::Kind::Negate)
+        return expr.left && native_pure_scalar_tree(*expr.left);
+    if (expr.kind == Expression::Kind::Add ||
+            expr.kind == Expression::Kind::Subtract ||
+            expr.kind == Expression::Kind::Multiply)
+        return expr.left && expr.right &&
+            native_pure_scalar_tree(*expr.left) &&
+            native_pure_scalar_tree(*expr.right);
+    return false;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int)
@@ -548,6 +563,76 @@ private:
                 terminal_try_finally = true;
                 require("try");
                 require("{");
+                if (token_.text == "defer" || token_.text == "throw") {
+                    // First typed-i64 exceptional CFG: one unconditional throw,
+                    // LIFO scoped field cleanups, and a local catch. No await,
+                    // exception-producing calls or nested try are admitted.
+                    if (value.returns_void || !value.statements.empty() ||
+                            !value.actor_actions.empty())
+                        fail("native caught throw requires a single terminal int try scope");
+                    // No partially inferred effect set can masquerade as a
+                    // complete exception/cleanup summary at this boundary.
+                    if (value.has_declared_effects)
+                        throw std::runtime_error(
+                            "native caught throw effect-qualified function unsupported at byte " +
+                            std::to_string(token_.offset));
+                    while (accept("defer")) {
+                        if (value.caught_throw_defers.size() == 8)
+                            fail("native caught throw defer limit exceeded (8)");
+                        Statement deferred;
+                        deferred.kind = Statement::Kind::FieldWrite;
+                        deferred.offset = token_.offset;
+                        auto target = primary();
+                        if (target->kind != Expression::Kind::Field ||
+                                !target->left ||
+                                target->left->kind != Expression::Kind::Variable)
+                            fail("native caught throw defer requires named class field write");
+                        deferred.receiver = target->left->name;
+                        deferred.field = target->name;
+                        require("=");
+                        deferred.expression = expression();
+                        if (!native_pure_scalar_tree(*deferred.expression))
+                            fail("native caught throw defer requires nonthrowing scalar/field expression");
+                        require(";");
+                        value.caught_throw_defers.push_back(std::move(deferred));
+                    }
+                    require("throw");
+                    value.caught_throw_value = expression();
+                    if (!native_pure_scalar_tree(*value.caught_throw_value))
+                        fail("native caught throw requires nonthrowing int payload");
+                    require(";");
+                    require("}");
+                    require("catch");
+                    require("(");
+                    value.catch_binding = identifier();
+                    for (const auto& param : value.parameters)
+                        if (param.name == value.catch_binding)
+                            fail("native caught throw binding shadows parameter");
+                    for (const auto& local : value.locals)
+                        if (local.name == value.catch_binding)
+                            fail("native caught throw binding shadows local owner");
+                    require(")");
+                    require("{");
+                    require("return");
+                    value.result = expression();
+                    if (!native_pure_scalar_tree(*value.result))
+                        fail("native caught throw catch return requires nonthrowing scalar/field read");
+                    require(";");
+                    require("}");
+                    require("finally");
+                    require("{");
+                    auto cleanup = branch_arm(true);
+                    require("}");
+                    for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
+                        if (it->kind != Statement::Kind::FieldWrite ||
+                                !native_pure_scalar_tree(*it->expression))
+                            fail("native caught throw finally requires nonthrowing field write");
+                        it->kind = Statement::Kind::Defer;
+                        value.statements.push_back(std::move(*it));
+                    }
+                    require("}");
+                    return value;
+                }
                 continue;
             }
             // A void program entrypoint may fall through with success status 0.
@@ -655,8 +740,7 @@ private:
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
-                // A nested class field such as shelf.worker.send(...) must
-                // never silently resolve to an unrelated actor named worker.
+                // Nested class receivers cannot alias unrelated ActorRef names.
                 if (!action->left || action->left->kind != Expression::Kind::Variable)
                     fail("native actor send requires direct named ActorRef receiver");
                 ActorSend send;
@@ -671,9 +755,7 @@ private:
                 continue;
             }
             if (action->kind == Expression::Kind::Field && accept("=")) {
-                // Guard the AST shape before extracting the receiver name.
-                // Without this, box.items.size = 7 could accidentally write
-                // a different local object's field, items.size.
+                // No nested assignment may resolve through a flattened field.
                 if (!action->left || action->left->kind != Expression::Kind::Variable)
                     fail("native field assignment requires direct named class receiver");
                 statement.kind = Statement::Kind::FieldWrite;
@@ -850,9 +932,8 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
-            // Keep ActorRef.send(...) available to the outer statement parser:
-            // it tracks actor DATA sends and send-after-stop ordering.
-            // Eager ArrayCall parsing here would erase those actor effects.
+            // Keep ActorRef.send(...) for the outer actor action parser.
+            // Eager ArrayCall parsing would erase the send/stop ordering.
             if (field->name != "send" && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
@@ -1137,6 +1218,17 @@ private:
             }
             if (!live_actors.empty())
                 throw std::runtime_error("actor reference must be stopped before return");
+            if (fn.caught_throw_value) {
+                // The thrown i64 expression and scoped defers see the original
+                // lexical environment. Catch binding enters only on handler
+                // admission, before checking the catch return expression.
+                validate_expression(*fn.caught_throw_value, params, functions);
+                for (const auto& defer : fn.caught_throw_defers)
+                    check_statement_names(defer, params);
+                if (!params.insert(fn.catch_binding).second)
+                    throw std::runtime_error("duplicate caught throw binding '" +
+                        fn.catch_binding + "'");
+            }
             for (const auto& guard : fn.early_returns) {
                 validate_expression(*guard.lhs, params, functions);
                 validate_expression(*guard.rhs, params, functions);

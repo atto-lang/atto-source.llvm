@@ -1,0 +1,10 @@
+fnc cleanup(): int { return 0; }
+pub fnc main(): int {
+  try {
+    defer cleanup();
+    throw 7;
+  } catch (err) {
+    return 43;
+  } finally {
+  }
+}

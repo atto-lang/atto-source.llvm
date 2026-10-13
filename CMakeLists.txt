@@ -99,6 +99,27 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_source_execution
         native_int_array_source_asan_ubsan PROPERTIES TIMEOUT 180)
 
+    # Verify compiler-generated checked array allocation/growth actually
+    # destroys exactly the initialized owners on every injected fault.
+    # Requires the Linux ELF --wrap linker protocol.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_checked_array_source_failure_cleanup
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_checked_array_failure_source.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_checked_array_source_failure_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_checked_array_failure_source.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --sanitizers)
+        set_tests_properties(native_checked_array_source_failure_cleanup
+            native_checked_array_source_failure_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+
     # Real native guest class-owned Array<int> fields, independent of the
     # handcrafted ABI fixture and lexical-array-only source admission.
     add_test(NAME native_class_owned_array_source_execution
@@ -391,6 +412,47 @@ if(BUILD_TESTING)
             native-try-finally-return-snapshot.ores
             --run 246 --clang "${ORE_CLANG}")
     endif()
+    # First executable native typed-i64 throw/catch CFG; Java still reserves
+    # source throw, so this is NOT cross-backend guest-source parity.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_caught_throw_unwind_lifo
+            native-caught-throw-unwind-lifo.ores
+            --ir "throw.cleanup" --run 47 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_caught_throw_payload
+            native-caught-throw-payload.ores
+            --ir "throw.catch" --run 43 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(reject_caught_throw_nested_call
+        native-caught-throw-nested-call-reject.ores
+        --diagnostic "native caught throw requires nonthrowing int payload")
+    oreslang_contract_test(reject_caught_throw_unsafe_defer
+        native-caught-throw-defer-call-reject.ores
+        --diagnostic "native caught throw defer requires named class field write")
+    oreslang_contract_test(reject_caught_throw_effect_signature
+        native-caught-throw-qualified-effects-reject.ores
+        --diagnostic "native caught throw effect-qualified function unsupported")
+    oreslang_contract_test(reject_caught_throw_finally_call
+        native-caught-throw-finally-call-reject.ores
+        --diagnostic "native caught throw finally requires nonthrowing field write")
+    # Native ABI-backed reads are not pure scalar operations.
+    oreslang_contract_test(reject_caught_throw_array_size_operand
+        native-caught-throw-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_heap_owned_operand
+        native-caught-throw-heap-owned-reject.ores --experimental-owned-int
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_defer_array_size
+        native-caught-throw-defer-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_catch_array_size
+        native-caught-throw-catch-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_finally_array_size
+        native-caught-throw-finally-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_wasm32
+        native-caught-throw-payload.ores --target wasm32
+        --diagnostic "wasm32 native caught-throw guest unsupported")
     oreslang_contract_test(reject_finally_return_override
         native-finally-return-reject.ores --diagnostic "cannot escape finally")
     oreslang_contract_test(reject_finally_break_override
