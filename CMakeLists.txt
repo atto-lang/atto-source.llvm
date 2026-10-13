@@ -789,6 +789,16 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-effect-unwind-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-effect-unwind-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_typed_exception_unwind COMMAND oreslang-effect-unwind-test)
+    # Primitive-only native Assert ABI substrate; imported source execution
+    # and compiler-emitted trap remain separately gated.
+    add_executable(oreslang-native-assert-scalar-abi-test
+        tests/native_assert_scalar_abi_test.cpp)
+    target_include_directories(oreslang-native-assert-scalar-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-assert-scalar-abi-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_scalar_abi_contract
+        COMMAND oreslang-native-assert-scalar-abi-test)
     # Actor-local uncaught routing never admits PANIC into guest callbacks.
     add_executable(oreslang-actor-local-failure-test tests/actor_local_failure_policy_test.cpp)
     target_include_directories(oreslang-actor-local-failure-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
