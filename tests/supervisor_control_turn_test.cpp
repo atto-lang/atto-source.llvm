@@ -100,5 +100,24 @@ int main() {
     CHECK(lane.urgent());
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
     CHECK(!lane.urgent());
+
+    // All 253 invalid one-byte decision tags must escalate, never ACK
+    // silently or consume the remaining restart budget. Each event must be
+    // handled only on the parent's single-flight admitted CONTROL turn.
+    const auto restart_count = lane.restarts_used();
+    for (unsigned raw = 3; raw < 256; ++raw) {
+        const Key forged_decision{"invalid-decision-" + std::to_string(raw), 5};
+        lane.reserve_child(forged_decision);
+        CHECK(lane.publish_child(forged_decision, Kind::Throw, "invalid decision"));
+        hooks.next = static_cast<SupervisorControlTurn::Decision>(raw);
+        const auto observed = hooks.order.size();
+        CHECK(lane.admit_turn(hooks, false) == SupervisorControlTurn::Admitted::Control);
+        CHECK(hooks.order.size() == observed + 2);
+        CHECK(hooks.order[observed] == "throw");
+        CHECK(hooks.order[observed + 1] == "escalate");
+        CHECK(lane.restarts_used() == restart_count);
+        CHECK(lane.reserved_count() == 0);
+        CHECK(!lane.urgent());
+    }
     return 0;
 }
