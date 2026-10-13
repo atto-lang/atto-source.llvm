@@ -155,7 +155,6 @@ static void quota_failure_unchanged(void) {
     oreslang_int_array_region_close(r);
 }
 
-
 /* Regression: geometric growth must not report quota exhaustion while an
  * additional element fits. A failed fallback allocation must leave the old
  * length/data unchanged and a later successful append must use the last

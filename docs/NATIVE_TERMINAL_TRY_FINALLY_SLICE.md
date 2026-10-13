@@ -57,3 +57,45 @@ throw/recover/panic, exceptional failure precedence or suppression,
 suspendable/async finally, nested closures inside finally, and general
 statement/branch CFG unwinding. Unsupported syntax must be rejected before
 IR generation; do not silently treat a catch handler as executable.
+
+## First synchronous native caught-i64 throw slice (experimental)
+
+An additional, deliberately restricted path compiles a **direct i64 throw**
+inside a terminal `try`, runs up to eight nonthrowing, named-class-field
+`defer` writes in LIFO order, transfers the i64 payload to the local
+`catch (name)` binding, snapshots the catch return, then executes the
+existing `finally` cleanup before lexical owners are retired. The native
+backend emits explicit `throw.cleanup` and `throw.catch` LLVM blocks.
+
+This is a **single-frame caught throw**, not generalized typed `Throw<T>`
+effects. Outside this exact shape, native `throw` remains rejected.
+Throwing cleanup, nested try, propagation across calls, rethrow, actor
+supervision, panic/raise, coroutine suspension, cancellation, cleanup
+suppression, and escaping exceptional payload ownership are **not supported**.
+The Java/GraalVM frontend still rejects source `throw`, so these are
+native-only fixtures, not Java/LLVM language-parity proofs.
+
+`tests/fixtures/native-caught-throw-unwind-lifo.ores` exercises two
+noncommutative deferred writes before catch and a finally mutation after
+return snapshot. `native-caught-throw-payload.ores` checks the i64 binding.
+All unimplemented cases must reject before LLVM IR emission.
+
+The slice additionally rejects effect-qualified function signatures and
+potentially throwing or unverified calls in the local `finally` block. The
+first implementation has no typed effect propagation across nested calls, so
+accepting such calls would incorrectly imply successful unwind semantics.
+
+### Ownership-verified nonthrowing scalar gate
+
+The exceptional path now requires primitive stack `int` data or scalar
+class fields, proven by the ownership checker as well as the parser. A
+heap-owned `int` read, `Array<int>.size`, class-array field or any
+native-runtime-backed handle read cannot be used in the `throw` payload,
+scoped `defer` expression, catch return, or `finally` update. Such reads
+can invoke runtime ABIs and invalidate the current nonthrowing proof.
+Nonexceptional source paths remain unchanged.
+
+The caught-i64 exception slice is explicitly **host native only**. The
+wasm32 target rejects such programs before IR emission because its exception
+and cleanup admission has not been certified; this is tested as a negative
+compiler target case.

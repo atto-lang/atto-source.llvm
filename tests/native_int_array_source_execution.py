@@ -208,13 +208,20 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
             if compiled.returncode != 0 or compiled.stderr:
                 raise AssertionError(f"{name} compiler rc={compiled.returncode}: {compiled.stderr!r}")
             ir = compiled.stdout
-            for required in (b"; ModuleID", b"@oreslang_int_array_region_open",
-                             b"@oreslang_int_array_new", b"@oreslang_int_array_drop",
+            for required in (b"; ModuleID", b"@oreslang_int_array_try_region_open",
+                             b"@oreslang_int_array_try_new", b"@oreslang_int_array_drop",
                              b"@oreslang_int_array_region_close"):
                 if required not in ir:
                     raise AssertionError(f"{name}: compiler did not emit {required!r}")
-            if ir.count(b"call i64 @oreslang_int_array_new(") != owners:
+            if ir.count(b"call i32 @oreslang_int_array_try_new(") != owners:
                 raise AssertionError(f"{name}: did not allocate exact owned array count")
+            if (b"@oreslang_int_array_try_add" not in ir or
+                    b"array.resource.failure:" not in ir or
+                    b"array.region.open.failure:" not in ir):
+                raise AssertionError(f"{name}: checked growth/init failure cleanup IR absent")
+            if b"call i64 @oreslang_int_array_new(" in ir or \
+                    b"call void @oreslang_int_array_add(" in ir:
+                raise AssertionError(f"{name}: legacy aborting allocator remains in generated IR")
             if not ir or b"define i32 @main()" not in ir:
                 raise AssertionError(f"{name}: missing native compiler-generated entrypoint")
             ll = work / f"{name}.ll"
@@ -249,7 +256,7 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
                     raise AssertionError(
                         f"{name}: bounds-negative guest failed source compilation: "
                         f"{compiled.returncode} {compiled.stderr!r}")
-                for symbol in (b"@oreslang_int_array_new",
+                for symbol in (b"@oreslang_int_array_try_new",
                                b"@oreslang_int_array_get" if name.startswith("get")
                                else b"@oreslang_int_array_set"):
                     if symbol not in compiled.stdout:

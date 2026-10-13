@@ -98,7 +98,7 @@ ordinary resource exhaustion from ownership corruption.
   output place when allocation or slot admission fails.
 - `try_reserve(region, handle, capacity)` and
   `try_add(region, handle, value)` leave length, previously committed
-  elements, and region reservations unchanged on failure. When geometric
+elements, and region reservations unchanged on failure. When geometric
   growth for `try_add` would exceed the aggregate region budget but one
   additional element fits, it retries with the exact minimum required
   capacity. Failed fallback allocation leaves previously committed data
@@ -142,6 +142,49 @@ verifies old values, untouched output slots, full aggregate quota recovery,
 and an allocation-free four-owner commit. LLVM guest-source, exceptional unwind, recoverable `Result`
 conversion, and multi-field class replacement lowering are **not** implemented
 by this substrate change.
+
+## LLVM checked allocation source lowering (incremental)
+
+The native LLVM code generator now lowers the already-admitted synchronous,
+non-escaping lexical and class-owned `Array<int>` subset using the checked
+runtime resource API:
+
+- `try_region_open(&region)` for the private owner region;
+- `try_new(region, &handle)` for each owned local or class field;
+- `try_add(region, handle, value)` for dynamic array growth.
+
+Each status is compared with `ORES_NATIVE_ARRAY_OK`. No checked failure
+continues into guest code or reads an uninitialized handle. Per-function
+shadow handle slots start at zero *before* any allocation. Every successful
+creation records its token in its own shadow, independently of class-field
+publication. If a resource operation fails, generated LLVM IR drops every
+acquired handle in reverse order, closes the array region, cleans any live
+native owned-i64 local regions, and then aborts. The failed region-open path
+does not attempt to close a nonexistent region.
+
+**Important contract boundary:** This is **not** guest-visible recoverable
+`Result`, `throw`, `trap`, or supervisor handling. The code generator
+observes the checked result, cleans up, then intentionally aborts as an
+interim fail-closed process behavior. Until typed propagation and unwind are
+implemented, callers cannot recover from an array allocation error.
+Bounds/get/set checks continue to abort in the original runtime.
+
+The Linux-only `native_checked_array_source_failure_cleanup` test verifies
+the actual emitted ABI calls and injects deterministic faults at every region,
+owner creation, and growth allocation point for three source-compiled guest
+programs: two lexical arrays, four class-owned arrays, and mixed scalar
+`owned int` plus `Array<int>`. ELF link wrappers assert the exact numbers
+of both array and scalar owner drops and both region closes **before**
+compiler-generated abort; normal execution asserts exact-once cleanup and
+a successful result. A parallel ASan+UBSan gate uses the same
+compiler-produced IR. No hand-written surrogate IR is accepted.
+The mixed-owned-int fixture is explicitly gated with
+`--experimental-owned-int` and is not enabled by default.
+
+This lowering is still restricted to the earlier lexical/class subset; it
+does not implement `self.field = staged`, native `Option`, queue class methods,
+loops, cross-region replacement, asynchronous suspend, or exceptional unwind.
+All six strict exact linked-queue source rejection gates remain.
 
 ## Ownership and concurrency
 
