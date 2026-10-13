@@ -460,6 +460,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_method_suspension
         actor-method-suspend-reject.ores
         --diagnostic "state read/write loan cannot suspend or nest")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_actor_method_state_guest
+            actor-method-state-guest.ores
+            --run 43 --clang "${ORE_CLANG}"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_guest.c"
+            --stderr "ACTOR_METHOD_STATE_GUEST_PASS read=7 increment=8,9 reset=12")
+        oreslang_contract_test(native_asan_actor_method_state_guest
+            actor-method-state-guest.ores
+            --run 43 --clang "${ORE_CLANG}" --sanitize
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_guest.c"
+            --stderr "ACTOR_METHOD_STATE_GUEST_PASS read=7 increment=8,9 reset=12")
+    endif()
     # Function-level 'with' effect upper bound is distinct from scoped
     # 'using' acquisition and sealed handle_state authority.
     foreach(mode read write)
