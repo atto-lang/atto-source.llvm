@@ -110,6 +110,38 @@ native actor CONTROL publication to Panic while retaining origin. Neither
 guest exceptional syntax. Host policy/runtime tests do not constitute
 cross-backend source parity or AOT proof.
 
+## October 13 fail-closed audit and guest future isolation
+
+Native `EffectUnwind` now converts unknown FFI/native effect discriminator
+values to `Fatal(code=0xFFFFFFFD)` **before** propagation or further
+cleanup. A forged/unknown `SupervisorControlTurn` decision throws and requeues
+the CONTROL event rather than implicitly acknowledging it. These are native
+host-substrate guarantees; actual guest LLVM exception lowering remains
+unimplemented.
+
+Java `ActorRuntime` ranks every competing terminal failure, not only a
+cleanup-specific fault: HostFatal outranks cancellation; cancellation outranks
+panic; panic outranks raise; raise outranks throw. A fatal failure arising in
+actor final cleanup is recorded and then rethrown **after** the actor's turn
+authority is exited. One immutable typed secondary cause is retained; a
+single retained secondary is not a full multi-error traceback.
+
+Java guest actor, root-scheduler and Mailman calls to `ready()`,
+`readyRef()` and `done()` now return lazily cached non-cancellable Future
+views. Exceptional guest-visible completion carries a bounded immutable
+`ActorFailureSnapshotException` with no `Throwable` cause/suppressed
+graph. Trusted host callers retain their original error-bearing Future and
+host-only `ActorRef.failure()`; the raw failure accessor rejects actor,
+Mailman and Ores scheduler/root turns. The snapshot is a **Future result
+view**, not a parent supervisor CONTROL delivery. The Java compiler still
+rejects exceptional source syntax and host interop must not use these
+runtime signals to bypass compiler admission.
+
+Funded, exact-source host verification exercises the native GCC and Clang
+ASan/UBSan policy tests and focused Java 21 Maven actor/source-admission
+tests. This does not establish AOT, full compiler lowering, supervision
+hook registration or Java/LLVM same-guest-program conformance.
+
 ## Required source-level parity release gates
 
 - Typed signature/effect inference: unannotated local inference, exported upper bounds, trait and function-value substitution, typed catch mismatch, dynamic/FFI unknown effect rejection.
