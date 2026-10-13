@@ -806,6 +806,51 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             if (fn.returns_void) builder.CreateRetVoid();
             else builder.CreateRet(builder.CreateLoad(i64, return_snapshot, "return.snapshot"));
         }
+        if (array_failure) {
+            builder.SetInsertPoint(array_failure);
+            // The shadow owner slots contain 0 until the corresponding
+            // checked new call succeeds; drop in reverse construction order.
+            for (std::size_t k = array_owner_count; k != 0; --k) {
+                llvm::Value* address = builder.CreateGEP(i64, array_handle_shadows,
+                    llvm::ConstantInt::get(i64, k - 1), "array.failure.drop.slot");
+                llvm::Value* handle = builder.CreateLoad(i64, address, "array.failure.handle");
+                llvm::BasicBlock* drop = llvm::BasicBlock::Create(
+                    context, "array.failure.drop", function);
+                llvm::BasicBlock* next = llvm::BasicBlock::Create(
+                    context, "array.failure.next", function);
+                builder.CreateCondBr(builder.CreateICmpNE(handle,
+                    llvm::ConstantInt::get(i64, 0)), drop, next);
+                builder.SetInsertPoint(drop);
+                builder.CreateCall(arrayDrop, {array_region, handle});
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), address);
+                builder.CreateBr(next);
+                builder.SetInsertPoint(next);
+            }
+            builder.CreateCall(arrayClose, {array_region});
+            if (region != nullptr) {
+                for (auto it = heap_failure_slots.rbegin();
+                     it != heap_failure_slots.rend(); ++it) {
+                    llvm::Value* handle = builder.CreateLoad(i64, *it,
+                        "owned.failure.handle");
+                    llvm::BasicBlock* drop = llvm::BasicBlock::Create(
+                        context, "owned.failure.drop", function);
+                    llvm::BasicBlock* next = llvm::BasicBlock::Create(
+                        context, "owned.failure.next", function);
+                    builder.CreateCondBr(builder.CreateICmpNE(handle,
+                        llvm::ConstantInt::get(i64, 0)), drop, next);
+                    builder.SetInsertPoint(drop);
+                    builder.CreateCall(regionDrop, {region, handle});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), *it);
+                    builder.CreateBr(next);
+                    builder.SetInsertPoint(next);
+                }
+                builder.CreateCall(regionClose, {region});
+            }
+            // Guest-visible exceptions remain separate work. Resource errors
+            // are detected, fully cleaned up, and only then abort the process.
+            builder.CreateCall(arrayAbort, {});
+            builder.CreateUnreachable();
+        }
     }
 
 
