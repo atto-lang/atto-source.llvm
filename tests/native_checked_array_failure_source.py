@@ -21,6 +21,18 @@ LEXICAL = """pub fnc main(): int {
   return first.get(0) + second.get(0);
 }
 """
+MOVED_CLASS = """define class Pair as
+  let mut Array<int> first = new Array<int>();
+  let mut Array<int> second = new Array<int>();
+end
+pub fnc main(): int {
+  let mut Pair original = new Pair();
+  let mut Pair moved = rt take(original);
+  moved.first.add(7);
+  moved.second.add(35);
+  return moved.first.get(0) + moved.second.get(0);
+}
+"""
 MIXED = """pub fnc main(): int {
   const box: owned int = 5;
   let mut Array<int> a = new Array<int>();
@@ -134,6 +146,7 @@ def verify(compiler, clang, root, sanitizers):
         for label, src, owned, growing, heap in (
             ("lexical", LEXICAL, 2, 2, 0),
             ("class", CLASS, 4, 4, 0),
+            ("moved-class", MOVED_CLASS, 2, 2, 0),
             ("mixed", MIXED, 1, 1, 1),
         ):
             source = temp / f"{label}.ores"
@@ -214,7 +227,7 @@ def verify(compiler, clang, root, sanitizers):
                     f"{label}: normal cleanup failed: rc={result.returncode}, "
                     f"stderr={result.stderr[:2200]!r}")
     print("PASS checked Array<int> source failure cleanup: "
-          "17 injected allocation edges + 3 successful complete guest runs"
+          "22 injected allocation edges + 4 successful complete guest runs"
           + (" (ASan+UBSan)" if sanitizers else ""), flush=True)
 
 
