@@ -17,9 +17,8 @@ SOURCE = """pub fnc main(): int {
   a.add(11);
   a.add(12);
   a.add(13);
-  const first: int = a.try_add(20);
-  const second: int = a.try_add(21);
-  return first * 40 + second * 20 + a.size * 4 + a.get(0) + a.get(3);
+  return a.try_add(20) * 40 + a.try_add(21) * 20
+       + a.size * 4 + a.get(0) + a.get(3);
 }
 """
 
