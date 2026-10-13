@@ -49,6 +49,7 @@ struct ClassField {
     std::string name;
     std::int64_t initial = 0;
     bool int_array = false; // owned opaque handle; never exposed as an int
+    bool final_field = false; // fixed field slot: writes rejected by ownership checker
 };
 
 struct ClassDecl {
