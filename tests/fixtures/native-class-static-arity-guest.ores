@@ -1,0 +1,8 @@
+// Static method namespaces are disjoint from unqualified free functions.
+fnc pick(int value): int { return 200; }
+define class Foo as
+    pub static fnc pick(): int { return 4; }
+    pub static fnc pick(int value): int { return value + 5; }
+    pub static fnc pick(int value, int extra): int { return value + extra; }
+end
+pub fnc main(): int { return Foo.pick() + Foo.pick(3) + Foo.pick(8, 4); }
