@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <memory>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -138,7 +139,10 @@ public:
         // Allocation failure cannot advance the source completion phase.
         if (domain != domain_ || frame.empty() || frame.size() > max_reply_bytes_)
             throw std::invalid_argument("invalid canonical nominal pipeline reply");
-        std::vector<std::uint8_t> owned(frame);
+        // Allocate the immutable snapshot before acquiring the route mutex.
+        // Failure to allocate never advances source completion. Later result
+        // observers can each copy bytes without monopolizing CONTROL/DONE.
+        auto owned = std::make_shared<const std::vector<std::uint8_t>>(frame);
         std::lock_guard<std::mutex> lock(mutex_);
         if (aborted_ || claimed_ || actor != actors_.front() ||
             actual_sender != actors_[1] || phase_ != 2 * actors_.size() - 1 ||
@@ -153,11 +157,19 @@ public:
     // is required. A failed, premature or legacy payloadless route cannot
     // expose nominal reply bytes.
     std::vector<std::uint8_t> completed_reply() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (aborted_ || done_count_ != actors_.size() ||
-            phase_ != 2 * actors_.size() || !reply_attested_)
-            throw std::logic_error("pipeline typed result is not committed and finalized");
-        return reply_frame_; // return a copy, never an aliased mutable buffer
+        std::shared_ptr<const std::vector<std::uint8_t>> committed;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (aborted_ || done_count_ != actors_.size() ||
+                phase_ != 2 * actors_.size() || !reply_attested_ || !reply_frame_)
+                throw std::logic_error("pipeline typed result is not committed and finalized");
+            committed = reply_frame_;
+        }
+        // The route is permanently successful once all physical DONE
+        // receipts and the typed reply have committed. An immutable shared
+        // snapshot pins the bytes while a large result is copied outside the
+        // CONTROL mutex. Observers never receive the owned buffer itself.
+        return *committed;
     }
 
     // Physical finalization releases ONLY that actor's routing fence. A
@@ -279,7 +291,7 @@ private:
     // message storage. Schema-level length checks happen before this call.
     static constexpr std::size_t max_reply_bytes_ = 1024 * 1024;
     bool reply_attested_ = false;
-    std::vector<std::uint8_t> reply_frame_;
+    std::shared_ptr<const std::vector<std::uint8_t>> reply_frame_;
 };
 
 } // namespace oreslang::runtime
