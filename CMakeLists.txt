@@ -1005,6 +1005,19 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_field_move_admission.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_field_and_region_move_admission PROPERTIES TIMEOUT 90)
+    add_test(NAME native_colon_class_field_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_colon_class_fields.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_colon_class_field_admission PROPERTIES TIMEOUT 90)
+    if(ORE_CLANG)
+        add_test(NAME native_colon_class_field_execution
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_colon_class_fields.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        set_tests_properties(native_colon_class_field_execution PROPERTIES TIMEOUT 120)
+    endif()
     # Executable transfer + exact-once conditional owned-region drop flags.
     # Wasm has no native region ABI; unsafe transfers must reject with no IR.
     if(ORE_CLANG)

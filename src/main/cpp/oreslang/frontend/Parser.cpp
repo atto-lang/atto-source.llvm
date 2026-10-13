@@ -157,7 +157,7 @@ class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
                     bool experimental_rt_scalar_loop)
-        : lexer_(source), token_(lexer_.next()),
+        : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
@@ -284,9 +284,10 @@ private:
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
-            require("let");
+            const bool legacy_let = accept("let");
             ClassField field;
-            if (accept("mut")) {
+            if (!legacy_let) field.final_field = accept("final");
+            if (legacy_let && accept("mut")) {
                 require("Array");
                 require("<");
                 require("int");
@@ -295,30 +296,46 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 require("new");
                 require("Array");
                 require("<");
                 require("int");
                 require(">");
                 require("(");
+                const std::size_t initializer_end = token_.offset + token_.text.size();
                 require(")");
+                class_field_terminator(initializer_end);
             } else {
                 require("int");
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 if (token_.kind != Kind::Integer)
                     fail("class field requires i64 literal initializer");
+                const std::size_t initializer_end = token_.offset + token_.text.size();
                 field.initial = integer_literal();
+                class_field_terminator(initializer_end);
             }
-            require(";");
             result.fields.push_back(std::move(field));
         }
         if (result.fields.empty()) fail("native class requires at least one field");
         require("end");
         return result;
+    }
+
+    void class_field_terminator(std::size_t initializer_end) {
+        if (accept(";")) return;
+        if (token_.kind == Kind::End || token_.offset < initializer_end)
+            fail("class field requires ';' or a line break");
+        // Unlike expression statements, native class fields may omit ';'
+        // only at a real lexical line boundary. A same-line next member is
+        // never silently admitted by whitespace or comments alone.
+        const auto gap = source_.substr(initializer_end, token_.offset - initializer_end);
+        if (gap.find('\n') == std::string_view::npos &&
+                gap.find('\r') == std::string_view::npos)
+            fail("class field requires ';' or a line break");
     }
 
     std::int64_t integer_literal() {
@@ -1419,6 +1436,7 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::string_view source_;
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
