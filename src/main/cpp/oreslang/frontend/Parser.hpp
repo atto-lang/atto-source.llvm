@@ -20,6 +20,9 @@ struct Expression {
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
+    // Call-site labels parallel to arguments, empty for positional arguments.
+    // Retain lexical argument order through validation and IR lowering.
+    std::vector<std::string> argument_names;
 };
 
 struct Parameter {
