@@ -68,6 +68,22 @@ struct NominalOverloadSlot {
     std::vector<std::optional<NominalTypeTag>> parameter_tags;
 };
 
+// Type tags are plain internal records so that backends may construct them
+// from typed IR. Treat these records as UNTRUSTED at every API boundary:
+// a caller could bypass primitive_tag()/enum_tag(), or synthesize a bad enum
+// discriminant with a cast. Never put such a value into an ABI symbol key.
+inline void validate_nominal_tag(const NominalTypeTag& tag) {
+    switch (tag.kind) {
+        case NominalTypeTag::Kind::Primitive:
+            (void)primitive_tag(tag.identity);
+            return;
+        case NominalTypeTag::Kind::Enum:
+            (void)enum_tag(tag.identity);
+            return;
+    }
+    throw std::invalid_argument("unknown nominal tag discriminant");
+}
+
 inline void validate_nominal_overload_family(const std::vector<NominalOverloadSlot>& slots) {
     if (slots.size() > 256) throw std::invalid_argument("nominal overload family exceeds 256 declarations");
     if (slots.empty()) return;
@@ -79,6 +95,8 @@ inline void validate_nominal_overload_family(const std::vector<NominalOverloadSl
         if (a.owner != first.owner || a.name != first.name
                 || a.parameter_tags.size() != first.parameter_tags.size())
             throw std::invalid_argument("nominal overload family mixes owner/name/arity");
+        for (const auto& tag : a.parameter_tags)
+            if (tag) validate_nominal_tag(*tag);
         for (std::size_t j = 0; j < i; ++j) {
             const auto& b = slots[j];
             bool distinguishable = false;
@@ -101,6 +119,10 @@ inline std::size_t resolve_nominal_overload_static(
         const std::vector<NominalOverloadSlot>& slots,
         const std::vector<std::optional<NominalTypeTag>>& argument_tags) {
     validate_nominal_overload_family(slots);
+    if (argument_tags.size() > 64)
+        throw std::invalid_argument("nominal argument list exceeds 64 values");
+    for (const auto& tag : argument_tags)
+        if (tag) validate_nominal_tag(*tag);
     std::optional<std::size_t> chosen;
     for (std::size_t i = 0; i < slots.size(); ++i) {
         const auto& candidate = slots[i];
@@ -147,8 +169,7 @@ inline std::string nominal_overload_link_key(const NominalOverloadSlot& slot) {
             + "$a" + std::to_string(slot.parameter_tags.size());
     for (const auto& tag : slot.parameter_tags) {
         if (!tag) { key += "$u"; continue; }
-        if (tag->identity.empty() || tag->identity.size() > 1024)
-            throw std::invalid_argument("invalid overload tag identity length");
+        validate_nominal_tag(*tag);
         key += tag->kind == NominalTypeTag::Kind::Enum ? "$e" : "$p";
         key += encode(tag->identity);
     }
