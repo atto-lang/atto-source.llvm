@@ -1269,6 +1269,10 @@ private:
                     member == "false" || member == "false_throws" ||
                     member == "fail")
                     fail("native sealed Assert member requires typed bool/String argument lowering");
+                // Identity is not scalar equality. A future linker cannot
+                // silently implement source 'is' through tagged-value 'eq'.
+                if (member == "same" || member == "same_throws")
+                    fail("native sealed Assert identity requires reference-identity ABI lowering");
                 expr = std::move(call);
             } else {
                 if (double_colon)
