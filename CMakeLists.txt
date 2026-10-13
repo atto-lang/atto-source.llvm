@@ -1198,7 +1198,15 @@ if(BUILD_TESTING)
              COMMAND oreslang-epoch-arena-test)
     set_tests_properties(native_actor_epoch_deterministic_drop PROPERTIES TIMEOUT 20)
 
+    # The bounded native subset has no instance methods: ordinary class
+    # fields are readable/writable from free functions only with explicit pub.
+    oreslang_contract_test(reject_native_private_field_read class-private-read-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_field_write class-private-write-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_field_take class-private-take-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_array_size class-private-array-size-reject.ores --diagnostic "private class field")
+
     if(ORE_CLANG)
+        oreslang_contract_test(native_public_class_field_read class-public-field-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(class_exec_mutable_borrow class-mutable-borrow-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_shared_read class-shared-read-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_mut_to_shared_reborrow class-reborrow-native.ores --run 42 --clang "${ORE_CLANG}")
