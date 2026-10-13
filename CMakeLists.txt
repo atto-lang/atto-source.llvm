@@ -648,6 +648,12 @@ if(BUILD_TESTING)
             native_branch_local_scope_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
     oreslang_contract_test(arithmetic_precedence return-arithmetic.ores --ir "ret i64 28")
+    # Proven-nonescaping integer-field classes are stack-only and emit no
+    # malloc, tracing collector roots, or native heap calls.
+    oreslang_contract_test(owned_stack_class owned-stack-class.ores --ir "alloca %Box")
+    oreslang_contract_test(reject_owned_stack_escape owned-stack-escape.ores --diagnostic "class is non-Copy")
+    oreslang_contract_test(reject_owned_stack_unknown_field owned-stack-bad-field.ores --diagnostic "unknown class field")
+    oreslang_contract_test(reject_owned_stack_duplicate_field owned-stack-double-field.ores --diagnostic "duplicate class field")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "ret i64 42")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "ret i64 42")
     oreslang_contract_test(native_owned_lexical_lifetime owned-lexical-main.ores --no-native-abi --ir "llvm.lifetime.end")
@@ -1170,6 +1176,28 @@ if(BUILD_TESTING)
 
 
 
+    # Native deterministic ownership is a runtime primitive, not yet source
+    # Oreslang object/borrow lowering. Compile and execute it in every LLVM CI.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-owned-heap-test tests/owned_heap_test.cpp)
+    target_include_directories(oreslang-owned-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-owned-heap-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-owned-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_owned_heap_deterministic_drop
+             COMMAND oreslang-owned-heap-test)
+    set_tests_properties(native_owned_heap_deterministic_drop PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-epoch-arena-test tests/epoch_arena_test.cpp)
+    target_include_directories(oreslang-epoch-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-epoch-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_epoch_deterministic_drop
+             COMMAND oreslang-epoch-arena-test)
+    set_tests_properties(native_actor_epoch_deterministic_drop PROPERTIES TIMEOUT 20)
+
     if(ORE_CLANG)
         oreslang_contract_test(class_exec_mutable_borrow class-mutable-borrow-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_shared_read class-shared-read-native.ores --run 42 --clang "${ORE_CLANG}")
@@ -1201,6 +1229,7 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_exec_owned_stack_class owned-stack-class.ores --run 13 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_negative negative-literal.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_lexical_local owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_identifier owned-identifier-main.ores --no-native-abi --run 42 --clang "${ORE_CLANG}")
@@ -1381,6 +1410,20 @@ if(BUILD_TESTING)
         add_test(NAME native_actor_ingress_handler_trace
                  COMMAND oreslang-actor-trace-test)
         set_tests_properties(native_actor_ingress_handler_trace PROPERTIES TIMEOUT 15)
+
+        # Actual dedicated carrier callback accesses its own native ownership
+        # heap, while the broker and supervisor cannot discover that heap.
+        add_executable(oreslang-native-actor-heap-test
+            tests/native_actor_heap_integration_test.cpp
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp)
+        target_include_directories(oreslang-native-actor-heap-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-heap-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-actor-heap-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_actor_heap_isolation_and_drop
+                 COMMAND oreslang-native-actor-heap-test)
+        set_tests_properties(native_actor_heap_isolation_and_drop PROPERTIES TIMEOUT 30)
     endif()
     # Current-main reconciliation of the native actor substrate from draft
     # LLVM #118. Never replace the newer main ownership/continuation tests.
