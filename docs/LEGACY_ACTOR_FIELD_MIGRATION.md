@@ -16,22 +16,22 @@ The following historical fixtures were inspected on the LLVM draft branch.
 Migration status is per-fixture; passing targeted gates does **not** establish
 that the full legacy suite has been restored:
 
-| Intended existing coverage | Confirmed affected fixture |
-|---|---|
-| Owned actor heap fields (pending) | `actor-owned-fields.ores` |
-| Duplicate-state-key rejection (migrated; focused CI green) | `actor-duplicate-field.ores` |
-| Immutable-field write rejection | `actor-immutable-write.ores` |
-| Local/field shadow rejection | `actor-field-shadow.ores` |
-| Unknown lexical variable rejection (migrated; focused CI green) | `actor-unknown-field.ores` |
-| Unknown state write rejection | `actor-unknown-write.ores` |
-| Unsupported actor state type rejection (migrated; focused CI green) | `actor-unsupported-field.ores` |
-| Native source actor send | `source-actor-send.ores` |
-| Five-worker actor lifecycle | `source-actor-five-workers.ores` |
-| Spawn/stop actor field handling | `source-actor-spawn-stop.ores` |
-| Tagged integer DATA dispatch | `source-tagged-int-payload-dispatch.ores` |
-| Boolean receive match | `message-receive-bool-match.ores` |
-| Three-actor bidirectional native pipeline | `source-actor-pipeline-bidirectional.ores` |
-| Generated actor ABI collision (migrated; focused CI green) | `actor-abi-actor-collision.ores` |
+| Historical invariant / behavior | Fixture | Focused result |
+|---|---|---|
+| Three-key persistent heap and four methods | `actor-owned-fields.ores` | Native + ASan/UBSan passed |
+| Duplicate fixed state key | `actor-duplicate-field.ores` | Exact diagnostic passed |
+| Mutation attempted under immutable read grant | `actor-immutable-write.ores` | Reframed negative passed |
+| Parameter versus state-key lexical resolution | `actor-field-shadow.ores` | Reframed positive passed |
+| Unknown lexical variable | `actor-unknown-field.ores` | Exact diagnostic passed |
+| Unknown state key write | `actor-unknown-write.ores` | Exact diagnostic passed |
+| Unsupported fixed-key value type | `actor-unsupported-field.ores` | Exact diagnostic passed |
+| Native async DATA send and STOP drain | `source-actor-send.ores` | Compiled guest passed |
+| Five independent actors and mailboxes | `source-actor-five-workers.ores` | Compiled guest passed |
+| Spawn and physical STOP | `source-actor-spawn-stop.ores` | Compiled guest passed |
+| Nominal typed integer DATA dispatch | `source-tagged-int-payload-dispatch.ores` | Native + ASan/UBSan passed |
+| Exhaustive boolean receive arms | `message-receive-bool-match.ores` | Native + ASan/UBSan passed |
+| Three-actor forward/backward pipeline | `source-actor-pipeline-bidirectional.ores` | Typed guest + route evidence + ASan/UBSan passed |
+| Generated actor symbol collision | `actor-abi-actor-collision.ores` | Exact diagnostic passed |
 
 **Migration criteria:**
 
@@ -41,10 +41,11 @@ that the full legacy suite has been restored:
 2. Negative fixtures must fail for the originally intended invariant
    (e.g. duplicate key, shadowing or ABI collision), not for an unrelated
    early legacy-field syntax rejection.
-3. General ordinary actor method and legacy boolean-match state access
-   require real ownership-aware lowering before these historical fixtures
-   can be fully migrated. The currently executable LLVM `handle_state` subset
-   covers only exhaustive **tagged receive arms** and fixed `int` keys.
+3. The restricted native compiler now executes one synchronous scoped
+   `int`-returning state callback in an ordinary actor method and in each
+   exhaustive tagged/boolean receive arm. General function-body lowering,
+   suspension, reference-bearing values and multiple outstanding flows
+   remain outside this proven subset.
 4. Keep Java/GraalVM fail-closed until equivalent guest `handle_state`
    capability semantics exist; do not rewrite source tests to weaken that
    safety boundary.
@@ -52,9 +53,12 @@ that the full legacy suite has been restored:
    Native Image and sanitizer suites on exact source trees **before**
    removing the draft restriction or merging.
 
-This inventory covers 14 inspected files, **not necessarily all**
-legacy actor-field usages in the repository. It is not a claim that every
-listed test fails the same way or that these are all the outstanding gaps.
+This original inventory contains 14 historical fixtures now migrated to the
+canonical fixed-key state model. This is **not** an exhaustive repository
+inventory or a full-tree CTest result. Where the old contract was rendered
+obsolete by the actor-state design (immutable actor fields and field-shadow
+rejection), the corresponding tests are explicitly reinterpreted as
+read-only loan rejection and lexical namespace acceptance.
 
 Focused new-capability evidence:
 https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38314809579
@@ -77,8 +81,8 @@ safety canary, and Clang ASan/UBSan:
 https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38326659916
 
 This was a **47-blob SHA-pinned focused native build**, not the complete
-historical source tree or full CMake/CTest suite. The remaining legacy
-fixtures in the inventory need source migration and original intent tests.
+historical source tree or full CMake/CTest suite. Later focused gates migrate the remaining fixtures in this original inventory.
+Other pre-1.0 source fixtures and full historical CTest remain unverified.
 
 ## Follow-up historical regressions (focused gate verified)
 
@@ -102,6 +106,29 @@ focused canonical-regression CTests: duplicate state key, invalid state type,
 unknown lexical variable, two ABI symbol collisions, two method-only actor
 admission cases, and a Python `-O` forbidden-diagnostic mutation canary.
 The intentionally failing canary passes only when CTest observes its expected
-failure (`WILL_FAIL`); it is not a regular positive compiler test. Ordinary-method state execution, the legacy mutable-field
-positive fixture, lifecycle/boolean receive migrations, full CTest coverage,
-and Java executable actor-state parity are still release blockers.
+failure (`WILL_FAIL`); it is not a regular positive compiler test.
+
+## Integrated focused migration gate — 2026-10-12
+
+[Exact-source funded Linux Actions run #38343367152](https://github.com/flags-2-env-test/java-app/actions/runs/38343367152)
+passed **41/41 focused CTests** with 47 pinned source/test blobs and the real
+LLVM frontend, C actor runtime and Clang. The gate includes normal native
+execution, ASan/UBSan, ordinary-method state callbacks, state persistence
+between turns, read-only and effect-denial negatives, a full three-actor
+typed forward/backward round trip with authenticated causal-route evidence,
+five independently spawned workers, canonical tagged MessagePack i64
+boundaries, and boolean state-match SSA/PHI merging.
+
+The normal and sanitized three-actor guest test preserves the historical
+typed result 19 and physical actor teardown evidence without handwritten
+host-side actor callbacks. This is still a **focused mirrored CTest suite**,
+not a full checkout of LLVM PR #244, not the complete historical CMake/CTest
+suite, and not Java/GraalVM execution parity. Other legacy fixtures outside
+this 14-file inventory may remain.
+
+The restricted native compiler has concrete execution for one synchronous
+state callback in ordinary methods and boolean/tagged receive arms. Full
+general state loans, arbitrary user functions during loans, suspension,
+reference-valued state snapshots, multi-flow scheduling, native full-tree
+CTest and Java/GraalVM Native Image parity remain release blockers.
+**Keep PR #244 draft.**

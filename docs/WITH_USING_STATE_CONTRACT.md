@@ -87,9 +87,9 @@ ownership/scheduler proofs.
   **17 focused compiler/ownership checks passed**, 15 Git blobs verified.
   This is **not** Java guest execution or full Maven/Native Image testing.
 - LLVM PR #244 executable restricted native compiler recognizes `with`
-  and bounds scalar state read/write permissions in compiled tagged
-  receive arms; `using` acquires scoped callbacks and
-  `self.handle_state` remains sealed. [Funded exact-source native
+  and bounds scalar state read/write permissions in compiled ordinary
+  methods and exhaustive tagged/boolean receive arms; `using` acquires
+  scoped callbacks and `self.handle_state` remains sealed. [Funded exact-source native
   verification](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38316632181):
   **67/67 targeted CTests passed**, including real 15-stage typed pipelines,
   under-declared effect rejection, and ASan/UBSan coverage.
@@ -113,3 +113,7 @@ Maven/JUnit, LLVM CTest, Graal Native Image, actor-runtime guest parity,
 multi-flow streaming/backpressure, and formal scheduling/ownership proof
 are not complete. **Do not merge these draft branches on focused gates
 alone.**
+
+### Updated native execution milestone (October 12, 2026)
+
+[Funded exact-source LLVM CI #38343367152](https://github.com/flags-2-env-test/java-app/actions/runs/38343367152): **41/41 focused CTests passed**. Restricted guest methods now execute synchronous read/write loans on actor-owned heaps across distinct trusted turns, and the migrated three-actor typed guest roundtrip exercises `self.forward`/`self.backward` with correlated runtime evidence and sanitizers. This does not replace full-tree LLVM CTest, Java/GraalVM Native Image, generalized borrow checking or multi-flow tests; keep draft.

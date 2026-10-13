@@ -39,11 +39,13 @@ define actor Counter as
 end
 ```
 
-The source above specifies **the intended language API**. The current
-restricted LLVM compiler supports the two callback spellings in exhaustive
-tagged receive arms, **not yet in ordinary actor methods**. Do not label
-the complete class-method example runnable until general method-state
-lowering is implemented and tested. Java/GraalVM PR #760 has source parser, effect/ownership, and focused scalar guest-execution coverage, but full Java/LLVM general actor-method parity remains a release gate.
+The source above is executable in the restricted LLVM profile with fixed
+`int` state, one synchronous copied-scalar callback, and no suspension or
+arbitrary guest calls inside the scope. Ordinary actor methods now lower to
+native heap reads/writes under authenticated turn tokens. The complete
+language semantics and Java/LLVM general actor-method parity are **not** yet
+established; Java PR #738 must be reconciled with the separate effects/state
+compiler work in PR #760.
 
 For this API, the name is `self.handle_state` (dot access), not
 `self_handle_state` as a standalone global function.
@@ -110,8 +112,11 @@ no-live-loan-suspension rules. For the complete normative contract, see
   explicitly fail closed because scoped guest state access isn't
   implemented; neither form runs on Java yet.
 
-Full native repository regressions, historical `let` actor-field
-migration, ordinary-method callback support, async/suspend-aware loans,
-general state value types, multiple concurrent flows, reader snapshot
-semantics and Java/LLVM executable parity are still release blockers.
+An additional [41/41 exact-source focused LLVM gate](https://github.com/flags-2-env-test/java-app/actions/runs/38343367152)
+verified ordinary-method and exhaustive tagged/boolean state callback execution,
+multi-key actor heaps and typed forward/backward pipeline behavior under
+sanitizers. Full native repository regressions, other legacy `let` actor-field
+fixtures, async/suspend-aware loans, general value types, multiple concurrent
+flows, reader snapshot semantics and Java/LLVM executable parity are still
+release blockers.
 **Keep both PRs draft and do not claim full feature parity.**
