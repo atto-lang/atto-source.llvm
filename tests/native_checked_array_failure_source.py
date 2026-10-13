@@ -14,6 +14,19 @@ import subprocess
 import sys
 import tempfile
 
+BATCH_FULL_QUOTA = """define class Four as
+  let mut Array<int> previous = new Array<int>();
+  let mut Array<int> following = new Array<int>();
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> occupied = new Array<int>();
+end
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 65536, -1, -1, 0, 0);
+  rt array_commit_filled(q, 65536, -1, -1, 0, 0);
+  return 42;
+}
+"""
 BATCH_COMMIT = """define class Four as
   let mut Array<int> previous = new Array<int>();
   let mut Array<int> following = new Array<int>();
@@ -339,6 +352,35 @@ def verify(compiler, clang, root, sanitizers):
             raise AssertionError(
                 f"four-batch success cleanup: rc={result.returncode}, "
                 f"stderr={result.stderr[:2200]!r}")
+        # A second maximal-capacity staging attempt cannot coexist with
+        # four fully reserved 65536-element destinations in this region.
+        # The quota must fail BEFORE any new owner is published. The abort
+        # cleanup must still drop four committed owners and close cleanly.
+        quota_src = temp / "four-batch-quota.ores"
+        quota_src.write_text(BATCH_FULL_QUOTA, encoding="utf-8")
+        compiled = run([str(compiler), str(quota_src)])
+        if compiled.returncode or compiled.stderr or not compiled.stdout:
+            raise AssertionError(f"full-capacity quota source failed: {compiled.stderr!r}")
+        quota_ir = compiled.stdout
+        if quota_ir.count(b"call void @oreslang_int_array_commit_many(") != 2:
+            raise AssertionError("full-capacity quota must lower both batch statements")
+        quota_ll = temp / "four-batch-quota.ll"
+        quota_ll.write_bytes(quota_ir)
+        quota_exe = temp / "four-batch-quota"
+        quota_link = [str(quota_ll) if item == str(ll) else
+                      str(quota_exe) if item == str(exe) else item for item in link]
+        linked = run(quota_link)
+        if linked.returncode:
+            raise AssertionError(f"full-capacity quota clang/link: {linked.stderr!r}")
+        env = os.environ.copy()
+        env.update(ORE_FAIL_AFTER="-1", ORE_EXPECT_DROPS="4",
+                   ORE_EXPECT_CLOSES="1", ORE_EXPECT_OWNED_DROPS="0",
+                   ORE_EXPECT_OWNED_CLOSES="0")
+        result = run([str(quota_exe)], env=env)
+        if result.returncode != 86 or b"CHECKED_ABORT_OK\n" not in result.stderr:
+            raise AssertionError(
+                f"full-capacity repeated prepare must reject and cleanly close: "
+                f"rc={result.returncode}; stderr={result.stderr[:2200]!r}")
     print("PASS checked Array<int> source failure cleanup: "
           "41 injected allocation edges + 6 successful complete guest runs"
           + (" (ASan+UBSan)" if sanitizers else ""), flush=True)
