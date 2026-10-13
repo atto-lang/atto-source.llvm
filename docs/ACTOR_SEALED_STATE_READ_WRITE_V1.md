@@ -334,3 +334,28 @@ Private exact-source [native CI #38323024237](https://github.com/agent-pontifex/
 passed strict GCC C++17 and Clang ASan/UBSan frontend tests including
 both newly rejected forms. This is a frontend security/grammar regression,
 not executable `handle_state` or complete LLVM compiler integration.
+
+
+## Native typed scalar state callback parsing and effects (2026-10-12)
+
+The constrained native frontend now recognizes source forms
+`self.handle_state(critical-read |s| -> s.value)` and
+`self.handle_state(critical-write |s| -> { s.value = s.value + 1;
+return s.value; })` as non-reifiable `ActorStateAccess` nodes,
+separate from ordinary native functions and legacy actor handlers.
+The initial subset has bounded actor methods, `int` state fields,
+one lexical callback binder, a simple read-expression form and a
+scoped writer assignment/return form. More general callback bodies
+must fail closed rather than fall back to scalar actor lowering.
+
+The parser verifies referenced state field names and rejects a writer
+RHS if it contains unknown captures, foreign state, calls, borrows,
+ownership transfer or unsupported effects; only pure own-state field
+arithmetic and numeric literals are accepted. The full native semantic
+gate **still rejects any actor with `sealed_state` before LLVM IR**.
+A syntactically checked AST is not proof that an executable state loan
+can be safely entered, suspended or unwound.
+
+Private exact-source [GCC/Clang ASan/UBSan CI #38330866171](https://github.com/agent-pontifex/agent-pontifex-daemon/actions/runs/38330866171)
+passed. This is frontend validation only, NOT compiled Oreslang source
+execution, complete native CTest, or Java/GraalVM parity.
