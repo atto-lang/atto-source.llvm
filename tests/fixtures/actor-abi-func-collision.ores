@@ -1,5 +1,7 @@
 pub fnc oreslang_actor_Counter_read(): int { return 17; }
-define actor Counter as {
-  const base: int = 42;
-  pub fnc read(): int { return base; }
-}
+define actor Counter as
+    state { base: int = 42; }
+    pub fnc read(): int with state.read {
+        return self.handle_state(|s| -> { return s.base; });
+    }
+end

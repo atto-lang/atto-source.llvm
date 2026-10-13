@@ -1,4 +1,7 @@
-define actor Counter as {
-  const base: int = 12;
-  pub fnc read(int base): int { return base; }
-}
+// State keys are not ordinary lexical locals.
+define actor Counter as
+    state { base: int = 12; }
+    pub fnc read(int argument): int {
+        return base;
+    }
+end

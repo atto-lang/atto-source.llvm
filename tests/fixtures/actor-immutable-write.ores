@@ -1,7 +1,9 @@
-define actor Counter as {
-  const immutable: int = 40;
-  pub fnc bad(): int {
-    immutable = 41;
-    return immutable;
-  }
-}
+define actor Counter as
+    state { immutable: int = 40; }
+    pub fnc bad(): int with state.read {
+        return self.handle_state(|s| -> {
+            s.immutable = 41;
+            return s.immutable;
+        });
+    }
+end

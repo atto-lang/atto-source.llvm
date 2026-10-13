@@ -1,8 +1,12 @@
-define actor A_B as {
-  const value: int = 40;
-  pub fnc c(): int { return value; }
-}
-define actor A as {
-  const value: int = 2;
-  pub fnc B_c(): int { return value; }
-}
+define actor A_B as
+    state { value: int = 40; }
+    pub fnc c(): int with state.read {
+        return self.handle_state(|s| -> { return s.value; });
+    }
+end
+define actor A as
+    state { value: int = 2; }
+    pub fnc B_c(): int with state.read {
+        return self.handle_state(|s| -> { return s.value; });
+    }
+end

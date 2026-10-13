@@ -1,6 +1,4 @@
-// Must fail compilation until actor semantics and ownership are implemented.
+// Stateless actors remain valid when they define at least one method.
+// An empty actor body must be rejected; do not reinstate legacy fields.
 define actor Worker as
-  fnc run(int value): int {
-    return value;
-  }
 end

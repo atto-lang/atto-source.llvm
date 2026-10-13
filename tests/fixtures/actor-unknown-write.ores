@@ -1,7 +1,9 @@
-define actor Counter as {
-  let value: int = 40;
-  pub fnc bad(): int {
-    ghost = 41;
-    return value;
-  }
-}
+define actor Counter as
+    state { value: int = 40; }
+    pub fnc bad(): int with state.write {
+        return self.handle_state(critical |s| -> {
+            s.ghost = 41;
+            return 40;
+        });
+    }
+end

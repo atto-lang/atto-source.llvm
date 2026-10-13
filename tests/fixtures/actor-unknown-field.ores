@@ -1,4 +1,6 @@
-define actor Counter as {
-  const base: int = 12;
-  pub fnc read(): int { return phantom; }
-}
+define actor Counter as
+    state { base: int = 12; }
+    pub fnc read(): int with state.read {
+        return self.handle_state(|s| -> { return s.phantom; });
+    }
+end
