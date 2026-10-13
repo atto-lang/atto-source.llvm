@@ -1534,6 +1534,12 @@ private:
             for (const auto& cls : program.classes)
                 if (cls.name == "Assert")
                     throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            for (const auto& loop : program.cooperative_loops) {
+                // Cooperative AOT continuations use their own lexical
+                // frame bindings, not ordinary Function.locals.
+                if (loop.name == "Assert" || loop.variable == "Assert")
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            }
             for (const auto& actor : program.actors) {
                 if (actor.name == "Assert")
                     throw std::runtime_error("sealed Assert module alias cannot be shadowed");
