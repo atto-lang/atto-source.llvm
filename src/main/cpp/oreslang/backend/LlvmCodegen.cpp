@@ -49,6 +49,9 @@ struct RegionMoveLowering {
     const std::unordered_set<std::string>* array_names = nullptr;
     const std::unordered_set<std::string>* array_fields = nullptr;
     llvm::BasicBlock* resource_failure = nullptr;
+    // Compiler-owned error tag survives every owner-drop and region close.
+    // Values exactly match OresNativeIntArrayStatus; not a guest Result yet.
+    llvm::Value* array_failure_status = nullptr;
     const std::unordered_map<std::string, llvm::Value*>* owned_failure_handles = nullptr;
 };
 
@@ -127,9 +130,14 @@ llvm::Value* lower(const Expression& expr,
                     {moves->array_region, handle, args[0]}, "array.add.status");
                 llvm::BasicBlock* proceed = llvm::BasicBlock::Create(
                     builder.getContext(), "array.add.ok", builder.GetInsertBlock()->getParent());
+                llvm::BasicBlock* failed = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.add.error", builder.GetInsertBlock()->getParent());
                 builder.CreateCondBr(builder.CreateICmpEQ(status,
                     llvm::ConstantInt::get(status->getType(), 0), "array.add.success"),
-                    proceed, moves->resource_failure);
+                    proceed, failed);
+                builder.SetInsertPoint(failed);
+                builder.CreateStore(status, moves->array_failure_status);
+                builder.CreateBr(moves->resource_failure);
                 builder.SetInsertPoint(proceed);
                 return llvm::ConstantInt::get(i64, 0);
             }
@@ -504,6 +512,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::Value* array_region = nullptr;
         llvm::Value* array_handle_shadows = nullptr;
         llvm::BasicBlock* array_failure = nullptr;
+        llvm::Value* array_failure_status = nullptr;
         std::size_t next_array_shadow = 0;
         std::vector<llvm::Value*> heap_failure_slots;
         std::unordered_map<std::string, llvm::Value*> owned_failure_handles;
@@ -528,6 +537,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 owned_failure_handles.emplace(local.name, shadow);
             }
             array_failure = llvm::BasicBlock::Create(context, "array.resource.failure", function);
+            array_failure_status = builder.CreateAlloca(
+                llvm::Type::getInt32Ty(context), nullptr, "array.failure.status.slot");
+            builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0),
+                array_failure_status);
             llvm::Value* open_out = builder.CreateAlloca(native_ptr, nullptr, "array.region.out");
             llvm::Value* open_status = builder.CreateCall(arrayOpen, {open_out}, "array.region.status");
             llvm::BasicBlock* opened = llvm::BasicBlock::Create(
@@ -537,6 +550,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             builder.CreateCondBr(builder.CreateICmpEQ(open_status,
                 llvm::ConstantInt::get(open_status->getType(), 0)), opened, denied);
             builder.SetInsertPoint(denied);
+            // Preserve the actual typed resource status even when open fails
+            // before a valid array-region pointer can be published.
+            builder.CreateStore(open_status, array_failure_status);
             // No local owner of either kind has been constructed yet.
             if (region != nullptr) builder.CreateCall(regionClose, {region});
             builder.CreateCall(arrayAbort, {});
@@ -546,7 +562,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
-            &array_field_keys, array_failure, &owned_failure_handles};
+            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles};
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
@@ -558,9 +574,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 {array_region, address}, label + ".array.create.status");
             llvm::BasicBlock* proceed = llvm::BasicBlock::Create(
                 context, label + ".array.created", function);
+            llvm::BasicBlock* denied_new = llvm::BasicBlock::Create(
+                context, label + ".array.create.failure", function);
             builder.CreateCondBr(builder.CreateICmpEQ(status,
                 llvm::ConstantInt::get(status->getType(), 0)),
-                proceed, array_failure);
+                proceed, denied_new);
+            builder.SetInsertPoint(denied_new);
+            builder.CreateStore(status, array_failure_status);
+            builder.CreateBr(array_failure);
             builder.SetInsertPoint(proceed);
             return builder.CreateLoad(i64, address, label + ".array.new");
         };
@@ -951,10 +972,29 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 }
                 builder.CreateCall(regionClose, {region});
             }
-            // Guest-visible exceptions remain separate work. Resource errors
-            // are detected, fully cleaned up, and only then abort the process.
-            builder.CreateCall(arrayAbort, {});
-            builder.CreateUnreachable();
+            // Preserve the exact checked status through cleanup, refusing
+            // unknown or success status tags before guest-level error lowering.
+            // Both expected resource errors still terminate here: a typed
+            // throw/Result continuation MUST NOT resume with dropped owners.
+            llvm::Value* typed_status = builder.CreateLoad(
+                llvm::Type::getInt32Ty(context), array_failure_status,
+                "array.failure.typed.status");
+            llvm::BasicBlock* quota_error = llvm::BasicBlock::Create(
+                context, "array.failure.limit", function);
+            llvm::BasicBlock* memory_error = llvm::BasicBlock::Create(
+                context, "array.failure.no-memory", function);
+            llvm::BasicBlock* invalid_status = llvm::BasicBlock::Create(
+                context, "array.failure.invalid-status", function);
+            auto* dispatch = builder.CreateSwitch(typed_status, invalid_status, 2);
+            dispatch->addCase(llvm::ConstantInt::get(
+                llvm::Type::getInt32Ty(context), 1), quota_error);
+            dispatch->addCase(llvm::ConstantInt::get(
+                llvm::Type::getInt32Ty(context), 2), memory_error);
+            for (llvm::BasicBlock* fatal : {quota_error, memory_error, invalid_status}) {
+                builder.SetInsertPoint(fatal);
+                builder.CreateCall(arrayAbort, {});
+                builder.CreateUnreachable();
+            }
         }
     }
 

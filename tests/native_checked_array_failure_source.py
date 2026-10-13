@@ -8,6 +8,7 @@ the compiler's terminal abort. This is NOT guest-visible throw/Result support.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -176,6 +177,12 @@ def verify(compiler, clang, root, sanitizers):
                 b"@oreslang_int_array_try_add",
                 b"array.resource.failure:",
                 b"array.failure.drop",
+                b"array.failure.status.slot",
+                b"array.failure.typed.status",
+                b"array.failure.limit:",
+                b"array.failure.no-memory:",
+                b"array.failure.invalid-status:",
+                b"switch i32",
                 b"@oreslang_int_array_drop",
                 b"@oreslang_int_array_region_close",
                 b"@abort",
@@ -183,6 +190,20 @@ def verify(compiler, clang, root, sanitizers):
             for item in required:
                 if item not in ir:
                     raise AssertionError(f"{label}: IR missing {item!r}")
+            # Every checked new/add edge must carry the *actual* runtime
+            # status into the distinct failure classifier before cleanup.
+            # Nonrecoverable paths still abort after exact-once destruction.
+            if (len(re.findall(rb'^\w[\w.]*\.array\.create\.failure(?:[0-9]+)?:', ir,
+                               re.MULTILINE)) != owned or
+                    len(re.findall(rb'^array\.add\.error(?:[0-9]+)?:', ir,
+                                   re.MULTILINE)) != growing):
+                raise AssertionError(f"{label}: lost status-preserving create/add failure edges")
+            if ir.count(b"switch i32") != 1:
+                raise AssertionError(f"{label}: ambiguous resource error classifier")
+            if (ir.count(b"array.failure.limit:") != 1 or
+                    ir.count(b"array.failure.no-memory:") != 1 or
+                    ir.count(b"array.failure.invalid-status:") != 1):
+                raise AssertionError(f"{label}: missing distinct resource statuses")
             if (ir.count(b"call i32 @oreslang_int_array_try_new(") != owned or
                     ir.count(b"call i32 @oreslang_int_array_try_add(") != growing or
                     b"call i64 @oreslang_int_array_new(" in ir or
