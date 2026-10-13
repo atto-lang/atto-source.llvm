@@ -15,6 +15,15 @@ pub fnc main(): int {
   return f.a + f.b;
 }
 """,
+    "final-const-literal": """define class Foo as
+  int a: 13
+  final const int b: 29
+end
+pub fnc main(): int {
+  let mut Foo f = new Foo();
+  return f.a + f.b;
+}
+""",
     "compatibility": """define class Foo as
   int a = 13
   final int b = 29
@@ -41,6 +50,20 @@ REJECTIONS = {
 end
 pub fnc main(): int { return 0; }
 """, "class field requires ';' or a line break"),
+    "final-const-runtime-reject": ("""define class Foo as
+  final const int a: calculate();
+end
+pub fnc main(): int { return 0; }
+""", "class field requires i64 literal initializer"),
+    "final-const-reassign": ("""define class Foo as
+  final const int a: 5;
+end
+pub fnc main(): int {
+  let mut Foo f = new Foo();
+  f.a = 6;
+  return f.a;
+}
+""", "cannot reassign final class field"),
     "final-reassign": ("""define class Foo as
   final int a: 5;
 end
