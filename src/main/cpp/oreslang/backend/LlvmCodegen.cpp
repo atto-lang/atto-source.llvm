@@ -331,9 +331,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         auto* i32 = llvm::Type::getInt32Ty(context);
         arrayOpen = module.getOrInsertFunction("oreslang_int_array_try_region_open",
-            llvm::FunctionType::get(i32, {native_ptr}, false));
+            llvm::FunctionType::get(i32, {native_ptr->getPointerTo()}, false));
         arrayNew = module.getOrInsertFunction("oreslang_int_array_try_new",
-            llvm::FunctionType::get(i32, {native_ptr, native_ptr}, false));
+            llvm::FunctionType::get(i32, {native_ptr, loan_ptr}, false));
         arrayAdd = module.getOrInsertFunction("oreslang_int_array_try_add",
             llvm::FunctionType::get(i32, {native_ptr, i64, i64}, false));
         arrayAbort = module.getOrInsertFunction("abort",
