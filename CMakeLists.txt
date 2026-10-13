@@ -285,6 +285,36 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Unsupported guest source suspension requires heap-owned continuation
+    # lowering. Never emit IR for partial/unsafe loop and cooperate forms.
+    oreslang_contract_test(native_rt_while_loop_failclosed
+        native-rt-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_for_loop_failclosed
+        native-rt-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_unbounded_loop_failclosed
+        native-rt-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_failclosed
+        native-rt-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_expression_failclosed
+        native-rt-cooperate-expression-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_nested_while_failclosed
+        native-rt-nested-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_for_failclosed
+        native-rt-nested-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_loop_failclosed
+        native-rt-nested-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_cooperate_failclosed
+        native-rt-nested-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+
     add_executable(oreslang-ownership-cfg-dataflow-test
         tests/ownership_cfg_dataflow_test.cpp)
     target_include_directories(oreslang-ownership-cfg-dataflow-test PRIVATE
