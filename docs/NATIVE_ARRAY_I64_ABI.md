@@ -98,7 +98,7 @@ ordinary resource exhaustion from ownership corruption.
   output place when allocation or slot admission fails.
 - `try_reserve(region, handle, capacity)` and
   `try_add(region, handle, value)` leave length, previously committed
-elements, and region reservations unchanged on failure. When geometric
+  elements, and region reservations unchanged on failure. When geometric
   growth for `try_add` would exceed the aggregate region budget but one
   additional element fits, it retries with the exact minimum required
   capacity. Failed fallback allocation leaves previously committed data
@@ -185,6 +185,36 @@ This lowering is still restricted to the earlier lexical/class subset; it
 does not implement `self.field = staged`, native `Option`, queue class methods,
 loops, cross-region replacement, asynchronous suspend, or exceptional unwind.
 All six strict exact linked-queue source rejection gates remain.
+
+## Verified whole-class owned-array transfer
+
+The native frontend now admits **only a whole-class** `rt take(original)`
+for a live unborrowed class that owns `Array<int>` fields:
+
+```oreslang
+let mut Shelf original = new Shelf();
+original.items.add(42);
+let mut Shelf moved = rt take(original);
+return moved.items.get(0);
+```
+
+The ownership checker requires matching class types, a live unique source,
+no partial field move or active loan, and a mutable destination owner. LLVM
+lowering transfers each opaque array token into the destination class field
+and clears the old field to zero. A moved source cannot be accessed again.
+At normal return, conditional class-field cleanup skips zero/disarmed owners,
+then drops each live destination token exactly once. On an array resource
+failure after the move, the pre-existing allocation shadow table still owns
+exactly the original tokens and the shared failure cleanup drops each one
+once without consulting possibly disarmed source field storage.
+
+This is **not** field-wise reassignment, cloning, array handle return,
+cross-call class passing, shared aliases or `commit_many` lowering. The
+existing restrictions on array class parameters, mutable field assignments,
+nested borrows and actor-owned arrays remain fail closed. The transaction
+test includes whole-class move chains, guarded returns, fresh later
+allocations, stale source/duplicate move/immutable destination rejection,
+and normal plus ASan+UBSan fault injection at every allocation point.
 
 ## Ownership and concurrency
 
