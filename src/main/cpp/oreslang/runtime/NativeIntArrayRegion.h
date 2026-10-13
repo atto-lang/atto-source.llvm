@@ -9,7 +9,8 @@ extern "C" {
  * This is NOT yet Oreslang source lowering, a cross-thread shared collection,
  * an unforgeable capability, or a remotely callable API. Every operation is
  * performed on one serialized owner turn. Invalid handles, bounds, quota,
- * and token exhaustion always fail closed by aborting. The original APIs
+ * and token exhaustion fail closed by aborting. Resource quotas return
+ * statuses through checked APIs but abort via legacy entry points. The original APIs
  * also abort on resource exhaustion; checked compiler-only try_* APIs
  * instead distinguish quota and allocation failure without mutating state.
  *
@@ -46,6 +47,20 @@ OresNativeIntArrayStatus oreslang_int_array_try_add(
  */
 OresNativeIntArrayStatus oreslang_int_array_try_prepare_many(
     OresNativeIntArrayRegion* region, uint64_t n, OresNativeIntArrayHandle* out);
+
+/* Transactionally prepare n fully initialized arrays, each with exactly
+ * lengths[i] elements initially equal to values[i]. Arrays reserve precisely
+ * their declared length (rather than repeated geometric append growth).
+ * Validate the aggregate budget BEFORE allocating; if any new/reserve fails,
+ * destroy all staged owners and zeroize their contents, leaving existing
+ * arrays and the caller's out[] completely unchanged.
+ * Caller supplies valid, nonaliased n-element lengths[], values[], out[].
+ * This is a trusted compiler ABI, not a guest-callable operation.
+ */
+OresNativeIntArrayStatus oreslang_int_array_try_prepare_filled_many(
+    OresNativeIntArrayRegion* region, uint64_t n,
+    const uint64_t lengths[], const int64_t values[],
+    OresNativeIntArrayHandle out[]);
 
 /* Single-owner, allocation-free, all-or-nothing ownership transfer from n
  * distinct staged source places into n distinct destination owner places.

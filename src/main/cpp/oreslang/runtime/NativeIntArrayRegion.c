@@ -102,7 +102,8 @@ OresNativeIntArrayRegion* oreslang_int_array_region_open(void) {
 OresNativeIntArrayStatus oreslang_int_array_try_new(
         OresNativeIntArrayRegion* region, OresNativeIntArrayHandle* out_handle) {
     if (!region || !out_handle) fail_closed();
-    if (region->live_count >= MAX_ARRAY_SLOTS) return ORES_NATIVE_ARRAY_LIMIT;
+    if (region->live_count > MAX_ARRAY_SLOTS) fail_closed();
+    if (region->live_count == MAX_ARRAY_SLOTS) return ORES_NATIVE_ARRAY_LIMIT;
     for (size_t i = 0; i < MAX_ARRAY_SLOTS; ++i) {
         IntArraySlot* slot = &region->arrays[i];
         if (slot->token == 0) {
@@ -222,6 +223,8 @@ OresNativeIntArrayStatus oreslang_int_array_try_prepare_many(
         OresNativeIntArrayRegion* region, uint64_t n,
         OresNativeIntArrayHandle* out) {
     if (!region || (n && !out)) fail_closed();
+    if (region->live_count > MAX_ARRAY_SLOTS ||
+            region->reserved_elements > REGION_ELEMENT_BUDGET) fail_closed();
     if (n > MAX_ARRAY_SLOTS ||
             n > MAX_ARRAY_SLOTS - region->live_count)
         return ORES_NATIVE_ARRAY_LIMIT;
@@ -240,6 +243,60 @@ OresNativeIntArrayStatus oreslang_int_array_try_prepare_many(
     }
     for (uint64_t i = 0; i < n; ++i) out[i] = staged[i];
     return ORES_NATIVE_ARRAY_OK;
+}
+
+/* Fill all staged owners in isolation. This operation creates the four
+ * initialized backing arrays needed by the linked queue without allowing
+ * any intermediate class-field publication. Every memory/slot allocation
+ * edge is fallible and every abort-free failure path rolls back all owners.
+ */
+OresNativeIntArrayStatus oreslang_int_array_try_prepare_filled_many(
+        OresNativeIntArrayRegion* region, uint64_t n,
+        const uint64_t lengths[], const int64_t values[],
+        OresNativeIntArrayHandle out[]) {
+    if (!region || (n && (!lengths || !values || !out))) fail_closed();
+    if (region->live_count > MAX_ARRAY_SLOTS ||
+            region->reserved_elements > REGION_ELEMENT_BUDGET) fail_closed();
+    if (n > MAX_ARRAY_SLOTS - region->live_count)
+        return ORES_NATIVE_ARRAY_LIMIT;
+
+    /* Perform the complete input and quota validation before requesting a
+     * token or a byte. This also avoids arithmetic overflow in aggregate
+     * length accounting, because remaining_budget is always bounded.
+     */
+    uint64_t remaining_budget = REGION_ELEMENT_BUDGET - region->reserved_elements;
+    for (uint64_t i = 0; i < n; ++i) {
+        if (lengths[i] > MAX_ARRAY_ELEMENTS ||
+                lengths[i] > SIZE_MAX / sizeof(int64_t) ||
+                lengths[i] > remaining_budget)
+            return ORES_NATIVE_ARRAY_LIMIT;
+        remaining_budget -= lengths[i];
+    }
+
+    OresNativeIntArrayHandle staged[MAX_ARRAY_SLOTS] = {0};
+    uint64_t acquired = 0;
+    OresNativeIntArrayStatus status = ORES_NATIVE_ARRAY_OK;
+    for (uint64_t i = 0; i < n; ++i) {
+        status = oreslang_int_array_try_new(region, &staged[i]);
+        if (status != ORES_NATIVE_ARRAY_OK) goto rollback;
+        ++acquired;
+        if (lengths[i] == 0) continue;
+        status = oreslang_int_array_try_reserve(region, staged[i], lengths[i]);
+        if (status != ORES_NATIVE_ARRAY_OK) goto rollback;
+        IntArraySlot* slot = require_slot(region, staged[i]);
+        for (uint64_t j = 0; j < lengths[i]; ++j)
+            slot->values[j] = values[i];
+        slot->length = lengths[i];
+    }
+    for (uint64_t i = 0; i < n; ++i) out[i] = staged[i];
+    return ORES_NATIVE_ARRAY_OK;
+
+rollback:
+    while (acquired != 0) {
+        --acquired;
+        oreslang_int_array_drop(region, staged[acquired]);
+    }
+    return status;
 }
 
 /* Once validation succeeds, commit makes no fallible allocation. Every

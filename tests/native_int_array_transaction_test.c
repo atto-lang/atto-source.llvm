@@ -155,6 +155,91 @@ static void quota_failure_unchanged(void) {
     oreslang_int_array_region_close(r);
 }
 
+/* Four already-published fields remain unchanged while four replacement
+ * arrays are staged. Every one of the eight resource operations (4 logical
+ * slots + 4 physical backing buffers) must roll back, including after the
+ * first three arrays have been filled with real data.
+ */
+static void filled_preparation_allocation_edge_matrix(void) {
+    OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+    OresNativeIntArrayHandle current[4] = {0};
+    for (int i = 0; i < 4; ++i) {
+        current[i] = oreslang_int_array_new(r);
+        oreslang_int_array_add(r, current[i], 100 + i);
+    }
+
+    const uint64_t lengths[4] = {17, 4096, 3, 1024};
+    const int64_t values[4] = {-1, -1, 0, 0};
+    const uint64_t impossible[4] = {65533, 65533, 65533, 65533};
+    OresNativeIntArrayHandle staged[4] = {111, 222, 333, 444};
+
+    /* Aggregate budget proof happens before *any* allocation or publication.
+     * Current four arrays have 4 reserved elements each (16 total).
+     */
+    check(oreslang_int_array_try_prepare_filled_many(
+          r, 4, impossible, values, staged) == ORES_NATIVE_ARRAY_LIMIT);
+    for (int i = 0; i < 4; ++i) check(staged[i] == (uint64_t)(111 * (i + 1)));
+    check(oreslang_int_array_try_prepare_filled_many(
+          r, 0, NULL, NULL, NULL) == ORES_NATIVE_ARRAY_OK);
+
+    for (int failpoint = 0; failpoint < 8; ++failpoint) {
+        fail_on_attempt(failpoint);
+        check(oreslang_int_array_try_prepare_filled_many(
+              r, 4, lengths, values, staged) == ORES_NATIVE_ARRAY_NO_MEMORY);
+        reset_injection();
+        for (int i = 0; i < 4; ++i) {
+            check(staged[i] == (uint64_t)(111 * (i + 1)));
+            check(oreslang_int_array_length(r, current[i]) == 1);
+            check(oreslang_int_array_get(r, current[i], 0) == 100 + i);
+        }
+
+        /* All allocated backing storage must have been reclaimed. Each
+         * replacement reserves exactly the remaining shared 262,128 slots.
+         * An unseen 1-element leak would make this operation return LIMIT.
+         */
+        const uint64_t full_lengths[4] = {65532, 65532, 65532, 65532};
+        OresNativeIntArrayHandle probes[4] = {0};
+        check(oreslang_int_array_try_prepare_filled_many(
+              r, 4, full_lengths, values, probes) == ORES_NATIVE_ARRAY_OK);
+        for (int i = 0; i < 4; ++i) {
+            check(oreslang_int_array_length(r, probes[i]) == 65532);
+            check(oreslang_int_array_get(r, probes[i], 0) == values[i]);
+            check(oreslang_int_array_get(r, probes[i], 65531) == values[i]);
+        }
+        for (int i = 3; i >= 0; --i) oreslang_int_array_drop(r, probes[i]);
+    }
+
+    check(oreslang_int_array_try_prepare_filled_many(
+          r, 4, lengths, values, staged) == ORES_NATIVE_ARRAY_OK);
+    OresNativeIntArrayHandle* destinations[4] = {
+        &current[0], &current[1], &current[2], &current[3]
+    };
+    OresNativeIntArrayHandle* sources[4] = {
+        &staged[0], &staged[1], &staged[2], &staged[3]
+    };
+    OresNativeIntArrayHandle old[4] = {
+        current[0], current[1], current[2], current[3]
+    };
+    oreslang_int_array_commit_many(r, 4, destinations, sources);
+    for (int i = 0; i < 4; ++i) {
+        check(staged[i] == 0);
+        check(current[i] != old[i]);
+        check(oreslang_int_array_length(r, current[i]) == lengths[i]);
+        check(oreslang_int_array_get(r, current[i], 0) == values[i]);
+        check(oreslang_int_array_get(r, current[i], lengths[i] - 1) == values[i]);
+    }
+    for (int i = 3; i >= 0; --i) oreslang_int_array_drop(r, current[i]);
+
+    /* A full 64 fresh handle batch after the commit and cleanup proves that
+     * every superseded old handle was dropped and none of the staging slots
+     * remained attached to the region.
+     */
+    OresNativeIntArrayHandle all[64] = {0};
+    check(oreslang_int_array_try_prepare_many(r, 64, all) == ORES_NATIVE_ARRAY_OK);
+    for (int i = 63; i >= 0; --i) oreslang_int_array_drop(r, all[i]);
+    oreslang_int_array_region_close(r);
+}
+
 #if defined(__unix__) || defined(__APPLE__)
 static void must_abort_on_invalid_transaction(int kind) {
     pid_t pid = fork();
@@ -203,6 +288,7 @@ int main(void) {
     opening_and_single_owner_failures();
     prepare_rollback_and_commit();
     quota_failure_unchanged();
+    filled_preparation_allocation_edge_matrix();
 #if defined(__unix__) || defined(__APPLE__)
     for (int i = 0; i < 6; ++i) must_abort_on_invalid_transaction(i);
 #endif
