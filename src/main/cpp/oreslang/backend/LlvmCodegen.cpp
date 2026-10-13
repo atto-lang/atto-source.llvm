@@ -224,9 +224,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
-            for (const auto& local : fn.locals)
-                if (local.heap_owned || local.int_array)
+            for (const auto& local : fn.locals) {
+                // Retain the established owned-i64 diagnostic: arrays have a
+                // distinct unsupported guest runtime contract.
+                if (local.heap_owned)
+                    throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
+                if (local.int_array)
                     throw std::runtime_error("wasm32 native heap-owned/Array<int> regions are not implemented");
+            }
         }
     }
     // Native C entrypoints return i32; Oreslang int remains an internal i64.
