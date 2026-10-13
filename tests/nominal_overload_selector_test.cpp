@@ -78,6 +78,21 @@ int main() {
     must_reject([&] { enum_tag("pkg/a.ores::A-B"); });
     must_reject([&] { enum_tag("pkg/A#$"); });
     must_reject([&] { primitive_tag("i8"); });
+    // Compiler internal records may bypass constructor factory APIs. All
+    // public selectors, including single-member families, validate tags.
+    const auto forged_primitive =
+        NominalTypeTag{NominalTypeTag::Kind::Primitive, "u8"};
+    const auto forged_enum =
+        NominalTypeTag{NominalTypeTag::Kind::Enum, "A"};
+    const auto forged_discriminant =
+        NominalTypeTag{static_cast<NominalTypeTag::Kind>(12345), "int"};
+    must_reject([&] { validate_nominal_overload_family({{"root", "x", {forged_primitive}}}); });
+    must_reject([&] { validate_nominal_overload_family({{"root", "x", {forged_enum}}}); });
+    must_reject([&] { validate_nominal_overload_family({{"root", "x", {forged_discriminant}}}); });
+    must_reject([&] { resolve_nominal_overload_static({{"root", "x", {integer}}}, {forged_primitive}); });
+    must_reject([&] { resolve_nominal_overload_static({{"root", "x", {integer}}}, {forged_discriminant}); });
+    must_reject([&] { nominal_overload_link_key({"root", "x", {forged_enum}}); });
+    must_reject([&] { nominal_overload_link_key({"root", "x", {forged_discriminant}}); });
     must_reject([&] {
         validate_nominal_overload_family({
             {"first", "x", {a}}, {"second", "x", {b}}
