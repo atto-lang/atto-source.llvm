@@ -12,7 +12,7 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -20,6 +20,7 @@ struct Expression {
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
+    std::vector<std::string> argument_names; // indexed in lexical source order
 };
 
 struct Parameter {
@@ -34,6 +35,7 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Restricted local stack-only explicit class move.
@@ -47,12 +49,14 @@ struct LocalBinding {
 struct ClassField {
     std::string name;
     std::int64_t initial = 0;
+    bool int_array = false; // owned opaque handle; never exposed as an int
+    bool final_field = false; // fixed field slot: writes rejected by ownership checker
 };
 
 struct ClassDecl {
     std::string name;
-    // The initial typed class subset admits up to 16 i64 fields.
-    // This vector is ordered: it defines the native LLVM struct layout.
+    // Up to 16 scalar i64 or owned Array<int> fields.
+    // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
 };
 
@@ -90,7 +94,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled };
     Kind kind;
     // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
     // Non-Copy branch-local classes are still rejected until drop glue exists.
@@ -98,6 +102,11 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // Dedicated compiler intrinsic, never lowered as a guest-callable
+    // function: rt array_commit_filled(class_owner, length, v0, v1, v2, v3).
+    // Exactly four Array<int> fields in class declaration order.
+    std::unique_ptr<Expression> array_commit_length;
+    std::vector<std::unique_ptr<Expression>> array_commit_values;
     std::size_t offset = 0;
     // A bounded synchronous if/else statement. Arms contain checked field
     // writes or direct calls; local declarations and suspension fail closed.
@@ -117,8 +126,18 @@ struct GuardedReturn {
     std::size_t offset = 0;
 };
 
+// Experimental LLVM AOT-only, single-owner scalar loop frame. The grammar
+// admits only one val i64 counter, a constant upper bound and a +1 body.
+// No borrowed pointer, object owner, dynamic call or cleanup crosses a yield.
+struct ScalarWhileLoop {
+    std::string counter;
+    std::int64_t initial = 0;
+    std::int64_t upper_bound = 0;
+};
+
 struct Function {
     std::string name;
+    std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
     std::vector<Statement> statements;
@@ -129,6 +148,10 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    // Single-frame native i64 throw; no nested exceptions or suspension.
+    std::unique_ptr<Expression> caught_throw_value;
+    std::string catch_binding;
+    std::vector<Statement> caught_throw_defers;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
@@ -153,6 +176,7 @@ struct Program {
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32 and source-level await/suspension.
-Program parse_program(std::string_view source, bool experimental_owned_int = false);
+Program parse_program(std::string_view source, bool experimental_owned_int = false,
+                      bool experimental_rt_scalar_loop = false);
 
 } // namespace oreslang

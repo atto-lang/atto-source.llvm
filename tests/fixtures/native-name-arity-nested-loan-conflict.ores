@@ -1,0 +1,5 @@
+// Nested calls cannot evade a live outer mutable argument loan.
+fnc probe(borrow int x): int { return x; }
+fnc probe(borrow mut int x, int y): int { return x + y; }
+fnc wrapper(int x): int { return probe(rt borrow mut x, probe(rt borrow x)); }
+pub fnc main(): int { return wrapper(41); }
