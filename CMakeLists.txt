@@ -16,6 +16,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+    src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
 )
 
 target_include_directories(oreslang-llvmc PRIVATE
@@ -263,6 +264,20 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # This isolated AOT source-to-native frame test does not relax the nine
+    # default compiler-negative RT admission contracts.
+    if(ORE_CLANG)
+        add_test(NAME native_rt_scalar_frame_aot_two_tasks
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_aot.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
+        set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 120)
+    else()
+        message(WARNING "Experimental scalar-loop AOT gate requires clang")
+    endif()
     find_program(ORE_NODE NAMES node nodejs)
     if(ORE_CLANG AND ORE_NODE)
         add_test(NAME wasm32_source_class_ownership_runtime
@@ -1198,6 +1213,22 @@ if(BUILD_TESTING)
         add_test(NAME hungry_carrier_async_bounded_cancel
                  COMMAND oreslang-hungry-carrier-test)
         set_tests_properties(hungry_carrier_async_bounded_cancel PROPERTIES TIMEOUT 30)
+
+        # Actual compiled Oreslang scalar frame is driven by a real one-actor
+        # HungryCarrier OS thread. CPU cooperation is NOT IO or logical DONE.
+        if(ORE_CLANG)
+            add_test(NAME native_rt_compiled_scalar_carrier_cooperate
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_carrier_aot.py"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                    --clang "${ORE_CLANG}"
+                    --clangxx "${CMAKE_CXX_COMPILER}"
+                    --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                    --test "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_carrier_aot_test.cpp"
+                    --source-root "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            set_tests_properties(native_rt_compiled_scalar_carrier_cooperate
+                PROPERTIES TIMEOUT 120)
+        endif()
 
         add_executable(oreslang-carrier-supervisor-test
             tests/native_carrier_supervisor_integration.cpp
