@@ -86,6 +86,60 @@ compiler-only contract analogous to `NativeOwnedI64Region`, not a recoverable
 guest `Result` API. The eventual lowering must supply error/unwind and drop
 glue when the full Oreslang language semantics demand it.
 
+## Recoverable internal resource API and staging contract
+
+The trusted runtime now also exposes a **checked internal ABI** while keeping
+all previously compiled `oreslang_int_array_*` entry points and their
+abort-on-error semantics unchanged. `ORES_NATIVE_ARRAY_OK`,
+`ORES_NATIVE_ARRAY_LIMIT`, and `ORES_NATIVE_ARRAY_NO_MEMORY` distinguish
+ordinary resource exhaustion from ownership corruption.
+
+- `try_region_open(out)` and `try_new(region, out)` never write their
+  output place when allocation or slot admission fails.
+- `try_reserve(region, handle, capacity)` and
+  `try_add(region, handle, value)` leave length, previously committed
+  elements, and region reservations unchanged on failure. No-op reserve is
+  always successful. Over-limit size/count/budget returns `LIMIT`;
+  exhausted native memory returns `NO_MEMORY`.
+- `try_prepare_many(region, n, out)` acquires up to 64 independent empty
+  arrays without publishing any output handle until all acquisitions pass.
+  On any failure, it drops all staged handles in reverse acquisition order
+  and preserves all pre-existing region arrays.
+- `try_prepare_filled_many(region, n, lengths, initial_values, out)`
+  atomically stages up to 64 fully populated arrays with exactly the requested
+  lengths and default values. It checks all declared sizes and their aggregate
+  reservation cost against the region budget **before** consuming a handle
+  or allocating backing storage. Every slot or backing-allocation failure
+  drops previously staged owners in reverse order, zeroizes their filled data,
+  leaves existing published arrays untouched, and does not modify the caller's
+  output handle slots. Filling uses exact-length reservations, not repeated
+  geometric append allocations.
+- `commit_many(region, n, destinations, sources)` validates all source
+  tokens, destination tokens, uniqueness and pointer aliases **before**
+  performing any mutation. On success, it drops old destination arrays,
+  moves staged tokens to the destination owner slots, and disarms source slots
+  with zero. It performs no allocation and has no recoverable error exit.
+
+**Safety contract:** invalid/stale/foreign handles, duplicate mutable owner
+places and token exhaustion still abort, including in `try_*` functions.
+`commit_many` is a trusted compiler primitive, not callable from guest
+Oreslang. Source-level array assignment/move is **still rejected** until
+the compiler emits this transfer only after proving exclusive ownership.
+
+The test-only `ORESLANG_NATIVE_TEST_ALLOC_FAILURE` flag enables
+`test_fail_after(n)` to deterministically inject a resource failure at
+region allocation, logical slot creation or backing-array growth. This hook
+must never appear in a production runtime. The dedicated
+`native_int_array_transaction_recovery` CTest verifies fault injection,
+prepared-owner rollback, old-value preservation, full 64-slot recovery,
+atomic owner transfer, quota exhaustion, and adversarial alias/stale-token
+rejections. The filled-array audit injects failures at **all eight** slot and
+backing-storage allocation edges for a four-array queue initialization, then
+verifies old values, untouched output slots, full aggregate quota recovery,
+and an allocation-free four-owner commit. LLVM guest-source, exceptional unwind, recoverable `Result`
+conversion, and multi-field class replacement lowering are **not** implemented
+by this substrate change.
+
 ## Ownership and concurrency
 
 One owner invokes this ABI serially. It contains no mutexes and is **not**
