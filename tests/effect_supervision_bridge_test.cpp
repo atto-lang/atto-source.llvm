@@ -12,11 +12,16 @@ using Lane = oreslang::SupervisorFailureLane;
 
 struct EventHandler : Lane::Handler {
     std::vector<Lane::Kind> observed;
-    void on_throw(const Lane::Failure&) override { observed.push_back(Lane::Kind::Throw); }
-    void on_raise(const Lane::Failure&) override { observed.push_back(Lane::Kind::Raise); }
-    void on_panic(const Lane::Failure&) override { observed.push_back(Lane::Kind::Panic); }
-    void on_cancel(const Lane::Failure&) override { observed.push_back(Lane::Kind::Cancel); }
-    void on_host_failure(const Lane::Failure&) override { observed.push_back(Lane::Kind::HostFailure); }
+    std::vector<Lane::Kind> origins;
+    void add(const Lane::Failure& failure) {
+        observed.push_back(failure.kind);
+        origins.push_back(failure.origin_kind);
+    }
+    void on_throw(const Lane::Failure& f) override { add(f); }
+    void on_raise(const Lane::Failure& f) override { add(f); }
+    void on_panic(const Lane::Failure& f) override { add(f); }
+    void on_cancel(const Lane::Failure& f) override { add(f); }
+    void on_host_failure(const Lane::Failure& f) override { add(f); }
 };
 
 int main() {
@@ -28,6 +33,10 @@ int main() {
         EffectKind::Cancel, EffectKind::Fatal
     };
     constexpr Lane::Kind expected[] = {
+        Lane::Kind::Panic, Lane::Kind::Panic, Lane::Kind::Panic,
+        Lane::Kind::Cancel, Lane::Kind::HostFailure
+    };
+    constexpr Lane::Kind original[] = {
         Lane::Kind::Throw, Lane::Kind::Raise, Lane::Kind::Panic,
         Lane::Kind::Cancel, Lane::Kind::HostFailure
     };
@@ -43,6 +52,7 @@ int main() {
     EventHandler handler;
     for (int i = 0; i < 5; ++i) CHECK(lane.dispatch_one(handler));
     CHECK(handler.observed == std::vector<Lane::Kind>(expected, expected + 5));
+    CHECK(handler.origins == std::vector<Lane::Kind>(original, original + 5));
     CHECK(lane.reserved_count() == 0);
 
     // Normal return leaves the reservation intact; lifecycle owner retires it.
@@ -67,6 +77,7 @@ int main() {
     auto delivered = lane.poll();
     CHECK(delivered.has_value());
     CHECK(delivered->kind == Lane::Kind::Panic);
+    CHECK(delivered->origin_kind == Lane::Kind::Panic);
     CHECK(delivered->summary == "defer panic");
     lane.ack(key(6));
 
