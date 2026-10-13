@@ -77,6 +77,21 @@ import module Assert from "std/assert";
 pub fnc x(): int { return 2; }
 pub fnc bad(): bool { return Assert.equal(x(), 2); }
 ORES
+expect_reject nested_conditional 'native Assert member requires a typed bool return' <<'ORES'
+import module Assert from "std/assert";
+pub fnc main(): int {
+  if (1 eq 1) { Assert.equal(1, 2); } else { } fi
+  return 0;
+}
+ORES
+expect_reject nested_bool_call 'native bool-to-int coercion requires explicit lowering' <<'ORES'
+import module Assert from "std/assert";
+pub fnc pred(): bool { return Assert.equal(1, 1); }
+pub fnc main(): int {
+  if (1 eq 1) { pred(); } else { } fi
+  return 0;
+}
+ORES
 expect_reject unsupported_type 'direct equal/not_equal primitive return' <<'ORES'
 import module Assert from "std/assert";
 pub fnc bad(): bool { return Assert.true(1); }

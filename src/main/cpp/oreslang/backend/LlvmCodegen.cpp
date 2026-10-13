@@ -174,6 +174,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 if (visit(arg.get(), visit)) return true;
             return false;
         };
+        // Conditional arms are nested CFG scopes. A shallow scan would
+        // admit an i1-producing module call inside an unrelated int function.
+        auto scan_statements = [&](const std::vector<Statement>& actions,
+                                  const auto& scan, const auto& matches) -> bool {
+            for (const auto& stmt : actions) {
+                if (matches(stmt.expression.get()) ||
+                        matches(stmt.condition_lhs.get()) ||
+                        matches(stmt.condition_rhs.get()) ||
+                        (stmt.branch_local &&
+                         matches(stmt.branch_local->initializer.get())) ||
+                        scan(stmt.then_statements, scan, matches) ||
+                        scan(stmt.else_statements, scan, matches))
+                    return true;
+            }
+            return false;
+        };
         for (const auto& fn : source.functions) {
             if (fn.returns_bool) {
                 if (fn.name == "main" || fn.returns_void || !fn.result ||
@@ -203,11 +219,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 for (const auto& local : fn.locals)
                     if (contains_module_call(local.initializer.get(), contains_module_call))
                         throw std::runtime_error("native Assert member requires a typed bool return");
-                for (const auto& stmt : fn.statements)
-                    if (contains_module_call(stmt.expression.get(), contains_module_call) ||
-                            contains_module_call(stmt.condition_lhs.get(), contains_module_call) ||
-                            contains_module_call(stmt.condition_rhs.get(), contains_module_call))
-                        throw std::runtime_error("native Assert member requires a typed bool return");
+                if (scan_statements(fn.statements, scan_statements,
+                        [&](const Expression* e) {
+                            return contains_module_call(e, contains_module_call);
+                        }))
+                    throw std::runtime_error("native Assert member requires a typed bool return");
                 for (const auto& guard : fn.early_returns)
                     if (contains_module_call(guard.lhs.get(), contains_module_call) ||
                             contains_module_call(guard.rhs.get(), contains_module_call) ||
@@ -237,11 +253,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 for (const auto& local : fn.locals)
                     if (calls_bool(local.initializer.get(), calls_bool))
                         throw std::runtime_error("native bool-to-int coercion requires explicit lowering");
-                for (const auto& stmt : fn.statements)
-                    if (calls_bool(stmt.expression.get(), calls_bool) ||
-                            calls_bool(stmt.condition_lhs.get(), calls_bool) ||
-                            calls_bool(stmt.condition_rhs.get(), calls_bool))
-                        throw std::runtime_error("native bool-to-int coercion requires explicit lowering");
+                if (scan_statements(fn.statements, scan_statements,
+                        [&](const Expression* e) {
+                            return calls_bool(e, calls_bool);
+                        }))
+                    throw std::runtime_error("native bool-to-int coercion requires explicit lowering");
                 for (const auto& guard : fn.early_returns)
                     if (calls_bool(guard.lhs.get(), calls_bool) ||
                             calls_bool(guard.rhs.get(), calls_bool) ||
