@@ -448,8 +448,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
+        // The guest linker ABI is explicitly public only when declared 'pub'.
+        // Internal helper callables remain reachable by same-module calls,
+        // but must not be exported as externally linkable symbols.
+        const auto linkage = fn.exported
+            ? llvm::Function::ExternalLinkage
+            : llvm::Function::InternalLinkage;
         declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
-            llvm::Function::Create(signature, llvm::Function::ExternalLinkage, symbol, module));
+            llvm::Function::Create(signature, linkage, symbol, module));
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
