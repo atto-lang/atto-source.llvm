@@ -1,3 +1,4 @@
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
@@ -30,9 +31,6 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 }
 
 // Source identifier grammar excludes $, so this selector cannot alias source names.
-std::string native_function_slot(const std::string& name, std::size_t arity) {
-    return name + "$arity" + std::to_string(arity);
-}
 
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
@@ -414,7 +412,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name);
         const std::string symbol = family_sizes.at(fn.name) > 1
-            ? base_symbol + "$arity" + std::to_string(fn.parameters.size())
+            ? native_function_slot(base_symbol, fn.parameters.size())
             : base_symbol;
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
