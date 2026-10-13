@@ -57,6 +57,7 @@ struct ClassField {
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool fixed_binding = false; // final/const/val: no writes or destructive field take
     bool mutable_referent = false; // mut capability (required for Array<int>)
+    bool public_member = false; // required for native free-function field access
 };
 
 struct ClassDecl {
