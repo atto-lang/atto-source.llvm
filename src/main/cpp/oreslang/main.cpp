@@ -9,6 +9,7 @@
 #include <string>
 
 int main(int argc, char** argv) {
+    bool check_only = false;
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
@@ -16,7 +17,10 @@ int main(int argc, char** argv) {
     const char* path = nullptr;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--experimental-rt-scalar-loop") {
+        if (arg == "--check") {
+            if (check_only) { std::cerr << "duplicate check option\n"; return 2; }
+            check_only = true;
+        } else if (arg == "--experimental-rt-scalar-loop") {
             if (experimental_rt_scalar_loop) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
@@ -48,7 +52,7 @@ int main(int argc, char** argv) {
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--check] [--target=host|wasm32|wasm32-unknown-unknown] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -70,7 +74,18 @@ int main(int argc, char** argv) {
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target);
+        if (!ast.client_contracts.empty()) {
+            if (!ast.functions.empty() || !ast.classes.empty() || !ast.actors.empty())
+                throw std::runtime_error("client contracts must be declaration-only source");
+            if (wasm32_target || experimental_owned_int || experimental_rt_scalar_loop)
+                throw std::runtime_error("client contract check requires host target without experimental runtime modes");
+            if (check_only) return 0;
+            throw std::runtime_error("client contracts have no admitted LLVM runtime implementation; use --check for declaration validation");
+        }
+        auto verified_ir = oreslang::emit_verified_llvm_ir(ast, wasm32_target);
+        // Ordinary --check follows the same target/ABI admission path as
+        // compilation; parse-only validation must not certify unsupported IR.
+        if (!check_only) std::cout << verified_ir;
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';

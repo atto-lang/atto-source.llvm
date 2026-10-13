@@ -1719,6 +1719,12 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+    add_test(NAME native_client_contract_declarations
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/client_contract_check.py"
+        "$<TARGET_FILE:oreslang-llvmc>" "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/clients-core-client-contract.ores")
+    add_test(NAME native_route_contract_declarations
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ores_interfaces_route_contract.py"
+        "$<TARGET_FILE:oreslang-llvmc>" "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/ores-interfaces-route-contract.ores")
     add_executable(oreslang-refreshed-control-data-lane-test tests/native_actor_control_data_lane_test.cpp)
     target_include_directories(oreslang-refreshed-control-data-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-refreshed-control-data-lane-test PRIVATE Threads::Threads)

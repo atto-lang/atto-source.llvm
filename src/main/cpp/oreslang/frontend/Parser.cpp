@@ -178,7 +178,14 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (accept("define")) {
+        while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
+            const bool exported = accept("pub");
+            require("define");
+            if (accept("contract")) {
+                program.client_contracts.push_back(client_contract());
+                continue;
+            }
+            if (exported) fail("public wrappers outside native client contract subset");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -195,6 +202,7 @@ public:
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
                 } else fail("expected 'module', 'class' or 'actor'");
             }
+            break;
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
@@ -218,11 +226,12 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
+                program.cooperative_loops.empty() && program.client_contracts.empty())
             fail("expected at least one function or actor");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.actors.empty() || !program.classes.empty() || !program.module.empty() ||
+                 !program.client_contracts.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         validate(program);
@@ -230,6 +239,45 @@ public:
     }
 
 private:
+    Token peek_next() const { Lexer lookahead = lexer_; return lookahead.next(); }
+    ClientContract client_contract() {
+        ClientContract result;
+        result.name = identifier();
+        require("as");
+        std::unordered_set<std::string> methods;
+        while (token_.kind != Kind::End && token_.text != "end") {
+            require("fnc");
+            ClientContractMethod method;
+            method.name = identifier();
+            if (!methods.insert(method.name).second)
+                fail("duplicate client contract method");
+            require("(");
+            std::unordered_set<std::string> names;
+            if (!accept(")")) {
+                do {
+                    require("String");
+                    std::string name = identifier();
+                    if (!names.insert(name).second)
+                        fail("duplicate client contract parameter");
+                    method.parameters.push_back(std::move(name));
+                } while (accept(","));
+                require(")");
+            }
+            const auto arrow_next = peek_next();
+            if (token_.text != "=" || arrow_next.text != ">"
+                    || arrow_next.offset != token_.offset + 1)
+                fail("contract signatures require contiguous '=>'");
+            require("=");
+            require(">");
+            require("String");
+            require(";");
+            result.methods.push_back(std::move(method));
+        }
+        require("end");
+        if (result.methods.empty()) fail("empty client contract is unsupported");
+        return result;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -1379,6 +1427,11 @@ private:
     }
 
     static void validate(const Program& program) {
+        std::unordered_set<std::string> contract_names;
+        for (const auto& contract : program.client_contracts) {
+            if (!contract_names.insert(contract.name).second)
+                throw std::runtime_error("duplicate client contract: " + contract.name);
+        }
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
             if (!classes.insert(cls.name).second)

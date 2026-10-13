@@ -176,12 +176,22 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Declaration-only client contract syntax; no runtime implementation or wire validator.
+struct ClientContractMethod {
+    std::string name;
+    std::vector<std::string> parameters;
+};
+struct ClientContract {
+    std::string name;
+    std::vector<ClientContractMethod> methods;
+};
 struct Program {
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
+    std::vector<ClientContract> client_contracts;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and

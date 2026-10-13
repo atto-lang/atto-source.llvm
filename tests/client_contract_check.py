@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Native LLVM parser admission: checked declarations only, never codegen."""
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+compiler, fixture = sys.argv[1:]
+source = pathlib.Path(fixture).read_text()
+
+def call(args, text=None):
+    if text is None:
+        return subprocess.run([compiler, *args, fixture], text=True, capture_output=True, timeout=12)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ores') as f:
+        f.write(text)
+        f.flush()
+        return subprocess.run([compiler, *args, f.name], text=True, capture_output=True, timeout=12)
+
+native = call(['--check'])
+assert native.returncode == 0 and not native.stdout and not native.stderr, native
+rejected = call([])
+assert rejected.returncode != 0 and 'no admitted LLVM runtime implementation' in rejected.stderr, rejected
+assert not rejected.stdout, rejected.stdout
+cases = {
+    'duplicate method': source.replace('end\n','  fnc list_items(String x) => String;\nend\n'),
+    'duplicate parameter': source.replace('String page_size)', 'String page_size, String page_size)'),
+    'reserved operation': source.replace('fnc list_items', 'fnc suspends'),
+    'unsupported wire type': source.replace('String page_size', 'int page_size'),
+    'missing result type': source.replace('=> String;', '=> ;'),
+    'split arrow': source.replace('=>', '= >'),
+    'comment-split arrow': source.replace('=>', '=/* split */>'),
+    'empty contract': 'pub define contract Empty as end',
+    'duplicate contract': source + source,
+    'unverified target header': '// ores: target=host\n' + source,
+    'unterminated contract': source.rsplit('end', 1)[0],
+}
+for label, invalid in cases.items():
+    failure = call(['--check'], invalid)
+    assert failure.returncode != 0, (label, failure)
+    assert not failure.stdout, (label, failure.stdout)
+print('Native LLVM generated String client declaration parsed, negative cases rejected, and runtime codegen denied:',len(cases))
+
+# --check must preserve target/backend admission, not merely successful parsing.
+for options in [ ['--target=wasm32'], ['--experimental-owned-int'], ['--experimental-rt-scalar-loop'] ]:
+    denied = call(['--check', *options])
+    assert denied.returncode != 0 and not denied.stdout, (options, denied)
+mixed = source + '\npub fnc main(): int { return 42; }\n'
+denied = call(['--check'], mixed)
+assert denied.returncode != 0 and 'declaration-only' in denied.stderr and not denied.stdout, denied
+for text, options in [
+    ('pub fnc main(int arg): int { return arg; }', []),
+    ('pub fnc main(): int { const x: owned int = 42; return x; }', ['--experimental-owned-int', '--target=wasm32']),
+]:
+    denied = call(['--check', *options], text)
+    assert denied.returncode != 0 and not denied.stdout, (text, denied)
+plain = call(['--check'], 'pub fnc main(): int { return 42; }')
+assert plain.returncode == 0 and not plain.stdout, plain
