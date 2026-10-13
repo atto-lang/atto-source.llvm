@@ -1,0 +1,5 @@
+define class Foo as
+    let int x = 5;
+    pub fnc pick(int value): int { return value; }
+end
+pub fnc main(): int { return 0; }
