@@ -51,6 +51,7 @@ struct ClassField {
     std::int64_t initial = 0;
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
+    bool public_member = false; // class field access requires explicit pub outside class
 };
 
 struct ClassDecl {
