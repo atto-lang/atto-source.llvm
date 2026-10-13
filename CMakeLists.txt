@@ -162,6 +162,26 @@ if(BUILD_TESTING)
         endforeach()
     endif()
 
+    # Same-live-owner checked recovery: real first-growth allocation OOM,
+    # retry after error, synthetic quota denials, and exact contents/drops.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_int_array_try_add_repeat_recovery
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_try_add_recovery.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_int_array_try_add_repeat_recovery_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_try_add_recovery.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --sanitizers)
+        set_tests_properties(native_int_array_try_add_repeat_recovery
+            native_int_array_try_add_repeat_recovery_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+
     # Real native guest class-owned Array<int> fields, independent of the
     # handcrafted ABI fixture and lexical-array-only source admission.
     add_test(NAME native_class_owned_array_source_execution
