@@ -90,6 +90,17 @@ extern "C" void on_state(void* raw, size_t actor, OresNativeActorStateWake wake)
         s.rejected.fetch_add(1);
         return;
     }
+    // A second trusted host component cannot use the older completion
+    // entrypoint to release this already-dispatched grant while the actor
+    // callback is still running. Only bridge.complete() owns that release.
+    bool legacy_completion_denied = false;
+    try { s.registry.complete(wake.incarnation, wake.continuation_id); }
+    catch (const std::logic_error&) { legacy_completion_denied = true; }
+    if (!legacy_completion_denied ||
+            !s.registry.admitted(wake.incarnation, wake.continuation_id, Mode::Read)) {
+        s.failures.fetch_add(1);
+        return;
+    }
     // In particular, an immediately admitted read ticket must *not*
     // execute on the host producer thread; it is owned by this actor lane.
     s.accepted.fetch_add(1);
