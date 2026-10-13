@@ -172,7 +172,11 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("class")) {
+                    ClassDecl cls = class_declaration(program);
+                    known_class_names_.insert(cls.name);
+                    program.classes.push_back(std::move(cls));
+                }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'module', 'class' or 'actor'");
             }
@@ -184,7 +188,11 @@ public:
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("class")) {
+                    ClassDecl cls = class_declaration(program);
+                    known_class_names_.insert(cls.name);
+                    program.classes.push_back(std::move(cls));
+                }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else fail("expected 'class' or 'actor'");
             } else {
@@ -270,18 +278,30 @@ private:
         return actor;
     }
 
-    ClassDecl class_declaration() {
+    ClassDecl class_declaration(Program& program) {
         ClassDecl result;
         result.name = identifier();
         require("as");
         std::unordered_set<std::string> seen;
+        std::size_t static_methods = 0;
         // Ordered i64 scalar slots and owned Array<int> handles only.
-        // No nested class, arbitrary initializer, method, or pointer escape.
+        // Static, synchronous class functions are lowered to qualified
+        // source functions; instance methods need explicit self/vtable ABI.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            const bool member_public = accept("pub");
+            if (token_.text == "static") {
+                Function method = function(member_public, result.name);
+                program.functions.push_back(std::move(method));
+                ++static_methods;
+                continue;
+            }
+            if (token_.text == "fnc" || token_.text == "method" ||
+                    token_.text == "abstract") {
+                fail("native instance/abstract class methods require self/vtable lowering");
+            }
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
             require("let");
             ClassField field;
             if (accept("mut")) {
@@ -314,7 +334,8 @@ private:
             require(";");
             result.fields.push_back(std::move(field));
         }
-        if (result.fields.empty()) fail("native class requires at least one field");
+        if (result.fields.empty() && static_methods == 0)
+            fail("native class requires a field or supported static function");
         require("end");
         return result;
     }
@@ -333,10 +354,11 @@ private:
         return value;
     }
 
-    Function function() {
+    Function function(bool member_public = false, const std::string& class_owner = "") {
         Function value;
         value.offset = token_.offset;
-        value.exported = accept("pub");
+        value.exported = member_public || accept("pub");
+        if (!class_owner.empty()) require("static");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -356,7 +378,8 @@ private:
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
-        value.name = identifier();
+        const std::string member_name = identifier();
+        value.name = class_owner.empty() ? member_name : class_owner + "." + member_name;
         require("(");
         if (!accept(")")) {
             do {
@@ -966,7 +989,16 @@ private:
             // Keep ActorRef.send(...) for the outer actor action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
             if (field->name != "send" && accept("(")) {
-                field->kind = Expression::Kind::ArrayCall;
+                const bool static_class_call =
+                    field->left && field->left->kind == Expression::Kind::Variable &&
+                    known_class_names_.count(field->left->name) != 0;
+                if (static_class_call) {
+                    field->name = field->left->name + "." + field->name;
+                    field->kind = Expression::Kind::Call;
+                    field->left.reset();
+                } else {
+                    field->kind = Expression::Kind::ArrayCall;
+                }
                 if (!accept(")")) {
                     do {
                         field->arguments.push_back(expression());
@@ -1329,6 +1361,7 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    std::unordered_set<std::string> known_class_names_;
 };
 
 } // namespace
