@@ -38,9 +38,13 @@ def main():
                 str(s / "oreslang/runtime/MultiActorCarrier.cpp"),
                 "-x", "ir", *map(str, irs), "-o", str(binary)]
             run(compile_command)
-            result = run([str(binary)])
-            assert "TWO_COMPILED_ACTORS_ONE_REAL_CARRIER_PASS" in result.stdout, result.stdout
-        print("TWO_COMPILED_ACTORS_ONE_REAL_CARRIER_PASS: Release and ASan/UBSan")
+            # Repeated process-isolated schedules exercise cancellation and
+            # producer admission ordering across different OS interleavings.
+            for attempt in range(12 if label == "release" else 3):
+                result = run([str(binary)])
+                assert "TWO_COMPILED_ACTORS_ONE_REAL_CARRIER_PASS" in result.stdout, (
+                    label, attempt, result.stdout, result.stderr)
+        print("TWO_COMPILED_ACTORS_ONE_REAL_CARRIER_PASS: 12 Release + 3 ASan/UBSan schedules")
 
 if __name__ == "__main__":
     main()
