@@ -428,6 +428,66 @@ private:
         return name;
     }
 
+    // Restricted synchronous i64 state callback shared by tagged receive arms
+    // and ordinary actor method returns. Both source spellings lower to the
+    // same owned-heap operations after effect and no-escape validation.
+    std::unique_ptr<StateLoan> state_loan(std::string result_binding) {
+        if (state_loan_depth_ != 0)
+            fail("state read/write loan cannot suspend or nest");
+        auto loan = std::make_unique<StateLoan>();
+        loan->result_binding = std::move(result_binding);
+        if (accept("using")) {
+            require("state"); require(".");
+            if (accept("read")) loan->mode = StateLoan::Mode::Read;
+            else if (accept("write")) loan->mode = StateLoan::Mode::Write;
+            else fail("using state capability must be read or write");
+            require("(");
+            if (loan->mode == StateLoan::Mode::Write) {
+                require("critical");
+                accept("write");
+            } else if (accept("critical")) {
+                if (!accept("read"))
+                    fail("using state.read cannot request a critical write loan");
+            }
+        } else {
+            require("self"); require("."); require("handle_state"); require("(");
+            if (accept("critical")) {
+                if (accept("read")) loan->mode = StateLoan::Mode::Read;
+                else { accept("write"); loan->mode = StateLoan::Mode::Write; }
+            } else loan->mode = StateLoan::Mode::Read;
+        }
+        require("|");
+        if (accept("state")) state_loan_binder_ = "state";
+        else state_loan_binder_ = identifier();
+        if (state_loan_binder_ == "self")
+            fail("state callback cannot shadow self");
+        require("|"); require("->"); require("{");
+        state_loan_depth_ = 1;
+        while (token_.text == state_loan_binder_) {
+            if (loan->mode == StateLoan::Mode::Read)
+                fail("read-only actor state loan cannot mutate state");
+            FieldAssignment assignment;
+            assignment.offset = token_.offset;
+            advance(); require(".");
+            assignment.field = identifier();
+            require("=");
+            assignment.value = expression();
+            require(";");
+            loan->assignments.push_back(std::move(assignment));
+        }
+        if (token_.text == "await" || token_.text == "select"
+                || token_.text == "nb" || token_.text == "using"
+                || token_.text == "rt" || token_.text == "yield")
+            fail("state read/write loan cannot suspend or nest");
+        require("return");
+        loan->result = expression();
+        require(";");
+        state_loan_depth_ = 0;
+        state_loan_binder_.clear();
+        require("}"); require(")"); require(";");
+        return loan;
+    }
+
     Function function(bool actor_method = false,
                       const std::string& message_type = "",
                       const std::string& backward_type = "",
@@ -694,59 +754,12 @@ private:
                         }
                     }
                     require("{");
-                    // Canonical actor state API:
-                    // self.handle_state(|state| -> {...})          -> read loan
-                    // self.handle_state(critical |state| -> {...}) -> write loan.
-                    // The earlier using state.read/write syntax is retained
-                    // only as a restricted equivalent for this migration.
-                    // No loan may escape the callback or suspend.
+                    // Both canonical source spellings share a single
+                    // sealed scope parser and return copied scalar results.
                     if (accept("const")) {
-                        auto loan = std::make_unique<StateLoan>();
-                        loan->result_binding = identifier();
+                        const auto binding = identifier();
                         require("=");
-                        if (accept("using")) {
-                            require("state"); require(".");
-                            if (accept("read"))
-                                loan->mode = StateLoan::Mode::Read;
-                            else if (accept("write"))
-                                loan->mode = StateLoan::Mode::Write;
-                            else fail("using state capability must be read or write");
-                            require("(");
-                            if (loan->mode == StateLoan::Mode::Write)
-                                require("critical");
-                            else if (token_.text == "critical")
-                                fail("using state.read cannot request a critical write loan");
-                        } else {
-                            require("self"); require(".");
-                            require("handle_state"); require("(");
-                            loan->mode = accept("critical")
-                                ? StateLoan::Mode::Write
-                                : StateLoan::Mode::Read;
-                        }
-                        require("|"); require("state"); require("|");
-                        require("->"); require("{");
-                        state_loan_depth_ = 1;
-                        while (token_.text == "state") {
-                            if (loan->mode == StateLoan::Mode::Read)
-                                fail("read-only actor state loan cannot mutate state");
-                            FieldAssignment assignment;
-                            assignment.offset = token_.offset;
-                            require("state"); require(".");
-                            assignment.field = identifier();
-                            require("=");
-                            assignment.value = expression();
-                            require(";");
-                            loan->assignments.push_back(std::move(assignment));
-                        }
-                        if (token_.text == "await" || token_.text == "select"
-                                || token_.text == "nb" || token_.text == "using")
-                            fail("state read/write loan cannot suspend or nest");
-                        require("return");
-                        loan->result = expression();
-                        require(";");
-                        state_loan_depth_ = 0;
-                        require("}"); require(")"); require(";");
-                        arm.state_loan = std::move(loan);
+                        arm.state_loan = state_loan(binding);
                     }
                     // Legacy direct field mutation is intentionally rejected.
                     if (token_.kind == Kind::Identifier && !reserved(token_.text))
@@ -835,8 +848,18 @@ private:
             value.result->integer = 0;
         } else {
             require("return");
-            value.result = expression();
-            require(";");
+            // Ordinary actor methods may return a copied i64 from the
+            // sealed state callback directly. User-facing methods are not
+            // publicly callable actor entrypoints; this only lowers their
+            // compiler-generated method bodies.
+            if (actor_method && (token_.text == "using" || token_.text == "self")) {
+                value.method_state_loan = state_loan("");
+                value.result = make_expression(Expression::Kind::Integer, token_.offset);
+                value.result->integer = 0;
+            } else {
+                value.result = expression();
+                require(";");
+            }
         }
         require("}");
         return value;
@@ -940,11 +963,11 @@ private:
         }
         if (token_.kind != Kind::Identifier
                 || (reserved(token_.text)
-                    && !(state_loan_depth_ && token_.text == "state"))) {
+                    && !(state_loan_depth_ && token_.text == state_loan_binder_))) {
             fail("expected int expression");
         }
-        if (state_loan_depth_ && token_.text == "state") {
-            require("state");
+        if (state_loan_depth_ && token_.text == state_loan_binder_) {
+            advance();
             if (token_.text != ".")
                 fail("actor state reference cannot escape handle_state callback");
             require(".");
@@ -1745,6 +1768,7 @@ private:
     Lexer lexer_;
     Token token_;
     unsigned state_loan_depth_ = 0;
+    std::string state_loan_binder_;
 };
 
 } // namespace
