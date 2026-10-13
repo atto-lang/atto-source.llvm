@@ -186,7 +186,7 @@ public:
         for (int i = 0; i < n; ++i) {
             if (buf[i].data.u64 == wake_token) {
                 std::uint64_t drained = 0;
-                while (::read(wake_, &drained, sizeof(drained)) == sizeof(drained)) { }
+                while (::read(wake_, &drained, sizeof(drained)) == static_cast<ssize_t>(sizeof(drained))) { }
                 continue;
             }
             out[accepted++] = Ready{buf[i].data.u64, buf[i].events};
