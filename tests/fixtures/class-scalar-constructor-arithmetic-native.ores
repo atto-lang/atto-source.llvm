@@ -4,7 +4,6 @@ define class Pair as
   constructor(int start) { return; }
 end
 pub fnc main(): int {
-  const input: int = 13;
-  let Pair p = new Pair(input);
+  let Pair p = new Pair(13);
   return p.a + p.b;
 }
