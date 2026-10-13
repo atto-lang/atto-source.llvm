@@ -391,6 +391,47 @@ if(BUILD_TESTING)
             native-try-finally-return-snapshot.ores
             --run 246 --clang "${ORE_CLANG}")
     endif()
+    # First executable native typed-i64 throw/catch CFG; Java still reserves
+    # source throw, so this is NOT cross-backend guest-source parity.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_caught_throw_unwind_lifo
+            native-caught-throw-unwind-lifo.ores
+            --ir "throw.cleanup" --run 47 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_caught_throw_payload
+            native-caught-throw-payload.ores
+            --ir "throw.catch" --run 43 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(reject_caught_throw_nested_call
+        native-caught-throw-nested-call-reject.ores
+        --diagnostic "native caught throw requires nonthrowing int payload")
+    oreslang_contract_test(reject_caught_throw_unsafe_defer
+        native-caught-throw-defer-call-reject.ores
+        --diagnostic "native caught throw defer requires named class field write")
+    oreslang_contract_test(reject_caught_throw_effect_signature
+        native-caught-throw-qualified-effects-reject.ores
+        --diagnostic "native caught throw effect-qualified function unsupported")
+    oreslang_contract_test(reject_caught_throw_finally_call
+        native-caught-throw-finally-call-reject.ores
+        --diagnostic "native caught throw finally requires nonthrowing field write")
+    # Native ABI-backed reads are not pure scalar operations.
+    oreslang_contract_test(reject_caught_throw_array_size_operand
+        native-caught-throw-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_heap_owned_operand
+        native-caught-throw-heap-owned-reject.ores --experimental-owned-int
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_defer_array_size
+        native-caught-throw-defer-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_catch_array_size
+        native-caught-throw-catch-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_finally_array_size
+        native-caught-throw-finally-array-size-reject.ores
+        --diagnostic "native caught throw scalar read requires stack i64")
+    oreslang_contract_test(reject_caught_throw_wasm32
+        native-caught-throw-payload.ores --target wasm32
+        --diagnostic "wasm32 native caught-throw guest unsupported")
     oreslang_contract_test(reject_finally_return_override
         native-finally-return-reject.ores --diagnostic "cannot escape finally")
     oreslang_contract_test(reject_finally_break_override

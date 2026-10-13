@@ -131,6 +131,10 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    // Single-frame native i64 throw; no nested exceptions or suspension.
+    std::unique_ptr<Expression> caught_throw_value;
+    std::string catch_binding;
+    std::vector<Statement> caught_throw_defers;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;

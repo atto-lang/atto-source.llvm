@@ -221,12 +221,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 if (field.int_array)
                     throw std::runtime_error("wasm32 class Array<int> owned fields are not implemented");
         for (const auto& fn : source.functions) {
+            // A host-only caught-i64 CFG is not a certified wasm guest
+            // exception ABI, even if an LLVM optimizer could emit its blocks.
+            if (fn.caught_throw_value)
+                throw std::runtime_error("wasm32 native caught-throw guest unsupported");
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
             for (const auto& local : fn.locals) {
-                // Retain the established owned-i64 diagnostic: arrays have a
-                // distinct unsupported guest runtime contract.
+                // Preserve the native heap-owned diagnostic independently
+                // of array-backed ownership rejection.
                 if (local.heap_owned)
                     throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
                 if (local.int_array)
@@ -589,6 +593,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 storage.erase(*it);
             }
         };
+        if (fn.caught_throw_value) {
+            // Real native CFG edges. Evaluate payload once, run scoped LIFO
+            // cleanups, and transfer the typed scalar into the catch binding.
+            llvm::Value* thrown = lower(*fn.caught_throw_value, builder, i64,
+                storage, field_storage, declarations, &region_moves);
+            llvm::Value* caught = builder.CreateAlloca(i64, nullptr, "catch.i64.slot");
+            builder.CreateStore(thrown, caught);
+            llvm::BasicBlock* unwind = llvm::BasicBlock::Create(
+                context, "throw.cleanup", function);
+            llvm::BasicBlock* handler = llvm::BasicBlock::Create(
+                context, "throw.catch", function);
+            builder.CreateBr(unwind);
+            builder.SetInsertPoint(unwind);
+            for (auto it = fn.caught_throw_defers.rbegin();
+                 it != fn.caught_throw_defers.rend(); ++it) {
+                llvm::Value* updated = lower(*it->expression, builder, i64,
+                    storage, field_storage, declarations, &region_moves);
+                builder.CreateStore(updated, field_storage.at(
+                    field_key(it->receiver, it->field)));
+            }
+            builder.CreateBr(handler);
+            builder.SetInsertPoint(handler);
+            if (!storage.emplace(fn.catch_binding, caught).second)
+                throw std::runtime_error("duplicate native caught throw binding");
+        }
         for (const auto& stmt : fn.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
                 deferred_effects.push_back(&stmt);
