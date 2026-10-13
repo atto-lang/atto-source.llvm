@@ -407,6 +407,11 @@ void validate_i64_ownership(const Program& program) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.new_class) {
+                // Constructor operands must remain independent scalar reads.
+                // Check every operand before introducing the new class owner.
+                // The parser has already rejected calls, takes and loans.
+                for (const auto& argument : binding.constructor_arguments)
+                    check_value(*argument, locals, functions);
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.class_fixed_fields = class_fixed_fields.at(binding.class_name);
