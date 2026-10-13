@@ -127,6 +127,18 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "try_add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {moves->array_region, handle, args[0]}, "array.try_add.status");
+                // This ABI has exactly three recoverable status codes:
+                // 0=OK, 1=LIMIT, 2=NO_MEMORY. An unknown or negative
+                // status is an ABI violation, never guest arithmetic.
+                auto* valid = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.try_add.valid",
+                    builder.GetInsertBlock()->getParent());
+                builder.CreateCondBr(
+                    builder.CreateICmpULE(status,
+                        llvm::ConstantInt::get(status->getType(), 2),
+                        "array.try_add.known.status"),
+                    valid, moves->resource_failure);
+                builder.SetInsertPoint(valid);
                 return builder.CreateZExt(status, i64, "array.try_add.code");
             }
             if (expr.name == "add" && args.size() == 1) {

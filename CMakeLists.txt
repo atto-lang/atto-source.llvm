@@ -154,6 +154,27 @@ if(BUILD_TESTING)
             native_int_array_try_add_guest_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
 
+    # Test invalid checked C ABI statuses fail closed with exact cleanup,
+    # a real full-65536-element LIMIT without mutation, and an injected
+    # second-growth OOM after four values were already committed.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_int_array_try_add_adversarial
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_try_add_hardening.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_int_array_try_add_adversarial_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_try_add_hardening.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --sanitizers)
+        set_tests_properties(native_int_array_try_add_adversarial
+            native_int_array_try_add_adversarial_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+
     # Real native guest class-owned Array<int> fields, independent of the
     # handcrafted ABI fixture and lexical-array-only source admission.
     add_test(NAME native_class_owned_array_source_execution
@@ -322,6 +343,36 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+
+    # Reject all unsupported source-level scheduler suspension until verified
+    # heap-owned continuations exist. The harness rejects any partial LLVM IR.
+    oreslang_contract_test(native_rt_while_loop_failclosed
+        native-rt-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_for_loop_failclosed
+        native-rt-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_unbounded_loop_failclosed
+        native-rt-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_failclosed
+        native-rt-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_expression_failclosed
+        native-rt-cooperate-expression-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_nested_while_failclosed
+        native-rt-nested-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_for_failclosed
+        native-rt-nested-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_loop_failclosed
+        native-rt-nested-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_cooperate_failclosed
+        native-rt-nested-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
     add_executable(oreslang-ownership-cfg-dataflow-test
         tests/ownership_cfg_dataflow_test.cpp)

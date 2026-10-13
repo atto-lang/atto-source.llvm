@@ -216,6 +216,34 @@ test includes whole-class move chains, guarded returns, fresh later
 allocations, stale source/duplicate move/immutable destination rejection,
 and normal plus ASan+UBSan fault injection at every allocation point.
 
+## Native/runtime linker symbol admission
+
+Compiler-owned C runtime imports and generated exports must not share an
+unqualified ELF/Wasm linker symbol with a source function. LLVM
+`Function::Create` can otherwise silently rename the guest function to a
+numbered suffix such as `abort.1`, violating the native source-to-symbol
+identity contract. The frontend now rejects unqualified source functions
+named `abort` or `__oreslang_guest_main`, or starting with
+`oreslang_int_array_`, `oreslang_owned_i64_region_`,
+`ores_actor_i64_heap_`, `oreslang_source_actor_`,
+`oreslang_actor_`, or `oreslang_wasm_actor_`. Existing
+`oreslang_int_array_` rejection is retained regardless of module name.
+Other names are checked when they would generate an unqualified linker
+symbol. Module-qualified user functions have distinct symbol names.
+
+The native class array source gate asserts seven additional forbidden
+symbol families are rejected **without IR**, rather than inspecting
+possibly auto-renamed generated functions. The same gate also constructs
+64 owned arrays across four classes and transfers all four complete
+classes without allocating any further handle. All sixty-four original
+handles are subsequently destroyed exactly once.
+
+This is a source/linker ABI namespace invariant, **not** guest-level
+exception handling, typed array allocation recovery or actor supervisor
+delivery. The checked resource failure cleanup continues to use trusted
+`abort` after exact-once destruction until typed error propagation is
+implemented.
+
 ## Ownership and concurrency
 
 One owner invokes this ABI serially. It contains no mutexes and is **not**
@@ -299,6 +327,10 @@ transitive calls. Array borrowing, moves, escaped handles, suspension,
 typed `Result<void, ArrayError>` or a cross-backend Oreslang language
 contract. The integer codes must not be silently promoted to stable language
 API without a coordinated typed-result proposal and Java parity.
+An unknown or negative checked-ABI status takes the existing exactly-once
+owned-handle cleanup, region-close and abort path. A plain numerical status
+cannot prove callers actually inspect errors; only directly discarded-status
+statements are rejected. Public use requires typed `Result`.
 
 The `native_int_array_try_add_guest` CTests compile actual Oreslang source
 through LLVM, link against Clang and the checked C ABI, inject append OOM,
