@@ -26,6 +26,10 @@ namespace oreslang::runtime {
  * live state-loan draining. A gate ticket alone cannot prove either.
  */
 class ActorStateReadWriteContinuations final {
+    // The bridge verifies the physical scheduler actor-lane before claiming
+    // or completing a dispatched loan. No other component may invoke the
+    // raw registry entrypoints that lack actor-turn provenance.
+    friend class ActorStateReadWriteSchedulerBridge;
 public:
     using Gate = ActorStateReadWriteGate;
     using Mode = Gate::Mode;
@@ -89,6 +93,7 @@ public:
     // after this callback starts; claim resolves that handoff race atomically.
     // One-shot dispatch claims prevent duplicate/replayed READY envelopes
     // from executing guest code twice.
+private:
     [[nodiscard]] bool try_claim_ready(
             const Notification& wake, Mode expected_mode) {
         std::lock_guard<std::mutex> lock(mu_);
@@ -110,8 +115,10 @@ public:
         complete_impl(incarnation, continuation_id, true);
     }
 
-    // Complete an admitted, scheduler-dispatched actor operation.
-    // Queued continuations must be cancelled, not falsely completed.
+public:
+    // Legacy host-only completion is retained for undelivered/acknowledged
+    // test tickets. It refuses already dispatched callbacks; production
+    // guests must use the bridge's owning scheduler scope.
     void complete(std::uint64_t incarnation, std::uint64_t continuation_id) {
         complete_impl(incarnation, continuation_id, false);
     }
