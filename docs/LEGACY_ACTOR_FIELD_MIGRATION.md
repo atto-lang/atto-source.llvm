@@ -22,16 +22,16 @@ that the full legacy suite has been restored:
 | Duplicate-state-key rejection (migrated; focused CI green) | `actor-duplicate-field.ores` |
 | Immutable-field write rejection | `actor-immutable-write.ores` |
 | Local/field shadow rejection | `actor-field-shadow.ores` |
-| Unknown lexical variable rejection (migrated; new CI pending) | `actor-unknown-field.ores` |
+| Unknown lexical variable rejection (migrated; focused CI green) | `actor-unknown-field.ores` |
 | Unknown state write rejection | `actor-unknown-write.ores` |
-| Unsupported actor state type rejection (migrated; new CI pending) | `actor-unsupported-field.ores` |
+| Unsupported actor state type rejection (migrated; focused CI green) | `actor-unsupported-field.ores` |
 | Native source actor send | `source-actor-send.ores` |
 | Five-worker actor lifecycle | `source-actor-five-workers.ores` |
 | Spawn/stop actor field handling | `source-actor-spawn-stop.ores` |
 | Tagged integer DATA dispatch | `source-tagged-int-payload-dispatch.ores` |
 | Boolean receive match | `message-receive-bool-match.ores` |
 | Three-actor bidirectional native pipeline | `source-actor-pipeline-bidirectional.ores` |
-| Generated actor ABI collision (migrated; new CI pending) | `actor-abi-actor-collision.ores` |
+| Generated actor ABI collision (migrated; focused CI green) | `actor-abi-actor-collision.ores` |
 
 **Migration criteria:**
 
@@ -80,7 +80,7 @@ This was a **47-blob SHA-pinned focused native build**, not the complete
 historical source tree or full CMake/CTest suite. The remaining legacy
 fixtures in the inventory need source migration and original intent tests.
 
-## Follow-up historical regressions (pending fresh verification)
+## Follow-up historical regressions (focused gate verified)
 
 - The historical method-only `unsupported-actor.ores` is now an **acceptance**
   fixture. The old rejection was inconsistent with the canonical rule that
@@ -96,7 +96,12 @@ fixtures in the inventory need source migration and original intent tests.
   via a `--diagnostic-not` check in the regression harness, including under
   optimized Python where source `assert` statements would be disabled.
 
-These changes need a fresh **exact-tree** compiler execution before being
-counted as verified. Ordinary-method state execution, the legacy mutable-field
+**Verification:** [funded exact-source Linux GitHub Actions #38340223003](https://github.com/flags-2-env-test/java-app/actions/runs/38340223003)
+compiled the real LLVM frontend against 14 pinned Git blobs and passed **8/8**
+focused canonical-regression CTests: duplicate state key, invalid state type,
+unknown lexical variable, two ABI symbol collisions, two method-only actor
+admission cases, and a Python `-O` forbidden-diagnostic mutation canary.
+The intentionally failing canary passes only when CTest observes its expected
+failure (`WILL_FAIL`); it is not a regular positive compiler test. Ordinary-method state execution, the legacy mutable-field
 positive fixture, lifecycle/boolean receive migrations, full CTest coverage,
 and Java executable actor-state parity are still release blockers.
