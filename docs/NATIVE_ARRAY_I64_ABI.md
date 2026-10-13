@@ -359,9 +359,13 @@ additional initialized-zero owner shadows, calls the trusted runtime
 `try_prepare_filled_many` once, and branches on its actual status. On
 success it emits exactly one `commit_many`, which validates all
 destination/source slots before changing any and never allocates.
-The four obsolete owner shadows are then disarmed, and the staged
-handles remain the sole cleanup authority if a later checked operation
-fails. The user's `ready` scalar may be published only after commit.
+Because `commit_many` disarms each staged source slot, the compiler
+must **restore the hidden cleanup shadow** from each published
+destination handle immediately after commit returns. It then zeros the
+obsolete owner shadows; the new shadows remain the sole cleanup
+authority if a later checked operation fails. Missing this restoration
+would leak committed owners and abort when closing a live region.
+The user's `ready` scalar may be published only after commit.
 
 On a staging failure, the runtime rolls back all partially prepared
 arrays and leaves both the four destination slots and the staged-output
