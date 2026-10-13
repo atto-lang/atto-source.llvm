@@ -1,0 +1,9 @@
+define actor Counter as
+    state { value: int = 7; }
+    pub fnc reset(): int with state.write {
+        return using state.write(critical |s| -> {
+            s.value = 12;
+            return 12;
+        });
+    }
+end
