@@ -282,3 +282,33 @@ the prior stress model. This **does not** exercise the entire 9k-line
 guest interpreter / full GraalVM Maven suite, verify actor STOP
 incarnation fencing, or enable new source-level RW declarations.
 The source repository checks were not verified green. Keep draft.
+
+## Actor reincarnation / STOP admission fencing (audit on October 12, 2026)
+
+The Java runtime-only admission prototype
+[PR #780](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/780)
+now revokes the source actor's *instance* `CriticalRwGate` from
+`ActorOwnedGuestState.revokeRuntimeAdmissions()`, invoked only after
+`activeTurns == 0`, no actor carrier is active, and no actor batch is
+scheduled, but before the actor's memory slice is reclaimed. This is a
+**fail-closed stale-incarnation fence**. The runtime must not revoke a
+live writer's gate merely because a STOP request was received while
+guest code still executes. Other actors may still use shared file-level
+and static-class protection domains.
+
+A cancellation request during an executing `OresScheduler` turn can
+legitimately return `false` initially. It must eventually settle as
+cancelled after the guest turn unwinds and then release the ticket; it
+may *never* release the permit while an active guest turn still runs.
+Do not assert synchronous success in tests without first proving the
+task has completed its carrier turn.
+
+[Private exact-source validation #38330459276](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38330459276)
+passed precise interpreter and actor-runtime **source identity and
+finalization-order checks**, plus executing Java gate/Future/scheduler
+stress against a test-only actor shim. A synthetic stale-instance
+revocation test showed that closing an instance gate does not close an
+unrelated static gate. It did **not** execute full real
+`ActorRuntime` / GraalVM actor STOP tests; those JUnit cases are newly
+added to Java PR #780 but remain unverified, as does native LLVM
+finalization parity.
