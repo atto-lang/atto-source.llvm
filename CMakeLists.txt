@@ -64,6 +64,16 @@ if(BUILD_TESTING)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
         set(ORE_NATIVE_ARRAY_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang")
     endif()
+    add_test(NAME native_annotation_macro_aot_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/annotation_macro_aot_admission_matrix.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}")
+    set_tests_properties(native_annotation_macro_aot_admission PROPERTIES TIMEOUT 180)
+    add_test(NAME native_annotation_macro_aot_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_annotation_macro_aot_harness.py")
+    set_tests_properties(native_annotation_macro_aot_harness_selftest PROPERTIES TIMEOUT 30)
     add_test(NAME native_int_array_llvm_abi
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_int_array_llvm_abi.py"
