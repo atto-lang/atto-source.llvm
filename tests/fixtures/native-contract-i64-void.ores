@@ -1,0 +1,6 @@
+define contract C as
+  fnc value() => int;
+end
+define module M conforms C as
+  pub fnc value(): void { return; }
+end

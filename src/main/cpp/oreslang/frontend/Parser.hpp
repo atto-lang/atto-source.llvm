@@ -185,6 +185,18 @@ struct ClientContract {
     std::string name;
     std::vector<ClientContractMethod> methods;
 };
+// Compiler-only structural contract evidence for the native i64 subset.
+// Contract declarations do not allocate runtime objects or generate LLVM IR.
+struct ContractMethod {
+    std::string name;
+    std::vector<Parameter::Mode> parameter_modes;
+};
+
+struct ModuleContract {
+    std::string name;
+    std::vector<ContractMethod> methods;
+};
+
 struct Program {
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
@@ -192,6 +204,8 @@ struct Program {
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ClientContract> client_contracts;
+    std::vector<ModuleContract> contracts;
+    std::vector<std::string> conforms;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and

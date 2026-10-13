@@ -551,6 +551,34 @@ if(BUILD_TESTING)
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
     oreslang_contract_test(call_scoped_borrow_parameter_refresh unsupported-borrow-param.ores
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
+    # Compile-time i64 contract subset: actually type-check a module before
+    # emitting verified IR, then link/run a native main. Cross-unit imports and
+    # String contracts must reject without emitting any LLVM IR.
+    oreslang_contract_test(native_i64_module_contract_valid native-contract-i64-valid.ores
+        --ir "call i64 @Math.add")
+    oreslang_contract_test(native_i64_module_contract_missing native-contract-i64-missing.ores
+        --diagnostic "missing public native module contract method")
+    oreslang_contract_test(native_i64_module_contract_private native-contract-i64-private.ores
+        --diagnostic "missing public native module contract method")
+    oreslang_contract_test(native_i64_module_contract_arity native-contract-i64-arity.ores
+        --diagnostic "native module contract parameter arity mismatch")
+    oreslang_contract_test(native_i64_module_contract_borrow native-contract-i64-borrow.ores
+        --diagnostic "native module contract ownership mode mismatch")
+    oreslang_contract_test(native_i64_module_contract_void native-contract-i64-void.ores
+        --diagnostic "native module contract requires int return")
+    oreslang_contract_test(native_i64_module_contract_duplicate_parameter native-contract-i64-duplicate-param.ores
+        --diagnostic "duplicate native module contract parameter")
+    oreslang_contract_test(native_i64_module_contract_split_arrow native-contract-i64-split-arrow.ores
+        --diagnostic "contract signatures require contiguous '=>'")
+    oreslang_contract_test(native_i64_module_contract_unknown native-contract-i64-unknown.ores
+        --diagnostic "unknown native module contract")
+    oreslang_contract_test(native_i64_module_contract_duplicate native-contract-i64-duplicate.ores
+        --diagnostic "duplicate native module contract method")
+    oreslang_contract_test(native_contract_unlinked_import native-contract-i64-import.ores
+        --diagnostic "native contract imports require a validated cross-unit linker")
+    oreslang_contract_test(native_contract_string_unimplemented native-contract-reject-string.ores
+        --diagnostic "expected 'int'")
+
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
@@ -1716,6 +1744,12 @@ if(BUILD_TESTING)
                 --samples 3 --warmups 1 --expected-exit 42)
         set_tests_properties(native_hpc_ml_scalar_source_provenance PROPERTIES TIMEOUT 60)
     endif()
+endif()
+
+if(BUILD_TESTING AND ORE_CLANG)
+    add_test(NAME refreshed_i64_module_contract_execution
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/module_contract_refresh.py"
+        "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 if(BUILD_TESTING)
