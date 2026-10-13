@@ -474,6 +474,24 @@ if(BUILD_TESTING)
             --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_guest.c"
             --stderr "ACTOR_METHOD_STATE_GUEST_PASS read=7 increment=8,9 reset=12")
     endif()
+    # Cross-backend parity: the exact same .ores fixture Git blobs are
+    # checked by Java/GraalVM PR #760 with the Java AST/effect verifier.
+    oreslang_contract_test(native_shared_actor_state_read
+        actor-state-parity-read.ores --ir "oreslang_actor_Counter_get")
+    oreslang_contract_test(native_shared_actor_state_write
+        actor-state-parity-write.ores --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_shared_actor_state_missing_with
+        actor-state-parity-no-with-reject.ores
+        --diagnostic "actor method state loan requires explicit with effects")
+    oreslang_contract_test(reject_shared_actor_state_read_mutate
+        actor-state-parity-read-mutate-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_shared_actor_state_escape
+        actor-state-parity-loan-escape-reject.ores
+        --diagnostic "actor state reference cannot escape handle_state callback")
+    oreslang_contract_test(reject_shared_actor_state_cooperate
+        actor-state-parity-cooperate-reject.ores
+        --diagnostic "state read/write loan cannot suspend or nest")
     # Function-level 'with' effect upper bound is distinct from scoped
     # 'using' acquisition and sealed handle_state authority.
     foreach(mode read write)
