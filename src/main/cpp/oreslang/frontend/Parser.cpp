@@ -43,7 +43,7 @@ bool reserved(std::string_view name) {
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
-        "for", "of", "loop", "block", "break", "continue", "yield",
+        "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
@@ -138,11 +138,28 @@ bool nonthrowing_protected_read(const Expression& expr) {
            expr.left->kind == Expression::Kind::Variable;
 }
 
+// Arithmetic over checked scalar reads is nonthrowing. Never admit
+// general calls, array mutations, ownership transfers, or suspension.
+bool native_pure_scalar_tree(const Expression& expr) {
+    if (nonthrowing_protected_read(expr)) return true;
+    if (expr.kind == Expression::Kind::Negate)
+        return expr.left && native_pure_scalar_tree(*expr.left);
+    if (expr.kind == Expression::Kind::Add ||
+            expr.kind == Expression::Kind::Subtract ||
+            expr.kind == Expression::Kind::Multiply)
+        return expr.left && expr.right &&
+            native_pure_scalar_tree(*expr.left) &&
+            native_pure_scalar_tree(*expr.right);
+    return false;
+}
+
 class Parser {
 public:
-    explicit Parser(std::string_view source, bool experimental_owned_int)
+    explicit Parser(std::string_view source, bool experimental_owned_int,
+                    bool experimental_rt_scalar_loop)
         : lexer_(source), token_(lexer_.next()),
-          experimental_owned_int_(experimental_owned_int) {}
+          experimental_owned_int_(experimental_owned_int),
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
     Program parse() {
         Program program;
@@ -260,27 +277,46 @@ private:
         result.name = identifier();
         require("as");
         std::unordered_set<std::string> seen;
-        // Only plain, ordered i64 fields are admitted: no nested objects,
-        // pointers, destructors, user initializers or implicit heap storage.
+        // Ordered i64 scalar slots and owned Array<int> handles only.
+        // No nested class, arbitrary initializer, method, or pointer escape.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
             require("let");
-            require("int");
             ClassField field;
-            field.name = identifier();
-            if (!seen.insert(field.name).second)
-                fail("duplicate class field '" + field.name + "'");
-            require("=");
-            if (token_.kind != Kind::Integer)
-                fail("class field requires i64 literal initializer");
-            field.initial = integer_literal();
+            if (accept("mut")) {
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                field.int_array = true;
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                require("new");
+                require("Array");
+                require("<");
+                require("int");
+                require(">");
+                require("(");
+                require(")");
+            } else {
+                require("int");
+                field.name = identifier();
+                if (!seen.insert(field.name).second)
+                    fail("duplicate class field '" + field.name + "'");
+                require("=");
+                if (token_.kind != Kind::Integer)
+                    fail("class field requires i64 literal initializer");
+                field.initial = integer_literal();
+            }
             require(";");
             result.fields.push_back(std::move(field));
         }
-        if (result.fields.empty()) fail("native class requires at least one i64 field");
+        if (result.fields.empty()) fail("native class requires at least one field");
         require("end");
         return result;
     }
@@ -370,6 +406,27 @@ private:
                 binding.owner_mutable = accept("mut");
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
+                if (token_.text == "Array") {
+                    // Native slice #265: only a lexical, exclusively owned Array<int>.
+                    // No implicit copies, fields, captures, cross-call transfers, or
+                    // suspension can enter the current synchronous array ABI.
+                    if (!binding.owner_mutable)
+                        fail("native Array<int> requires let mut owner");
+                    require("Array");
+                    require("<");
+                    require("int");
+                    require(">");
+                    binding.name = identifier();
+                    require("=");
+                    require("new");
+                    require("Array");
+                    require("<");
+                    require("int");
+                    require(">");
+                    require("(");
+                    require(")");
+                    binding.int_array = true;
+                } else {
                 binding.class_name = identifier();
                 binding.name = identifier();
                 require("=");
@@ -386,6 +443,7 @@ private:
                     binding.move_source = identifier();
                     if (parenthesized) require(")");
                     binding.move_class = true;
+                }
                 }
             } else {
                 // A val owns mutable scalar storage; const permits only shared
@@ -455,6 +513,19 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
+                if (token_.text == "while" || token_.text == "for" ||
+                        token_.text == "loop") {
+                    fail("native realtime source loop requires verified LLVM continuation lowering");
+                }
+                if (token_.text == "rt") {
+                    advance();
+                    if (token_.text == "cooperate") {
+                        throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+                    }
+                    fail("unsupported native runtime operation in conditional arm");
+                }
                 Statement statement;
                 statement.offset = token_.offset;
                 if (finally_scope && (token_.text == "return" ||
@@ -485,7 +556,8 @@ private:
                     statement.receiver = target->left->name;
                     statement.field = target->name;
                     statement.expression = expression();
-                } else if (target->kind == Expression::Kind::Call) {
+                } else if (target->kind == Expression::Kind::Call ||
+                           target->kind == Expression::Kind::ArrayCall) {
                     statement.kind = Statement::Kind::Call;
                     statement.expression = std::move(target);
                 } else {
@@ -500,12 +572,127 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "while" && experimental_rt_scalar_loop_) {
+                if (value.scalar_while || value.locals.size() != 1 ||
+                        !value.statements.empty() || !value.early_returns.empty() ||
+                        !value.actor_spawns.empty() || !value.actor_actions.empty() ||
+                        value.has_declared_effects || !value.parameters.empty() ||
+                        value.returns_void)
+                    fail("experimental scalar loop requires one local and no effects");
+                const LocalBinding& local = value.locals.front();
+                if (!local.owner_mutable || local.heap_owned || local.int_array ||
+                        !local.class_name.empty() || !local.initializer ||
+                        local.initializer->kind != Expression::Kind::Integer)
+                    fail("experimental scalar loop requires val scalar integer initializer");
+                auto loop = std::make_unique<ScalarWhileLoop>();
+                loop->counter = local.name;
+                loop->initial = local.initializer->integer;
+                require("while");
+                require("(");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop condition must read its counter");
+                require("<");
+                loop->upper_bound = integer_literal();
+                require(")");
+                require("{");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop must update its counter");
+                require("=");
+                if (identifier() != loop->counter)
+                    fail("experimental scalar loop cannot read another owner");
+                require("+");
+                if (integer_literal() != 1)
+                    fail("experimental scalar loop increment must be exactly one");
+                require(";");
+                require("}");
+                if (loop->initial < 0 || loop->upper_bound < loop->initial ||
+                        loop->upper_bound > 1000000000LL)
+                    fail("experimental scalar loop requires bounded nonnegative i64 range");
+                value.scalar_while = std::move(loop);
+                if (token_.text != "return")
+                    fail("experimental scalar loop must be followed by a single return");
+                continue;
+            }
+            if (token_.text == "while" || token_.text == "for" ||
+                    token_.text == "loop") {
+                fail("native realtime source loop requires verified LLVM continuation lowering");
+            }
             if (token_.text == "try") {
                 if (terminal_try_finally || return_guards_started)
                     fail("native terminal try/finally must be a single return-only scope");
                 terminal_try_finally = true;
                 require("try");
                 require("{");
+                if (token_.text == "defer" || token_.text == "throw") {
+                    // First typed-i64 exceptional CFG: one unconditional throw,
+                    // LIFO scoped field cleanups, and a local catch. No await,
+                    // exception-producing calls or nested try are admitted.
+                    if (value.returns_void || !value.statements.empty() ||
+                            !value.actor_actions.empty())
+                        fail("native caught throw requires a single terminal int try scope");
+                    // No partially inferred effect set can masquerade as a
+                    // complete exception/cleanup summary at this boundary.
+                    if (value.has_declared_effects)
+                        throw std::runtime_error(
+                            "native caught throw effect-qualified function unsupported at byte " +
+                            std::to_string(token_.offset));
+                    while (accept("defer")) {
+                        if (value.caught_throw_defers.size() == 8)
+                            fail("native caught throw defer limit exceeded (8)");
+                        Statement deferred;
+                        deferred.kind = Statement::Kind::FieldWrite;
+                        deferred.offset = token_.offset;
+                        auto target = primary();
+                        if (target->kind != Expression::Kind::Field ||
+                                !target->left ||
+                                target->left->kind != Expression::Kind::Variable)
+                            fail("native caught throw defer requires named class field write");
+                        deferred.receiver = target->left->name;
+                        deferred.field = target->name;
+                        require("=");
+                        deferred.expression = expression();
+                        if (!native_pure_scalar_tree(*deferred.expression))
+                            fail("native caught throw defer requires nonthrowing scalar/field expression");
+                        require(";");
+                        value.caught_throw_defers.push_back(std::move(deferred));
+                    }
+                    require("throw");
+                    value.caught_throw_value = expression();
+                    if (!native_pure_scalar_tree(*value.caught_throw_value))
+                        fail("native caught throw requires nonthrowing int payload");
+                    require(";");
+                    require("}");
+                    require("catch");
+                    require("(");
+                    value.catch_binding = identifier();
+                    for (const auto& param : value.parameters)
+                        if (param.name == value.catch_binding)
+                            fail("native caught throw binding shadows parameter");
+                    for (const auto& local : value.locals)
+                        if (local.name == value.catch_binding)
+                            fail("native caught throw binding shadows local owner");
+                    require(")");
+                    require("{");
+                    require("return");
+                    value.result = expression();
+                    if (!native_pure_scalar_tree(*value.result))
+                        fail("native caught throw catch return requires nonthrowing scalar/field read");
+                    require(";");
+                    require("}");
+                    require("finally");
+                    require("{");
+                    auto cleanup = branch_arm(true);
+                    require("}");
+                    for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
+                        if (it->kind != Statement::Kind::FieldWrite ||
+                                !native_pure_scalar_tree(*it->expression))
+                            fail("native caught throw finally requires nonthrowing field write");
+                        it->kind = Statement::Kind::Defer;
+                        value.statements.push_back(std::move(*it));
+                    }
+                    require("}");
+                    return value;
+                }
                 continue;
             }
             // A void program entrypoint may fall through with success status 0.
@@ -608,11 +795,43 @@ private:
                                                value.actor_stops.size() - 1});
                 continue;
             }
+            if (token_.text == "rt") {
+                const auto intrinsic_offset = token_.offset;
+                advance();
+                if (accept("array_commit_filled")) {
+                    // Restricted, compiler-only transaction over four
+                    // owned array fields in declaration order.
+                    Statement effect;
+                    effect.kind = Statement::Kind::ArrayCommitFilled;
+                    effect.offset = intrinsic_offset;
+                    require("(");
+                    effect.receiver = identifier();
+                    require(",");
+                    effect.array_commit_length = expression();
+                    for (std::size_t i = 0; i < 4; ++i) {
+                        require(",");
+                        effect.array_commit_values.push_back(expression());
+                    }
+                    require(")");
+                    require(";");
+                    value.statements.push_back(std::move(effect));
+                    continue;
+                }
+                if (token_.text == "cooperate") {
+                    throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+                }
+                fail("native rt statement unsupported until suspension lowering");
+            }
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
+                // Nested class receivers cannot alias unrelated ActorRef names.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor send requires direct named ActorRef receiver");
                 ActorSend send;
                 send.offset = statement.offset;
                 send.reference = action->left->name;
@@ -625,11 +844,15 @@ private:
                 continue;
             }
             if (action->kind == Expression::Kind::Field && accept("=")) {
+                // No nested assignment may resolve through a flattened field.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native field assignment requires direct named class receiver");
                 statement.kind = Statement::Kind::FieldWrite;
                 statement.receiver = action->left->name;
                 statement.field = action->name;
                 statement.expression = expression();
-            } else if (action->kind == Expression::Kind::Call) {
+            } else if (action->kind == Expression::Kind::Call ||
+                       action->kind == Expression::Kind::ArrayCall) {
                 statement.kind = Statement::Kind::Call;
                 statement.expression = std::move(action);
             } else {
@@ -641,6 +864,10 @@ private:
         require("return");
         if (!value.returns_void) {
             value.result = expression();
+            if (value.scalar_while &&
+                    (value.result->kind != Expression::Kind::Variable ||
+                     value.result->name != value.scalar_while->counter))
+                fail("experimental scalar loop must return the counter");
             if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
                 fail("native protected try return requires nonthrowing scalar/field read");
         }
@@ -730,6 +957,11 @@ private:
             const auto offset = token_.offset;
             advance();
             const auto operation = token_.text;
+            if (operation == "cooperate") {
+                throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
@@ -791,11 +1023,26 @@ private:
                 } while (accept(","));
                 require(")");
             }
-        } else if (accept(".")) {
+        }
+        // Class-owned array expressions are intentionally limited to one
+        // field selection followed by a native array method or .size.
+        while (accept(".")) {
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            // Keep ActorRef.send(...) for the outer actor action parser.
+            // Eager ArrayCall parsing would erase the send/stop ordering.
+            if (field->name != "send" && accept("(")) {
+                field->kind = Expression::Kind::ArrayCall;
+                if (!accept(")")) {
+                    do {
+                        field->arguments.push_back(expression());
+                    } while (accept(","));
+                    require(")");
+                }
+            }
             expr = std::move(field);
+            if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
     }
@@ -832,7 +1079,7 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::size_t>& functions) {
+                                    const std::unordered_map<std::string, std::unordered_set<std::size_t>>& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -844,9 +1091,14 @@ private:
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions);
                 return;
+            case Expression::Kind::ArrayCall:
+                validate_expression(*expr.left, parameters, functions);
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions);
+                return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
-                if (found == functions.end() || found->second != expr.arguments.size()) {
+                if (found == functions.end() || found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
                                              + expr.name + "' at byte "
                                              + std::to_string(expr.offset));
@@ -876,7 +1128,8 @@ private:
 
     static bool contains_callable_invocation(const Expression* expr) {
         if (!expr) return false;
-        if (expr->kind == Expression::Kind::Call) return true;
+        if (expr->kind == Expression::Kind::Call ||
+            expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get()) ||
             contains_callable_invocation(expr->right.get())) return true;
         for (const auto& item : expr->arguments)
@@ -884,7 +1137,7 @@ private:
         return false;
     }
 
-    static void validate_declared_effects(const Function& fn) {
+    static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -892,16 +1145,36 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
-            if (local.heap_owned && !fn.declared_effects.has(FunctionEffect::Alloc))
+            bool allocates_class_array = false;
+            if (local.new_class) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == local.class_name; });
+                if (cls != program.classes.end())
+                    allocates_class_array = std::any_of(cls->fields.begin(), cls->fields.end(),
+                        [](const ClassField& field) { return field.int_array; });
+            }
+            if ((local.heap_owned || local.int_array || allocates_class_array) &&
+                    !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
             if (contains_callable_invocation(local.initializer.get()))
                 throw std::runtime_error(
                     "using effects require transitive call summaries");
         }
-        for (const auto& stmt : fn.statements)
+        for (const auto& stmt : fn.statements) {
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
+                    !fn.declared_effects.has(FunctionEffect::Alloc))
+                throw std::runtime_error("filled array commit violates using signature without alloc");
             if (contains_callable_invocation(stmt.expression.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
+            if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                if (contains_callable_invocation(stmt.array_commit_length.get()))
+                    throw std::runtime_error("filled array commit requires pure scalar length");
+                for (const auto& item : stmt.array_commit_values)
+                    if (contains_callable_invocation(item.get()))
+                        throw std::runtime_error("filled array commit requires pure scalar fills");
+            }
+        }
         for (const auto& guard : fn.early_returns)
             if (contains_callable_invocation(guard.lhs.get()) ||
                 contains_callable_invocation(guard.rhs.get()) ||
@@ -917,13 +1190,43 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
-        std::unordered_map<std::string, std::size_t> functions;
+        std::unordered_map<std::string, std::unordered_set<std::size_t>> functions;
         for (const auto& fn : program.functions) {
-            validate_declared_effects(fn);
-            if (!functions.emplace(fn.name, fn.parameters.size()).second) {
-                throw std::runtime_error("duplicate function '" + fn.name + "' at byte "
-                                         + std::to_string(fn.offset));
+            validate_declared_effects(fn, program);
+            // Compiler-owned ABI imports and generated exports may be
+            // inserted before source function definitions. LLVM silently
+            // renames duplicate Function::Create symbols (e.g. abort.1),
+            // which would disconnect source identity from the actual linker
+            // symbol. Reject unqualified native/wasm symbols *before* IR.
+            // Module-qualified names are emitted as module.name and do not
+            // collide at the ELF/Wasm symbol boundary.
+            if (fn.name.rfind("oreslang_int_array_", 0) == 0)
+                throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (program.module.empty()) {
+                const bool runtime_symbol =
+                    fn.name == "abort" ||
+                    fn.name == "__oreslang_guest_main" ||
+                    fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                    fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                    fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
+                if (runtime_symbol)
+                    throw std::runtime_error("reserved native runtime ABI symbol '" +
+                        fn.name + "'");
             }
+            if (std::count_if(fn.locals.begin(), fn.locals.end(),
+                    [](const LocalBinding& local) { return local.int_array; }) > 64)
+                throw std::runtime_error("native Array<int> owner limit exceeded (64)");
+            // Overload identity is strictly name and explicit argument count.
+            // Parameter types, borrow modes and returns cannot select a slot.
+            if (fn.name == "main" && functions.count("main"))
+                throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
+            if (!functions[fn.name].insert(fn.parameters.size()).second)
+                throw std::runtime_error("function '" + fn.name + "' already has arity "
+                    + std::to_string(fn.parameters.size()) +
+                    "; parameter and return types do not select overloads at byte " +
+                    std::to_string(fn.offset));
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) {
                 if (!params.insert(param.name).second) {
@@ -980,7 +1283,11 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.new_class || binding.move_class) {
+                if (binding.int_array) {
+                    // Construction was parsed as exactly new Array<int>().
+                    // Its initializer is a trusted runtime operation, never
+                    // a user-callable scalar or transferable class value.
+                } else if (binding.new_class || binding.move_class) {
                     if (classes.count(binding.class_name) == 0)
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
                     if (binding.move_class && !params.count(binding.move_source))
@@ -1008,6 +1315,15 @@ private:
                     for (const auto& action : stmt.else_statements)
                         check_statement_names(action, else_names);
                     // Neither arm's lexical locals escape into the parent scope.
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                    if (!names.count(stmt.receiver))
+                        throw std::runtime_error("unknown array commit class receiver '" +
+                            stmt.receiver + "'");
+                    validate_expression(*stmt.array_commit_length, names, functions);
+                    for (const auto& item : stmt.array_commit_values)
+                        validate_expression(*item, names, functions);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
@@ -1044,6 +1360,17 @@ private:
             }
             if (!live_actors.empty())
                 throw std::runtime_error("actor reference must be stopped before return");
+            if (fn.caught_throw_value) {
+                // The thrown i64 expression and scoped defers see the original
+                // lexical environment. Catch binding enters only on handler
+                // admission, before checking the catch return expression.
+                validate_expression(*fn.caught_throw_value, params, functions);
+                for (const auto& defer : fn.caught_throw_defers)
+                    check_statement_names(defer, params);
+                if (!params.insert(fn.catch_binding).second)
+                    throw std::runtime_error("duplicate caught throw binding '" +
+                        fn.catch_binding + "'");
+            }
             for (const auto& guard : fn.early_returns) {
                 validate_expression(*guard.lhs, params, functions);
                 validate_expression(*guard.rhs, params, functions);
@@ -1086,12 +1413,20 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    bool experimental_rt_scalar_loop_;
 };
 
 } // namespace
 
-Program parse_program(std::string_view source, bool experimental_owned_int) {
-    Program program = Parser(source, experimental_owned_int).parse();
+Program parse_program(std::string_view source, bool experimental_owned_int,
+                      bool experimental_rt_scalar_loop) {
+    Program program = Parser(source, experimental_owned_int,
+                             experimental_rt_scalar_loop).parse();
+    if (experimental_rt_scalar_loop &&
+            (program.functions.size() != 1 || !program.functions.front().scalar_while ||
+             !program.classes.empty() || !program.actors.empty() ||
+             !program.module.empty()))
+        throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
     // LLVM lowering is prohibited unless the native subset has passed both
     // name/arity checking and flow-sensitive explicit ownership admission.
     validate_i64_ownership(program);
