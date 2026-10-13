@@ -1,5 +1,6 @@
 #include "oreslang/runtime/RootFailureBoundary.hpp"
 #include <stdexcept>
+#include <initializer_list>
 #define CHECK(condition) do { if (!(condition)) throw std::runtime_error("failed: " #condition); } while (false)
 using namespace oreslang;
 int main() {
