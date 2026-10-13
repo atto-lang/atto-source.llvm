@@ -370,7 +370,7 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_caught_throw_unwind_lifo
             native-caught-throw-unwind-lifo.ores
-            --ir "throw.cleanup" --run 41 --clang "${ORE_CLANG}")
+            --ir "throw.cleanup" --run 47 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_caught_throw_payload
             native-caught-throw-payload.ores
             --ir "throw.catch" --run 43 --clang "${ORE_CLANG}")

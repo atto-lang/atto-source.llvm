@@ -3,6 +3,7 @@ define class Counter as
 end
 fnc change(borrow mut Counter c): int {
   try {
+    defer c.value = c.value + 3;
     defer c.value = c.value * 10;
     throw 7;
   } catch (err) {
