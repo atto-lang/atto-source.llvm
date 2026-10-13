@@ -24,7 +24,10 @@ enum class CriticalStateAdmission : std::uint8_t {
     LoanAcrossSuspension,
     MissingContinuationFence,
     InvalidEffectMetadata,
-    ScopeDenied
+    ScopeDenied,
+    // A sealed actor state loan cannot nest, including read/read and
+    // read/write, even when the scheduler continuation is identical.
+    NestedStateLoan
 };
 
 struct CriticalStateCallback {
@@ -72,9 +75,8 @@ inline CriticalStateAdmission admit_critical_handle_state(
             && callback.inferred.has(FunctionEffect::StateWrite)) {
         return CriticalStateAdmission::ReadModeCannotWrite;
     }
-    // The compiler-declared effect bound must cover acquisition of the
-    // lexical state capability independently of inferred field operations.
-    // A no-op callback is not permission to mint an undeclared loan.
+    // Acquiring a scoped state capability requires a corresponding
+    // declaration even if the callback performs no state field access.
     if ((mode == CriticalStateMode::Read
                 && !with_effects.has(FunctionEffect::StateRead))
             || (mode == CriticalStateMode::Write

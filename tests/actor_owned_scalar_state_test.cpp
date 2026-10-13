@@ -86,14 +86,23 @@ int main() {
                                 return std::int64_t{999};
                             });
                 });
-                const auto nested = state.critical(actor, 100, checked, allowed,
-                        [&](State::Access& inner) -> State::Value {
-                    rejects([&] { (void) access.read("count"); });
-                    check(std::get<std::int64_t>(inner.read("count")) == 1);
-                    return inner.read("count");
+                // No nested read/write callback is legal, even when its
+                // continuation is the same one already running this actor.
+                rejects([&] {
+                    (void) state.critical(actor, 100, checked, allowed,
+                            [&](State::Access& inner) -> State::Value {
+                        inner.write("count", std::int64_t{999});
+                        return inner.read("count");
+                    });
                 });
-                check(std::get<std::int64_t>(nested) == 1);
+                rejects([&] {
+                    (void) state.critical(actor, 100, plain, readonly,
+                            [&](State::Access& inner) -> State::Value {
+                        return inner.read("count");
+                    });
+                });
                 check(std::get<std::int64_t>(access.read("count")) == 1);
+                check(!state.ready_to_suspend(actor));
             }
             return access.read("count");
         });
