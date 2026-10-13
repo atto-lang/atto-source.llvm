@@ -40,6 +40,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_assert_canonical_import_parser
         COMMAND oreslang-assert-import-parser-test)
+    # Versioned primitive-only native Any / Option<bool> ABI substrate.
+    # This is not compiled guest std/assert execution.
+    add_executable(oreslang-native-assert-scalar-abi-test
+        tests/native_assert_scalar_abi_test.cpp)
+    target_include_directories(oreslang-native-assert-scalar-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-assert-scalar-abi-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_scalar_abi_contract
+        COMMAND oreslang-native-assert-scalar-abi-test)
 
     # Host-only fairness budget; not evidence of compiled Oreslang suspension.
     add_executable(oreslang-native-reduction-quantum-test
