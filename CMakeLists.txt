@@ -29,6 +29,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
+    # pattern proof. This is not guest source Result/match lowering.
+    add_executable(oreslang-native-array-result-contract-test
+        tests/native_array_result_contract_test.cpp)
+    target_include_directories(oreslang-native-array-result-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-array-result-contract-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_array_result_nominal_closed_proof_host_only
+        COMMAND oreslang-native-array-result-contract-test)
+    set_tests_properties(native_array_result_nominal_closed_proof_host_only
+        PROPERTIES TIMEOUT 20)
     # Host-only fairness budget; not evidence of compiled Oreslang suspension.
     add_executable(oreslang-native-reduction-quantum-test
         tests/native_cooperation_quantum_test.cpp)
