@@ -1052,7 +1052,10 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
-        if (token_.kind != Kind::Identifier || reserved(token_.text)) {
+        // A method's implicit self is validated against its declared
+        // receiver parameter, so a free function cannot fabricate self.
+        if (token_.kind != Kind::Identifier ||
+                (reserved(token_.text) && token_.text != "self")) {
             fail("expected int expression");
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
