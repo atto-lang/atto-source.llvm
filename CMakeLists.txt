@@ -494,6 +494,17 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_handle_read_call
         actor-handle-read-call-reject.ores
         --diagnostic "state read/write loan cannot invoke arbitrary functions")
+    # All tagged/boolean/ordinary state callbacks need explicit with rows.
+    oreslang_contract_test(reject_tagged_missing_effect_bound
+        actor-tagged-missing-effect-bound-reject.ores
+        --diagnostic "actor state method requires explicit with effects")
+    oreslang_contract_test(tagged_write_only_no_native_reads
+        source-tagged-write-only.ores
+        --ir "call void @ores_actor_i64_heap_field_write"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    oreslang_contract_test(reject_tagged_write_only_illegal_read
+        actor-tagged-write-only-read-effect-reject.ores
+        --diagnostic "state.read operation not permitted by with effects")
     # Function-level 'with' effect upper bound is distinct from scoped
     # 'using' acquisition and sealed handle_state authority.
     foreach(mode read write)
