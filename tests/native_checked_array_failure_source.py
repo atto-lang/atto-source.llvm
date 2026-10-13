@@ -8,6 +8,7 @@ the compiler's terminal abort. This is NOT guest-visible throw/Result support.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -192,10 +193,11 @@ def verify(compiler, clang, root, sanitizers):
             # Every checked new/add edge must carry the *actual* runtime
             # status into the distinct failure classifier before cleanup.
             # Nonrecoverable paths still abort after exact-once destruction.
-            if (ir.count(b"array.create.failure:") != 0:
-                raise AssertionError(f"{label}: malformed new failure label")
-            if (ir.count(b"array.add.error:") != growing:
-                raise AssertionError(f"{label}: lost status-preserving add edge")
+            if (len(re.findall(rb'^\\w[\\w.]*\\.array\\.create\\.failure(?:[0-9]+)?:', ir,
+                               re.MULTILINE)) != owned or
+                    len(re.findall(rb'^array\\.add\\.error(?:[0-9]+)?:', ir,
+                                   re.MULTILINE)) != growing):
+                raise AssertionError(f"{label}: lost status-preserving create/add failure edges")
             if ir.count(b"switch i32") != 1:
                 raise AssertionError(f"{label}: ambiguous resource error classifier")
             if (ir.count(b"array.failure.limit:") != 1 or
