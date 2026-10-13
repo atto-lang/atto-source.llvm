@@ -473,6 +473,29 @@ The pre-existing `native_int_array_llvm_abi` test instead uses
 lowering. The same pinned sources are mirrored onto a funded private runner
 for real LLVM 18 compilation when repository Actions minutes are exhausted.
 
+## Experimental native checked append (NOT a public Result type)
+
+The native LLVM compiler accepts `array.try_add(value)` in an i64
+expression on a live, uniquely mutable `Array<int>` local or direct owned
+class field. Its **internal runtime status** is 0 (OK), 1 (quota or size
+limit), or 2 (allocation failure). On either resource failure the guest
+remains in control, the array stays live with its committed data intact,
+and normal lexical cleanup owns the handle until its ordinary exit.
+
+The compiler checks the full closed status domain *before* exposing it to
+guest arithmetic. An unexpected ABI status takes exactly-once owner cleanup
+followed by terminal invariant failure; it is never catchable. Bare ignored
+`try_add` statements, unmanaged receivers, invalid arity, loans and
+unsupported wasm targets still fail closed.
+
+**Release boundary:** This numeric scalar is a temporary native-only
+compiler/ABI proving primitive. It is **not** a stable Oreslang
+`Result<void, ArrayError>` or portable Java/GraalVM feature. Public
+admission requires a nominal sum type and exhaustive match lowering, with
+proof that the error cannot be implicitly discarded or interpreted as an
+unrelated integer. General `throw`/`raise`/`panic` and supervisor
+unwinding are distinct work.
+
 ## Required compiler follow-ups
 
 1. Complete class/actor-lifetime regions and *recoverable* transactional
