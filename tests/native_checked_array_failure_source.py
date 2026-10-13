@@ -138,7 +138,8 @@ def verify(compiler, clang, root, sanitizers):
         ):
             source = temp / f"{label}.ores"
             source.write_text(src, encoding="utf-8")
-            compiled = run([str(compiler), str(source)])
+            flags = ["--experimental-owned-int"] if heap else []
+            compiled = run([str(compiler), *flags, str(source)])
             if compiled.returncode or compiled.stderr or not compiled.stdout:
                 raise AssertionError(f"{label}: compiler failure {compiled.stderr!r}")
             ir = compiled.stdout
