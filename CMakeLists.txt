@@ -494,6 +494,18 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_handle_read_call
         actor-handle-read-call-reject.ores
         --diagnostic "state read/write loan cannot invoke arbitrary functions")
+    oreslang_contract_test(reject_actor_method_state_bool_write_reject
+        actor-method-state-bool-write-reject.ores
+        --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_method_state_bool_result_reject
+        actor-method-state-bool-result-reject.ores
+        --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_tagged_state_bool_write_reject
+        actor-tagged-state-bool-write-reject.ores
+        --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_boolean_state_bool_result_reject
+        actor-boolean-state-bool-result-reject.ores
+        --diagnostic "actor state callback requires int expressions")
     # All tagged/boolean/ordinary state callbacks need explicit with rows.
     oreslang_contract_test(reject_tagged_missing_effect_bound
         actor-tagged-missing-effect-bound-reject.ores
