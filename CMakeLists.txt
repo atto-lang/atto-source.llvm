@@ -1598,3 +1598,11 @@ if(BUILD_TESTING)
     oreslang_contract_test(refreshed_actor_unknown_write actor-unknown-write.ores --diagnostic "cannot assign immutable or unknown actor field")
     oreslang_contract_test(refreshed_actor_unsupported_field actor-unsupported-field.ores --diagnostic "expected 'int'")
 endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND ORE_CLANG)
+    add_test(NAME native_aot_driver
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_driver.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    set_tests_properties(native_aot_driver PROPERTIES TIMEOUT 30)
+endif()
