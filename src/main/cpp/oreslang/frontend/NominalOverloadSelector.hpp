@@ -127,12 +127,8 @@ inline std::size_t resolve_nominal_overload_static(
 // canonical fully-qualified enum identities across Java/LLVM/Wasm targets.
 // Hex encoding is injective and cannot alias a '$' source identifier.
 inline std::string nominal_overload_link_key(const NominalOverloadSlot& slot) {
-    // Public symbol spelling is an encoding of *every* component, never a
-    // concatenation of unescaped user input. The tagged length/hex encoding
-    // is injective even for '
-
-} // namespace oreslang
-, '::', non-ASCII bytes or embedded NUL.
+    // Fully encode the owner, function name, arity and parameter tags.
+    // Raw concatenation would permit distinct source identities to alias.
     static constexpr char hex[] = "0123456789abcdef";
     if (slot.owner.empty() || slot.owner.size() > 1024
             || slot.name.empty() || slot.name.size() > 128
@@ -150,10 +146,7 @@ inline std::string nominal_overload_link_key(const NominalOverloadSlot& slot) {
             + "$n" + encode(slot.name)
             + "$a" + std::to_string(slot.parameter_tags.size());
     for (const auto& tag : slot.parameter_tags) {
-        if (!tag) {
-            key += "$u";
-            continue;
-        }
+        if (!tag) { key += "$u"; continue; }
         if (tag->identity.empty() || tag->identity.size() > 1024)
             throw std::invalid_argument("invalid overload tag identity length");
         key += tag->kind == NominalTypeTag::Kind::Enum ? "$e" : "$p";
