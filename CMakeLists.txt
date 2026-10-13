@@ -789,6 +789,17 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-effect-unwind-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-effect-unwind-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_typed_exception_unwind COMMAND oreslang-effect-unwind-test)
+    # Combined substrate regression: native unwind status reaches the parent
+    # reserved CONTROL lane without executing child-side guest callbacks.
+    add_executable(oreslang-effect-supervisor-e2e-test
+        tests/effect_supervisor_end_to_end_test.cpp)
+    target_include_directories(oreslang-effect-supervisor-e2e-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-effect-supervisor-e2e-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-effect-supervisor-e2e-test PRIVATE Threads::Threads)
+    add_test(NAME native_effect_unwind_supervisor_end_to_end
+        COMMAND oreslang-effect-supervisor-e2e-test)
     # Actor-local uncaught routing never admits PANIC into guest callbacks.
     add_executable(oreslang-actor-local-failure-test tests/actor_local_failure_policy_test.cpp)
     target_include_directories(oreslang-actor-local-failure-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
