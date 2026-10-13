@@ -600,6 +600,17 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_state_rw_fifo_admission COMMAND oreslang-actor-state-rw-gate-test)
     set_tests_properties(native_actor_state_rw_fifo_admission PROPERTIES TIMEOUT 20)
+    # Compiled without the internal test hook. Prove that the raw
+    # completion and READY-claim entrypoints cannot be called from ordinary
+    # production C++ units, even if someone reorders public/private scopes.
+    add_executable(oreslang-actor-state-rw-api-boundary-test
+        tests/actor_state_rw_production_api_boundary_test.cpp)
+    target_include_directories(oreslang-actor-state-rw-api-boundary-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-state-rw-api-boundary-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_rw_production_api_sealed
+        COMMAND oreslang-actor-state-rw-api-boundary-test)
     add_executable(oreslang-actor-state-rw-continuations-test
         tests/actor_state_read_write_continuations_test.cpp)
     target_include_directories(oreslang-actor-state-rw-continuations-test PRIVATE
