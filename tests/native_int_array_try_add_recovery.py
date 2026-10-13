@@ -127,7 +127,7 @@ def verify(compiler: Path, clang: Path, root: Path, sanitizers: bool):
         if built.returncode != 0 or built.stderr or not built.stdout.startswith(b"; ModuleID"):
             raise AssertionError(f"compiler failed: {built.stderr!r}")
         checked_checks = re.findall(
-            rb"array\\.try_add\\.known\\.status(?:\\d+)? = icmp ule i32",
+            rb"array\.try_add\.known\.status(?:\d+)? = icmp ule i32",
             built.stdout)
         add_calls = built.stdout.count(b"call i32 @oreslang_int_array_try_add(")
         if add_calls != 6 or len(checked_checks) != 2:
