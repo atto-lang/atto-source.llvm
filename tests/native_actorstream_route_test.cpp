@@ -108,6 +108,9 @@ static void authenticated_typed_reply(std::size_t n) {
         actors[0], actors[1], "wrong-domain", reply); });
     rejected([&] { route.complete_source_with_reply(
         actors[0], actors[1], "canonical-domain-v2", {}); });
+    rejected([&] { route.complete_source_with_reply(
+        actors[0], actors[1], "canonical-domain-v2",
+        std::vector<std::uint8_t>(1024 * 1024 + 1, 0x42)); });
     check(route.phase() == 2*n-1, "invalid reply advanced source terminal phase");
     route.complete_source_with_reply(
         actors[0], actors[1], "canonical-domain-v2", reply);
@@ -128,6 +131,37 @@ static void authenticated_typed_reply(std::size_t n) {
     route.fail();
     check(route.completed_reply()[0] == 0x92,
           "late post-success failure invalidated already-finalized result");
+}
+static void typed_completion_races_abort() {
+    // A source return may race a fatal CONTROL event. Even if the return
+    // claims the terminal source phase first, failure before whole-route
+    // physical DONE MUST permanently prevent publishing typed bytes.
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        auto a = ids(3);
+        Route route(a, "domain");
+        advance_to(route, a, 2 * a.size() - 1, "domain");
+        std::atomic<bool> start{false};
+        std::thread publisher([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            try {
+                route.complete_source_with_reply(
+                    a[0], a[1], "domain", {0x92, 0xa1, 0x52});
+            } catch (const std::logic_error&) {
+                // Failure won the source-publish race.
+            }
+        });
+        std::thread failure([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            route.fail();
+        });
+        start.store(true, std::memory_order_release);
+        publisher.join();
+        failure.join();
+        for (auto actor : a) route.physical_done(actor, true);
+        check(route.done() == Route::Done::Failed,
+              "terminal failure lost the typed-result publication race");
+        rejected([&] { route.completed_reply(); });
+    }
 }
 static void reply_failure_is_not_a_result() {
     auto actors = ids(3);
@@ -156,6 +190,7 @@ int main() {
         authenticated_typed_reply(n);
     }
     reply_failure_is_not_a_result();
+    typed_completion_races_abort();
     for (auto n: {1u, 17u}) {
         try { Route invalid(ids(n), "PipeMessages"); }
         catch (const std::invalid_argument&) { continue; }
