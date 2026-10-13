@@ -19,7 +19,7 @@ def main():
     compiler = args.compiler
     fixture = pathlib.Path(args.fixture)
     cases = [
-        ("val count: int = 0;", "val count: int = 0;"),
+        ("val count: int = 0;", "val count: int = -1;"),
         ("count = count + 1;", "count = count + 2;"),
         ("while (count < 1000)", "while (count < 2000000000)"),
         ("return count;", "return 17;"),
