@@ -94,15 +94,21 @@ terminal/origin pairs and invalid error-code ranges must fail closed without
 consuming the reserved slot. Valid duplicate publications remain idempotent.
 Cancellation and host-fatal control remain distinct from guest Panic.
 
-The Java `ExceptionBoundaryPolicy` and native
-`RootFailureBoundary.hpp` helpers encode the **same normalization rule** for
-a non-actor task/root boundary but are currently pure policy helpers. Native
-`EffectSupervisorBridge`, `SupervisorControlTurn`, and
-`SupervisorFailureLane` now apply actor-boundary panic normalization;
-this does **not** imply that Java `ActorRuntime`, Java
-`LinkedProgramRunner`, or either source compiler has been wired to the
-typed exceptional-effect ABI. No source parity claim is permitted until
-end-to-end fixtures pass on identical source and binaries.
+Java `ExceptionBoundaryPolicy` and native `RootFailureBoundary.hpp`
+encode the same **non-actor task/root normalization policy**, but the root
+launcher/task integration is still outstanding. Java `ActorRuntime` now
+classifies explicit compiler-bridge `GuestEffectSignal` instances on real
+actor finalization and exposes one immutable, bounded `ActorFailureNotice`
+with typed origin, uint32 code, optional typed cleanup-secondary cause and
+sanitized diagnostic type. Ordinary JVM exceptions are never fabricated as
+guest Throw/Raise; actor cancellation and host-fatal errors remain distinct.
+**This Java notice is host-observable metadata, not yet an admitted parent
+supervisor priority CONTROL event.** Native `EffectSupervisorBridge`,
+`SupervisorControlTurn`, and `SupervisorFailureLane` normalize actual
+native actor CONTROL publication to Panic while retaining origin. Neither
+`LinkedProgramRunner` nor either source compiler is wired for executable
+guest exceptional syntax. Host policy/runtime tests do not constitute
+cross-backend source parity or AOT proof.
 
 ## Required source-level parity release gates
 
