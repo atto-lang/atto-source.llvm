@@ -114,6 +114,9 @@ struct Function {
     std::string match_subject;
     std::vector<ReceiveBooleanArm> boolean_arms;
     std::vector<TaggedReceiveArm> tagged_arms;
+    // Synchronous actor-method return from a sealed i64 state loan.
+    // Never a state reference, never a suspendable or nested callback.
+    std::unique_ptr<StateLoan> method_state_loan;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
