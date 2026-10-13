@@ -13,7 +13,7 @@ must fail closed instead of producing misleading native code.
 |---|---|---|---|---|
 | throw(E) | yes, typed | `None` | not needed | `on_throw` |
 | raise(E) | no | no | yes, explicit | `on_raise` |
-| panic(PanicInfo) | no | no | restricted recovery | `on_panic` |
+| panic(PanicInfo) | no | no | no guest recovery | parent's supervisor `on_panic` |
 | cancel | no | no | no | `on_cancel` |
 | fatal host failure | no | no | no | `on_host_failure` when containable |
 
@@ -35,10 +35,14 @@ a stronger failure. An ordinary cleanup throw may replace an ordinary return.
 Cleanup operations cannot extend a borrow past its lifetime or resume a dead
 actor.
 
-A `recover` is an explicit, restricted effect boundary, not an implicit
-`catch all`. The compiler must require recovery capability for panic and
-validate actor state restoration before resumption. No resumable panic is
-claimed in either backend yet. Host panics should not be translated to normal
+A `recover` is an explicit, restricted `raise` recovery boundary, not an
+implicit `catch all`. The compiler must verify recovery authority and a safe
+checkpoint before resuming, with no leaked actor state loans. An actor's own
+`panic` **always bypasses guest recover and actor-local hooks** and is published
+to its parent/root supervisor CONTROL lane while the hosting runtime survives.
+The parent's `on_panic` operates on a child-failure envelope, never in the
+failing actor. The failure remains typed `Panic`; it is not the default upgrade
+for an unhandled throw or raise. Host panics should not be translated to normal
 Oreslang `throw` automatically.
 
 ## Typed supervisor protocol
