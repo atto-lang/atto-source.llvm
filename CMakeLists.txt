@@ -465,6 +465,30 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_handle_noncritical_write
         actor-handle-read-mut-reject.ores
         --diagnostic "read-only actor state loan cannot mutate state")
+    # Java/Graal-compatible explicit critical mode spellings. READ never
+    # acquires write authority, even with an inclusive `with` effect row.
+    oreslang_contract_test(native_handle_explicit_critical_read
+        actor-handle-explicit-critical-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_handle_explicit_critical_write
+        actor-handle-explicit-critical-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_using_explicit_critical_read
+        actor-using-explicit-critical-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_using_explicit_critical_write
+        actor-using-explicit-critical-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_using_read_critical_write
+        actor-using-critical-write-reject.ores
+        --diagnostic "using state.read cannot request a critical write loan")
+    oreslang_contract_test(reject_using_write_critical_read
+        actor-using-critical-read-reject.ores
+        --diagnostic "using state.write requires critical write callback")
+    oreslang_contract_test(reject_handle_critical_read_mutation
+        actor-handle-critical-read-mutate-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+
     oreslang_contract_test(reject_handle_read_await
         actor-handle-read-await-reject.ores
         --diagnostic "state read/write loan cannot suspend or nest")
