@@ -28,6 +28,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only fairness budget; not evidence of compiled Oreslang suspension.
+    add_executable(oreslang-native-reduction-quantum-test
+        tests/native_cooperation_quantum_test.cpp)
+    target_include_directories(oreslang-native-reduction-quantum-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-reduction-quantum-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_reduction_quantum_watchdog_host_only
+        COMMAND oreslang-native-reduction-quantum-test)
+    set_tests_properties(native_reduction_quantum_watchdog_host_only
+        PROPERTIES TIMEOUT 15)
+
     # Native Array<int> substrate, independent of source-level admission.
     # Invalid operations must abort even in Release/NDEBUG.
     add_executable(oreslang-native-int-array-region-test
@@ -164,6 +176,22 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_unique_parallel_tokens
         COMMAND oreslang-owned-i64-token-concurrent-regions-test)
     set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
+
+    # Independent thread-confined regions may allocate concurrently. The
+    # process-global handle allocator must never issue duplicate tokens.
+    add_executable(oreslang-native-int-array-token-concurrent-regions-test
+        tests/native_int_array_token_concurrency_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-token-concurrent-regions-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-int-array-token-concurrent-regions-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-native-int-array-token-concurrent-regions-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-native-int-array-token-concurrent-regions-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_int_array_unique_parallel_tokens
+        COMMAND oreslang-native-int-array-token-concurrent-regions-test)
+    set_tests_properties(native_int_array_unique_parallel_tokens PROPERTIES TIMEOUT 30)
     # Header-only native arena proof: independent actor byte regions without
     # tracing GC. This is not yet a compiled Oreslang actor object heap.
     add_executable(oreslang-actor-owned-heap-test tests/actor_owned_heap_test.cpp)
@@ -272,6 +300,36 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+
+    # Reject all unsupported source-level scheduler suspension until verified
+    # heap-owned continuations exist. The harness rejects any partial LLVM IR.
+    oreslang_contract_test(native_rt_while_loop_failclosed
+        native-rt-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_for_loop_failclosed
+        native-rt-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_unbounded_loop_failclosed
+        native-rt-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_failclosed
+        native-rt-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_expression_failclosed
+        native-rt-cooperate-expression-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_nested_while_failclosed
+        native-rt-nested-while-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_for_failclosed
+        native-rt-nested-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_loop_failclosed
+        native-rt-nested-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_nested_cooperate_failclosed
+        native-rt-nested-cooperate-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
     add_executable(oreslang-ownership-cfg-dataflow-test
         tests/ownership_cfg_dataflow_test.cpp)
