@@ -58,6 +58,29 @@ pub fnc main(): int {
   return rt take f.a;
 }
 """, "cannot take final class field"),
+    "final-after-owner-move": ("""define class Foo as
+  final int a: 5;
+end
+pub fnc main(): int {
+  let mut Foo f = new Foo();
+  let mut Foo moved = rt take(f);
+  moved.a = 9;
+  return moved.a;
+}
+""", "cannot reassign final class field"),
+    "final-conditional-write": ("""define class Foo as
+  final int a: 5;
+end
+pub fnc main(): int {
+  let mut Foo f = new Foo();
+  if (f.a == 5) {
+    f.a = 6;
+  } else {
+    f.a = 7;
+  } fi
+  return f.a;
+}
+""", "cannot reassign final class field"),
     "bad-native-field-type": ("""define class Foo as
   string a: "100";
 end
