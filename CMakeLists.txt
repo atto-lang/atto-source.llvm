@@ -506,6 +506,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_boolean_state_bool_result_reject
         actor-boolean-state-bool-result-reject.ores
         --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_state_boolean_initializer
+        actor-state-bool-init-reject.ores
+        --diagnostic "actor state initializer requires int expression")
     # All tagged/boolean/ordinary state callbacks need explicit with rows.
     oreslang_contract_test(reject_tagged_missing_effect_bound
         actor-tagged-missing-effect-bound-reject.ores
