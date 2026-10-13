@@ -495,6 +495,27 @@ void validate_i64_ownership(const Program& program) {
                 recv.moved_fields.erase(cleanup.field);
             }
         };
+        if (function.caught_throw_value) {
+            // Type-check payload before unwind; each scoped field cleanup
+            // is verified at its LIFO execution point.
+            check_value(*function.caught_throw_value, locals, functions);
+            for (auto it = function.caught_throw_defers.rbegin();
+                 it != function.caught_throw_defers.rend(); ++it) {
+                const auto& effect = *it;
+                auto& recv = checked_field(effect.receiver, effect.field,
+                                           effect.offset, locals);
+                if (recv.class_array_fields.count(effect.field))
+                    throw std::runtime_error("ownership violation: cannot reassign owned Array<int> class field");
+                if (recv.mode == Mode::Borrow || (recv.mode == Mode::Value && !recv.mutable_owner))
+                    throw std::runtime_error("ownership violation: caught throw defer requires mutable receiver");
+                if (recv.exclusive_loan || recv.shared_loans)
+                    throw std::runtime_error("ownership violation: caught throw defer conflicts with active borrow");
+                check_value(*effect.expression, locals, functions);
+                recv.moved_fields.erase(effect.field);
+            }
+            if (!locals.emplace(function.catch_binding, LocalOwnership{}).second)
+                throw std::runtime_error("native caught throw binding shadows live local");
+        }
         const Locals cfg_entry = locals;
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the

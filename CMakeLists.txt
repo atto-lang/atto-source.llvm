@@ -365,6 +365,22 @@ if(BUILD_TESTING)
             native-try-finally-return-snapshot.ores
             --run 246 --clang "${ORE_CLANG}")
     endif()
+    # First executable native typed-i64 throw/catch CFG; Java still reserves
+    # source throw, so this is NOT cross-backend guest-source parity.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_caught_throw_unwind_lifo
+            native-caught-throw-unwind-lifo.ores
+            --ir "throw.cleanup" --run 41 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_caught_throw_payload
+            native-caught-throw-payload.ores
+            --ir "throw.catch" --run 43 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(reject_caught_throw_nested_call
+        native-caught-throw-nested-call-reject.ores
+        --diagnostic "native caught throw requires nonthrowing int payload")
+    oreslang_contract_test(reject_caught_throw_unsafe_defer
+        native-caught-throw-defer-call-reject.ores
+        --diagnostic "native caught throw defer requires named class field write")
     oreslang_contract_test(reject_finally_return_override
         native-finally-return-reject.ores --diagnostic "cannot escape finally")
     oreslang_contract_test(reject_finally_break_override
