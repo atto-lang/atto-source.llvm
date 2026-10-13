@@ -20,26 +20,26 @@ end
 POSITIVES = {
     "class-array-whole-move": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
-  shelf.first.add(19);
   let mut Shelf moved = rt take(shelf);
+  moved.first.add(19);
   moved.second.add(23);
   return moved.first.get(0) + moved.second.get(0);
 }
 """, 42, 2),
     "class-array-chain-moves": (CLASS + """pub fnc main(): int {
   let mut Shelf original = new Shelf();
-  original.first.add(6);
   let mut Shelf middle = rt take(original);
   let mut Shelf final_owner = rt take(middle);
+  final_owner.first.add(6);
   final_owner.second.add(36);
   return final_owner.first.get(0) + final_owner.second.get(0);
 }
 """, 42, 2),
     "class-array-move-followed-by-allocation": (CLASS + """pub fnc main(): int {
   let mut Shelf original = new Shelf();
-  original.first.add(10);
   let mut Shelf relocated = rt take(original);
   let mut Shelf new_one = new Shelf();
+  relocated.first.add(10);
   new_one.first.add(11);
   relocated.second.add(21);
   return relocated.first.get(0) + relocated.second.get(0) + new_one.first.get(0);
@@ -47,8 +47,8 @@ POSITIVES = {
 """, 42, 4),
     "class-array-move-guarded-exit": (CLASS + """pub fnc main(): int {
   let mut Shelf original = new Shelf();
-  original.first.add(42);
   let mut Shelf relocated = rt take(original);
+  relocated.first.add(42);
   if (relocated.first.size == 1) { return relocated.first.get(0); } fi
   return 2;
 }
