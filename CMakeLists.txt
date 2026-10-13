@@ -99,6 +99,27 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_source_execution
         native_int_array_source_asan_ubsan PROPERTIES TIMEOUT 180)
 
+    # Verify compiler-generated checked array allocation/growth actually
+    # destroys exactly the initialized owners on every injected fault.
+    # Requires the Linux ELF --wrap linker protocol.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_checked_array_source_failure_cleanup
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_checked_array_failure_source.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_checked_array_source_failure_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_checked_array_failure_source.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --sanitizers)
+        set_tests_properties(native_checked_array_source_failure_cleanup
+            native_checked_array_source_failure_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+
     # Real native guest class-owned Array<int> fields, independent of the
     # handcrafted ABI fixture and lexical-array-only source admission.
     add_test(NAME native_class_owned_array_source_execution
