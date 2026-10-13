@@ -78,6 +78,22 @@ storage. The token is **not** a cryptographic capability or authorization
 credential. A handle is only valid with its original region while the slot
 remains live. All element reads/writes are bounds-checked. No element pointer
 escapes. Destroying an array zeroizes all reserved storage before freeing it.
+Growth likewise allocates a fresh zero-filled buffer, copies live elements,
+and scrubs the entire old capacity **before** freeing the old buffer (rather
+than relying on `realloc`, which may release the old block without wiping).
+A failed growth leaves existing values, length and reservation metadata
+unchanged. The test-only backing-storage scrub counter verifies each growth
+and final destruction, separately from metadata wiping.
+
+Every live-handle operation first validates the internal slot invariants:
+`length <= capacity <= 65,536`, the capacity fits the region reservation
+accounting, and backing storage is present exactly when capacity is nonzero.
+This includes no-op `try_reserve`, `try_add` without growth, reads, writes
+and destruction; corrupt metadata triggers a process abort rather than being
+treated as quota exhaustion or successful access. Recycled slots must have
+fully cleared metadata. Test-only corrupted-length injection verifies the
+fail-closed behavior in child processes on each access path; it is unavailable
+in production runtime builds.
 Closing a region requires every owned array to have been dropped.
 
 Invalid inputs, exhaustion, stale/cross-region handles, allocation failure
@@ -102,7 +118,7 @@ ordinary resource exhaustion from ownership corruption.
   growth for `try_add` would exceed the aggregate region budget but one
   additional element fits, it retries with the exact minimum required
   capacity. Failed fallback allocation leaves previously committed data
-  unchanged. No-op reserve is always successful. Over-limit size/count/budget returns `LIMIT`;
+  unchanged. No-op reserve on an internally consistent live owner is always successful. Over-limit size/count/budget returns `LIMIT`;
   exhausted native memory returns `NO_MEMORY`.
 - `try_prepare_many(region, n, out)` acquires up to 64 independent empty
   arrays without publishing any output handle until all acquisitions pass.
