@@ -13,14 +13,24 @@ define match pattern NumberMail as
 end
 
 define actor Accumulator<messages=NumberMail> as
-    let total: int = 0;
+    state { total: int = 0; }
 
-    receive(NumberMail m) {
+    receive(NumberMail m) with state.read, state.write {
         do match m over {
-            on Numbers.Add as n { total = total + n; }
-            on Numbers.Sub as n { total = total - n; }
+            on Numbers.Add as n {
+                const next = self.handle_state(critical |state| -> {
+                    state.total = state.total + n;
+                    return state.total;
+                });
+            }
+            on Numbers.Sub as n {
+                const next = self.handle_state(critical |state| -> {
+                    state.total = state.total - n;
+                    return state.total;
+                });
+            }
         }
-        return total;
+        return next;
     }
 end
 
