@@ -422,6 +422,44 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_handle_read_call
         actor-handle-read-call-reject.ores
         --diagnostic "state read/write loan cannot invoke arbitrary functions")
+    # Canonical scoped actor state in ordinary methods (restricted int
+    # profile). No direct self.state access or live-loan suspension.
+    foreach(mode read-handle read-using write-handle write-using write-only)
+        oreslang_contract_test(native_actor_method_${mode}
+            actor-method-${mode}.ores
+            --ir "oreslang_actor_Counter_")
+    endforeach()
+    foreach(mode read-handle read-using)
+        oreslang_contract_test(native_actor_method_${mode}_readonly_ir
+            actor-method-${mode}.ores
+            --ir-not "call .*@ores_actor_i64_heap_field_write")
+    endforeach()
+    foreach(mode write-handle write-using write-only)
+        oreslang_contract_test(native_actor_method_${mode}_write_ir
+            actor-method-${mode}.ores
+            --ir "call void @ores_actor_i64_heap_field_write")
+    endforeach()
+    oreslang_contract_test(native_actor_method_write_only_no_read_ir
+        actor-method-write-only.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    oreslang_contract_test(reject_actor_method_no_with
+        actor-method-no-with-reject.ores
+        --diagnostic "actor method state loan requires explicit with effects")
+    oreslang_contract_test(reject_actor_method_underdeclared_read
+        actor-method-missing-read-reject.ores
+        --diagnostic "state.read operation not permitted by with effects")
+    oreslang_contract_test(reject_actor_method_underdeclared_write
+        actor-method-missing-write-reject.ores
+        --diagnostic "state.write loan not permitted by with effects")
+    oreslang_contract_test(reject_actor_method_read_moderate
+        actor-method-read-mutate-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_actor_method_reference_escape
+        actor-method-loan-escape-reject.ores
+        --diagnostic "actor state reference cannot escape handle_state callback")
+    oreslang_contract_test(reject_actor_method_suspension
+        actor-method-suspend-reject.ores
+        --diagnostic "state read/write loan cannot suspend or nest")
     # Function-level 'with' effect upper bound is distinct from scoped
     # 'using' acquisition and sealed handle_state authority.
     foreach(mode read write)
