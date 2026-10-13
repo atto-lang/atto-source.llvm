@@ -53,6 +53,22 @@ if(BUILD_TESTING)
     add_test(NAME native_int_array_region_security
         COMMAND oreslang-native-int-array-region-test)
 
+    # Checked, recoverable internal allocation/resize + staged prepare/commit.
+    # Failpoint injection only exists in this test executable; existing
+    # compiler-generated abort ABI and production runtime remain unchanged.
+    add_executable(oreslang-native-int-array-transaction-test
+        tests/native_int_array_transaction_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-transaction-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-int-array-transaction-test PRIVATE
+        ORESLANG_NATIVE_TEST_ALLOC_FAILURE=1)
+    target_compile_options(oreslang-native-int-array-transaction-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Werror -Wpedantic>)
+    add_test(NAME native_int_array_transaction_recovery
+        COMMAND oreslang-native-int-array-transaction-test)
+    set_tests_properties(native_int_array_transaction_recovery PROPERTIES TIMEOUT 120)
+
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_NATIVE_ARRAY_CLANG)
