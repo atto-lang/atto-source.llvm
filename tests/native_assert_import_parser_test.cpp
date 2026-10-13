@@ -172,12 +172,27 @@ int main() {
             "import module Assert from \"std/assert\"; "
             "pub fnc main(): int { return Assert::unknown(1); }",
             "unknown sealed Assert member");
-        auto qualified_bool = oreslang::parse_program(
+        // Imported bool/String parameters are not yet representable by the
+        // native scalar AST. They must not be silently coerced from ints.
+        expect_rejected(
             "import module Assert from \"std/assert\"; "
             "pub fnc check(): bool { return Assert::true(1); } "
-            "pub fnc main(): int { return 0; }");
-        if (qualified_bool.functions[0].result->name != "true")
-            throw std::runtime_error("Assert::true reserved member parsing mismatch");
+            "pub fnc main(): int { return 0; }",
+            "requires typed bool/String argument lowering");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert.false_throws(0); } "
+            "pub fnc main(): int { return 0; }",
+            "requires typed bool/String argument lowering");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { Assert::fail(1); return 0; }",
+            "requires typed bool/String argument lowering");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert::false(0); } "
+            "pub fnc main(): int { return 0; }",
+            "requires typed bool/String argument lowering");
 
 
         // A sealed module name must not be hidden by actor state, implicit
