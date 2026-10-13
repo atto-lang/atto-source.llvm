@@ -282,10 +282,30 @@ private:
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
-            require("let");
-            ClassField field;
+            // Bounded native subset: fixed scalar slots and mutable owned
+            // Array<int> handles. General object/member lowering remains
+            // unsupported, and must fail before LLVM IR is generated.
+            bool fixed = false;
+            bool mutable_referent = false;
+            if (accept("final") || accept("const")) {
+                fixed = true;
+            } else if (accept("val")) {
+                fixed = true;
+                mutable_referent = true;
+            } else {
+                accept("let");
+            }
             if (accept("mut")) {
-                require("Array");
+                if (mutable_referent)
+                    fail("duplicate mut class field qualifier");
+                mutable_referent = true;
+            }
+            ClassField field;
+            field.fixed_binding = fixed;
+            field.mutable_referent = mutable_referent;
+            if (accept("Array")) {
+                if (!mutable_referent)
+                    fail("native Array<int> field requires mut referent capability");
                 require("<");
                 require("int");
                 require(">");
@@ -293,7 +313,8 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":") && !accept("="))
+                    fail("class field requires declaration-site initializer");
                 require("new");
                 require("Array");
                 require("<");
@@ -306,7 +327,9 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":") && !accept("="))
+                    fail(fixed ? "final class field requires declaration-site initializer" :
+                                 "class field requires declaration-site initializer");
                 if (token_.kind != Kind::Integer)
                     fail("class field requires i64 literal initializer");
                 field.initial = integer_literal();
