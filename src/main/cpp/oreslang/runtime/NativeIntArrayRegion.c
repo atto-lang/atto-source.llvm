@@ -168,6 +168,14 @@ OresNativeIntArrayStatus oreslang_int_array_try_add(
         if (capacity > MAX_ARRAY_ELEMENTS) capacity = MAX_ARRAY_ELEMENTS;
         OresNativeIntArrayStatus status =
             oreslang_int_array_try_reserve(region, handle, capacity);
+        /* A geometric reservation can exceed the remaining regional quota
+         * even when exactly one additional element still fits. Fall back to
+         * the minimum append capacity, but only on LIMIT: NO_MEMORY remains
+         * a recoverable, unchanged-state allocation failure. */
+        if (status == ORES_NATIVE_ARRAY_LIMIT &&
+                capacity > slot->length + 1)
+            status = oreslang_int_array_try_reserve(
+                region, handle, slot->length + 1);
         if (status != ORES_NATIVE_ARRAY_OK) return status;
     }
     slot->values[slot->length] = value;

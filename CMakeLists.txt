@@ -143,6 +143,22 @@ if(BUILD_TESTING)
     add_test(NAME native_owned_region_unique_parallel_tokens
         COMMAND oreslang-owned-i64-token-concurrent-regions-test)
     set_tests_properties(native_owned_region_unique_parallel_tokens PROPERTIES TIMEOUT 25)
+
+    # Independent thread-confined regions may allocate concurrently. The
+    # process-global handle allocator must never issue duplicate tokens.
+    add_executable(oreslang-native-int-array-token-concurrent-regions-test
+        tests/native_int_array_token_concurrency_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-token-concurrent-regions-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-int-array-token-concurrent-regions-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-native-int-array-token-concurrent-regions-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-native-int-array-token-concurrent-regions-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_int_array_unique_parallel_tokens
+        COMMAND oreslang-native-int-array-token-concurrent-regions-test)
+    set_tests_properties(native_int_array_unique_parallel_tokens PROPERTIES TIMEOUT 30)
     # Header-only native arena proof: independent actor byte regions without
     # tracing GC. This is not yet a compiled Oreslang actor object heap.
     add_executable(oreslang-actor-owned-heap-test tests/actor_owned_heap_test.cpp)
