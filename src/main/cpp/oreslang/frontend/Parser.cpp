@@ -1041,7 +1041,12 @@ private:
                                              + expr.name + "' at byte "
                                              + std::to_string(expr.offset));
                 }
+                // All callable parameters in the restricted native
+                // profile are declared int. Even a call embedded inside a
+                // message payload must not coerce bool to a native i64.
                 for (const auto& arg : expr.arguments) {
+                    if (contains_boolean(*arg))
+                        throw std::runtime_error("int function argument cannot contain boolean");
                     validate_expression(*arg, parameters, functions);
                 }
                 return;
@@ -1095,6 +1100,18 @@ private:
         for (const auto& arg : e.arguments)
             if (contains_boolean(*arg)) return true;
         return false;
+    }
+
+    static void validate_int_expression(const Expression& expr,
+                                        const std::unordered_set<std::string>& parameters,
+                                        const std::unordered_map<std::string, std::size_t>& functions) {
+        // In this bootstrap profile all user parameters, owned scalar
+        // locals and scalar returns have int type. Boolean literals and
+        // compositions must not be silently lowered as i64. Typed bool
+        // message payloads continue through validate_expression directly.
+        if (contains_boolean(expr))
+            throw std::runtime_error("int expression cannot contain boolean");
+        validate_expression(expr, parameters, functions);
     }
 
     static bool reads_name(const Expression& e, const std::string& name) {
@@ -1285,7 +1302,7 @@ private:
                     throw std::runtime_error("scalar local shadows actor reference '" + local.name + "'");
                 // The initializer is checked BEFORE publication: x=x+1 or
                 // forward references cannot read uninitialized stack memory.
-                validate_expression(*local.initializer, available, functions);
+                validate_int_expression(*local.initializer, available, functions);
                 if (!available.insert(local.name).second) {
                     throw std::runtime_error("duplicate owned local '" + local.name
                                              + "' at byte " + std::to_string(local.offset));
@@ -1366,7 +1383,7 @@ private:
                 }
                 validate_expression(*send.payload, available, functions);
             }
-            validate_expression(*fn.result, available, functions);
+            validate_int_expression(*fn.result, available, functions);
             for (const auto& name : fn.actor_stops) {
                 if (!liveActors.erase(name))
                     throw std::runtime_error("invalid or repeated actor stop '" + name + "'");
@@ -1462,7 +1479,7 @@ private:
                         throw std::runtime_error("actor parameter shadows field '" + param + "'");
                 }
                 for (const auto& local : method.locals) {
-                    validate_expression(*local.initializer, available, functions);
+                    validate_int_expression(*local.initializer, available, functions);
                     if (!available.insert(local.name).second)
                         throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
                 }
@@ -1719,7 +1736,7 @@ private:
                                 if (outputCase == output->cases.end() || !outputCase->has_payload
                                     || outputCase->payload.kind != MessageShape::Kind::Integer)
                                     throw std::runtime_error("pipeline route requires typed int enum case");
-                                validate_expression(*arm.route_payload, armAvailable, functions);
+                                validate_int_expression(*arm.route_payload, armAvailable, functions);
                             }
                             if (arm.binds_payload) {
                                 if (!matched->has_payload)
@@ -1782,7 +1799,7 @@ private:
                             }))
                         returnAvailable.insert(firstLoan->result_binding);
                 }
-                validate_expression(*method.result, returnAvailable, functions);
+                validate_int_expression(*method.result, returnAvailable, functions);
             }
             // Static variant coverage alone cannot authorize execution:
             // per-case MessagePack DATA and typed continuation lowering
