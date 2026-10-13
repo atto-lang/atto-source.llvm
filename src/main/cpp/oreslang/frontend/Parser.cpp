@@ -506,6 +506,7 @@ private:
                 // Preserve the Java/Graal distinction between immutable
                 // let Class and exclusively borrowable let mut Class.
                 binding.owner_mutable = accept("mut");
+                reject_unlowered_result_type();
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
                 if (token_.text == "Array") {
@@ -552,6 +553,7 @@ private:
                 // loans. Preserve the distinction for native ownership checks.
                 binding.owner_mutable = token_.text == "val";
                 advance();
+                reject_unlowered_result_type();
                 binding.name = identifier();
                 // Distinguish actor capabilities from scalar data before IR.
                 // Unsupported generic futures never become fake blocking calls.
@@ -560,6 +562,7 @@ private:
                 SourceType declared_type;
                 bool typed_actor_ref = false;
                 if (explicit_type) {
+                    reject_unlowered_result_type();
                     if (accept("ActorRef")) {
                         require("<");
                         declared_type.kind = SourceType::Kind::ActorRef;
