@@ -86,3 +86,12 @@ unknown params, arity failures, effectful expressions, and owned-array denials.
 These fixtures are currently committed but **not validated by a running CI
 worker**. This implementation must not be represented as backend parity until
 real exact-tree compiled native and GraalVM results pass.
+
+## Branch integration and source identity
+
+Main has advanced with overlapping parser, codegen, ownership and CMake
+changes. GitHub currently reports this draft PR as merge-conflicted.
+A conflict-aware rebase is required; neither replacement of main files
+with stale versions nor force-merge is acceptable. A source-identical
+native Pair constructor guest has been added to the Java test suite and
+the LLVM CTest fixtures (expected result 40); it is not yet executed.
