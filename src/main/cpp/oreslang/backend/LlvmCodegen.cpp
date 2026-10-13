@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -929,8 +928,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         auto* zero = llvm::ConstantInt::get(i64, 0);
         auto* one = llvm::ConstantInt::get(i64, 1);
         auto* two = llvm::ConstantInt::get(i64, 2);
-        auto* max_value = llvm::ConstantInt::getSigned(i64,
-            std::numeric_limits<std::int64_t>::max());
         auto* max_fuel = llvm::ConstantInt::get(i64, 512);
         auto* init_value = llvm::ConstantInt::getSigned(i64, loop.initial);
 
@@ -977,11 +974,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             remaining->addIncoming(bounded, body);
             auto* counter = b.CreateInBoundsGEP(i64, frame, one);
             auto* current = b.CreateLoad(i64, counter, "committed.counter");
-            // The minimal scalar subset saturates, never exhibits native
-            // signed-overflow UB, and always performs one atomic IR-side update.
-            auto* incremented = b.CreateAdd(current, one, "next.counter");
-            auto* next = b.CreateSelect(b.CreateICmpEQ(current, max_value),
-                                        max_value, incremented);
+            // Match the existing native i64 arithmetic: LLVM add without
+            // 'nsw' or 'nuw' wraps modulo 2^64. Do not silently introduce
+            // saturation into the resumable form of the same expression.
+            // A guest-visible update is committed before the next yield.
+            auto* next = b.CreateAdd(current, one, "next.counter");
             b.CreateStore(next, counter);
             auto* left = b.CreateSub(remaining, one);
             auto* expired = b.CreateICmpEQ(left, zero);
