@@ -207,9 +207,14 @@ drop and not unlimited producer waiters. Self-send deadlock on a serial lease
 must fail closed. Ordinary `Channel<T>` stays FIFO; mailbox QoS lives in
 `ActorMailbox`, not in the underlying channel API.
 
-When no higher-level handler is active, dispatcher arbitration checks CONTROL
-first, then schedules URGENT/NORMAL/BULK with **bounded starvation** (e.g.,
-quota-limited weighted deficit round robin, with age promotion and
+STOP/CANCEL/restart fencing is out-of-band runtime authority and cannot
+be queued behind any guest message. When no higher-level handler is active,
+continuation wakeups are preferred, but must have a bounded dispatch burst:
+a perpetually refilled continuation queue must not starve user work.
+A suspended serial/source handler is the exception: its continuation keeps
+the logical handler lease, so another user message cannot run until it ends.
+The dispatcher then schedules URGENT/NORMAL/BULK with **bounded starvation**
+(e.g., quota-limited weighted deficit round robin, age promotion and
 non-starvable NORMAL/BULK service). Within a lane, stable per-sender FIFO is
 maintained; strict global FIFO across priorities is explicitly not promised.
 An urgent message cannot preempt a currently executing guest handler:
