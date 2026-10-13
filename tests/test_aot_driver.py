@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='ores aot ') as directory:
     subprocess.run([driver,str(source),str(output)],env=env,check=True)
     assert subprocess.run([str(output)],env={'PATH':'/nonexistent'}).returncode==42
     original=output.read_bytes()
-    for text in ['import module spin from "spin";\n', 'this is not Oreslang\n']:
+    for text in ['import module spin from "spin";\n', 'this is not Oreslang\n', 'fnc helper(): int { return 42; }\n']:
         source.write_text(text)
         result=subprocess.run([driver,str(source),str(output)],env=env,capture_output=True)
         assert result.returncode!=0
