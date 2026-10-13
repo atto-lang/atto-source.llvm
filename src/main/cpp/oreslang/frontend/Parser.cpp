@@ -118,12 +118,18 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Arrow and equality are contiguous tokens, not independent
+        // operators. The pipe is otherwise a standalone syntax symbol.
+        if (source_.substr(at_, 2) == "->") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*=.<>|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -242,12 +248,79 @@ private:
             }
             require("}");
             actor.sealed_state = std::move(state);
-            if (token_.text == "state") {
-                fail("duplicate sealed actor state block");
-            }
-            if (token_.text != (braced ? "}" : "end")) {
-                fail("native actor state methods require sealed handle_state "
-                     "effects and continuation lowering; currently unsupported");
+            std::unordered_set<std::string> method_names;
+            while (token_.text != (braced ? "}" : "end")) {
+                if (token_.kind == Kind::End)
+                    fail("unterminated native sealed actor declaration");
+                if (token_.text == "state")
+                    fail("duplicate sealed actor state block");
+                if (actor.state_operations.size() >= 32)
+                    fail("native sealed actor method limit exceeded (32)");
+                ActorStateAccess operation;
+                operation.offset = token_.offset;
+                require("pub");
+                operation.method = identifier();
+                if (operation.method == "handle_state" ||
+                        !method_names.insert(operation.method).second)
+                    fail("sealed handle_state cannot be overridden or duplicated");
+                require("(");
+                require(")");
+                require(":");
+                require("int");
+                require("{");
+                require("return");
+                require("self");
+                require(".");
+                require("handle_state");
+                require("(");
+                if (accept("critical-read")) {
+                    operation.mode = ActorStateAccess::Mode::Read;
+                } else if (accept("critical-write")) {
+                    operation.mode = ActorStateAccess::Mode::Write;
+                } else {
+                    fail("sealed handle_state requires critical-read/write");
+                }
+                require("|");
+                operation.binding = identifier();
+                if (operation.binding == "self" || operation.binding == "state")
+                    fail("reserved sealed callback binding");
+                require("|");
+                require("->");
+                if (accept("{")) {
+                    if (operation.mode != ActorStateAccess::Mode::Write)
+                        fail("native critical-read block callback is not supported");
+                    const std::string target = identifier();
+                    if (target != operation.binding)
+                        fail("sealed state write must target callback-local state binding");
+                    require(".");
+                    operation.field = identifier();
+                    require("=");
+                    operation.new_value = expression();
+                    require(";");
+                    require("return");
+                    const std::string returned = identifier();
+                    if (returned != operation.binding)
+                        fail("sealed state result must use callback-local state binding");
+                    require(".");
+                    if (identifier() != operation.field)
+                        fail("native sealed state write must return its updated field");
+                    require(";");
+                    require("}");
+                } else {
+                    if (operation.mode != ActorStateAccess::Mode::Read)
+                        fail("native critical-write requires a scoped write body");
+                    const std::string binding = identifier();
+                    if (binding != operation.binding)
+                        fail("sealed state read must use callback-local state binding");
+                    require(".");
+                    operation.field = identifier();
+                }
+                if (!state_names.count(operation.field))
+                    fail("unknown sealed actor state field '" + operation.field + "'");
+                require(")");
+                require(";");
+                require("}");
+                actor.state_operations.push_back(std::move(operation));
             }
             if (braced) require("}");
             else require("end");
