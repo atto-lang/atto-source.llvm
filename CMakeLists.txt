@@ -329,6 +329,12 @@ if(BUILD_TESTING)
         class-explicit-public-visible.ores)
     oreslang_contract_test(native_canonical_define_pub_class
         class-canonical-public-visible.ores)
+    oreslang_contract_test(native_private_callable_internal_linkage
+        native-private-function-linkage.ores
+        --ir "define internal i64 @hidden(")
+    oreslang_contract_test(native_public_callable_external_linkage
+        native-private-function-linkage.ores
+        --ir "define i64 @visible(")
 
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
