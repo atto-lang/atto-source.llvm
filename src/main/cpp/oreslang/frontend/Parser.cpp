@@ -1544,6 +1544,14 @@ private:
                                             method.allowed_effects.end(), effect)
                                             != method.allowed_effects.end();
                                     };
+                                    // The loan itself acquires read or write authority,
+                                    // even when its callback never accesses a field.
+                                    if (arm.state_loan->mode == StateLoan::Mode::Read
+                                            && !allowed("state.read"))
+                                        throw std::runtime_error("with clause omits state.read effect");
+                                    if (arm.state_loan->mode == StateLoan::Mode::Write
+                                            && !allowed("state.write"))
+                                        throw std::runtime_error("with clause omits state.write effect");
                                     bool reads = reads_state_projection(*arm.state_loan->result);
                                     for (const auto& assignment : arm.state_loan->assignments)
                                         reads = reads || reads_state_projection(*assignment.value);
