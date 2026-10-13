@@ -89,5 +89,29 @@ int main() {
     } catch (const std::invalid_argument&) { invalid = true; }
     CHECK(invalid && lane.pending_count() == 0);
     lane.retire_gracefully(key(7));
+
+    // Promotion is tested through the SupervisorControlTurn overload too.
+    // A malformed (terminal, origin) pair is never accepted.
+    oreslang::SupervisorControlTurn controlled(2);
+    controlled.reserve_child(key(8));
+    CHECK(Bridge::publish_terminal(controlled, key(8),
+            {EffectKind::Throw, 33u}, "uncaught throw", "root"));
+    CHECK(controlled.pending_count() == 1);
+
+    Lane invalid_pair(1);
+    invalid_pair.reserve(key(9));
+    bool bad_origin = false;
+    try {
+        invalid_pair.publish_preallocated(key(9), Lane::Kind::Raise, "invalid",
+                                          "root", Lane::Kind::Throw);
+    } catch (const std::invalid_argument&) { bad_origin = true; }
+    CHECK(bad_origin && invalid_pair.pending_count() == 0);
+    CHECK(invalid_pair.publish_preallocated(
+            key(9), Lane::Kind::Panic, "uncaught raise", "root", Lane::Kind::Raise));
+    auto restored = invalid_pair.poll();
+    CHECK(restored.has_value());
+    CHECK(restored->kind == Lane::Kind::Panic);
+    CHECK(restored->origin_kind == Lane::Kind::Raise);
+    invalid_pair.ack(key(9));
     return 0;
 }
