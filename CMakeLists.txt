@@ -29,6 +29,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
+    # pattern proof. This is not guest source Result/match lowering.
+    add_executable(oreslang-native-array-result-contract-test
+        tests/native_array_result_contract_test.cpp)
+    target_include_directories(oreslang-native-array-result-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-array-result-contract-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_array_result_nominal_closed_proof_host_only
+        COMMAND oreslang-native-array-result-contract-test)
+    set_tests_properties(native_array_result_nominal_closed_proof_host_only
+        PROPERTIES TIMEOUT 20)
     # Host-only fairness budget; not evidence of compiled Oreslang suspension.
     add_executable(oreslang-native-reduction-quantum-test
         tests/native_cooperation_quantum_test.cpp)
@@ -404,7 +416,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
         --diagnostic "native main() must have zero arguments")
     oreslang_contract_test(native_exit_reject_reserved_symbol exit-reserved-native-symbol.ores
-        --diagnostic "reserved native runtime ABI symbol")
+        --diagnostic "reserved native runtime ABI symbol '__oreslang_guest_main'")
     oreslang_contract_test(native_exit_reject_unsupported_explicit_exit exit-unsupported-process-exit.ores
         --diagnostic "oreslang-llvmc:")
     oreslang_contract_test(native_exit_reject_unsupported_async_root exit-unsupported-async-main.ores
@@ -1224,6 +1236,39 @@ if(BUILD_TESTING)
         add_test(NAME hungry_carrier_async_bounded_cancel
                  COMMAND oreslang-hungry-carrier-test)
         set_tests_properties(hungry_carrier_async_bounded_cancel PROPERTIES TIMEOUT 30)
+
+        # Actual compiled Oreslang scalar frame is driven by a real one-actor
+        # HungryCarrier OS thread. CPU cooperation is NOT IO or logical DONE.
+        if(ORE_CLANG)
+            add_test(NAME native_rt_compiled_scalar_carrier_cooperate
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_carrier_aot.py"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                    --clang "${ORE_CLANG}"
+                    --clangxx "${CMAKE_CXX_COMPILER}"
+                    --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                    --test "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_carrier_aot_test.cpp"
+                    --source-root "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            set_tests_properties(native_rt_compiled_scalar_carrier_cooperate
+                PROPERTIES TIMEOUT 120)
+        endif()
+
+        # Experimental multiple actors on ONE OS worker, using two
+        # independently compiled scalar .ores continuations. Not production
+        # source actor lowering and not a hard realtime guarantee.
+        if(ORE_CLANG)
+            add_test(NAME native_multi_actor_compiled_round_robin_fairness
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_multi_actor_carrier_aot.py"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                    --clangxx "${CMAKE_CXX_COMPILER}"
+                    --fast "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                    --slow "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-multi-actor-slow.ores"
+                    --test "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_multi_actor_carrier_aot_test.cpp"
+                    --source-root "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            set_tests_properties(native_multi_actor_compiled_round_robin_fairness
+                PROPERTIES TIMEOUT 150)
+        endif()
 
         add_executable(oreslang-carrier-supervisor-test
             tests/native_carrier_supervisor_integration.cpp

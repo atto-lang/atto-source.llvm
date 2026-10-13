@@ -140,7 +140,7 @@ cases = {
     "borrow then rt cooperate": (
         "fnc use(borrow int a, int b): int { return a + b; } "
         "fnc invoke(int x): int { return use(rt borrow x, rt cooperate); }",
-        "native async/channel/select boundary unsupported"),
+        "native rt cooperate requires verified heap-owned continuation lowering"),
     "borrow moved parameter": (
         "fnc use(borrow int a): int { return a; } "
         "fnc invoke(int x): int { return rt take x + use(rt borrow x); }",
