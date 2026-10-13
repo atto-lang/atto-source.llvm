@@ -30,8 +30,8 @@ static void fail_closed(void) { abort(); }
 void oreslang_int_array_unhandled_resource_failure(uint32_t status) {
     if (status != ORES_NATIVE_ARRAY_LIMIT &&
             status != ORES_NATIVE_ARRAY_NO_MEMORY)
-        fail_closed();
-    fail_closed(); /* Unhandled ordinary resource failure is still terminal. */
+        abort(); /* Invalid status is an invariant violation, not a throw. */
+    abort(); /* Every unhandled ordinary resource failure is terminal. */
 }
 
 
