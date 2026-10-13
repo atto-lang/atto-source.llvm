@@ -21,6 +21,13 @@ LEXICAL = """pub fnc main(): int {
   return first.get(0) + second.get(0);
 }
 """
+MIXED = """pub fnc main(): int {
+  const box: owned int = 5;
+  let mut Array<int> a = new Array<int>();
+  a.add(37);
+  return box + a.get(0);
+}
+"""
 CLASS = """define class Four as
   let mut Array<int> a = new Array<int>();
   let mut Array<int> b = new Array<int>();
@@ -40,6 +47,7 @@ pub fnc main(): int {
 # linker, and no wrapper or fault injector is included in production binaries.
 C_WRAPPERS = r"""
 #include "oreslang/runtime/NativeIntArrayRegion.h"
+#include "oreslang/runtime/NativeOwnedI64Region.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,11 +55,18 @@ C_WRAPPERS = r"""
 
 static int dropped = 0;
 static int closed = 0;
+static int owned_dropped = 0;
+static int owned_closed = 0;
 static int expectations(void) {
     const char* wanted_drops = getenv("ORE_EXPECT_DROPS");
     const char* wanted_closes = getenv("ORE_EXPECT_CLOSES");
-    if (!wanted_drops || !wanted_closes) return 0;
-    return dropped == atoi(wanted_drops) && closed == atoi(wanted_closes);
+    const char* wanted_owned_drops = getenv("ORE_EXPECT_OWNED_DROPS");
+    const char* wanted_owned_closes = getenv("ORE_EXPECT_OWNED_CLOSES");
+    if (!wanted_drops || !wanted_closes || !wanted_owned_drops ||
+        !wanted_owned_closes) return 0;
+    return dropped == atoi(wanted_drops) && closed == atoi(wanted_closes) &&
+        owned_dropped == atoi(wanted_owned_drops) &&
+        owned_closed == atoi(wanted_owned_closes);
 }
 __attribute__((constructor)) static void setup(void) {
     const char* injected = getenv("ORE_FAIL_AFTER");
@@ -70,18 +85,31 @@ void __wrap_oreslang_int_array_region_close(OresNativeIntArrayRegion* r) {
     ++closed;
     __real_oreslang_int_array_region_close(r);
 }
+extern void __real_oreslang_owned_i64_region_drop(
+    OresOwnedI64Region*, OresOwnedI64Handle);
+extern void __real_oreslang_owned_i64_region_close(OresOwnedI64Region*);
+void __wrap_oreslang_owned_i64_region_drop(OresOwnedI64Region* r,
+                                          OresOwnedI64Handle h) {
+    ++owned_dropped;
+    __real_oreslang_owned_i64_region_drop(r, h);
+}
+void __wrap_oreslang_owned_i64_region_close(OresOwnedI64Region* r) {
+    ++owned_closed;
+    __real_oreslang_owned_i64_region_close(r);
+}
 __attribute__((noreturn)) void __wrap_abort(void) {
     if (expectations()) {
         (void)write(2, "CHECKED_ABORT_OK\n", 17);
         _Exit(86);
     }
-    (void)fprintf(stderr, "BAD_CLEANUP dropped=%d closed=%d\n", dropped, closed);
+    (void)fprintf(stderr, "BAD_CLEANUP dropped=%d closed=%d owned_dropped=%d owned_closed=%d\n",
+                      dropped, closed, owned_dropped, owned_closed);
     _Exit(87);
 }
 __attribute__((destructor)) static void verify_normal_exit(void) {
     if (!expectations()) {
-        (void)fprintf(stderr, "BAD_NORMAL_CLEANUP dropped=%d closed=%d\n",
-                      dropped, closed);
+        (void)fprintf(stderr, "BAD_NORMAL_CLEANUP dropped=%d closed=%d owned_dropped=%d owned_closed=%d\n",
+                      dropped, closed, owned_dropped, owned_closed);
         _Exit(88);
     }
 }
@@ -103,9 +131,10 @@ def verify(compiler, clang, root, sanitizers):
         temp = Path(folder)
         shim = temp / "test_wrappers.c"
         shim.write_text(C_WRAPPERS, encoding="utf-8")
-        for label, src, owned, growing in (
-            ("lexical", LEXICAL, 2, 2),
-            ("class", CLASS, 4, 4),
+        for label, src, owned, growing, heap in (
+            ("lexical", LEXICAL, 2, 2, 0),
+            ("class", CLASS, 4, 4, 0),
+            ("mixed", MIXED, 1, 1, 1),
         ):
             source = temp / f"{label}.ores"
             source.write_text(src, encoding="utf-8")
@@ -142,8 +171,12 @@ def verify(compiler, clang, root, sanitizers):
                 "-Wl,--wrap=oreslang_int_array_drop",
                 "-Wl,--wrap=oreslang_int_array_region_close",
                 "-Wl,--wrap=abort",
+                "-Wl,--wrap=oreslang_owned_i64_region_drop",
+                "-Wl,--wrap=oreslang_owned_i64_region_close",
                 "-x", "ir", str(ll),
-                "-x", "c", str(runtime), str(shim),
+                "-x", "c", str(runtime),
+                str(root / "src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c"),
+                str(shim),
                 "-I", str(root / "src/main/cpp"),
                 "-o", str(exe),
             ]
@@ -157,7 +190,9 @@ def verify(compiler, clang, root, sanitizers):
                 e = os.environ.copy()
                 e.update(ORE_FAIL_AFTER=str(failed_at),
                          ORE_EXPECT_DROPS=str(expected_drops),
-                         ORE_EXPECT_CLOSES=str(int(failed_at > 0)))
+                         ORE_EXPECT_CLOSES=str(int(failed_at > 0)),
+                         ORE_EXPECT_OWNED_DROPS=str(heap if failed_at > 0 else 0),
+                         ORE_EXPECT_OWNED_CLOSES=str(heap))
                 result = run([str(exe)], env=e)
                 if result.returncode != 86 or \
                         b"CHECKED_ABORT_OK\n" not in result.stderr:
@@ -169,14 +204,16 @@ def verify(compiler, clang, root, sanitizers):
             # destroyed exactly once plus one region close.
             e = os.environ.copy()
             e.update(ORE_FAIL_AFTER=str(1 + owned + growing),
-                     ORE_EXPECT_DROPS=str(owned), ORE_EXPECT_CLOSES="1")
+                     ORE_EXPECT_DROPS=str(owned), ORE_EXPECT_CLOSES="1",
+                     ORE_EXPECT_OWNED_DROPS=str(heap),
+                     ORE_EXPECT_OWNED_CLOSES=str(heap))
             result = run([str(exe)], env=e)
             if result.returncode != 42 or result.stdout or result.stderr:
                 raise AssertionError(
                     f"{label}: normal cleanup failed: rc={result.returncode}, "
                     f"stderr={result.stderr[:2200]!r}")
     print("PASS checked Array<int> source failure cleanup: "
-          "14 injected allocation edges + 2 successful complete guest runs"
+          "17 injected allocation edges + 3 successful complete guest runs"
           + (" (ASan+UBSan)" if sanitizers else ""), flush=True)
 
 
