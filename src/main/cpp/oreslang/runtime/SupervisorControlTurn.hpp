@@ -121,10 +121,13 @@ public:
                         }
                         break;
                     default:
-                        // Invalid enum tags from host FFI/corrupt handlers must
-                        // retain the in-flight CONTROL event for retry rather
-                        // than silently acknowledging a failed actor.
-                        throw std::invalid_argument("invalid supervisor CONTROL decision");
+                        // Invalid FFI/hook decision must escalate in this
+                        // same CONTROL turn: endless retries would strand the
+                        // pre-reserved child failure and allow no progress.
+                        // An exception thrown by escalation itself is still
+                        // retried through the existing catch/retry boundary.
+                        hooks.on_escalate(*next);
+                        break;
                 }
                 child_failures_.ack(next->actor);
             } catch (...) {
