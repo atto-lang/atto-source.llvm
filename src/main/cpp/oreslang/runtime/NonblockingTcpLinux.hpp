@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <limits>
 #include <sys/socket.h>
 #include <unistd.h>
 namespace oreslang::runtime {
@@ -93,28 +95,85 @@ private:
     explicit NonblockingTcpListener(OwnedSocketFd s) noexcept : listener_(std::move(s)) {}
     OwnedSocketFd listener_;
 };
-// The reactor may park on epoll_wait; actor/ROOT carriers MUST NOT call wait().
-// Token identity must be checked against actor generation before completion.
+// A dedicated reactor thread may park on epoll_wait. A host/actor carrier
+// submits nonblocking commands and calls wakeup(), never wait().
+// User registrations are one-shot so an unconsumed OP_READ/EPOLLIN cannot
+// create a hot event loop. Reactor re-arms only after processing a request.
+// Stable generation IDs must be validated by the owning completion gate.
 class EpollReadiness final {
 public:
     static constexpr std::size_t max_batch = 32;
+    static constexpr std::uint64_t wake_token = std::numeric_limits<std::uint64_t>::max();
     struct Ready { std::uint64_t token; std::uint32_t events; };
-    EpollReadiness() : epoll_(::epoll_create1(EPOLL_CLOEXEC)) {
+
+    EpollReadiness() {
+        epoll_ = ::epoll_create1(EPOLL_CLOEXEC);
         if (epoll_ < 0) throw std::system_error(errno, std::generic_category(), "epoll_create1");
+        wake_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (wake_ < 0) {
+            const int e = errno;
+            ::close(epoll_);
+            epoll_ = -1;
+            throw std::system_error(e, std::generic_category(), "eventfd");
+        }
+        epoll_event event{};
+        event.events = EPOLLIN;
+        event.data.u64 = wake_token;
+        if (::epoll_ctl(epoll_, EPOLL_CTL_ADD, wake_, &event) != 0) {
+            const int e = errno;
+            ::close(wake_);
+            ::close(epoll_);
+            wake_ = -1;
+            epoll_ = -1;
+            throw std::system_error(e, std::generic_category(), "epoll add wakeup");
+        }
     }
-    ~EpollReadiness() noexcept { if (epoll_ >= 0) ::close(epoll_); }
+
+    ~EpollReadiness() noexcept {
+        if (wake_ >= 0) ::close(wake_);
+        if (epoll_ >= 0) ::close(epoll_);
+    }
     EpollReadiness(const EpollReadiness&) = delete;
     EpollReadiness& operator=(const EpollReadiness&) = delete;
-    void add(int fd, std::uint32_t events, std::uint64_t token) {
-        if (fd < 0 || token == 0 || !(events & (EPOLLIN | EPOLLOUT)))
+
+    static void validate_registration(int fd, std::uint32_t events, std::uint64_t token) {
+        if (fd < 0 || token == 0 || token == wake_token
+                || !(events & (EPOLLIN | EPOLLOUT))
+                || (events & ~(static_cast<std::uint32_t>(EPOLLIN | EPOLLOUT))) != 0)
             throw std::invalid_argument("invalid epoll registration");
-        epoll_event e{};
-        e.events = events | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
-        e.data.u64 = token;
-        if (::epoll_ctl(epoll_, EPOLL_CTL_ADD, fd, &e) != 0)
+    }
+    void add(int fd, std::uint32_t events, std::uint64_t token) {
+        validate_registration(fd, events, token);
+        epoll_event event{};
+        event.events = events | EPOLLONESHOT | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+        event.data.u64 = token;
+        if (::epoll_ctl(epoll_, EPOLL_CTL_ADD, fd, &event) != 0)
             throw std::system_error(errno, std::generic_category(), "epoll add");
     }
-    void remove(int fd) noexcept { if (fd >= 0) ::epoll_ctl(epoll_, EPOLL_CTL_DEL, fd, nullptr); }
+    void rearm(int fd, std::uint32_t events, std::uint64_t token) {
+        validate_registration(fd, events, token);
+        epoll_event event{};
+        event.events = events | EPOLLONESHOT | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+        event.data.u64 = token;
+        if (::epoll_ctl(epoll_, EPOLL_CTL_MOD, fd, &event) != 0)
+            throw std::system_error(errno, std::generic_category(), "epoll rearm");
+    }
+    void remove(int fd) noexcept {
+        if (fd >= 0) ::epoll_ctl(epoll_, EPOLL_CTL_DEL, fd, nullptr);
+    }
+
+    // Cross-thread wakeup is a nonblocking eventfd write; the reactor consumes
+    // wake notifications internally and returns zero user events when no socket
+    // is ready. Never let the reserved token escape to guest callbacks.
+    void wakeup() {
+        const std::uint64_t one = 1;
+        for (;;) {
+            if (::write(wake_, &one, sizeof(one)) == static_cast<ssize_t>(sizeof(one))) return;
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN) return; // counter already readable
+            throw std::system_error(errno, std::generic_category(), "reactor wakeup");
+        }
+    }
     std::size_t wait(std::array<Ready, max_batch>& out, int timeout_ms) {
         if (timeout_ms < -1) throw std::invalid_argument("invalid epoll timeout");
         std::array<epoll_event, max_batch> buf{};
@@ -123,10 +182,19 @@ public:
             if (errno == EINTR) return 0;
             throw std::system_error(errno, std::generic_category(), "epoll wait");
         }
-        for (int i = 0; i < n; ++i) out[i] = Ready{buf[i].data.u64, buf[i].events};
-        return static_cast<std::size_t>(n);
+        std::size_t accepted = 0;
+        for (int i = 0; i < n; ++i) {
+            if (buf[i].data.u64 == wake_token) {
+                std::uint64_t drained = 0;
+                while (::read(wake_, &drained, sizeof(drained)) == sizeof(drained)) { }
+                continue;
+            }
+            out[accepted++] = Ready{buf[i].data.u64, buf[i].events};
+        }
+        return accepted;
     }
 private:
     int epoll_ = -1;
+    int wake_ = -1;
 };
 } // namespace oreslang::runtime
