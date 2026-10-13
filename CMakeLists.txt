@@ -331,6 +331,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
+    # Java '/' produces a float even for int/int. Until native float lowering
+    # exists, reject '/' and '%' before IR rather than silently emitting i64.
+    oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
+        --diagnostic "native floating division unsupported")
+    oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
+        --diagnostic "native floating division unsupported")
+    oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
+        --diagnostic "native integer remainder unsupported")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")

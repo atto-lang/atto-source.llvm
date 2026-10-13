@@ -107,7 +107,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -842,7 +842,16 @@ private:
 
     std::unique_ptr<Expression> product() {
         auto left = unary();
-        while (token_.text == "*") {
+        while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
+            // Java defines int/int division as a FLOAT result; this native
+            // source compiler lowers expressions only to signed i64. Reject
+            // at the operator before either lowering or emitting partial IR.
+            if (token_.text == "/")
+                fail("native floating division unsupported: int/int yields float in Java; "
+                     "LLVM float typing and zero-divisor semantics are not implemented");
+            if (token_.text == "%")
+                fail("native integer remainder unsupported: zero-divisor and overflow contracts "
+                     "are not implemented");
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::Multiply, offset);
