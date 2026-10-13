@@ -51,6 +51,12 @@ int main() {
         "define actor Counter as state { v: int = 0; } state { w: int = 1; } end",
         "duplicate sealed actor state block");
     must_reject(
+        "define actor Counter as state { value: int = load_secret(); } end",
+        "native state-loan effect violation");
+    must_reject(
+        "define actor Counter as state { value: int = outside; } end",
+        "native state-loan effect violation");
+    must_reject(
         "define actor Counter as state { value: int = 0; } pub get(): int { return value; } end",
         "expected 'self'");
 
