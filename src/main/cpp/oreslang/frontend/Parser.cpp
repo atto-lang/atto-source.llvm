@@ -1450,6 +1450,43 @@ private:
                     if (!available.insert(local.name).second)
                         throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
                 }
+                if (method.method_state_loan) {
+                    const auto& loan = *method.method_state_loan;
+                    if (method.is_receiver)
+                        throw std::runtime_error("direct method state loan cannot replace typed receive match");
+                    if (!actor.state_declared)
+                        throw std::runtime_error("handle_state requires an actor state map");
+                    if (!method.effects_declared)
+                        throw std::runtime_error("actor method state loan requires explicit with effects");
+                    const auto permits = [&](std::string_view effect) {
+                        return std::find(method.declared_effects.begin(),
+                            method.declared_effects.end(), effect)
+                                != method.declared_effects.end();
+                    };
+                    if (loan.mode == StateLoan::Mode::Read && !permits("state.read"))
+                        throw std::runtime_error("state.read loan not permitted by with effects");
+                    if (loan.mode == StateLoan::Mode::Write && !permits("state.write"))
+                        throw std::runtime_error("state.write loan not permitted by with effects");
+                    if (loan.mode == StateLoan::Mode::Read && !loan.assignments.empty())
+                        throw std::runtime_error("read-only actor state loan cannot mutate state");
+                    bool reads = reads_state_value(*loan.result);
+                    std::unordered_set<std::string> loanAvailable = available;
+                    for (const auto& field : actor.fields)
+                        loanAvailable.insert("@state." + field.name);
+                    for (const auto& assignment : loan.assignments) {
+                        if (!mutableFields.count(assignment.field))
+                            throw std::runtime_error("state callback writes unknown or immutable key");
+                        reads |= reads_state_value(*assignment.value);
+                        if (contains_call(*assignment.value))
+                            throw std::runtime_error("state read/write loan cannot invoke arbitrary functions");
+                        validate_expression(*assignment.value, loanAvailable, functions);
+                    }
+                    if (contains_call(*loan.result))
+                        throw std::runtime_error("state read/write loan cannot invoke arbitrary functions");
+                    validate_expression(*loan.result, loanAvailable, functions);
+                    if (reads && !permits("state.read"))
+                        throw std::runtime_error("state.read operation not permitted by with effects");
+                }
                 if (method.is_receiver) {
                     const std::string methodDomain = actor.transform_pipe
                         ? (method.name == "receive_forward"
