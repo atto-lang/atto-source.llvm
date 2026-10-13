@@ -415,6 +415,24 @@ if(BUILD_TESTING)
         actor-state-mixed-first-use-reads-positive.ores
         --ir "call i64 @ores_actor_i64_heap_field_read"
         --ir-not "call i64 @ores_actor_i64_heap_field_read.*i64 0")
+    # Source-compiled callback checked against the real persistent actor
+    # heap, across two distinct admitted turns. This is a direct-ABI test;
+    # separate 15-actor pipeline tests prove trusted wire admission.
+    if(ORE_CLANG)
+        foreach(mode normal sanitized)
+            set(firstuse_sanitizer_args)
+            if(mode STREQUAL "sanitized")
+                list(APPEND firstuse_sanitizer_args --sanitize)
+            endif()
+            oreslang_contract_test(native_state_firstuse_callback_${mode}
+                actor-state-first-use-native-behavior-positive.ores
+                --run 0 --clang "${ORE_CLANG}"
+                --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_first_use_behavior.c"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --stderr "FIRST_USE_BEHAVIOR_PASS turns=2 result=15"
+                ${firstuse_sanitizer_args})
+        endforeach()
+    endif()
     oreslang_contract_test(reject_with_direct_handle_read_missing_effect
         actor-with-using-read-outside-bound-reject.ores
         --diagnostic "with clause omits state.read effect")
