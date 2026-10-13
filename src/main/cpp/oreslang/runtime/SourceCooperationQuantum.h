@@ -2,8 +2,19 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 
 namespace oreslang::runtime {
+
+// Saturation preserves the mandatory reduction cap even after an extremely
+// prolonged no-yield critical section. Kept constexpr for boundary testing.
+namespace detail {
+constexpr std::uint64_t saturatingBackedgeSuccessor(
+        std::uint64_t completed) noexcept {
+    return completed == std::numeric_limits<std::uint64_t>::max()
+        ? completed : completed + 1;
+}
+}  // namespace detail
 
 /**
  * Host-only native scheduling quantum, not guest Oreslang await lowering.
@@ -31,8 +42,12 @@ public:
     // One cheap integer counter/bit-mask on the committed loop backedge.
     // No wall-clock sampling and no scheduler/FFI calls here.
     bool completedBackedgeNeedsCheck() noexcept {
-        ++backedges_;
-        return (backedges_ & (kLoopCheckInterval - 1)) == 0;
+        backedges_ = detail::saturatingBackedgeSuccessor(backedges_);
+        // After an over-budget no-yield region, do not defer a newly
+        // available safe handoff for another 64 backedges. The caller still
+        // decides whether a protected lexical scope forbids suspension.
+        return backedges_ >= kMaxBackedgesPerDispatch ||
+            (backedges_ & (kLoopCheckInterval - 1)) == 0;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
