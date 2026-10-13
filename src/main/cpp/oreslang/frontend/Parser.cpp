@@ -285,6 +285,9 @@ private:
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             accept("pub");
+            if (token_.text == "constructor") {
+                fail("native class constructors and constructor-parameter field initializers require checked initialization lowering");
+            }
             // Bounded native subset: fixed scalar slots and mutable owned
             // Array<int> handles. General object/member lowering remains
             // unsupported, and must fail before LLVM IR is generated.
