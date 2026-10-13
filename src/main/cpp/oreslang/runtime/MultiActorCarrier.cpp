@@ -242,18 +242,25 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
         const auto outcome = callback(user_state, message, cause, fuel);
         lock.lock();
         ++state->counters.dispatches;
-        // A cancellation or stop that raced a bounded CPU step wins BEFORE
-        // the continuation is requeued, and before any other user callback.
-        if (state->closing || actor.cancel_requested) continue;
+        // A completed guest slice has ALREADY committed its source effects.
+        // Count this logical turn exactly once, even if cancellation/STOP
+        // arrived while the native callback was running. Cancellation then
+        // retires the actor (and discards later envelopes) with no active
+        // frame; it cannot retroactively turn DONE into a canceled frame.
         if (outcome == Outcome::complete) {
             actor.active = false;
             ++actor.completed;
             ++state->counters.completed;
+            if (state->closing || actor.cancel_requested)
+                continue; // process reserved CONTROL before other user work
             if (actor.size && !enqueue(*state, index)) {
                 ++state->counters.protocol_failures;
                 actor.cancel_requested = true;
             }
         } else if (outcome == Outcome::cooperate) {
+            // This continuation is still live. CONTROL wins over requeue,
+            // and owner-thread cancellation must run exactly once.
+            if (state->closing || actor.cancel_requested) continue;
             ++actor.cooperations;
             ++state->counters.cooperations;
             if (!enqueue(*state, index)) {
@@ -261,6 +268,8 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
                 actor.cancel_requested = true;
             }
         } else {
+            // A bogus callback result is a protocol failure even if a
+            // cancellation raced it. Never silently accept invalid IR state.
             ++state->counters.protocol_failures;
             actor.cancel_requested = true;
         }
