@@ -904,6 +904,17 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-effect-supervision-bridge-test PRIVATE Threads::Threads)
     add_test(NAME native_effect_unwind_supervisor_control_bridge
         COMMAND oreslang-effect-supervision-bridge-test)
+    # Actual host-runtime path: native cleanup -> CONTROL publication ->
+    # supervisor admission, with promoted Panic and original typed origin.
+    add_executable(oreslang-effect-supervisor-e2e-test
+        tests/effect_supervisor_end_to_end_test.cpp)
+    target_include_directories(oreslang-effect-supervisor-e2e-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-effect-supervisor-e2e-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-effect-supervisor-e2e-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_effect_unwind_supervisor_end_to_end
+        COMMAND oreslang-effect-supervisor-e2e-test)
     add_executable(oreslang-supervisor-failure-lane-test tests/supervisor_failure_lane_test.cpp)
     target_include_directories(oreslang-supervisor-failure-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-supervisor-failure-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
