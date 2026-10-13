@@ -1,6 +1,6 @@
 define actor Counter as
     state { value: int = 7; }
-    bad(): int with state.read, suspend {
+    bad(): int with state.read {
         return using state.read(|s| -> {
             rt cooperate;
             return s.value;
