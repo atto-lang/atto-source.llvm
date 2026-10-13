@@ -395,6 +395,21 @@ if(BUILD_TESTING)
         actor-with-using-write-only-positive.ores
         --ir "call void @ores_actor_i64_heap_field_write"
         --ir-not "call .*@ores_actor_i64_heap_field_read")
+    # Ordered callback dataflow: reads *after* a first write observe the
+    # callback-local value and must not trigger pre-callback heap reads.
+    # Conversely, self-updates need a real native heap read; reading another
+    # untouched field must never cause a read of the already-written field.
+    oreslang_contract_test(native_state_write_then_read_no_snapshot
+        actor-state-write-before-read-no-snapshot-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_state_self_update_requires_snapshot
+        actor-state-self-update-must-snapshot-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_state_mixed_first_use_only
+        actor-state-mixed-first-use-reads-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read"
+        --ir-not "call i64 @ores_actor_i64_heap_field_read.*i64 0")
     oreslang_contract_test(reject_with_direct_handle_read_missing_effect
         actor-with-using-read-outside-bound-reject.ores
         --diagnostic "with clause omits state.read effect")
