@@ -86,14 +86,25 @@ int main() {
     CHECK(delivered->summary == "defer panic");
     lane.ack(key(6));
 
-    lane.reserve(key(7));
-    bool invalid = false;
-    try {
-        Bridge::publish_terminal(lane, key(7),
-                {static_cast<EffectKind>(0xff), 10}, "forged");
-    } catch (const std::invalid_argument&) { invalid = true; }
-    CHECK(invalid && lane.pending_count() == 0);
-    lane.retire_gracefully(key(7));
+    // Every invalid 8-bit native effect tag must fail closed through the
+    // reserved supervisor CONTROL slot, not throw C++ across the actor runtime
+    // boundary, strand an actor reservation, or preserve forged diagnostics.
+    for (unsigned raw = 7; raw < 256; ++raw) {
+        const auto actor = key(1000 + static_cast<int>(raw));
+        lane.reserve(actor);
+        CHECK(Bridge::publish_terminal(lane, actor,
+                {static_cast<EffectKind>(raw), 10}, "forged success"));
+        CHECK(!Bridge::publish_terminal(lane, actor,
+                {static_cast<EffectKind>(raw), 10}, "duplicate"));
+        CHECK(lane.pending_count() == 1);
+        auto invalid_event = lane.poll();
+        CHECK(invalid_event.has_value());
+        CHECK(invalid_event->kind == Lane::Kind::HostFailure);
+        CHECK(invalid_event->summary == "invalid native effect discriminant");
+        lane.ack(actor);
+        CHECK(lane.pending_count() == 0);
+        CHECK(lane.reserved_count() == 0);
+    }
 
     // ProcessExit is a valid effect but not a graceful actor Return.
     // Route it to the reserved CONTROL failure lane instead of throwing an
@@ -127,5 +138,24 @@ int main() {
     CHECK(hooks.host_failures == 1);
     CHECK(!turn.urgent());
     CHECK(turn.reserved_count() == 0);
+
+    // Test all forged tags through the scheduler-facing overload too.
+    // The parent's on_host_failure must execute only during admit_turn.
+    for (unsigned raw = 7; raw < 256; ++raw) {
+        const auto invalid_child = key(2000 + static_cast<int>(raw));
+        turn.reserve_child(invalid_child);
+        const int previously_admitted = hooks.host_failures;
+        CHECK(Bridge::publish_terminal(turn, invalid_child,
+                {static_cast<EffectKind>(raw), 0}, "forged return"));
+        CHECK(turn.pending_count() == 1);
+        CHECK(turn.urgent());
+        CHECK(hooks.host_failures == previously_admitted);
+        CHECK(turn.admit_turn(hooks, false) ==
+              oreslang::SupervisorControlTurn::Admitted::Control);
+        CHECK(hooks.host_failures == previously_admitted + 1);
+        CHECK(!turn.urgent());
+        CHECK(turn.reserved_count() == 0);
+    }
+    CHECK(hooks.host_failures == 250);
     return 0;
 }
