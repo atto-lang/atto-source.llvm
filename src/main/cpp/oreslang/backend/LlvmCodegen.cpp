@@ -28,6 +28,26 @@
 namespace oreslang {
 namespace {
 
+// Avoid heap-field reads in a WRITE-only state callback. Reading a field
+// requires an actual state.read effect, even when LLVM would otherwise
+// discard a speculative snapshot. The compiler sees all restricted scalar
+// expressions and can identify references before lowering.
+bool state_key_read(const Expression& expression, const std::string& key) {
+    if (expression.kind == Expression::Kind::Variable && expression.name == key)
+        return true;
+    if (expression.left && state_key_read(*expression.left, key)) return true;
+    if (expression.right && state_key_read(*expression.right, key)) return true;
+    for (const auto& argument : expression.arguments)
+        if (state_key_read(*argument, key)) return true;
+    return false;
+}
+bool loan_reads_key(const StateLoan& loan, const std::string& key) {
+    if (state_key_read(*loan.result, key)) return true;
+    for (const auto& assignment : loan.assignments)
+        if (state_key_read(*assignment.value, key)) return true;
+    return false;
+}
+
 // Source-compiled nominal identity follows Java TaggedMessageCodec byte-for-
 // byte; schema hashes are SHA-256 over a SORTED closed domain, not declaration
 // order, and variant identity includes its declared wire tag.
@@ -765,10 +785,14 @@ std::string emit_verified_llvm_ir(const Program& source) {
                         for (std::size_t i = 0; i < actor.fields.size(); ++i) {
                             auto* key = builder.CreateAlloca(
                                 i64, nullptr, "state." + actor.fields[i].name);
-                            auto* snapshot = builder.CreateCall(fieldRead,
-                                {heap, currentDomain, currentEpoch,
-                                 llvm::ConstantInt::get(i64, i)},
-                                "state.snapshot." + actor.fields[i].name);
+                            llvm::Value* snapshot = llvm::ConstantInt::get(i64, 0);
+                            if (loan_reads_key(*arm.state_loan,
+                                    "@state." + actor.fields[i].name)) {
+                                snapshot = builder.CreateCall(fieldRead,
+                                    {heap, currentDomain, currentEpoch,
+                                     llvm::ConstantInt::get(i64, i)},
+                                    "state.snapshot." + actor.fields[i].name);
+                            }
                             builder.CreateStore(snapshot, key);
                             loanLocals.emplace("@state." + actor.fields[i].name, key);
                         }
@@ -881,10 +905,14 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     const auto& field = actor.fields[index];
                     auto* slot = builder.CreateAlloca(i64, nullptr,
                                                       "state." + field.name);
-                    auto* snapshot = builder.CreateCall(fieldRead,
-                        {heap, currentDomain, currentEpoch,
-                         llvm::ConstantInt::get(i64, index)},
-                        "state.snapshot." + field.name);
+                    llvm::Value* snapshot = llvm::ConstantInt::get(i64, 0);
+                    if (loan_reads_key(*method.method_state_loan,
+                            "@state." + field.name)) {
+                        snapshot = builder.CreateCall(fieldRead,
+                            {heap, currentDomain, currentEpoch,
+                             llvm::ConstantInt::get(i64, index)},
+                            "state.snapshot." + field.name);
+                    }
                     builder.CreateStore(snapshot, slot);
                     loanLocals.emplace("@state." + field.name, slot);
                 }
