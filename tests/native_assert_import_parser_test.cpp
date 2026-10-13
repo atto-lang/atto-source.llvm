@@ -218,6 +218,25 @@ int main() {
             "}",
             "sealed Assert module alias cannot be shadowed");
 
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "suspend fnc worker(): void { "
+            "val Assert: int = 0; while (true) { Assert = Assert + 1; } }",
+            "sealed Assert module alias cannot be shadowed");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "suspend fnc Assert(): void { "
+            "val counter: int = 0; while (true) { counter = counter + 1; } }",
+            "sealed Assert module alias cannot be shadowed");
+
+        // A verified named-signature importer is still future work: reject
+        // any named arguments rather than binding source parameters by guess.
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert::equal(a: 1, b: 2); } "
+            "pub fnc main(): int { return 0; }",
+            "native sealed Assert named arguments require verified typed signature");
+
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {
