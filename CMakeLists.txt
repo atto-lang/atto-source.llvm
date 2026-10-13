@@ -91,18 +91,31 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
-    # Strict i64 fields: immutable const/val, mutable let, synchronous method writes.
+    # Historical actor regressions: state-only storage and fail-closed semantics.
+    # Method-only actors are legal; unsupported old instance fields must not
+    # masquerade as coverage for invalid state types or ABI collisions.
     oreslang_contract_test(actor_source_field_layout actor-owned-fields.ores --ir "oreslang_actor_Counter_read")
     oreslang_contract_test(actor_source_mutable_field actor-owned-fields.ores --ir "ores_actor_i64_heap_field_write")
     oreslang_contract_test(reject_actor_immutable_write actor-immutable-write.ores --diagnostic "cannot assign immutable or unknown actor field")
     oreslang_contract_test(reject_actor_unknown_write actor-unknown-write.ores --diagnostic "cannot assign immutable or unknown actor field")
-    oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
-    oreslang_contract_test(reject_actor_duplicate_field actor-duplicate-field.ores --diagnostic "duplicate actor state key")
-    oreslang_contract_test(reject_actor_bad_field_type actor-unsupported-field.ores --diagnostic "expected 'int'")
-    oreslang_contract_test(reject_actor_unknown_field actor-unknown-field.ores --diagnostic "unknown parameter")
+    oreslang_contract_test(actor_legacy_method_only_admission unsupported-actor.ores
+        --ir "oreslang_actor_Worker_run" --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_actor_duplicate_field actor-duplicate-field.ores
+        --diagnostic "duplicate actor state key"
+        --diagnostic-not "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_bad_field_type actor-unsupported-field.ores
+        --diagnostic "expected 'int'"
+        --diagnostic-not "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_unknown_field actor-unknown-field.ores
+        --diagnostic "unknown parameter"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_actor_shadow actor-field-shadow.ores --diagnostic "actor parameter shadows field")
-    oreslang_contract_test(reject_actor_user_symbol_collision actor-abi-func-collision.ores --diagnostic "conflicting generated actor symbol")
-    oreslang_contract_test(reject_actor_actor_symbol_collision actor-abi-actor-collision.ores --diagnostic "conflicting generated actor symbol")
+    oreslang_contract_test(reject_actor_user_symbol_collision actor-abi-func-collision.ores
+        --diagnostic "conflicting generated actor symbol"
+        --diagnostic-not "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_actor_symbol_collision actor-abi-actor-collision.ores
+        --diagnostic "conflicting generated actor symbol"
+        --diagnostic-not "actor instance data must be declared in one state map")
     # Restricted compiler-generated ActorRef lifecycle: trusted top-level
     # main may spawn one or more typed actors and must stop each exactly once.
     # Source await, actor methods, and cross-boundary ref escape remain rejected.

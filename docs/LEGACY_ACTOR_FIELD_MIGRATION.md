@@ -12,27 +12,26 @@ acquisition, not prototype aliases. Enclosing methods declare their effect
 bounds with `with state.read` / `with state.write`. User-defined actor methods
 remain allowed. See [WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md).
 
-The following preexisting source fixtures were inspected on the LLVM
-draft branch and **still use legacy `const`/`val`/`let` actor instance
-fields**. Their full original CTest behavior is **not** covered by the
-targeted 45-test funded using-capability gate:
+The following historical fixtures were inspected on the LLVM draft branch.
+Migration status is per-fixture; passing targeted gates does **not** establish
+that the full legacy suite has been restored:
 
 | Intended existing coverage | Confirmed affected fixture |
 |---|---|
-| Owned actor heap fields | `actor-owned-fields.ores` |
+| Owned actor heap fields (pending) | `actor-owned-fields.ores` |
 | Duplicate-state-key rejection (migrated; focused CI green) | `actor-duplicate-field.ores` |
 | Immutable-field write rejection | `actor-immutable-write.ores` |
 | Local/field shadow rejection | `actor-field-shadow.ores` |
-| Unknown field rejection | `actor-unknown-field.ores` |
+| Unknown lexical variable rejection (migrated; new CI pending) | `actor-unknown-field.ores` |
 | Unknown state write rejection | `actor-unknown-write.ores` |
-| Unsupported field type rejection | `actor-unsupported-field.ores` |
+| Unsupported actor state type rejection (migrated; new CI pending) | `actor-unsupported-field.ores` |
 | Native source actor send | `source-actor-send.ores` |
 | Five-worker actor lifecycle | `source-actor-five-workers.ores` |
 | Spawn/stop actor field handling | `source-actor-spawn-stop.ores` |
 | Tagged integer DATA dispatch | `source-tagged-int-payload-dispatch.ores` |
 | Boolean receive match | `message-receive-bool-match.ores` |
 | Three-actor bidirectional native pipeline | `source-actor-pipeline-bidirectional.ores` |
-| Generated actor ABI collision | `actor-abi-actor-collision.ores` |
+| Generated actor ABI collision (migrated; new CI pending) | `actor-abi-actor-collision.ores` |
 
 **Migration criteria:**
 
@@ -80,3 +79,24 @@ https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/
 This was a **47-blob SHA-pinned focused native build**, not the complete
 historical source tree or full CMake/CTest suite. The remaining legacy
 fixtures in the inventory need source migration and original intent tests.
+
+## Follow-up historical regressions (pending fresh verification)
+
+- The historical method-only `unsupported-actor.ores` is now an **acceptance**
+  fixture. The old rejection was inconsistent with the canonical rule that
+  actor instance state is optional.
+- `actor-unsupported-field.ores` now uses `state { ... }` with an invalid
+  state-value type, preserving the unsupported-type diagnostic without the
+  obsolete `const` declaration.
+- `actor-unknown-field.ores` now declares its valid state map and rejects
+  unresolved lexical `phantom`, rather than rejecting legacy storage syntax.
+- Both `actor-abi-actor-collision.ores` and `actor-abi-func-collision.ores`
+  now use canonical maps while preserving generated-function symbol collisions.
+- The historical negative CTests reject unrelated legacy-field diagnostics
+  via a `--diagnostic-not` check in the regression harness, including under
+  optimized Python where source `assert` statements would be disabled.
+
+These changes need a fresh **exact-tree** compiler execution before being
+counted as verified. Ordinary-method state execution, the legacy mutable-field
+positive fixture, lifecycle/boolean receive migrations, full CTest coverage,
+and Java executable actor-state parity are still release blockers.

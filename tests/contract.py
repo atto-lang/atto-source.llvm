@@ -106,6 +106,8 @@ def main():
     parser.add_argument("--ir-not", action="append",
                         help="Forbidden LLVM IR regex (checked even with python -O)")
     parser.add_argument("--diagnostic")
+    parser.add_argument("--diagnostic-not", action="append",
+                        help="Forbidden compiler diagnostic text in negative tests")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
     parser.add_argument("--native-runtime")
@@ -128,9 +130,14 @@ def main():
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
     )
+    require(not args.diagnostic_not or args.diagnostic,
+            "--diagnostic-not requires --diagnostic")
     if args.diagnostic:
         require(compile_result.returncode != 0, "invalid source unexpectedly accepted")
         require(args.diagnostic in compile_result.stderr, compile_result.stderr)
+        for forbidden in args.diagnostic_not or ():
+            require(forbidden not in compile_result.stderr,
+                    "unexpected compiler rejection reason: " + forbidden)
         require(not compile_result.stdout.strip(), "emitted IR after rejection")
         return
     require(compile_result.returncode == 0, compile_result.stderr)
