@@ -135,6 +135,45 @@ static void authenticated_typed_reply(std::size_t n) {
     check(route.completed_reply()[0] == 0x92,
           "late post-success failure invalidated already-finalized result");
 }
+static void concurrent_completed_reply_observers_copy_immutable_snapshot() {
+    const auto actors = ids(3);
+    Route route(actors, "domain");
+    advance_to(route, actors, 2 * actors.size() - 1, "domain");
+    std::vector<std::uint8_t> owner_bytes(512 * 1024, 0x5a);
+    owner_bytes[0] = 0x91;
+    owner_bytes.back() = 0x22;
+    route.complete_source_with_reply(
+        actors[0], actors[1], "domain", owner_bytes);
+    owner_bytes[0] = 0; // the sender retains no authority over the copy
+    for (auto actor : actors) route.physical_done(actor, true);
+    check(route.done() == Route::Done::Succeeded,
+          "large canonical reply did not achieve terminal physical DONE");
+    std::atomic<int> completed{0};
+    std::vector<std::thread> observers;
+    for (int i = 0; i < 8; ++i) {
+        observers.emplace_back([&] {
+            for (int iteration = 0; iteration < 32; ++iteration) {
+                auto bytes = route.completed_reply();
+                if (bytes.size() != 512 * 1024 ||
+                    bytes[0] != 0x91 || bytes.back() != 0x22 ||
+                    bytes[12345] != 0x5a) return;
+                bytes[0] = 0;
+                ++completed;
+            }
+        });
+    }
+    std::thread late_fatal([&] {
+        for (int iteration = 0; iteration < 100; ++iteration) route.fail();
+    });
+    for (auto& observer : observers) observer.join();
+    late_fatal.join();
+    check(completed == 8 * 32,
+          "concurrent completed-reply observers lost independent immutable bytes");
+    check(route.done() == Route::Done::Succeeded,
+          "late fatal invalidated physically completed typed result");
+    check(route.completed_reply()[0] == 0x91,
+          "observer mutated the shared native reply snapshot");
+}
 static void ambiguous_data_publication_is_terminal() {
     // A trusted scheduler may lose the publication acknowledgement after
     // issuing a directional claim. It must poison the route, NOT release
@@ -217,6 +256,7 @@ int main() {
     reply_failure_is_not_a_result();
     typed_completion_races_abort();
     ambiguous_data_publication_is_terminal();
+    concurrent_completed_reply_observers_copy_immutable_snapshot();
     for (auto n: {1u, 17u}) {
         try { Route invalid(ids(n), "PipeMessages"); }
         catch (const std::invalid_argument&) { continue; }
