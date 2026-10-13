@@ -95,6 +95,50 @@ int main() {
             }
         }
 
+        // Deliberately forged bitsets must never be approved. With the old
+        // subset-only permits() check, equal unknown-bit masks were accepted,
+        // including as the declared actor-state "using" effects.
+        constexpr std::uint32_t unknown_high = 1u << 31;
+        constexpr std::uint32_t unknown_next = 1u << 10;
+        constexpr std::uint32_t read_bit =
+            static_cast<std::uint32_t>(FunctionEffect::StateRead);
+        constexpr std::uint32_t write_bit =
+            static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+        require(FunctionEffects::KnownBits == all_effects,
+                "reviewed effect table must match the runtime allowlist");
+        require(FunctionEffects{}.valid(), "pure effects must be valid");
+        require(FunctionEffects{all_effects}.valid(),
+                "all recognized effects must be valid");
+        for (const std::uint32_t invalid_bit :
+             std::array<std::uint32_t, 4>{{unknown_next, unknown_high,
+                                           read_bit | unknown_high,
+                                           0xFFFFFFFFu}}) {
+            const FunctionEffects poisoned{invalid_bit};
+            require(!poisoned.valid(), "unrecognized effect bitset must be invalid");
+            require(!poisoned.permits({}), "invalid declared effects cannot permit pure");
+            require(!poisoned.permits(poisoned),
+                    "unknown bits cannot authorize themselves");
+            require(!FunctionEffects{all_effects}.permits(poisoned),
+                    "recognized effects cannot authorize unknown bits");
+            require(!poisoned.united({}).valid(),
+                    "union with pure cannot silently cleanse an invalid mask");
+            require(!poisoned.has(FunctionEffect::StateRead),
+                    "invalid effect set cannot grant a recognized permission");
+        }
+        for (const std::uint32_t invalid_flag :
+             std::array<std::uint32_t, 6>{{0u, read_bit | write_bit,
+                                           unknown_next, unknown_high,
+                                           0xFFFFFFFFu, read_bit | unknown_high}}) {
+            const auto forged = static_cast<FunctionEffect>(invalid_flag);
+            require(!FunctionEffects{all_effects}.has(forged),
+                    "zero, composite, or unknown cast flag must not match");
+        }
+        require(!FunctionEffects{read_bit}.has(
+                    static_cast<FunctionEffect>(read_bit | write_bit)),
+                "composite flag cannot accidentally match a partial subset");
+        // The known-domain tests above exhaust all valid rows.
+        // Extra adversarial values exercise the opaque public ABI boundary.
+
         const std::array<std::string_view, 13> invalid{{
             std::string_view{}, "unknown", "state", "state.READ", "state.read ",
             " state.read", "state-read", "suspend\n", "PANIC", "panic.",
