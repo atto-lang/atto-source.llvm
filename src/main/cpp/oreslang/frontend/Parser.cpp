@@ -321,9 +321,10 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
+            const bool public_member = accept("pub");
             const bool legacy_let = accept("let");
             ClassField field;
+            field.public_member = public_member;
             if (!legacy_let) field.final_field = accept("final");
             if (legacy_let && accept("mut")) {
                 require("Array");
