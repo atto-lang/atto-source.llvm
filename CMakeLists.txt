@@ -1001,7 +1001,7 @@ if(BUILD_TESTING)
         oreslang_contract_test(reject_native_constructor_effectful_initializer
             class-scalar-constructor-call-reject.ores --diagnostic "native class field initializer requires pure scalar")
         oreslang_contract_test(reject_native_constructor_unknown_parameter
-            class-scalar-constructor-unknown-reject.ores --diagnostic "unknown")
+            class-scalar-constructor-unknown-reject.ores --diagnostic "unknown parameter 'other'")
         oreslang_contract_test(reject_native_constructor_duplicate_parameter
             class-scalar-constructor-duplicate-reject.ores --diagnostic "duplicate native constructor parameter")
         oreslang_contract_test(reject_native_constructor_owned_array
