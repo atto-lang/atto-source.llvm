@@ -18,6 +18,20 @@ CLASS = """define class Shelf as
 end
 """
 POSITIVES = {
+    # Exact admitted boundary: four independently constructed classes, each
+    # owning sixteen arrays. This tests all 64 handles and reverse-order drop.
+    "exact-64-owned-array-limit": ("""define class Slot16 as
+""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\\n"
+             for i in range(16)) + """end
+pub fnc main(): int {
+  let mut Slot16 a = new Slot16();
+  let mut Slot16 b = new Slot16();
+  let mut Slot16 c = new Slot16();
+  let mut Slot16 d = new Slot16();
+  d.f15.add(42);
+  return d.f15.get(0);
+}
+""", 42, 64),
     "class-constructor-effect-alloc": (CLASS + """pub fnc main(): int using alloc {
   let mut Shelf shelf = new Shelf();
   return shelf.number + 35;
