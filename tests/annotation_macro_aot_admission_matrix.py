@@ -89,11 +89,15 @@ def main():
     failures = []
     with tempfile.TemporaryDirectory(prefix="oreslang-aot-attributes-") as directory:
         for target in ("host", "wasm32"):
+            # Native Oreslang main is i64 behind the checked i32 OS wrapper.
+            # Wasm retains its guest i64 export without that process wrapper.
+            main_signatures = (("define i64 @__oreslang_guest_main(", "define i32 @main(")
+                               if target == "host" else ("define i64 @main(",))
             good, _good_files = invoke(args.compiler, directory, "control_" + target,
                           "// @derive(Eq) in comments is not active metadata\n"
                           + "/* macro_rules! fake { () => { 42 }; } */\n" + BASE,
                           target)
-            if good.returncode or "define i64 @main" not in good.stdout:
+            if good.returncode or any(signature not in good.stdout for signature in main_signatures):
                 failures.append("positive control failed for " + target +
                                 ": " + good.stderr[:350])
             if _good_files:
@@ -114,7 +118,7 @@ def main():
                                        "pub fnc add(int a, int b): int { return a + b; }\n"
                                        "pub fnc main(): int { return add(20, 22); }\n",
                                        target)
-            if calls.returncode or "define i64 @main" not in calls.stdout or "define i64 @add" not in calls.stdout:
+            if calls.returncode or any(signature not in calls.stdout for signature in main_signatures) or "define i64 @add" not in calls.stdout:
                 failures.append("typed call control failed for " + target
                                 + ": " + calls.stderr[:350])
             if call_files:
