@@ -18,6 +18,41 @@ CLASS = """define class Shelf as
 end
 """
 POSITIVES = {
+    "class-array-whole-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.first.add(19);
+  let mut Shelf moved = rt take(shelf);
+  moved.second.add(23);
+  return moved.first.get(0) + moved.second.get(0);
+}
+""", 42, 2),
+    "class-array-chain-moves": (CLASS + """pub fnc main(): int {
+  let mut Shelf original = new Shelf();
+  original.first.add(6);
+  let mut Shelf middle = rt take(original);
+  let mut Shelf final_owner = rt take(middle);
+  final_owner.second.add(36);
+  return final_owner.first.get(0) + final_owner.second.get(0);
+}
+""", 42, 2),
+    "class-array-move-followed-by-allocation": (CLASS + """pub fnc main(): int {
+  let mut Shelf original = new Shelf();
+  original.first.add(10);
+  let mut Shelf relocated = rt take(original);
+  let mut Shelf new_one = new Shelf();
+  new_one.first.add(11);
+  relocated.second.add(21);
+  return relocated.first.get(0) + relocated.second.get(0) + new_one.first.get(0);
+}
+""", 42, 4),
+    "class-array-move-guarded-exit": (CLASS + """pub fnc main(): int {
+  let mut Shelf original = new Shelf();
+  original.first.add(42);
+  let mut Shelf relocated = rt take(original);
+  if (relocated.first.size == 1) { return relocated.first.get(0); } fi
+  return 2;
+}
+""", 42, 2),
     # Exact admitted boundary: four independently constructed classes, each
     # owning sixteen arrays. This tests all 64 handles and reverse-order drop.
     "exact-64-owned-array-limit": ("""define class Slot16 as
@@ -153,12 +188,25 @@ pub fnc main(): int {
   return shelf.number;
 }
 """, "class with Array<int> fields requires let mut owner"),
-    "forbid-move": (CLASS + """pub fnc main(): int {
+    "forbid-reuse-after-move": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   let mut Shelf moved = rt take(shelf);
+  return shelf.first.size;
+}
+""", "use-after-move"),
+    "forbid-duplicate-class-move": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let mut Shelf first = rt take(shelf);
+  let mut Shelf second = rt take(shelf);
+  return first.number;
+}
+""", "class move requires live unborrowed owner"),
+    "forbid-immutable-move-target": (CLASS + """pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  let Shelf moved = rt take(shelf);
   return moved.number;
 }
-""", "class with Array<int> fields cannot move"),
+""", "moved Array<int> class requires let mut owner"),
     "forbid-borrowed-parameter": (CLASS + """fnc read(borrow Shelf shelf): int {
   return shelf.number;
 }
