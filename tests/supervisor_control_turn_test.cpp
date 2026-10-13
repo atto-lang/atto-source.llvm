@@ -127,9 +127,10 @@ int main() {
     lane.reserve_child(invalid_decision);
     CHECK(lane.publish_child(invalid_decision, Kind::Panic, "panic"));
     hooks.next = static_cast<SupervisorControlTurn::Decision>(0xff);
-    const auto escalations_before = hooks.escalations;
+    const auto events_before = hooks.order.size();
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
-    CHECK(hooks.escalations == escalations_before + 1);
+    CHECK(hooks.order.size() == events_before + 2);
+    CHECK(hooks.order.back() == "escalate");
     CHECK(!lane.urgent());
     CHECK(lane.reserved_count() == 0);
     return 0;
