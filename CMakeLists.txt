@@ -96,8 +96,18 @@ if(BUILD_TESTING)
     # masquerade as coverage for invalid state types or ABI collisions.
     oreslang_contract_test(actor_source_field_layout actor-owned-fields.ores --ir "oreslang_actor_Counter_read")
     oreslang_contract_test(actor_source_mutable_field actor-owned-fields.ores --ir "ores_actor_i64_heap_field_write")
-    oreslang_contract_test(reject_actor_immutable_write actor-immutable-write.ores --diagnostic "cannot assign immutable or unknown actor field")
-    oreslang_contract_test(reject_actor_unknown_write actor-unknown-write.ores --diagnostic "cannot assign immutable or unknown actor field")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_actor_owned_fields_migrated actor-owned-fields.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_owned_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+        oreslang_contract_test(native_asan_actor_owned_fields_migrated actor-owned-fields.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3 --sanitize
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_owned_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+    endif()
+    oreslang_contract_test(reject_actor_immutable_write actor-immutable-write.ores --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_actor_unknown_write actor-unknown-write.ores --diagnostic "state callback writes unknown or immutable key")
     oreslang_contract_test(actor_legacy_method_only_admission unsupported-actor.ores
         --ir "oreslang_actor_Worker_run" --ir-not "call .*@ores_actor_i64_heap_field_write")
     oreslang_contract_test(reject_actor_duplicate_field actor-duplicate-field.ores
@@ -109,7 +119,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_unknown_field actor-unknown-field.ores
         --diagnostic "unknown parameter"
         --diagnostic-not "actor instance data must be declared in one state map")
-    oreslang_contract_test(reject_actor_shadow actor-field-shadow.ores --diagnostic "actor parameter shadows field")
+    oreslang_contract_test(actor_lexical_state_shadow actor-field-shadow.ores --ir "oreslang_actor_Counter_read")
     oreslang_contract_test(reject_actor_user_symbol_collision actor-abi-func-collision.ores
         --diagnostic "conflicting generated actor symbol"
         --diagnostic-not "actor instance data must be declared in one state map")
