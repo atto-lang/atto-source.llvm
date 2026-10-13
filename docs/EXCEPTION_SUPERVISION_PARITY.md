@@ -11,8 +11,8 @@ must fail closed instead of producing misleading native code.
 
 | Effect | Caught by catch | Converted by trap | Handled by recover | Unhandled actor outcome |
 |---|---|---|---|---|
-| throw(E) | yes, typed | `None` | not needed | `on_throw` |
-| raise(E) | no | no | yes, explicit | `on_raise` |
+| throw(E) | yes, typed | `None` | not needed | `on_throw`, then `Panic(origin=Throw)` if unhandled |
+| raise(E) | no | no | yes, explicit | `on_raise`, then `Panic(origin=Raise)` if unhandled |
 | panic(PanicInfo) | no | no | no guest recovery | parent's supervisor `on_panic` |
 | cancel | no | no | no | `on_cancel` |
 | fatal host failure | no | no | no | `on_host_failure` when containable |
@@ -41,16 +41,24 @@ checkpoint before resuming, with no leaked actor state loans. An actor's own
 `panic` **always bypasses guest recover and actor-local hooks** and is published
 to its parent/root supervisor CONTROL lane while the hosting runtime survives.
 The parent's `on_panic` operates on a child-failure envelope, never in the
-failing actor. The failure remains typed `Panic`; it is not the default upgrade
-for an unhandled throw or raise. Host panics should not be translated to normal
-Oreslang `throw` automatically.
+failing actor. **Every unhandled actor `throw` or `raise` is normalized to a
+terminal `Panic` at the actor-supervision boundary** (after eligible local
+handlers), carrying immutable `origin=Throw|Raise` metadata and the initiating
+cause. Direct panic has `origin=Panic`. Host panics should not be translated
+to normal Oreslang `throw` automatically.
 
 ## Typed supervisor protocol
 
-An actor's unhandled failure *ends that actor's execution domain*, preserving
-its original classification. No guest exception is injected up the parent's
-call stack. The actor lifecycle future settles with the original cause; an
-independent supervisor CONTROL event is delivered to its parent/supervisor.
+An actor's unhandled failure *ends that actor's execution domain*.
+Unrecovered throw/raise is **delivered as `Panic`**; typed `origin_kind` retains
+the throw/raise identity. No guest exception is injected up the parent's call
+stack. The actor lifecycle future settles with the original cause; an
+independent supervisor CONTROL panic event is delivered to its parent/supervisor.
+Nested non-actor calls propagate ordinary throws/raises until their outermost
+task/root boundary converts unresolved effects to terminal `Panic`; the CLI
+reports status 1 while an embedder receives the terminal outcome. A non-actor
+main supervising child actors receives child CONTROL events but does not intercept
+its own root panic. See `contracts/EXCEPTION_CONTROL_V1.md`.
 
 Proposed source hooks (not yet supported by the compiler):
 
@@ -150,6 +158,11 @@ provide supervisor failure delivery.
   but Java Throwable and metadata objects still use managed memory. Do not
   claim GC-free Java execution. An untrusted actor must be placed in a true
   isolate/process for physical fatal-failure containment.
+- LLVM: the `EffectSupervisorBridge` now normalizes actor terminal throw/raise
+  into Panic before CONTROL publication and preserves a typed `origin_kind` in
+  the lane's failure envelope; this is **host-side substrate** and not native
+  source actor/compiler lowering. `RootFailureBoundary.hpp` separately models
+  non-actor task/root terminal escalation and default exit-1 failure.
 - LLVM: the `SupervisorFailureLane` queues preallocated intrusive CONTROL
   nodes with bounded inline summary/parent metadata. `publish_preallocated`
   does not grow a queue or allocate event data. Separately,
