@@ -1,1 +1,1 @@
-pub fnc main(): int { return rt copy owner; }
+pub fnc main(): int { return rt copy resource; }

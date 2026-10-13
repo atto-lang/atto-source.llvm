@@ -1,0 +1,1 @@
+pub fnc main(): int { const critical: int = 7; return 7; }

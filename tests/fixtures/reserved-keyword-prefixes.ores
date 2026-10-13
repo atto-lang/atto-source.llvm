@@ -1,0 +1,8 @@
+pub fnc main(): int {
+    const owned: int = 10;
+    const ownership: int = 2;
+    const critical_value: int = owned - ownership;
+    const using_value: int = critical_value;
+    const withholding: int = using_value;
+    return withholding;
+}

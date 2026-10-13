@@ -2,10 +2,10 @@
 define class Box as
   pub let int value = 7;
 end
-fnc inspect(int value, borrow mut Box owner): int {
+fnc inspect(int value, borrow mut Box resource): int {
   return value;
 }
 pub fnc main(): int {
   let mut Box b = new Box();
-  return inspect(owner: rt borrow mut b, value: 7);
+  return inspect(resource: rt borrow mut b, value: 7);
 }

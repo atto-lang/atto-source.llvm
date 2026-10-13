@@ -10,6 +10,7 @@ int main() {
     FunctionEffects declared{static_cast<std::uint32_t>(FunctionEffect::StateRead)
             | static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
     CriticalStateCallback callback{};
+    callback.state_mode = CriticalStateMode::Write;
     callback.callback_critical = true;
     callback.one_state_parameter = true;
     callback.inferred = declared;
@@ -53,8 +54,15 @@ int main() {
     CHECK(resumed.end() == ORES_ACTOR_STATE_OK);
 
     // Fail closed on invalid source contracts, before state-loan allocation.
+    auto forged_write = callback;
+    forged_write.callback_critical = false;
+    CriticalStateLoan forged;
+    CHECK(forged.begin(state, 123, 901, forged_write, declared)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    CHECK(!forged.active());
+
     auto missing = callback;
-    missing.callback_critical = false;
+    missing.state_mode = CriticalStateMode::None;
     CriticalStateLoan invalid;
     CHECK(invalid.begin(state, 123, 901, missing, declared)
             == CriticalStateAdmission::MissingCallbackCritical);
@@ -72,5 +80,16 @@ int main() {
         CHECK(state.generation > previously_seen);
     }
     CHECK(ores_actor_state_ready_to_suspend(&state, 123) == ORES_ACTOR_STATE_OK);
+    // A fenced continuation does not make an active synchronous loan resumable.
+    callback.inferred.bits |= static_cast<std::uint32_t>(FunctionEffect::Suspend);
+    callback.continuation_generation_fenced = true;
+    callback.state_loan_live_across_suspend = false;
+    declared.bits |= static_cast<std::uint32_t>(FunctionEffect::Suspend);
+    const auto before_denied = state.generation;
+    CriticalStateLoan suspended;
+    CHECK(suspended.begin(state, 123, 903, callback, declared)
+            == CriticalStateAdmission::LoanAcrossSuspension);
+    CHECK(!suspended.active() && state.depth == 0 && !state.active);
+    CHECK(state.generation == before_denied);
     return 0;
 }

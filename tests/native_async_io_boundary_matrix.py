@@ -47,4 +47,22 @@ with tempfile.TemporaryDirectory(prefix="oreslang-async-io-boundary-") as root:
             result.stdout)
         assert "unknown function or wrong call arity" in result.stderr, (
             label, result.stderr)
-print(f"Native async-only I/O boundary: {len(cases)} unsupported native bindings fail closed")
+    # Qualified APIs, imported aliases and first-class references must also
+    # fail closed until real native registry/effect/continuation support exists.
+    extra = {
+        "filesystem method": 'pub fnc main(): int { return fs.read_text_async(1); }',
+        "TCP method": 'pub fnc main(): int { return net.connect_async(1); }',
+        "HTTP method": 'pub fnc main(): int { return http.get_text_async(1); }',
+        "NIO draft method": 'pub fnc main(): int { return network.listen_nonblocking(1); }',
+        "first-class reference": 'pub fnc main(): int { const hidden: int = read_text_async; return hidden; }',
+        "imported source": 'import module net_core from "std/net"; pub fnc main(): int { return 0; }',
+        "await": 'pub fnc main(): int { return await read_text_async(1); }',
+        "async declaration": 'pub async fnc main(): int { return read_text_async(1); }',
+    }
+    for label, source in extra.items():
+        file.write_text(source + "\n")
+        result = subprocess.run([compiler, str(file)], capture_output=True,
+                                text=True, timeout=15, check=False)
+        assert result.returncode != 0 and result.stderr.strip(), (label, result.stderr)
+        assert not result.stdout.strip(), (label, "partial IR emitted", result.stdout)
+print(f"Native async-only I/O boundary: {len(cases) + len(extra)} unsupported native bindings fail closed")

@@ -1,0 +1,1 @@
+pub fnc main(): int { const owner: int = 7; return 7; }

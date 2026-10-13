@@ -24,7 +24,7 @@ public:
     explicit AsyncIoCompletionGate(AsyncIoTicket ticket) noexcept : ticket_(ticket) {}
 
     bool finish(AsyncIoTicket ticket, AsyncIoTerminal outcome) noexcept {
-        if (!valid(ticket) || outcome == AsyncIoTerminal::pending) return false;
+        if (!valid(ticket) || !valid_terminal(outcome)) return false;
         AsyncIoTerminal expected = AsyncIoTerminal::pending;
         return terminal_.compare_exchange_strong(expected, outcome,
                 std::memory_order_acq_rel, std::memory_order_acquire);
@@ -37,6 +37,17 @@ public:
     const AsyncIoTicket& ticket() const noexcept { return ticket_; }
 
 private:
+    static bool valid_terminal(AsyncIoTerminal outcome) noexcept {
+        switch (outcome) {
+            case AsyncIoTerminal::success:
+            case AsyncIoTerminal::failure:
+            case AsyncIoTerminal::cancelled:
+            case AsyncIoTerminal::timed_out:
+            case AsyncIoTerminal::closed: return true;
+            default: return false;
+        }
+    }
+
     bool valid(AsyncIoTicket ticket) const noexcept {
         return ticket.actor_id == ticket_.actor_id
             && ticket.generation == ticket_.generation

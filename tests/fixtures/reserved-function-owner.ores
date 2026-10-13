@@ -1,0 +1,2 @@
+fnc owner(): int { return 7; }
+pub fnc main(): int { return 7; }

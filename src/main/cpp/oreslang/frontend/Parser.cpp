@@ -52,7 +52,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial"
+        "using", "with", "owns", "owner", "critical-read", "critical-write", "requires", "serial"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -93,6 +93,16 @@ public:
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+            if (source_.substr(start, at_ - start) == "critical") {
+                for (std::string_view suffix : {"-read", "-write"}) {
+                    const auto end = at_ + suffix.size();
+                    if (source_.substr(at_, suffix.size()) == suffix &&
+                            (end == source_.size() || !identifier_part(source_[end]))) {
+                        at_ = end;
+                        break;
+                    }
+                }
+            }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
         if (digit(ch)) {
@@ -367,7 +377,7 @@ private:
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
-        if (token_.text == "critical") {
+        if (token_.text == "critical" || token_.text == "critical-read" || token_.text == "critical-write") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
         if (token_.text == "actor" || token_.text == "async" ||

@@ -1,5 +1,6 @@
 #include "oreslang/runtime/AsyncIoCompletionGate.hpp"
 #include <atomic>
+#include <initializer_list>
 #include <stdexcept>
 #include <thread>
 
@@ -17,6 +18,15 @@ int main() {
     check(!gate.finish({11, 42, 3}, AsyncIoTerminal::success), "wrong operation accepted");
     check(!gate.finish({12, 42, 2}, AsyncIoTerminal::success), "wrong actor accepted");
     check(!gate.finish(original, AsyncIoTerminal::pending), "pending transition accepted");
+    for (unsigned value = 6; value <= 255; ++value) {
+        check(!gate.finish(original, static_cast<AsyncIoTerminal>(value)),
+              "invalid terminal enum accepted");
+        check(gate.terminal() == AsyncIoTerminal::pending, "invalid outcome consumed completion");
+    }
+    for (AsyncIoTicket invalid : {AsyncIoTicket{0, 42, 2}, AsyncIoTicket{11, 0, 2}, AsyncIoTicket{11, 42, 0}}) {
+        AsyncIoCompletionGate empty(invalid);
+        check(!empty.finish(invalid, AsyncIoTerminal::closed), "zero ticket identity accepted");
+    }
     check(gate.finish(original, AsyncIoTerminal::success), "completion not accepted");
     check(!gate.finish(original, AsyncIoTerminal::closed), "closed overwrote success");
     check(gate.terminal() == AsyncIoTerminal::success, "success lost");

@@ -808,6 +808,16 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_rt_share unsupported-rt-share.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unqualified_borrow_call unsupported-borrow-function.ores --diagnostic "expected int expression")
     oreslang_contract_test(reject_suspends unsupported-suspends.ores --diagnostic "native suspends declaration requires")
+    # Canonical concurrency/ownership markers cannot be reused as scalar names.
+    foreach(keyword critical using with owns owner critical-read critical-write)
+        string(REPLACE "-" "_" test_word "${keyword}")
+        oreslang_contract_test(reject_reserved_binding_${test_word}
+            reserved-binding-${keyword}.ores --diagnostic "expected non-keyword identifier")
+        oreslang_contract_test(reject_reserved_function_${test_word}
+            reserved-function-${keyword}.ores --diagnostic "expected non-keyword identifier")
+    endforeach()
+    oreslang_contract_test(reserved_keyword_prefixes_remain_identifiers
+        reserved-keyword-prefixes.ores --ir "define i32 @main()" --run 8 --clang "${ORE_CLANG}")
     oreslang_contract_test(reject_critical unsupported-critical.ores --diagnostic "native critical declaration requires")
     oreslang_contract_test(reject_suspend_critical unsupported-suspend-critical.ores --diagnostic "native suspends declaration requires")
     # Native parity substrate for the Graal per-incarnation i64/bool
