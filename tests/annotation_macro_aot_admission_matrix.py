@@ -55,9 +55,36 @@ def invoke(compiler, directory, case, source, target=None):
     return result, emitted
 
 
+def execute_host_ir(clang, directory, case, ir):
+    """Link actual compiler-produced IR and execute the guest artifact, no JIT."""
+    workdir = pathlib.Path(directory) / ("native_" + case)
+    workdir.mkdir()
+    ll = workdir / "guest.ll"
+    executable = workdir / "guest"
+    ll.write_text(ir, encoding="utf-8")
+    tool = shutil.which(clang)
+    if tool is None:
+        return "Clang executable not found: " + clang
+    linked = subprocess.run(
+        [str(pathlib.Path(tool).resolve()), "-x", "ir", str(ll),
+         "-o", str(executable)],
+        cwd=workdir, capture_output=True, text=True, timeout=30, check=False)
+    if linked.returncode or not executable.is_file():
+        return "Clang failed to link guest IR: " + linked.stderr[:400]
+    executed = subprocess.run(
+        [str(executable)], cwd=workdir, capture_output=True,
+        text=True, timeout=15, check=False)
+    if executed.returncode != 42 or executed.stdout.strip() or executed.stderr.strip():
+        return ("native guest expected exit 42 and no output; got exit "
+                + str(executed.returncode) + ", stdout=" + repr(executed.stdout[:160])
+                + ", stderr=" + repr(executed.stderr[:160]))
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
+    ap.add_argument("--clang", required=True)
     args = ap.parse_args()
     failures = []
     with tempfile.TemporaryDirectory(prefix="oreslang-aot-attributes-") as directory:
@@ -75,6 +102,11 @@ def main():
             if target == "wasm32" and 'target triple = "wasm32-unknown-unknown"' not in good.stdout:
                 failures.append("wasm32 positive control omitted certified target triple")
 
+            if target == "host" and good.returncode == 0:
+                error = execute_host_ir(args.clang, directory, "simple_main", good.stdout)
+                if error:
+                    failures.append("host standalone guest AOT: " + error)
+
             # Positive native baseline: valid, unannotated typed calls must
             # remain compilable while unsupported metadata fails closed.
             calls, call_files = invoke(args.compiler, directory,
@@ -88,6 +120,10 @@ def main():
             if call_files:
                 failures.append("typed call control wrote unexpected files for " + target
                                 + ": " + ", ".join(call_files))
+            if target == "host" and calls.returncode == 0:
+                error = execute_host_ir(args.clang, directory, "typed_calls", calls.stdout)
+                if error:
+                    failures.append("host typed-call guest AOT: " + error)
             for label, source in NEGATIVE_CASES.items():
                 result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
                 if result.returncode == 0:
@@ -103,7 +139,7 @@ def main():
         for failure in failures:
             print("FAIL:", failure, file=sys.stderr)
         return 1
-    print("PASS: native LLVM rejects all unsupported annotations/macros without IR (host + wasm32)")
+    print("PASS: LLVM host guest-AOT executed twice; host/wasm32 annotation/macro admission enforced")
     return 0
 
 
