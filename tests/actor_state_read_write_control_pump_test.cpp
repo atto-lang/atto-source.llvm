@@ -1,3 +1,4 @@
+#define ORESLANG_RW_INTERNAL_TEST_HOOKS 1
 #include "oreslang/runtime/ActorStateReadWriteControlPump.hpp"
 
 #include <array>
@@ -37,14 +38,14 @@ int main() {
     CHECK(!initial.admitted(initial.incarnation(), 1, Mode::Read));
     CHECK(initial_pump.pump(first_control_receipt) == 1);
     CHECK(initial.admitted(initial.incarnation(), 1, Mode::Read));
-    initial.complete(initial.incarnation(), 1);
+    initial.complete_undispatched_for_test(initial.incarnation(), 1);
 
     Registry registry;
     Pump pump(registry);
     CHECK(request_with_control(registry, 1, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(registry, 2, Mode::Write).status == Status::Queued);
     CHECK(request_with_control(registry, 3, Mode::Read).status == Status::Queued);
-    registry.complete(registry.incarnation(), 1);
+    registry.complete_undispatched_for_test(registry.incarnation(), 1);
 
     std::array<Registry::Notification, 1> control{};
     std::size_t admitted = 0;
@@ -59,7 +60,7 @@ int main() {
     CHECK(control[0].status == Status::Ready);
     CHECK(pump.pump(try_admit) == 0); // no duplicates after receipt
     CHECK(registry.admitted(registry.incarnation(), 2, Mode::Write));
-    registry.complete(registry.incarnation(), 2);
+    registry.complete_undispatched_for_test(registry.incarnation(), 2);
     CHECK(registry.pending_notifications().size() == 1);
     CHECK(pump.pump(try_admit) == 0); // saturation does not lose event
     admitted = 0;
@@ -85,7 +86,7 @@ int main() {
     Pump recursive_pump(recursive);
     CHECK(request_with_control(recursive, 1, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(recursive, 2, Mode::Write).status == Status::Queued);
-    recursive.complete(recursive.incarnation(), 1);
+    recursive.complete_undispatched_for_test(recursive.incarnation(), 1);
     int nested_receipts = -1;
     auto reject_nested = [](const Registry::Notification&) noexcept -> bool {
         return false;
@@ -104,7 +105,7 @@ int main() {
     Pump retiring_pump(retiring);
     CHECK(request_with_control(retiring, 1, Mode::Read).status == Status::Ready);
     CHECK(request_with_control(retiring, 2, Mode::Write).status == Status::Queued);
-    retiring.complete(retiring.incarnation(), 1);
+    retiring.complete_undispatched_for_test(retiring.incarnation(), 1);
     Registry::Notification queued_ready{};
     auto race_retire = [&](const Registry::Notification& n) noexcept -> bool {
         queued_ready = n;
