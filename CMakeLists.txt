@@ -116,6 +116,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_bad_field_type actor-unsupported-field.ores
         --diagnostic "expected 'int'"
         --diagnostic-not "actor instance data must be declared in one state map")
+    # The Java interpreter's bounded List[int] snapshots are not proof of
+    # LLVM native ownership. Retain the fixed-i64 ABI's explicit rejection.
+    oreslang_contract_test(reject_actor_list_int_without_native_snapshot
+        actor-state-list-int-native-reject.ores
+        --diagnostic "expected 'int'"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_actor_unknown_field actor-unknown-field.ores
         --diagnostic "unknown parameter"
         --diagnostic-not "actor instance data must be declared in one state map")
