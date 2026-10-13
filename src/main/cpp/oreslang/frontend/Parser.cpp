@@ -1101,7 +1101,21 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        // Do not parse guest tuple/record spreading as ordinary argument
+        // punctuation, and do not emit LLVM IR without a statically checked
+        // argument permutation and ownership/drop plan.
+        if (token_.text == ".") {
+            fail("native product spread requires verified fixed-product "
+                 "argument binding, borrowing and zero-GC AOT lowering");
+        }
         if (accept("(")) {
+            // A labeled parenthesized product is a record literal in Java.
+            // Native scalar grammar must fail closed until the native record
+            // layout, ownership and drop proof are implemented.
+            if (named_argument_ahead()) {
+                fail("native record literal requires verified static layout, "
+                     "borrowing and zero-GC AOT lowering");
+            }
             auto inner = expression();
             require(")");
             return inner;
