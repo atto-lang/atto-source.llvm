@@ -292,11 +292,13 @@ def verify(compiler, clang, root, sanitizers):
                      ORE_EXPECT_OWNED_CLOSES=str(heap),
                      ORE_EXPECT_RESOURCE_STATUS="1")
             limited = run([str(exe)], env=e)
-            if limited.returncode != 86 or b"CHECKED_ABORT_OK\\n" not in limited.stderr:
+            if limited.returncode != 86 or b"CHECKED_ABORT_OK\n" not in limited.stderr:
                 raise AssertionError(
                     f"{label}: quota error did not hand off after cleanup: "
                     f"rc={limited.returncode} stderr={limited.stderr[:2200]!r}")
             e.pop("ORE_FORCE_ARRAY_LIMIT", None)
+            e["ORE_FAIL_AFTER"] = str(1 + owned + growing)
+            e["ORE_EXPECT_RESOURCE_STATUS"] = "0"
             result = run([str(exe)], env=e)
             if result.returncode != 42 or result.stdout or result.stderr:
                 raise AssertionError(
