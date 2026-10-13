@@ -17,7 +17,46 @@ CLASS = """define class Shelf as
   let mut Array<int> second = new Array<int>();
 end
 """
+FOUR = """define class Four as
+  let mut Array<int> previous = new Array<int>();
+  let mut Array<int> following = new Array<int>();
+  let mut Array<int> values = new Array<int>();
+  let mut Array<int> occupied = new Array<int>();
+  let int ready = 0;
+end
+"""
 POSITIVES = {
+    "four-atomic-filled": (FOUR + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 3, -1, -1, 19, 23);
+  q.ready = 1;
+  return q.values.get(0) + q.occupied.get(2);
+}
+""", 42, 4),
+    "four-atomic-filled-repeated": (FOUR + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 3, -1, -1, 10, 10);
+  rt array_commit_filled(q, 4, -1, -1, 21, 21);
+  q.ready = 1;
+  return q.values.get(3) + q.occupied.get(0);
+}
+""", 42, 4),
+    "four-atomic-filled-after-class-move": (FOUR + """pub fnc main(): int {
+  let mut Four original = new Four();
+  let mut Four moved = rt take(original);
+  rt array_commit_filled(moved, 2, -1, -1, 40, 2);
+  moved.ready = 1;
+  return moved.values.get(1) + moved.occupied.get(1);
+}
+""", 42, 4),
+    "four-atomic-filled-at-capacity": (FOUR + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 65536, -1, -1, 21, 21);
+  q.ready = 1;
+  return q.values.get(65535) + q.occupied.get(65535);
+}
+""", 42, 4),
+
     "replace-one-owned-array-field": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   let mut Array<int> staged = new Array<int>();
@@ -194,6 +233,34 @@ pub fnc main(): int {
 """, 42, 2),
 }
 NEGATIVES = {
+    "reject-batch-two-array-class": (CLASS + """pub fnc main(): int {
+  let mut Shelf q = new Shelf();
+  rt array_commit_filled(q, 4, -1, -1, 0, 0);
+  return 42;
+}
+""", "requires exactly four owned Array<int> fields"),
+    "reject-batch-moved-source": (FOUR + """pub fnc main(): int {
+  let mut Four a = new Four();
+  let mut Four b = rt take(a);
+  rt array_commit_filled(a, 4, -1, -1, 0, 0);
+  return 42;
+}
+""", "requires live exclusive mutable whole class"),
+    "reject-batch-impure-length": (FOUR + """fnc size(): int { return 4; }
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, size(), -1, -1, 0, 0);
+  return 42;
+}
+""", "native guarded condition must be pure"),
+    "reject-batch-impure-fill": (FOUR + """fnc fill(): int { return 0; }
+pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 4, -1, -1, fill(), 0);
+  return 42;
+}
+""", "native guarded condition must be pure"),
+
     "reject-copy-into-owned-array-field": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   let mut Array<int> source = new Array<int>();

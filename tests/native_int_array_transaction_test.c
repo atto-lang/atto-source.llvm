@@ -113,6 +113,10 @@ static void prepare_rollback_and_commit(void) {
     OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
     OresNativeIntArrayHandle survivor = oreslang_int_array_new(r);
     oreslang_int_array_add(r, survivor, 29);
+    // The empty commit must be valid for an otherwise healthy region
+    // containing unrelated live arrays.
+    oreslang_int_array_commit_many(r, 0, NULL, NULL);
+    check(oreslang_int_array_get(r, survivor, 0) == 29);
 
     OresNativeIntArrayHandle outputs[4] = {91, 92, 93, 94};
     fail_on_attempt(2);
@@ -354,6 +358,111 @@ static void must_abort_on_corrupt_array_metadata(int kind) {
     check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
+/* A corrupted region counter must NEVER permit close() to abandon live
+ * sensitive buffers, or an allocation/drop to proceed on forged accounting.
+ * A child that returns normally proves the invariant was not enforced.
+ */
+static void must_abort_on_corrupt_region_accounting(int kind) {
+    pid_t pid = fork();
+    check(pid >= 0);
+    if (pid == 0) {
+        struct rlimit no_core = {0, 0};
+        (void)setrlimit(RLIMIT_CORE, &no_core);
+        reset_injection();
+        OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+        OresNativeIntArrayHandle a = oreslang_int_array_new(r);
+        check(oreslang_int_array_try_add(r, a, 17) == ORES_NATIVE_ARRAY_OK);
+        if (kind == 0) {
+            /* This used to allow region_close to free only the region
+             * struct, leaking the allocated array buffer without wiping.
+             */
+            oreslang_int_array_test_corrupt_region_accounting(r, 0, 0);
+            oreslang_int_array_region_close(r);
+        } else if (kind == 1) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            OresNativeIntArrayHandle next = 0;
+            (void)oreslang_int_array_try_new(r, &next);
+        } else if (kind == 2) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            (void)oreslang_int_array_try_reserve(r, a, 4);
+        } else if (kind == 3) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 2, 4);
+            OresNativeIntArrayHandle next = 0;
+            (void)oreslang_int_array_try_prepare_many(r, 1, &next);
+        } else if (kind == 4) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 2, 4);
+            const uint64_t lengths[1] = {1};
+            const int64_t values[1] = {42};
+            OresNativeIntArrayHandle next = 0;
+            (void)oreslang_int_array_try_prepare_filled_many(
+                r, 1, lengths, values, &next);
+        } else if (kind == 5) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 2, 4);
+            oreslang_int_array_drop(r, a);
+        } else if (kind == 6) {
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            (void)oreslang_int_array_try_reserve(r, a, 8);
+        } else if (kind == 7) {
+            /* Without a full pre-commit scan this succeeded: selected
+             * slot metadata looked valid even though the region's total
+             * reserved quota was forged. No old destination is dropped,
+             * so no other checked boundary catches the corruption.
+             */
+            OresNativeIntArrayHandle dest = 0;
+            OresNativeIntArrayHandle staged = a;
+            OresNativeIntArrayHandle* dests[1] = {&dest};
+            OresNativeIntArrayHandle* srcs[1] = {&staged};
+            oreslang_int_array_test_corrupt_region_accounting(r, 1, 8);
+            oreslang_int_array_commit_many(r, 1, dests, srcs);
+        } else if (kind == 8) {
+            /* Even an empty transaction is a trusted owner boundary,
+             * not a way to silently accept corrupt region accounting.
+             */
+            oreslang_int_array_test_corrupt_region_accounting(r, 0, 0);
+            oreslang_int_array_commit_many(r, 0, NULL, NULL);
+        } else {
+            abort();
+        }
+        _exit(0);
+    }
+    int status = 0;
+    check(waitpid(pid, &status, 0) == pid);
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+static void must_abort_on_corrupt_commit_region(int kind) {
+    pid_t pid = fork();
+    check(pid >= 0);
+    if (pid == 0) {
+        struct rlimit no_core = {0, 0};
+        (void)setrlimit(RLIMIT_CORE, &no_core);
+        reset_injection();
+        OresNativeIntArrayRegion* r = oreslang_int_array_region_open();
+        OresNativeIntArrayHandle unrelated = oreslang_int_array_new(r);
+        OresNativeIntArrayHandle staged = oreslang_int_array_new(r);
+        check(oreslang_int_array_try_add(r, unrelated, 17) == ORES_NATIVE_ARRAY_OK);
+        check(oreslang_int_array_try_add(r, staged, 23) == ORES_NATIVE_ARRAY_OK);
+        OresNativeIntArrayHandle destination = 0;
+        OresNativeIntArrayHandle* destinations[1] = {&destination};
+        OresNativeIntArrayHandle* sources[1] = {&staged};
+        if (kind == 0 || kind == 2) {
+            /* Forged live-count with otherwise individually valid slots. */
+            oreslang_int_array_test_corrupt_region_accounting(r, 3, 8);
+        } else {
+            /* A corrupted slot not named in the transaction. */
+            oreslang_int_array_test_corrupt_length(r, unrelated, 5);
+        }
+        if (kind < 2)
+            oreslang_int_array_commit_many(r, 1, destinations, sources);
+        else
+            oreslang_int_array_commit_many(r, 0, NULL, NULL);
+        _exit(0);
+    }
+    int status = 0;
+    check(waitpid(pid, &status, 0) == pid);
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
 static void must_abort_on_invalid_transaction(int kind) {
     pid_t pid = fork();
     check(pid >= 0);
@@ -407,6 +516,8 @@ int main(void) {
 #if defined(__unix__) || defined(__APPLE__)
     for (int i = 0; i < 6; ++i) must_abort_on_invalid_transaction(i);
     for (int i = 0; i < 6; ++i) must_abort_on_corrupt_array_metadata(i);
+    for (int i = 0; i < 9; ++i) must_abort_on_corrupt_region_accounting(i);
+    for (int i = 0; i < 4; ++i) must_abort_on_corrupt_commit_region(i);
 #endif
     return 0;
 }
