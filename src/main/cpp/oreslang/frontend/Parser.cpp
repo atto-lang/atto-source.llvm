@@ -398,9 +398,19 @@ private:
         if (token_.text == "const" || token_.text == "val"
                 || token_.text == "let" || token_.text == "state")
             fail("actor instance data must be declared in one state map");
-        while (token_.text == "fnc" || token_.text == "routine"
-               || token_.text == "pub" || token_.text == "receive"
-               || token_.text == "receive_forward" || token_.text == "receive_backward") {
+        auto isMethodStart = [&]() {
+            if (token_.text == "fnc" || token_.text == "routine"
+                    || token_.text == "pub" || token_.text == "receive"
+                    || token_.text == "receive_forward"
+                    || token_.text == "receive_backward") return true;
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                return false;
+            // Canonical Oreslang allows bare actor methods: get(): int.
+            // Never consume a non-method identifier as an actor declaration.
+            Lexer next = lexer_;
+            return next.next().text == "(";
+        };
+        while (isMethodStart()) {
             value.methods.push_back(function(true,
                 transform_pipe ? value.forward_messages_type : value.messages_type,
                 value.backward_messages_type, transform_pipe));
@@ -505,7 +515,11 @@ private:
             if (transform_pipe != (value.name != "receive"))
                 fail("transform pipe actor requires directional receive handlers");
         } else {
-            if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+            const bool spelled_fnc = accept("fnc") || accept("routine");
+            if (!spelled_fnc && !actor_method)
+                fail("expected fnc or routine");
+            // The actor-method shorthand has exactly the same ABI and
+            // effect/ownership rules as pub fnc declarations.
             value.name = identifier();
         }
         require("(");
