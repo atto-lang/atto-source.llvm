@@ -104,6 +104,12 @@ public:
                             if (!hooks.on_restart(*next)) hooks.on_escalate(*next);
                         }
                         break;
+                    default:
+                        // A forged enum tag from native hooks must not fall
+                        // through to ACK and silently discard a child failure.
+                        // Escalation exceptions take the existing retry path.
+                        hooks.on_escalate(*next);
+                        break;
                 }
                 child_failures_.ack(next->actor);
             } catch (...) {
