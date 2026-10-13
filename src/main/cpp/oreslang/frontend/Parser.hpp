@@ -46,12 +46,15 @@ struct LocalBinding {
 };
 
 struct ClassField {
+    // Private by default. Export state only when a source 'pub' modifier exists.
+    bool exported = false;
     std::string name;
     std::int64_t initial = 0;
     bool int_array = false; // owned opaque handle; never exposed as an int
 };
 
 struct ClassDecl {
+    bool exported = false;
     std::string name;
     // Up to 16 scalar i64 or owned Array<int> fields.
     // The ordered vector defines the native LLVM struct layout.
