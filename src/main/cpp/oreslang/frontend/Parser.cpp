@@ -52,7 +52,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial"
+        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -93,6 +93,20 @@ public:
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+            // Keep 'critical-read' / 'critical-write' as ordinary
+            // IDENT '-' IDENT tokens. The parser recognizes them *only*
+            // in callable modifier positions: arbitrary expressions must
+            // never lose subtraction because of declaration syntax.
+            // Existing nb-select recognition is intentionally unchanged
+            // until native select lowering supports that grammar.
+            const auto first = source_.substr(start, at_ - start);
+            if (first == "nb" && source_.substr(at_, 7) == "-select") {
+                const auto end = at_ + 7;
+                if (end == source_.size() ||
+                        (source_[end] != '-' && !identifier_part(source_[end]))) {
+                    at_ = end;
+                }
+            }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
         if (digit(ch)) {
@@ -176,7 +190,10 @@ public:
             } else {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else fail("expected 'module', 'class' or 'actor'");
+                else if (accept_transform_pipe_modifier()) {
+                    require("actor");
+                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+                } else fail("expected 'module', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
@@ -188,7 +205,10 @@ public:
                 }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else fail("expected 'class' or 'actor'");
+                else if (accept_transform_pipe_modifier()) {
+                    require("actor");
+                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+                } else fail("expected 'class' or 'actor'");
             } else {
                 program.functions.push_back(function());
             }
@@ -240,7 +260,16 @@ private:
         if (token_.text == "suspend" || token_.text == "suspends") {
             fail("native suspends actor method requires continuation lowering");
         }
+        // Actor method modifiers have their own admission boundary. Do not
+        // allow the fixed-int actor subset to parse these as method names or
+        // quietly route a read declaration through the legacy write lane.
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         if (!accept("fnc")) accept("method"); // optional method marker
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
@@ -367,6 +396,11 @@ private:
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
+        // Check compound READ/WRITE modes before handling legacy critical,
+        // otherwise declaration parsing could report WRITE-only semantics.
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
@@ -375,6 +409,9 @@ private:
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         value.name = identifier();
         require("(");
         if (!accept(")")) {
@@ -1102,6 +1139,34 @@ private:
         return true;
     }
 
+    // Consult a copy of the scanner rather than merging arithmetic tokens.
+    // The original scanner position and error offset remain unchanged.
+    bool at_unsupported_critical_mode() const {
+        if (token_.text != "critical") return false;
+        Lexer probe = lexer_;
+        const Token dash = probe.next();
+        if (dash.text != "-" || dash.offset != token_.offset + token_.text.size())
+            return false;
+        const Token mode = probe.next();
+        return (mode.text == "read" || mode.text == "write")
+            && mode.offset == dash.offset + 1;
+    }
+
+    // Parse the role only after 'define'. A plain transform-pipe expression
+    // must still lex as identifier, minus, identifier.
+    bool accept_transform_pipe_modifier() {
+        if (token_.text != "transform") return false;
+        const auto start = token_.offset;
+        advance();
+        if (token_.text != "-" || token_.offset != start + 9)
+            fail("expected contiguous transform-pipe actor modifier");
+        advance();
+        if (token_.text != "pipe" || token_.offset != start + 10)
+            fail("expected contiguous transform-pipe actor modifier");
+        advance();
+        return true;
+    }
+
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
@@ -1477,8 +1542,9 @@ private:
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
         // suspended/native execution frame or deferred callback.
-        if (token_.text == "select" || token_.text == "readch" ||
-            token_.text == "writech" || token_.text == "nb" ||
+        if (token_.text == "select" || token_.text == "nb-select" ||
+            token_.text == "readch" || token_.text == "writech" ||
+            token_.text == "nb" ||
             token_.text == "do" || token_.text == "await" ||
             token_.text == "yield" || token_.text == "cooperate") {
             throw std::runtime_error(
