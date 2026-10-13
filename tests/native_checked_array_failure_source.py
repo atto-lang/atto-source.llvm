@@ -83,16 +83,21 @@ static int dropped = 0;
 static int closed = 0;
 static int owned_dropped = 0;
 static int owned_closed = 0;
+static int typed_handoffs = 0;
+static uint32_t typed_status = 0;
 static int expectations(void) {
     const char* wanted_drops = getenv("ORE_EXPECT_DROPS");
     const char* wanted_closes = getenv("ORE_EXPECT_CLOSES");
     const char* wanted_owned_drops = getenv("ORE_EXPECT_OWNED_DROPS");
     const char* wanted_owned_closes = getenv("ORE_EXPECT_OWNED_CLOSES");
+    const char* wanted_typed_status = getenv("ORE_EXPECT_RESOURCE_STATUS");
     if (!wanted_drops || !wanted_closes || !wanted_owned_drops ||
-        !wanted_owned_closes) return 0;
+        !wanted_owned_closes || !wanted_typed_status) return 0;
     return dropped == atoi(wanted_drops) && closed == atoi(wanted_closes) &&
         owned_dropped == atoi(wanted_owned_drops) &&
-        owned_closed == atoi(wanted_owned_closes);
+        owned_closed == atoi(wanted_owned_closes) &&
+        typed_status == (uint32_t)atoi(wanted_typed_status) &&
+        typed_handoffs == (typed_status == 0 ? 0 : 1);
 }
 __attribute__((constructor)) static void setup(void) {
     const char* injected = getenv("ORE_FAIL_AFTER");
@@ -101,6 +106,22 @@ __attribute__((constructor)) static void setup(void) {
 }
 extern void __real_oreslang_int_array_drop(
     OresNativeIntArrayRegion*, OresNativeIntArrayHandle);
+extern OresNativeIntArrayStatus __real_oreslang_int_array_try_add(
+    OresNativeIntArrayRegion*, OresNativeIntArrayHandle, int64_t);
+OresNativeIntArrayStatus __wrap_oreslang_int_array_try_add(
+    OresNativeIntArrayRegion* r, OresNativeIntArrayHandle h, int64_t value) {
+    const char* force_limit = getenv("ORE_FORCE_ARRAY_LIMIT");
+    if (force_limit && force_limit[0] == '1')
+        return ORES_NATIVE_ARRAY_LIMIT;
+    return __real_oreslang_int_array_try_add(r, h, value);
+}
+extern void __real_oreslang_int_array_unhandled_resource_failure(uint32_t);
+void __wrap_oreslang_int_array_unhandled_resource_failure(uint32_t status) {
+    ++typed_handoffs;
+    typed_status = status;
+    __real_oreslang_int_array_unhandled_resource_failure(status);
+    _Exit(89); /* A terminal error handoff must never return. */
+}
 extern void __real_oreslang_int_array_region_close(OresNativeIntArrayRegion*);
 void __wrap_oreslang_int_array_drop(OresNativeIntArrayRegion* r,
                                    OresNativeIntArrayHandle h) {
@@ -184,6 +205,7 @@ def verify(compiler, clang, root, sanitizers):
                 b"array.failure.invalid-status:",
                 b"switch i32",
                 b"@oreslang_int_array_drop",
+                b"@oreslang_int_array_unhandled_resource_failure",
                 b"@oreslang_int_array_region_close",
                 b"@abort",
             ]
@@ -218,6 +240,8 @@ def verify(compiler, clang, root, sanitizers):
                 link += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
             link += [
                 "-Wl,--wrap=oreslang_int_array_drop",
+                "-Wl,--wrap=oreslang_int_array_try_add",
+                "-Wl,--wrap=oreslang_int_array_unhandled_resource_failure",
                 "-Wl,--wrap=oreslang_int_array_region_close",
                 "-Wl,--wrap=abort",
                 "-Wl,--wrap=oreslang_owned_i64_region_drop",
@@ -241,7 +265,8 @@ def verify(compiler, clang, root, sanitizers):
                          ORE_EXPECT_DROPS=str(expected_drops),
                          ORE_EXPECT_CLOSES=str(int(failed_at > 0)),
                          ORE_EXPECT_OWNED_DROPS=str(heap if failed_at > 0 else 0),
-                         ORE_EXPECT_OWNED_CLOSES=str(heap))
+                         ORE_EXPECT_OWNED_CLOSES=str(heap),
+                         ORE_EXPECT_RESOURCE_STATUS="2")
                 result = run([str(exe)], env=e)
                 if result.returncode != 86 or \
                         b"CHECKED_ABORT_OK\n" not in result.stderr:
@@ -255,7 +280,23 @@ def verify(compiler, clang, root, sanitizers):
             e.update(ORE_FAIL_AFTER=str(1 + owned + growing),
                      ORE_EXPECT_DROPS=str(owned), ORE_EXPECT_CLOSES="1",
                      ORE_EXPECT_OWNED_DROPS=str(heap),
-                     ORE_EXPECT_OWNED_CLOSES=str(heap))
+                     ORE_EXPECT_OWNED_CLOSES=str(heap),
+                     ORE_EXPECT_RESOURCE_STATUS="0")
+            # Force a typed LIMIT from an actual compiler-generated add,
+            # after every owner has been created. The error handoff receives
+            # quota=1 only AFTER all array owners have been destroyed.
+            e = os.environ.copy()
+            e.update(ORE_FAIL_AFTER="-1", ORE_FORCE_ARRAY_LIMIT="1",
+                     ORE_EXPECT_DROPS=str(owned), ORE_EXPECT_CLOSES="1",
+                     ORE_EXPECT_OWNED_DROPS=str(heap),
+                     ORE_EXPECT_OWNED_CLOSES=str(heap),
+                     ORE_EXPECT_RESOURCE_STATUS="1")
+            limited = run([str(exe)], env=e)
+            if limited.returncode != 86 or b"CHECKED_ABORT_OK\\n" not in limited.stderr:
+                raise AssertionError(
+                    f"{label}: quota error did not hand off after cleanup: "
+                    f"rc={limited.returncode} stderr={limited.stderr[:2200]!r}")
+            e.pop("ORE_FORCE_ARRAY_LIMIT", None)
             result = run([str(exe)], env=e)
             if result.returncode != 42 or result.stdout or result.stderr:
                 raise AssertionError(
