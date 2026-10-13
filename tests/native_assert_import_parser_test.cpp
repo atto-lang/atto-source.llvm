@@ -149,6 +149,36 @@ int main() {
             "import module Assert from \"std/assert\"; "
             "pub fnc check(int x): bool { return Assert.equal(rt borrow x, 7); }",
             "borrowed reference may only be passed to a borrowed parameter");
+
+        // Both spellings share the sealed import binding and compile-time
+        // arity rules; neither bypasses native codegen's import rejection.
+        auto colon = oreslang::parse_program(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert::equal(7, 7); } "
+            "pub fnc main(): int { return 0; }");
+        if (colon.functions.size() != 2 || !colon.functions[0].result ||
+            colon.functions[0].result->kind != oreslang::Expression::Kind::ModuleCall ||
+            colon.functions[0].result->name != "equal" ||
+            colon.functions[0].result->arguments.size() != 2)
+            throw std::runtime_error("qualified :: Assert call AST mismatch");
+        expect_rejected(
+            "pub fnc main(): int { return Assert::equal(1, 1); }",
+            "unbound native Assert module alias");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Assert::equal_throws(1); }",
+            "wrong sealed Assert member arity");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Assert::unknown(1); }",
+            "unknown sealed Assert member");
+        auto qualified_bool = oreslang::parse_program(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc check(): bool { return Assert::true(1); } "
+            "pub fnc main(): int { return 0; }");
+        if (qualified_bool.functions[0].result->name != "true")
+            throw std::runtime_error("Assert::true reserved member parsing mismatch");
+
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {
