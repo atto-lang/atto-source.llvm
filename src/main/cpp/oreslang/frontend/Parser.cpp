@@ -138,6 +138,21 @@ bool nonthrowing_protected_read(const Expression& expr) {
            expr.left->kind == Expression::Kind::Variable;
 }
 
+// Arithmetic over checked scalar reads is nonthrowing. Never admit
+// general calls, array mutations, ownership transfers, or suspension.
+bool native_pure_scalar_tree(const Expression& expr) {
+    if (nonthrowing_protected_read(expr)) return true;
+    if (expr.kind == Expression::Kind::Negate)
+        return expr.left && native_pure_scalar_tree(*expr.left);
+    if (expr.kind == Expression::Kind::Add ||
+            expr.kind == Expression::Kind::Subtract ||
+            expr.kind == Expression::Kind::Multiply)
+        return expr.left && expr.right &&
+            native_pure_scalar_tree(*expr.left) &&
+            native_pure_scalar_tree(*expr.right);
+    return false;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int)
@@ -570,14 +585,14 @@ private:
                         deferred.field = target->name;
                         require("=");
                         deferred.expression = expression();
-                        if (!nonthrowing_protected_read(*deferred.expression))
+                        if (!native_pure_scalar_tree(*deferred.expression))
                             fail("native caught throw defer requires nonthrowing scalar/field expression");
                         require(";");
                         value.caught_throw_defers.push_back(std::move(deferred));
                     }
                     require("throw");
                     value.caught_throw_value = expression();
-                    if (!nonthrowing_protected_read(*value.caught_throw_value))
+                    if (!native_pure_scalar_tree(*value.caught_throw_value))
                         fail("native caught throw requires nonthrowing int payload");
                     require(";");
                     require("}");
@@ -594,7 +609,7 @@ private:
                     require("{");
                     require("return");
                     value.result = expression();
-                    if (!nonthrowing_protected_read(*value.result))
+                    if (!native_pure_scalar_tree(*value.result))
                         fail("native caught throw catch return requires nonthrowing scalar/field read");
                     require(";");
                     require("}");
