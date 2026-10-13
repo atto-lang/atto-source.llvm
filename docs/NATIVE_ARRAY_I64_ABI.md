@@ -488,6 +488,22 @@ followed by terminal invariant failure; it is never catchable. Bare ignored
 `try_add` statements, unmanaged receivers, invalid arity, loans and
 unsupported wasm targets still fail closed.
 
+**Recovery audit boundary:** The source-compiled retry regression executes
+two checked appends on the **same live owner**: both succeed, actual first
+capacity-growth allocation failure followed by success, first or second
+quota denial, two quota denials, and OOM followed by quota denial. Each case
+checks the original four committed elements, the complete final contents
+before drop, both checked status codes, expected length, and exactly-once
+drop/region close, in both ordinary and ASan/UBSan builds. The adversarial
+suite also injects status 3, 99, INT32_MAX, INT32_MIN, and -1 to prove none
+can silently become OK, Limit or NoMemory.
+
+Bare `try_add(...)` statements are currently rejected, **but storing a
+numeric status in a never-read local is not yet forbidden**. Arithmetic
+combinations of status codes are permitted by this internal i64 slice.
+Consequently this implementation **does not meet a must-use Result contract**,
+regardless of successful native execution or negative tests.
+
 **Release boundary:** This numeric scalar is a temporary native-only
 compiler/ABI proving primitive. It is **not** a stable Oreslang
 `Result<void, ArrayError>` or portable Java/GraalVM feature. Public
