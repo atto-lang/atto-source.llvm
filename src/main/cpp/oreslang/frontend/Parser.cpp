@@ -15,12 +15,24 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, Symbol, End };
+enum class Kind { Identifier, Integer, String, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
     std::size_t offset;
 };
+
+// This is a sealed lexical interface, not executable native module linking.
+// Keep in sync with stdlib/assert.ores and the versioned Assert contract.
+int assert_member_arity(std::string_view member) noexcept {
+    if (member == "equal" || member == "not_equal" || member == "same" ||
+        member == "equal_throws" || member == "not_equal_throws" ||
+        member == "same_throws") return 2;
+    if (member == "true" || member == "false" ||
+        member == "true_throws" || member == "false_throws" ||
+        member == "fail") return 1;
+    return -1;
+}
 
 bool exceptional_control(std::string_view word) {
     return word == "throw" || word == "raise" || word == "panic" ||
@@ -102,6 +114,31 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Imports use canonical literal paths, not dynamic expressions,
+        // escapes, or host-controlled search paths.
+        if (ch == '"') {
+            ++at_;
+            const std::size_t body = at_;
+            while (at_ < source_.size() && source_[at_] != '"') {
+                const unsigned char byte =
+                    static_cast<unsigned char>(source_[at_]);
+                if (byte < 0x20 || byte == 0x7f || byte == '\\')
+                    throw std::runtime_error(
+                        "unsupported escape/control byte in native import string at byte "
+                        + std::to_string(at_));
+                ++at_;
+            }
+            if (at_ == source_.size())
+                throw std::runtime_error("unterminated native string at byte "
+                                         + std::to_string(start));
+            const std::string_view value = source_.substr(body, at_ - body);
+            ++at_;
+            return {Kind::String, value, start};
+        }
+        if (source_.substr(at_, 2) == "::") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -163,6 +200,13 @@ public:
 
     Program parse() {
         Program program;
+        // Java/GraalVM permits file-level imports before a wrapped module.
+        // Parse that prelude before deciding whether this is a module body.
+        while (token_.text == "import") {
+            if (!program.imports.empty())
+                fail("duplicate native module imports are unsupported");
+            program.imports.push_back(import_module());
+        }
         bool wrapped_module = false;
         if (accept("define")) {
             if (accept("serial")) {
@@ -181,6 +225,11 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            // Match the Java parser: imports are permitted only in the
+            // file-level prelude, never inside a module or after a callable.
+            if (token_.text == "import") {
+                fail("native module imports must precede declarations");
+            }
             if (accept("define")) {
                 if (accept("serial")) {
                     require("actor");
@@ -201,6 +250,28 @@ public:
     }
 
 private:
+    ModuleImport import_module() {
+        ModuleImport imported;
+        imported.offset = token_.offset;
+        require("import");
+        require("module");
+        imported.symbol = identifier();
+        require("from");
+        if (token_.kind != Kind::String)
+            fail("native module import requires a literal canonical path");
+        imported.canonical_path = std::string(token_.text);
+        advance();
+        require(";");
+        // This is a fixed, host-independent namespace. Do not consult the
+        // working directory, symlinks or user packages for built-in modules.
+        if (imported.symbol != "Assert" ||
+                imported.canonical_path != "std/assert") {
+            fail("unsupported native module import: only sealed Assert from std/assert is staged");
+        }
+        has_assert_import_ = true;
+        return imported;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -375,7 +446,15 @@ private:
         }
         require(":");
         value.returns_void = accept("void");
-        if (!value.returns_void) require("int");
+        if (!value.returns_void) {
+            if (accept("bool")) {
+                if (!has_assert_import_)
+                    fail("native bool return requires sealed module ABI linking");
+                value.returns_bool = true;
+            } else {
+                require("int");
+            }
+        }
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -556,6 +635,7 @@ private:
                     statement.receiver = target->left->name;
                     statement.field = target->name;
                     statement.expression = expression();
+                } else if (target->kind == Expression::Kind::Call ||
                 } else if (target->kind == Expression::Kind::Call ||
                            target->kind == Expression::Kind::ArrayCall) {
                     statement.kind = Statement::Kind::Call;
@@ -779,7 +859,8 @@ private:
                     deferred.receiver = target->left->name;
                     deferred.field = target->name;
                     deferred.expression = expression();
-                } else if (target->kind == Expression::Kind::Call) {
+                } else if (target->kind == Expression::Kind::Call ||
+                    target->kind == Expression::Kind::ModuleCall) {
                     deferred.expression = std::move(target);
                 } else {
                     fail("native defer requires a direct function call or class field assignment");
@@ -851,6 +932,7 @@ private:
                 statement.receiver = action->left->name;
                 statement.field = action->name;
                 statement.expression = expression();
+            } else if (action->kind == Expression::Kind::Call ||
             } else if (action->kind == Expression::Kind::Call ||
                        action->kind == Expression::Kind::ArrayCall) {
                 statement.kind = Statement::Kind::Call;
@@ -1026,23 +1108,52 @@ private:
         }
         // Class-owned array expressions are intentionally limited to one
         // field selection followed by a native array method or .size.
-        while (accept(".")) {
-            auto field = make_expression(Expression::Kind::Field, offset);
-            field->left = std::move(expr);
-            field->name = identifier();
-            // Keep ActorRef.send(...) for the outer actor action parser.
-            // Eager ArrayCall parsing would erase the send/stop ordering.
-            if (field->name != "send" && accept("(")) {
-                field->kind = Expression::Kind::ArrayCall;
+        while (token_.text == "." || token_.text == "::") {
+            const bool double_colon = accept("::");
+            if (!double_colon) require(".");
+            if (expr->kind == Expression::Kind::Variable && expr->name == "Assert") {
+                if (!has_assert_import_) fail("unbound native Assert module alias");
+                if (token_.kind != Kind::Identifier &&
+                    token_.text != "true" && token_.text != "false")
+                    fail("expected sealed Assert member name");
+                const std::string member(token_.text);
+                advance();
+                const int arity = assert_member_arity(member);
+                if (arity < 0)
+                    fail("unknown sealed Assert member '" + member + "'");
+                if (!accept("("))
+                    fail("native Assert member must be called, not read as a value");
+                auto call = make_expression(Expression::Kind::ModuleCall, offset);
+                call->left = std::move(expr);
+                call->name = member;
                 if (!accept(")")) {
-                    do {
-                        field->arguments.push_back(expression());
-                    } while (accept(","));
+                    do { call->arguments.push_back(expression()); }
+                    while (accept(","));
                     require(")");
                 }
+                if (call->arguments.size() != static_cast<std::size_t>(arity))
+                    fail("wrong sealed Assert member arity for '" + member + "'");
+                expr = std::move(call);
+            } else {
+                if (double_colon)
+                    fail("native :: qualification requires sealed Assert module");
+                auto field = make_expression(Expression::Kind::Field, offset);
+                field->left = std::move(expr);
+                field->name = identifier();
+                // Keep ActorRef.send(...) for the outer actor action parser.
+                // Eager ArrayCall parsing would erase the send/stop ordering.
+                if (field->name != "send" && accept("(")) {
+                    field->kind = Expression::Kind::ArrayCall;
+                    if (!accept(")")) {
+                        do {
+                            field->arguments.push_back(expression());
+                        } while (accept(","));
+                        require(")");
+                    }
+                }
+                expr = std::move(field);
+                if (expr->kind == Expression::Kind::ArrayCall) break;
             }
-            expr = std::move(field);
-            if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
     }
@@ -1091,6 +1202,14 @@ private:
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions);
                 return;
+            case Expression::Kind::ModuleCall:
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
+                    expr.left->name != "Assert" ||
+                    assert_member_arity(expr.name) != static_cast<int>(expr.arguments.size()))
+                    throw std::runtime_error("invalid sealed Assert call AST");
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions);
+                return;
             case Expression::Kind::ArrayCall:
                 validate_expression(*expr.left, parameters, functions);
                 for (const auto& arg : expr.arguments)
@@ -1128,6 +1247,7 @@ private:
 
     static bool contains_callable_invocation(const Expression* expr) {
         if (!expr) return false;
+        if (expr->kind == Expression::Kind::Call ||
         if (expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get()) ||
@@ -1185,6 +1305,29 @@ private:
     }
 
     static void validate(const Program& program) {
+        // An imported module alias must never be shadowed by a local, class,
+        // actor or function symbol: otherwise source binding could differ
+        // between the parser, ownership checker, and future LLVM linker.
+        if (!program.imports.empty()) {
+            if (program.module == "Assert")
+                throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            for (const auto& fn : program.functions) {
+                if (fn.name == "Assert")
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                for (const auto& param : fn.parameters)
+                    if (param.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+                for (const auto& binding : fn.locals)
+                    if (binding.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            }
+            for (const auto& cls : program.classes)
+                if (cls.name == "Assert")
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+            for (const auto& actor : program.actors)
+                if (actor.name == "Assert")
+                    throw std::runtime_error("sealed Assert module alias cannot be shadowed");
+        }
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
             if (!classes.insert(cls.name).second)
@@ -1328,6 +1471,8 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
+                    if (!program.imports.empty() && local.name == "Assert")
+                        throw std::runtime_error("sealed Assert module alias cannot be shadowed");
                     validate_expression(*local.initializer, names, functions);
                     if (!names.insert(local.name).second)
                         throw std::runtime_error("duplicate branch-local name '" +
@@ -1413,6 +1558,7 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    bool has_assert_import_ = false;
     bool experimental_rt_scalar_loop_;
 };
 
