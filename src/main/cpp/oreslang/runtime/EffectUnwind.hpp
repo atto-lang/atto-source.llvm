@@ -63,6 +63,16 @@ constexpr EffectStatus normalize_effect(EffectStatus status) noexcept {
 template <std::size_t Capacity, std::size_t SecondaryCapacity = 8>
 class EffectUnwind final {
 public:
+    // A pending cleanup stack is a unique lexical owner. Implicit copies or
+    // moves would duplicate callback registrations and could run a deferred
+    // resource release more than once (or leave stale context pointers).
+    // Keep the frame at its compiler-allocated address for its entire scope.
+    EffectUnwind() = default;
+    EffectUnwind(const EffectUnwind&) = delete;
+    EffectUnwind& operator=(const EffectUnwind&) = delete;
+    EffectUnwind(EffectUnwind&&) = delete;
+    EffectUnwind& operator=(EffectUnwind&&) = delete;
+
     using Cleanup = EffectStatus (*)(void*) noexcept;
 
     struct Summary {
@@ -72,7 +82,7 @@ public:
         std::size_t overflow_count = 0;
     };
 
-    bool push(Cleanup cleanup, void* context) noexcept {
+    [[nodiscard]] bool push(Cleanup cleanup, void* context) noexcept {
         if (cleanup == nullptr || count_ == Capacity || finished_) return false;
         stack_[count_++] = Entry{cleanup, context};
         return true;
@@ -85,7 +95,7 @@ public:
     // the Java/GraalVM cleanup and trap contracts. In particular, a deferred
     // process exit cannot convert an already-failing ordinary throw into an
     // apparently successful exit status.
-    Summary finish(EffectStatus current = {}) noexcept {
+    [[nodiscard]] Summary finish(EffectStatus current = {}) noexcept {
         Summary result{};
         result.primary = normalize_effect(current);
         if (finished_) {
