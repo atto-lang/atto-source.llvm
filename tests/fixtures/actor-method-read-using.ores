@@ -1,0 +1,6 @@
+define actor Counter as
+    state { value: int = 7; }
+    pub fnc get(): int with state.read {
+        return using state.read(|s| -> { return s.value; });
+    }
+end
