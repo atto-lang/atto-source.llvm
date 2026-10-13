@@ -41,6 +41,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-array-result-contract-test)
     set_tests_properties(native_array_result_nominal_closed_proof_host_only
         PROPERTIES TIMEOUT 20)
+    # Pure compile-time nominal selector proof. This does not imply that the
+    # restricted i64 native AST accepts source `define enum` yet.
+    add_executable(oreslang-native-nominal-selector-test
+        tests/nominal_overload_selector_test.cpp)
+    target_include_directories(oreslang-native-nominal-selector-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-nominal-selector-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nominal_overload_selector_static
+        COMMAND oreslang-native-nominal-selector-test)
+    set_tests_properties(native_nominal_overload_selector_static PROPERTIES TIMEOUT 15)
+
     # Host-only fairness budget; not evidence of compiled Oreslang suspension.
     add_executable(oreslang-native-reduction-quantum-test
         tests/native_cooperation_quantum_test.cpp)
