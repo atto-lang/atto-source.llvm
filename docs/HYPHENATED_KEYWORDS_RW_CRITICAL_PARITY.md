@@ -250,3 +250,35 @@ scheduler carriers. The actual actor runtime and full Java build were
 **not** part of this isolated test. No full guest compiler effect checking,
 Graal Native Image/AOT, LLVM guest parity, formal proof, or ready-to-merge
 status is claimed.
+
+## October 12: executable Java legacy-write route (integration WIP)
+
+Java [PR #780](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/780)
+now changes the interpreter's **legacy `critical`** admission at
+file-global, per-instance and per-class/static scopes to
+`CriticalRwGate.newCriticalTicket()`, equivalent to `Mode.WRITE`.
+All such compiler-generated callable routes in
+`OresEvalRootNode` use the same kind of gate that future verified
+`critical-read` and `critical-write` callables must share. Explicit
+`OresMutex.Critical` remains a separate, user-created mutex object;
+it must not be mistaken for a compiler-owned protection domain.
+
+The production `OresScheduler` on this PR now **defers settling a
+running task's cancellation Future until the executing carrier turn
+has completely unwound**. This is essential: `releaseOnCompletion()`
+must never release a writer ticket while guest instructions are still
+running. The cancellation request can initially return `false` when
+a guest turn is active; the task's Future subsequently settles as
+cancelled following the carrier unwind. Pending-task cancellation
+still settles directly. Tests must check both paths.
+
+The isolated funded exact-source Java run
+[38326862701](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/38326862701)
+passed with exact production `CriticalRwGate`, `OresFuture`,
+`OresScheduler`, `Awaitable` and `MixedInteropBridge` sources,
+a **test-only actor shim**, mixed legacy-vs-read/write admission tests,
+single-worker suspension, cancellation-before-release behavior, and
+the prior stress model. This **does not** exercise the entire 9k-line
+guest interpreter / full GraalVM Maven suite, verify actor STOP
+incarnation fencing, or enable new source-level RW declarations.
+The source repository checks were not verified green. Keep draft.
