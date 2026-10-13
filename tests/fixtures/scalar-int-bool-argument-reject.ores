@@ -1,0 +1,6 @@
+pub fnc identity(int n): int {
+    return n;
+}
+pub fnc main(): int {
+    return identity(true);
+}

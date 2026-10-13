@@ -499,6 +499,16 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor_receive_bool_result
         actor-receive-boolean-result-reject.ores
         --diagnostic "actor state int callback result cannot contain boolean")
+    # Restricted LLVM scalar expressions have int-only returns, locals and
+    # call parameters. Typed bool messages use a separate, explicit path.
+    oreslang_contract_test(reject_int_bool_return scalar-int-bool-return-reject.ores
+        --diagnostic "int expression cannot contain boolean")
+    oreslang_contract_test(reject_int_bool_local scalar-int-bool-local-reject.ores
+        --diagnostic "int expression cannot contain boolean")
+    oreslang_contract_test(reject_int_bool_call_argument scalar-int-bool-argument-reject.ores
+        --diagnostic "int expression cannot contain boolean")
+    oreslang_contract_test(reject_int_bool_arithmetic scalar-int-bool-arithmetic-reject.ores
+        --diagnostic "int expression cannot contain boolean")
     # Cross-backend parity: the exact same .ores fixture Git blobs are
     # checked by Java/GraalVM PR #760 with the Java AST/effect verifier.
     oreslang_contract_test(native_shared_actor_state_read

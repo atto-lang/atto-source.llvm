@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    const local: int = false;
+    return local;
+}
