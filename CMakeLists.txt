@@ -746,6 +746,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-async-io-operation-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-async-io-operation-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_async_io_completion_generation_races COMMAND oreslang-async-io-operation-test)
+    # Linux-only: nonblocking TCP syscalls + epoll readiness, not std/net lowering.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-nonblocking-tcp-linux-test tests/nonblocking_tcp_linux_test.cpp)
+        target_include_directories(oreslang-nonblocking-tcp-linux-test PRIVATE src/main/cpp)
+        target_compile_options(oreslang-nonblocking-tcp-linux-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_linux_nonblocking_tcp_readiness COMMAND oreslang-nonblocking-tcp-linux-test)
+        set_tests_properties(native_linux_nonblocking_tcp_readiness PROPERTIES TIMEOUT 20)
+    endif()
     set_tests_properties(native_async_io_completion_generation_races PROPERTIES TIMEOUT 20)
     # Pre-source-lowering safety gate: prevents stale continuation wakeups,
     # premature actor-heap retirement, duplicate resumes and live-loan drops.
