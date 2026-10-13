@@ -164,33 +164,46 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (accept("define")) {
+        // 'define' is optional for supported named declarations. Legacy
+        // 'pub define' remains accepted; 'define pub' is canonical.
+        while (token_.kind != Kind::End &&
+                !(wrapped_module && token_.text == "end")) {
+            const bool leading_pub = accept("pub");
+            const bool leading_private = accept("private");
+            const bool defined = accept("define");
+            const bool after_define_pub = defined && accept("pub");
+            const bool after_define_private = defined && accept("private");
+            if ((leading_pub && after_define_pub) ||
+                    (leading_pub || after_define_pub) &&
+                    (leading_private || after_define_private) ||
+                    (leading_private && after_define_private))
+                fail("duplicate/conflicting visibility modifier");
+            const bool exported = leading_pub || after_define_pub;
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
+                if (wrapped_module || !program.classes.empty() ||
+                        !program.actors.empty() || !program.functions.empty())
+                    fail("native module must be the outer source declaration");
+                if (exported || leading_private || after_define_private)
+                    fail("native module visibility requires an exported-module ABI");
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
+            } else if (accept("class")) {
+                ClassDecl klass = class_declaration();
+                klass.exported = exported;
+                program.classes.push_back(std::move(klass));
+            } else if (accept("actor")) {
+                ActorDecl actor = actor_declaration();
+                program.actors.push_back(std::move(actor));
             } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else fail("expected 'module', 'class' or 'actor'");
-            }
-        }
-        while (token_.kind != Kind::End
-                && !(wrapped_module && token_.text == "end")) {
-            if (accept("define")) {
-                if (accept("serial")) {
-                    require("actor");
-                    fail("native serial actor requires shared HTTP/message lane lowering");
-                }
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else fail("expected 'class' or 'actor'");
-            } else {
-                program.functions.push_back(function());
+                if (defined) fail("expected module, class or actor after 'define'");
+                if (leading_private || after_define_private)
+                    fail("private native function modifier must not change export linkage");
+                program.functions.push_back(function(exported));
             }
         }
         if (wrapped_module) require("end");
@@ -283,9 +296,11 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
-            require("let");
             ClassField field;
+            field.exported = accept("pub");
+            if (accept("private") && field.exported)
+                fail("duplicate/conflicting visibility modifier on class field");
+            require("let");
             if (accept("mut")) {
                 require("Array");
                 require("<");
@@ -335,10 +350,12 @@ private:
         return value;
     }
 
-    Function function() {
+    Function function(bool preexported = false) {
         Function value;
         value.offset = token_.offset;
-        value.exported = accept("pub");
+        if (preexported && token_.text == "pub")
+            fail("duplicate visibility modifier on native function");
+        value.exported = preexported || accept("pub");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
