@@ -473,6 +473,22 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_scoped_borrow_parameter_refresh unsupported-borrow-param.ores
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    add_test(NAME native_named_call_lexical_ir_order
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
+          "$<TARGET_FILE:oreslang-llvmc>"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
+    set_tests_properties(native_named_call_lexical_ir_order PROPERTIES TIMEOUT 30)
+    if(ORE_CLANG)
+        oreslang_contract_test(native_named_call_reordered_guest named-call-reordered-main.ores
+            --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_mixed_guest named-call-mixed-main.ores
+            --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_mut_borrow_binding named-call-mut-borrow-native.ores
+            --run 7 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_overload_arity_guest named-call-arity-overload-main.ores
+            --run 43 --clang "${ORE_CLANG}")
+    endif()
     # Same exact public Oreslang handler fixture as Java/Graal; execute native code.
     if(ORE_CLANG)
         oreslang_contract_test(shared_java_llvm_http_handler http-guest-counter-handler.ores --ir "call i64 @counter_response" --run 43 --clang "${ORE_CLANG}")
@@ -974,6 +990,14 @@ if(BUILD_TESTING)
         set_tests_properties(native_pinned_actor_heap_suspend_cancel_quiescence PROPERTIES TIMEOUT 30)
     endif()
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
+    oreslang_contract_test(native_named_call_unknown_label named-call-unknown-reject.ores
+        --diagnostic "unknown named argument")
+    oreslang_contract_test(native_named_call_duplicate_slot named-call-duplicate-reject.ores
+        --diagnostic "duplicate binding of parameter")
+    oreslang_contract_test(native_named_call_positional_after_named named-call-positional-after-named-reject.ores
+        --diagnostic "positional argument cannot follow named argument")
+    oreslang_contract_test(native_named_call_mut_borrow_conflict named-call-mut-borrow-after-loan-reject.ores
+        --diagnostic "field read conflicts with active mutable borrow")
     oreslang_contract_test(reject_duplicates duplicate-function.ores
         --diagnostic "already has arity 0")
     oreslang_contract_test(reject_same_arity_different_names native-name-arity-duplicate.ores

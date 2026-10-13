@@ -20,6 +20,7 @@ struct Expression {
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
+    std::vector<std::string> argument_names; // indexed in lexical source order
 };
 
 struct Parameter {
