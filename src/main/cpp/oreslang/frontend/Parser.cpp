@@ -43,7 +43,7 @@ bool reserved(std::string_view name) {
         "finally", "end", "fi", "if", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
-        "for", "of", "loop", "block", "break", "continue", "yield",
+        "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
@@ -511,6 +511,19 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
+                if (token_.text == "while" || token_.text == "for" ||
+                        token_.text == "loop") {
+                    fail("native realtime source loop requires verified LLVM continuation lowering");
+                }
+                if (token_.text == "rt") {
+                    advance();
+                    if (token_.text == "cooperate") {
+                        throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+                    }
+                    fail("unsupported native runtime operation in conditional arm");
+                }
                 Statement statement;
                 statement.offset = token_.offset;
                 if (finally_scope && (token_.text == "return" ||
@@ -557,6 +570,10 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "while" || token_.text == "for" ||
+                    token_.text == "loop") {
+                fail("native realtime source loop requires verified LLVM continuation lowering");
+            }
             if (token_.text == "try") {
                 if (terminal_try_finally || return_guards_started)
                     fail("native terminal try/finally must be a single return-only scope");
@@ -735,6 +752,15 @@ private:
                                                value.actor_stops.size() - 1});
                 continue;
             }
+            if (token_.text == "rt") {
+                advance();
+                if (token_.text == "cooperate") {
+                    throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+                }
+                fail("native rt statement unsupported until suspension lowering");
+            }
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
@@ -864,6 +890,11 @@ private:
             const auto offset = token_.offset;
             advance();
             const auto operation = token_.text;
+            if (operation == "cooperate") {
+                throw std::runtime_error(
+                            "native rt cooperate requires verified heap-owned continuation lowering"
+                            " at byte " + std::to_string(token_.offset));
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
