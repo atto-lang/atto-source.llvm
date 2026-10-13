@@ -39,13 +39,14 @@ define actor Counter as
 end
 ```
 
-The source above is executable in the restricted LLVM profile with fixed
-`int` state, one synchronous copied-scalar callback, and no suspension or
-arbitrary guest calls inside the scope. Ordinary actor methods now lower to
-native heap reads/writes under authenticated turn tokens. The complete
-language semantics and Java/LLVM general actor-method parity are **not** yet
-established; Java PR #738 must be reconciled with the separate effects/state
-compiler work in PR #760.
+The source above describes the canonical language-level API. The restricted
+LLVM frontend currently requires explicit `fnc` on ordinary method declarations
+and admits one synchronous copied-`int` callback; it has **not** verified the
+shorthand declarations in this documentation verbatim. Equivalent explicit
+`pub fnc` methods are compiled and executed against actor-owned native heaps
+under trusted turn tokens. Suspension, arbitrary guest calls within loans,
+general method bodies and Java/LLVM parity remain outside this evidence.
+Java PR #738 must be reconciled with the separate effects/state work in #760.
 
 For this API, the name is `self.handle_state` (dot access), not
 `self_handle_state` as a standalone global function.
