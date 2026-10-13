@@ -1426,6 +1426,8 @@ private:
             const std::unordered_set<std::string> none;
             const std::unordered_map<std::string, std::size_t> noCalls;
             for (const auto& field : actor.fields) {
+                if (contains_boolean(*field.initializer))
+                    throw std::runtime_error("actor state int initializer cannot contain boolean");
                 validate_expression(*field.initializer, none, noCalls);
                 if (field.name == "state" || field.name == "using"
                         || field.name == "read" || field.name == "write")
@@ -1483,6 +1485,8 @@ private:
                         throw std::runtime_error("state.write loan not permitted by with effects");
                     if (loan.mode == StateLoan::Mode::Read && !loan.assignments.empty())
                         throw std::runtime_error("read-only actor state loan cannot mutate state");
+                    if (contains_boolean(*loan.result))
+                        throw std::runtime_error("actor state int callback result cannot contain boolean");
                     bool reads = reads_state_value(*loan.result);
                     std::unordered_set<std::string> loanAvailable = available;
                     for (const auto& field : actor.fields)
@@ -1491,6 +1495,8 @@ private:
                         if (!mutableFields.count(assignment.field))
                             throw std::runtime_error("state callback writes unknown or immutable key");
                         reads |= reads_state_value(*assignment.value);
+                        if (contains_boolean(*assignment.value))
+                            throw std::runtime_error("actor state int write cannot contain boolean");
                         if (contains_call(*assignment.value))
                             throw std::runtime_error("state read/write loan cannot invoke arbitrary functions");
                         validate_expression(*assignment.value, loanAvailable, functions);
@@ -1603,6 +1609,8 @@ private:
                                             && !permits("state.write"))
                                         throw std::runtime_error(
                                             "state.write loan not permitted by with effects");
+                                    if (contains_boolean(*arm.state_loan->result))
+                                        throw std::runtime_error("actor state int callback result cannot contain boolean");
                                     bool reads = reads_state_value(*arm.state_loan->result);
                                     for (const auto& assignment : arm.state_loan->assignments)
                                         reads |= reads_state_value(*assignment.value);
@@ -1623,6 +1631,8 @@ private:
                                     if (!mutableFields.count(assignment.field))
                                         throw std::runtime_error(
                                             "state callback writes unknown or immutable key");
+                                    if (contains_boolean(*assignment.value))
+                                        throw std::runtime_error("actor state int write cannot contain boolean");
                                     if (contains_call(*assignment.value))
                                         throw std::runtime_error(
                                             "state read/write loan cannot invoke arbitrary functions");
