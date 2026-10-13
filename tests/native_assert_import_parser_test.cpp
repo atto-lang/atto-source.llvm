@@ -179,6 +179,30 @@ int main() {
         if (qualified_bool.functions[0].result->name != "true")
             throw std::runtime_error("Assert::true reserved member parsing mismatch");
 
+
+        // A sealed module name must not be hidden by actor state, implicit
+        // handler arguments or catch-local exceptional control bindings.
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "define actor Worker as "
+            "let Assert: int = 0; "
+            "pub fnc on_message(int input): int { return input; } end "
+            "pub fnc main(): int { return 0; }",
+            "sealed Assert module alias cannot be shadowed");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "define actor Worker as "
+            "let count: int = 0; "
+            "pub fnc on_message(int Assert): int { return Assert; } end "
+            "pub fnc main(): int { return 0; }",
+            "sealed Assert module alias cannot be shadowed");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc test(): int { "
+            "try { throw 5; } catch (Assert) { return 1; } finally { } "
+            "}",
+            "sealed Assert module alias cannot be shadowed");
+
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {
