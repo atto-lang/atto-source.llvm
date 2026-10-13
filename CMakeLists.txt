@@ -645,6 +645,11 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-effect-supervision-bridge-test PRIVATE Threads::Threads)
     add_test(NAME native_effect_unwind_supervisor_control_bridge
         COMMAND oreslang-effect-supervision-bridge-test)
+    # Pure task/root boundary policy; does not claim guest source lowering.
+    add_executable(oreslang-root-failure-boundary-test tests/root_failure_boundary_test.cpp)
+    target_include_directories(oreslang-root-failure-boundary-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-root-failure-boundary-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_nonactor_root_failure_boundary COMMAND oreslang-root-failure-boundary-test)
     add_executable(oreslang-supervisor-failure-lane-test tests/supervisor_failure_lane_test.cpp)
     target_include_directories(oreslang-supervisor-failure-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-supervisor-failure-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
