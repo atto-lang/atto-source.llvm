@@ -1486,4 +1486,24 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-refreshed-control-data-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME refreshed_actor_control_data_lane COMMAND oreslang-refreshed-control-data-lane-test)
     set_tests_properties(refreshed_actor_control_data_lane PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-test-assertions-test tests/test_assertions_enabled.cpp)
+    add_test(NAME native_test_assertions_remain_enabled
+        COMMAND oreslang-test-assertions-test)
+
+    # Release tests use assertions for ownership checks and sometimes for
+    # operations such as pthread_create. NDEBUG must not erase those operations
+    # or turn safety tests into false passes. Keep the compiler's Release flags.
+    get_property(oreslang_directory_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(oreslang_test_target IN LISTS oreslang_directory_targets)
+        get_target_property(oreslang_target_type ${oreslang_test_target} TYPE)
+        if(oreslang_target_type STREQUAL "EXECUTABLE"
+                AND NOT oreslang_test_target STREQUAL "oreslang-llvmc")
+            if(MSVC)
+                target_compile_options(${oreslang_test_target} PRIVATE /UNDEBUG)
+            else()
+                target_compile_options(${oreslang_test_target} PRIVATE -UNDEBUG)
+            endif()
+        endif()
+    endforeach()
 endif()
