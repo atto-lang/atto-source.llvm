@@ -237,6 +237,11 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 source.moved = true;
             } else if (expr.left->kind == Expression::Kind::Field) {
                 const Expression& field = *expr.left;
+                // A nested value such as box.array.size is not a class
+                // field ownership place and cannot be consumed by rt take.
+                // Never map its last two names to another local's field.
+                if (!field.left || field.left->kind != Expression::Kind::Variable)
+                    reject(expr, "native rt take requires a direct named class field");
                 LocalOwnership& source = checked_field(
                     field.left->name, field.name, field.offset, locals);
                 if (source.mode != Mode::Value)
