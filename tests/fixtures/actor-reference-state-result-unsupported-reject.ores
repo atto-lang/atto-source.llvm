@@ -1,0 +1,19 @@
+define enum Signal as
+    Data: int = 1
+end
+define match pattern PipeMessages as
+    Signal.Data
+end
+define actor Probe<messages=PipeMessages> as
+    state { items: List[int] = [1, 2]; }
+    receive(PipeMessages m) with state.read {
+        do match m over {
+            on Signal.Data as n {
+                const escaped = self.handle_state(|state| -> {
+                    return state.items;
+                });
+            }
+        }
+        return 0;
+    }
+end
