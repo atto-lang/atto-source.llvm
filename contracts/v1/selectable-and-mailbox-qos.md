@@ -1,0 +1,205 @@
+# Selectable and priority actor mailboxes — cross-backend target v0 (2026-10-13)
+
+**Status: normative design target, not a claim of implemented guest/compiler support.**
+Keep this file byte-identical in Java/GraalVM and LLVM until an explicit versioned
+replacement. Both backends must fail closed for unsupported lowering; formatter-only
+acceptance, host-only tests, and a Java Future race are not conformance evidence.
+
+## Distinct abstractions, one selection protocol
+
+| Abstraction | Responsibility | How it participates in `select` |
+| --- | --- | --- |
+| `Channel<T>` | Typed, bounded FIFO/rendezvous transport within one execution domain | `readch ch` reserves a receive; `writech ch, value` reserves admission |
+| `ActorMailbox<M>` | Actor-owned, incarnation-fenced message admission and delivery | Controlled inbox receive and outbox send adapters; **not** exposed raw bypass channels |
+| `Observable<T>` | Factory of potentially multiple bounded subscriptions | A one-item subscription operation with cancellation and declared delivery policy |
+| `ReadableStream<T>` | Exclusive reader and ordered flow control | One-item read operation holding its reader lease |
+| `Future<T>` | One eventual completion; not another actor/thread | Readiness of completion; losing the select detaches only its listener |
+| `async` / `await` | Callable effects / task suspension, not transport | `when await future` registers readiness **without awaiting first** |
+| `readch` / `writech` | Channel operation expressions | Syntax sugar producing selectable read/write operations |
+| `Selectable<T>` | **One pending operation** with result `T`, not a container or scheduler | Common compiler-recognized typed trait for select arms |
+
+### Target language-level trait
+
+`Selectable<T>` is a standard, compiler-recognized trait. Its publicly
+implementable requirement is a *pure description* returning an approved,
+domain-local `SelectOperation<T>` capability. The runtime registration and
+winner token are sealed and cannot be forged by user code. Illustrative
+contract (not yet valid source for either production frontend):
+
+```ores
+define trait Selectable<T> as
+  pub fnc select_operation(): SelectOperation<T>;
+end
+```
+
+An implementation can delegate to vetted operations such as
+`SelectOperation.read(channel)`, `write(channel, value)`,
+`future(future)`, `subscription_next(subscription)`, or a safe
+`map` adapter; user code cannot inject callbacks into a scheduler lock,
+fake readiness, or directly issue a commit token. The trait does not itself
+transfer ownership between actors. Select operations, channel handles,
+subscription leases, and registrations are domain-local and non-sendable
+unless an explicit future transport capability is proven.
+
+`Channel<T>` as a resource is **not** automatically a selectable write:
+reads and writes have different types and ownership. An optional read sugar
+can adapt a channel to `Selectable<T>`; `readch` and `writech` remain the
+unambiguous canonical spellings.
+
+## Source syntax target
+
+The same static selection can mix operations from distinct sources:
+
+```ores
+const obs = Observable.of([1, 2, 3]);
+const fut = Future.of(4);
+
+select {
+  when readch foo: int i -> {
+    stdio.println(i);
+  }
+  when obs.take(1): int a -> {
+    stdio.println(a);
+  }
+  when await fut: int b -> {
+    stdio.println(b);
+  }
+  when mySelectable: int c -> {
+    stdio.println(c);
+  }
+}
+```
+
+`when <selectable expression>: [binding] -> { ... }` is the new generic
+arm grammar. Typed bindings may contain `int i`, `const int i`, or
+`const int mut i` as admitted by the final typed-binding grammar.
+Legacy `when readch ch: const x { ... }` and `when writech ch, x: { ... }`
+stay parseable; `when` is canonical and `case` is compatibility syntax.
+The arm result type must unify with the operation's `Selectable<T>` type;
+no implicit channel-to-Future, Observable-to-value, or deep structural
+runtime type checks are allowed.
+
+`when await fut` is arm-level syntactic sugar for creating the future
+completion operation, **not** an early suspension or an additional concurrent
+task. A standalone `await fut` still suspends normally. `select` chooses
+exactly one committed arm. `nb select` only registers and returns and later
+executes the winner on the actor's serialized continuation lane; `try
+select` probes without leaving registrations. An arm's `nb`/`try` wait
+modifier remains invalid.
+
+`obs.take(1)` must be a safe *one-item selectable view* in this context,
+not merely a returned stream whose subscription may fetch multiple elements
+before arbitration. This requires a real compiler/library adapter; current
+`rx-oreslang-channels` exposes `take(Observable<T>, int): Observable<T>`
+and no compatible `select` lowering. A selected `int a` runs only on an
+actual emitted integer. Empty completion retires the arm without inventing
+an integer; if every arm retires, selection completes with a typed
+`SelectExhausted` outcome. Programs wanting to distinguish EOF explicitly
+use `subscription.next_event(): Selectable<StreamEvent<T>>` or the future
+typed `Option<T>` variant. Terminal errors are preserved and propagated,
+never coerced to an empty value.
+
+## Atomic heterogeneous arbitration (mandatory)
+
+1. Evaluate arms once, left-to-right, in the owning execution domain;
+   transfer/borrow-check outbound payloads and establish finite waiter quotas.
+2. Register all candidate operations with **one** selection generation and
+   one winner cell. Registration is an arming step, not a consuming read.
+3. Each source supports `reserve/probe -> commit` under the common winner
+   protocol. Readiness is a reversible reservation; losers release without
+   consuming, writing, acknowledging, or refunding admission twice.
+4. The selected operation commits its payload exactly once. An independently
+   completed Future result is immutable and may be observed without consuming
+   it; a losing Future arm merely detaches the listener and does not cancel a
+   shared Future or its producer.
+5. A stream/observable adapter must own a bounded pending-item reservation
+   or an upstream rollback/demand protocol. It cannot simply subscribe to a
+   hot producer and discard values when another arm wins. If a publisher
+   cannot provide lossless reservation, it must explicitly advertise its
+   lossy policy or be rejected as `Selectable<T>`.
+6. Cancellation/stop/reload seals the selection generation, removes all
+   registrations, releases reader leases and reserved quotas, and forbids any
+   late callback from executing a guest branch. Cleanup is idempotent.
+7. No operation parks a scheduler carrier; all source callbacks only post a
+   continuation to the actor's shared scheduler, never execute guest code
+   directly on I/O or Future completion threads.
+8. Default `select` is deterministic FAIR round-robin among *observed*
+   ready cases. `select first` is explicit static priority and
+   `select random` is explicit random. A subsequently-ready higher-priority
+   arm cannot retroactively steal an already committed winner.
+
+`SelectCase`, `SelectSet`, `SelectPlan`, static arms, and the dynamic
+`select from` form must use the **same** arbitration. Merely implementing
+`Future.anyOf`, registering channel consumers speculatively, or adding an
+ad-hoc polling loop is forbidden.
+
+## Actor mailbox QoS and control progress
+
+Mailbox delivery and select-case priority are different concerns. Each actor
+has a logically single inbox; its mailbox consists of distinct **bounded
+admission lanes** feeding one actor-owned serialized dispatcher:
+
+- `CONTROL`: runtime-owned STOP, CANCEL, lifecycle, supervisor terminal,
+  and continuation-wakeup authority; user code cannot enqueue CONTROL mail.
+  Stop/cancel admission and scheduler wakeup must also have an out-of-band
+  path so a saturated user queue or unavailable guest consumer cannot block
+  termination.
+- `URGENT`: permission-checked application priority with small separately
+  reserved slots and per-sender/actor quotas, never convertible to CONTROL.
+- `NORMAL`: bounded normal messages.
+- `BULK`: bounded background messages, throttled more aggressively.
+
+Control headroom is separate from user credits. Every lane has finite byte,
+item, waiter, and in-flight accounting, including payloads checked out by
+handlers and callbacks already scheduled. Admission failure supplies explicit
+backpressure (`try_send` fails or an awaitable sender suspends), not silent
+drop and not unlimited producer waiters. Self-send deadlock on a serial lease
+must fail closed. Ordinary `Channel<T>` stays FIFO; mailbox QoS lives in
+`ActorMailbox`, not in the underlying channel API.
+
+When no higher-level handler is active, dispatcher arbitration checks CONTROL
+first, then schedules URGENT/NORMAL/BULK with **bounded starvation** (e.g.,
+quota-limited weighted deficit round robin, with age promotion and
+non-starvable NORMAL/BULK service). Within a lane, stable per-sender FIFO is
+maintained; strict global FIFO across priorities is explicitly not promised.
+An urgent message cannot preempt a currently executing guest handler:
+scheduler cooperation/reduction checkpoints, bounded handler work, and
+dedicated continuation/control wakeups are required for responsive actors.
+A serial actor still has at most one *logical* message lifetime; urgent
+user messages cannot bypass a suspended serial handler's lease. Runtime
+CONTROL cancellation may terminate that lifetime without becoming an
+additional guest handler.
+
+The outbox is a policy/transport endpoint with bounded credits and explicit
+destination/sender authority, not a second unbounded staging queue. A
+`self.outbox.send(mail)` selectable means **admitted to destination
+transport**, never 'handler finished'; `mail.done()` / typed reply completes
+processing. `self.inbox.receive()` is actor-owned only and may never bypass
+private/shared/untrusted envelope validation or consume continuation CONTROL
+envelopes as user messages. Supervisors receive terminal events on reserved
+CONTROL paths, even when user inbox/outboxes are saturated. Priority forging,
+cross-actor channel capability transfer, and control-plane amplification are
+rejected at admission.
+
+## Conformance gate and known implementation gaps
+
+Required cross-backend guest tests: mixed channel/observable/Future selection;
+typed bindings and legacy syntax; finite ready-sets and fairness; atomic
+rendezvous with competing completion; loser never steals channel data or
+publishes an outgoing write; repeated `nb select` under actor single-flight;
+cancel/STOP/close vs commit races; future failure and empty observable; bounded
+registration quotas; hot publisher with/without lossless reservation; stream
+exclusive-reader enforcement; dynamic/static selection parity; no carrier
+blocking; priority flood with bounded control latency, fair normal/bulk service,
+sender FIFO, and no user CONTROL spoofing; saturated in/outboxes with
+cancellation and supervisor STOP. Include parser, type/ownership checker,
+formatter, Graal guest, LLVM guest, and sanitizer/model checks.
+
+**As of this design:** Java's `ChannelRuntime.SelectSet` registers only
+channel read/write/default cases and uses one coordinator; its source parser
+also builds channel-specific static select AST arms. Existing Java channel
+and actor tests do not prove heterogeneous select or priority-mailbox QoS.
+The reactive helper library currently returns observables from `take`,
+not a `Selectable<T>` registration. LLVM's documented stream contract
+explicitly lacks full source-level Channel/Observable parity. These are
+implementation blockers, **not** features to mark as passing.
