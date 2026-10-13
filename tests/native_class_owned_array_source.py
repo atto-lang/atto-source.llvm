@@ -271,9 +271,11 @@ def check(compiler, clang, source_root, sanitizers):
             if compiled.returncode or compiled.stderr or not compiled.stdout:
                 raise AssertionError(f"{name}: compiler failed: {compiled.stderr!r}")
             ir = compiled.stdout
-            if ir.count(b"call i64 @oreslang_int_array_new(") != count or \
+            if ir.count(b"call i32 @oreslang_int_array_try_new(") != count or \
                     ir.count(b"call void @oreslang_int_array_drop(") < count or \
-                    b"@oreslang_int_array_region_close" not in ir:
+                    b"@oreslang_int_array_region_close" not in ir or \
+                    b"@oreslang_int_array_try_region_open" not in ir or \
+                    b"array.resource.failure:" not in ir:
                 raise AssertionError(f"{name}: missing compiler-generated owned ABI operations")
             if name == "two-fields":
                 a = ir.find(b"shelf.second.drop.handle")
