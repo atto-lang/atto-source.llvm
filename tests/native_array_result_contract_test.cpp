@@ -108,15 +108,21 @@ int main() {
                 // one matching arm: avoid unsound exhaustiveness claims.
                 for (unsigned v = 0; v < 3; ++v) {
                     unsigned matches = 0;
+                    bool covered_by_explicit = false;
                     for (unsigned k = 0; k < 3; ++k) {
                         const Pattern pattern = cases[k].pattern;
-                        const bool matched =
+                        const bool explicit_match =
                             (pattern == Pattern::Ok && v == 0) ||
                             (pattern == Pattern::ErrLimit && v == 1) ||
                             (pattern == Pattern::ErrNoMemory && v == 2) ||
-                            (pattern == Pattern::ErrAny && v != 0) ||
-                            (pattern == Pattern::Wildcard);
+                            (pattern == Pattern::ErrAny && v != 0);
+                        // Final wildcard means the *complement* of all
+                        // preceding explicit arms, not another full-domain
+                        // overlapping pattern.
+                        const bool matched = explicit_match ||
+                            (pattern == Pattern::Wildcard && !covered_by_explicit);
                         if (matched) ++matches;
+                        covered_by_explicit |= explicit_match;
                     }
                     CHECK(matches == 1);
                 }
