@@ -573,7 +573,9 @@ private:
                     // No partially inferred effect set can masquerade as a
                     // complete exception/cleanup summary at this boundary.
                     if (value.has_declared_effects)
-                        fail("native caught throw effect-qualified function unsupported");
+                        throw std::runtime_error(
+                            "native caught throw effect-qualified function unsupported at byte " +
+                            std::to_string(token_.offset));
                     while (accept("defer")) {
                         if (value.caught_throw_defers.size() == 8)
                             fail("native caught throw defer limit exceeded (8)");
