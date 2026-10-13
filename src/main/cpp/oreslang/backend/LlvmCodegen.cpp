@@ -757,15 +757,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 builder.CreateBr(array_failure);
                 builder.SetInsertPoint(accepted);
                 builder.CreateCall(arrayCommitMany, {array_region, four, dests, sources});
-                // Commit has no fallible allocation. Only AFTER the ABI
-                // returned may old failure shadows be disarmed. The staged
-                // output slots stay the sole cleanup authority for new tokens.
+                // IMPORTANT: commit_many disarms *sources[i] = 0. Since we
+                // supplied hidden staging shadows as those source slots, the
+                // runtime also zeroed our failure-cleanup mirrors. Restore
+                // each new owner token from the published destination *after*
+                // the infallible native commit and before any further guest
+                // operations can fail. Otherwise a later resource failure
+                // would leak four live arrays and abort on region_close.
                 for (std::size_t i = 0; i < 4; ++i) {
+                    llvm::Value* shadow = builder.CreateGEP(i64,
+                        array_handle_shadows,
+                        llvm::ConstantInt::get(i64, first_stage + i),
+                        "arrays.commit.cleanup.owner");
+                    llvm::Value* published = builder.CreateLoad(i64,
+                        field_storage.at(owned_fields[i]),
+                        "arrays.commit.published.owner");
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0),
                         previous_shadows[i]);
-                    array_failure_places[owned_fields[i]] = builder.CreateGEP(
-                        i64, array_handle_shadows,
-                        llvm::ConstantInt::get(i64, first_stage + i));
+                    builder.CreateStore(published, shadow);
+                    array_failure_places[owned_fields[i]] = shadow;
                 }
             } else if (effect.kind == Statement::Kind::FieldWrite) {
                 const std::string target = field_key(effect.receiver, effect.field);
