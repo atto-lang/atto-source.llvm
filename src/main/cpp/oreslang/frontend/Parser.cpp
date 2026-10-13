@@ -636,7 +636,7 @@ private:
                     statement.field = target->name;
                     statement.expression = expression();
                 } else if (target->kind == Expression::Kind::Call ||
-                } else if (target->kind == Expression::Kind::Call ||
+                           target->kind == Expression::Kind::ModuleCall ||
                            target->kind == Expression::Kind::ArrayCall) {
                     statement.kind = Statement::Kind::Call;
                     statement.expression = std::move(target);
@@ -860,7 +860,8 @@ private:
                     deferred.field = target->name;
                     deferred.expression = expression();
                 } else if (target->kind == Expression::Kind::Call ||
-                    target->kind == Expression::Kind::ModuleCall) {
+                           target->kind == Expression::Kind::ModuleCall ||
+                           target->kind == Expression::Kind::ArrayCall) {
                     deferred.expression = std::move(target);
                 } else {
                     fail("native defer requires a direct function call or class field assignment");
@@ -933,7 +934,7 @@ private:
                 statement.field = action->name;
                 statement.expression = expression();
             } else if (action->kind == Expression::Kind::Call ||
-            } else if (action->kind == Expression::Kind::Call ||
+                       action->kind == Expression::Kind::ModuleCall ||
                        action->kind == Expression::Kind::ArrayCall) {
                 statement.kind = Statement::Kind::Call;
                 statement.expression = std::move(action);
@@ -1248,7 +1249,7 @@ private:
     static bool contains_callable_invocation(const Expression* expr) {
         if (!expr) return false;
         if (expr->kind == Expression::Kind::Call ||
-        if (expr->kind == Expression::Kind::Call ||
+            expr->kind == Expression::Kind::ModuleCall ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get()) ||
             contains_callable_invocation(expr->right.get())) return true;
