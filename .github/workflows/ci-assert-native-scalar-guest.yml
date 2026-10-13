@@ -1,7 +1,7 @@
 name: LLVM Assert compiled primitive guest (exact files)
 on:
   push:
-    branches: [audit/llvm-assert-bool-cabi-targeted-20261012]
+    branches: [feat/llvm-assert-scoped-trap-parse-20261012]
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,12 +29,13 @@ jobs:
           src/main/cpp/oreslang/main.cpp 811ffa7838a15f36d55e140d48e483c3d63dfeb2
           src/main/cpp/oreslang/runtime/TargetAbi.hpp 2ec234cfc9f4790e03a9f54c48b533e490dff7bd
           src/main/cpp/oreslang/backend/LlvmCodegen.hpp d31882669629d8145e5b6698e62e8c37b1e8a7e0
-          src/main/cpp/oreslang/frontend/Parser.cpp 72b5d5d53f440665013dbd85879dfae3588e202f
-          src/main/cpp/oreslang/frontend/Parser.hpp 56b9443e2aa522dfd5659c9e6f133a4559edf15c
-          src/main/cpp/oreslang/types/OwnershipChecker.cpp 553d52363f17450ac45ee061276fa61753d5b5ad
-          src/main/cpp/oreslang/backend/LlvmCodegen.cpp 8c8d6c97a05549bdbe7465e44268fdc02537d6fd
-          tests/native_assert_scalar_guest_test.sh d79853115066f2abf85dd0d673cb211703cfe54d
+          src/main/cpp/oreslang/frontend/Parser.cpp 4e97e04239c2fac26e2d9e582a073edee3e1eaa4
+          src/main/cpp/oreslang/frontend/Parser.hpp 4797e20e0a80a25451cfd26809a124d0ee0283a0
+          src/main/cpp/oreslang/types/OwnershipChecker.cpp 2c1e48e7a6e3784cca3a96166abfc30aeb6753fe
+          src/main/cpp/oreslang/backend/LlvmCodegen.cpp cc1349fa15bf73f0cdc2cd2f73f9d6af9592b58e
+          tests/native_assert_scalar_guest_test.sh 4d4489e9688990f089985a09a67b94305f43038a
           tests/native_assert_ast_seal_test.cpp e154b1fb0e76623657bc3a07a2bb8ecb9046a69d
+          tests/native_assert_import_parser_test.cpp 7cca4533bb0b570f44bb11a1007750af2ef6882b
           HASHES
           echo ASSERT_NATIVE_SCALAR_EXACT_FILES_PASS
       - name: Install LLVM C++ compiler dependencies
@@ -76,5 +77,15 @@ jobs:
             $(llvm-config --ldflags --libs core support --system-libs) \
             -o /tmp/oreslang-assert-ast-seal-test
           /tmp/oreslang-assert-ast-seal-test | grep -Fx ASSERT_NATIVE_BACKEND_AST_SEAL_PASS
+      - name: Verify both sealed qualified syntaxes and inline trap AST
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O0 -Isrc/main/cpp \
+            tests/native_assert_import_parser_test.cpp \
+            src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+            -o /tmp/oreslang-assert-parser-test
+          /tmp/oreslang-assert-parser-test | grep -Fx NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS
       - name: Execute compiled guest IR and fail-closed negatives
         run: bash tests/native_assert_scalar_guest_test.sh /tmp/oreslang-llvmc

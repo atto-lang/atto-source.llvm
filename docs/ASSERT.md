@@ -72,3 +72,17 @@ ordinary cleanup throws retain the most recent ordinary failure and preserve
 previous failures as secondary diagnostics. Only ordinary `Throw` is marked
 eligible for future `trap` capture. This helper is not yet emitted by the
 Oreslang compiler. Actual guest-to-guest parity remains a release gate.
+
+## Canonical qualified call syntax
+
+Both `Assert.equal_throws(10, 10)` and `Assert::equal_throws(10, 10)`
+parse as the same sealed module-call AST. The same applies to `equal`
+and other known Assert members, including `trap Assert::equal_throws(...)`.
+
+**Native execution boundary:** the LLVM compiler now parses these spellings and
+preserves an inline trap AST for future `Option<T>` lowering, but still
+rejects throwing assertions and call-site traps before emitting any executable
+guest program. Only primitive `Assert.equal(int,int)` and
+`Assert.not_equal(int,int)` have executable native lowering, with either
+qualification spelling. There is no fallback to a host callback or success
+value when a guest failure boundary cannot be proved.

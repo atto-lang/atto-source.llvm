@@ -7,14 +7,14 @@ trap 'rm -rf "$work"' EXIT
 cat > "$work/guest.ores" <<'ORES'
 import module Assert from "std/assert";
 pub fnc int_equal(int a, int b): bool { return Assert.equal(a, b); }
-pub fnc int_different(int a, int b): bool { return Assert.not_equal(a, b); }
+pub fnc int_different(int a, int b): bool { return Assert::not_equal(a, b); }
 pub fnc literal_equal(): bool { return Assert.equal(7, 7); }
-pub fnc literal_different(): bool { return Assert.not_equal(7, 8); }
+pub fnc literal_different(): bool { return Assert::not_equal(7, 8); }
 ORES
 
 "$compiler" "$work/guest.ores" > "$work/guest.ll"
-grep -E '^define (zeroext )?i1 @int_equal\\(i64' "$work/guest.ll"
-grep -E '^define (zeroext )?i1 @int_different\\(i64' "$work/guest.ll"
+grep -E '^define (zeroext )?i1 @int_equal[(]i64' "$work/guest.ll"
+grep -E '^define (zeroext )?i1 @int_different[(]i64' "$work/guest.ll"
 grep -F 'icmp eq i64' "$work/guest.ll"
 grep -F 'icmp ne i64' "$work/guest.ll"
 if grep -E '^declare .*Assert|^declare .*assert' "$work/guest.ll"; then
@@ -43,8 +43,8 @@ CPP
 # Check native exported signatures against Clang's own target C++ bool ABI.
 clang++ -std=c++17 -O0 -S -emit-llvm "$work/host.cpp" -o "$work/host.ll"
 for symbol in int_equal int_different literal_equal literal_different; do
-  host_decl="$(grep -E "^declare .*i1 @$symbol\\(" "$work/host.ll")"
-  guest_def="$(grep -E "^define .*i1 @$symbol\\(" "$work/guest.ll")"
+  host_decl="$(grep -E "^declare .*i1 @$symbol[(]" "$work/host.ll")"
+  guest_def="$(grep -E "^define .*i1 @$symbol[(]" "$work/guest.ll")"
   test -n "$host_decl" && test -n "$guest_def"
   if [[ "$host_decl" == *"zeroext i1 @"* ]]; then
     [[ "$guest_def" == *"zeroext i1 @"* ]] || { echo "ABI missing zeroext: $symbol" >&2; exit 1; }
@@ -76,6 +76,18 @@ expect_reject() {
 expect_reject throwing 'direct equal/not_equal primitive return' <<'ORES'
 import module Assert from "std/assert";
 pub fnc no_throw(): bool { return Assert.equal_throws(1, 2); }
+ORES
+expect_reject throwing_scoped 'direct equal/not_equal primitive return' <<'ORES'
+import module Assert from "std/assert";
+pub fnc no_throw(): bool { return Assert::equal_throws(1, 2); }
+ORES
+expect_reject unlowered_call_site_trap 'native Assert member requires a typed bool return' <<'ORES'
+import module Assert from "std/assert";
+pub fnc main(): int {
+  const success = Assert::equal_throws(10, 10);
+  const failure = trap Assert.equal_throws(10, 20);
+  return 0;
+}
 ORES
 expect_reject int_return 'cannot enter an int/void expression' <<'ORES'
 import module Assert from "std/assert";

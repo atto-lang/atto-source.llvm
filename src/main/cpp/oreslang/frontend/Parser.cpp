@@ -135,6 +135,12 @@ public:
             ++at_;
             return {Kind::String, value, start};
         }
+        // Contiguous scoped and equality delimiters; a single ':' remains
+        // reserved for typed declarations and must never be conflated.
+        if (source_.substr(at_, 2) == "::") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -515,8 +521,18 @@ private:
                     continue;
                 }
                 if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires ': int'");
                 binding.initializer = expression();
+                if (!explicit_type) {
+                    // Infer only sealed assertion signatures at this stage.
+                    // Generic int, Any, and Option native ABI remains gated.
+                    const Expression* inferred = binding.initializer.get();
+                    if (inferred->kind == Expression::Kind::Trap)
+                        inferred = inferred->left.get();
+                    if (!has_assert_import_ || !inferred ||
+                            inferred->kind != Expression::Kind::ModuleCall ||
+                            inferred->name != "equal_throws")
+                        fail("untyped native local requires sealed Assert.equal_throws or trap Assert.equal_throws");
+                }
             }
             require(";");
             value.locals.push_back(std::move(binding));
@@ -799,10 +815,14 @@ private:
 
     std::unique_ptr<Expression> unary() {
         if (token_.text == "trap") {
-            // Reserved for Option-valued ordinary-error capture. Reject it
-            // before IR generation: accepting a normal value here would erase
-            // the guest failure channel and violate panic/raise precedence.
-            fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
+            // Preserve the scoped Option boundary in the AST, rather than
+            // erasing its semantics. Codegen rejects it before producing IR
+            // until typed failure propagation and cleanup are implemented.
+            const auto offset = token_.offset;
+            advance();
+            auto result = make_expression(Expression::Kind::Trap, offset);
+            result->left = unary();
+            return result;
         }
         if (token_.text == "rt") {
             const auto offset = token_.offset;
@@ -869,7 +889,9 @@ private:
                 } while (accept(","));
                 require(")");
             }
-        } else if (accept(".")) {
+        } else if (token_.text == "." || token_.text == "::") {
+            const bool scoped = token_.text == "::";
+            advance();
             if (expr->name == "Assert") {
                 if (!has_assert_import_)
                     fail("unbound native Assert module alias");
@@ -898,6 +920,8 @@ private:
                     fail("wrong sealed Assert member arity for '" + member + "'");
                 expr = std::move(call);
             } else {
+                if (scoped)
+                    fail("native '::' requires a sealed static/module namespace; no dynamic fallback");
                 auto field = make_expression(Expression::Kind::Field, offset);
                 field->left = std::move(expr);
                 field->name = identifier();
@@ -972,6 +996,7 @@ private:
                 return;
             }
             case Expression::Kind::Negate:
+            case Expression::Kind::Trap:
             case Expression::Kind::Copy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
