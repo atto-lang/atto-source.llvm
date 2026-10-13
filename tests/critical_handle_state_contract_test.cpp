@@ -19,6 +19,13 @@ int main() {
             == CriticalStateAdmission::MissingCallbackCritical);
     c.state_mode = CriticalStateMode::Read;
     const auto using_rw = row(READ | WRITE);
+    // A correctly declared read capability cannot pass native admission
+    // without compiler/runtime-verified continuation-generation fencing.
+    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::MissingContinuationFence);
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::MissingContinuationFence);
+    c.continuation_generation_fenced = true;
     CHECK(admit_critical_handle_state(c, using_rw)
             == CriticalStateAdmission::Accept); // unmarked callback is immutable read
     CHECK(admit_critical_handle_state(c, using_rw, true)
