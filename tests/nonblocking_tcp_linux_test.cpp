@@ -21,21 +21,22 @@ int main() {
     peer.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
     const int c = ::connect(client.get(), reinterpret_cast<sockaddr*>(&peer), sizeof(peer));
     check(c == 0 || (c == -1 && errno == EINPROGRESS));
-    EpollReadiness reactor;
+    EpollReadiness wakeOnly;
     std::array<EpollReadiness::Ready, EpollReadiness::max_batch> ready{};
-    reactor.add(listener.fd(), EPOLLIN, 12345);
-    reactor.wakeup();
-    // No phantom user event on a cross-thread command notification.
-    check(reactor.wait(ready, 500) == 0);
-    std::thread notifier([&reactor] {
+    wakeOnly.wakeup();
+    // A dedicated reactor wakes for submitted work but exposes no fake TCP event.
+    check(wakeOnly.wait(ready, 500) == 0);
+    std::thread notifier([&wakeOnly] {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        reactor.wakeup();
+        wakeOnly.wakeup();
     });
     const auto started = std::chrono::steady_clock::now();
-    check(reactor.wait(ready, 3000) == 0);
+    const auto wakeCount = wakeOnly.wait(ready, 3000);
     const auto elapsed = std::chrono::steady_clock::now() - started;
     notifier.join();
-    check(elapsed < std::chrono::seconds(2));
+    check(wakeCount == 0 && elapsed < std::chrono::seconds(2));
+    EpollReadiness reactor;
+    reactor.add(listener.fd(), EPOLLIN, 12345);
     auto n = reactor.wait(ready, 1500);
     check(n > 0 && ready[0].token == 12345 && (ready[0].events & EPOLLIN));
     check(reactor.wait(ready, 0) == 0); // EPOLLONESHOT: no repeated accept notification
