@@ -717,16 +717,33 @@ private:
                                 loan->mode = StateLoan::Mode::Write;
                             else fail("using state capability must be read or write");
                             require("(");
-                            if (loan->mode == StateLoan::Mode::Write)
+                            if (loan->mode == StateLoan::Mode::Write) {
                                 require("critical");
-                            else if (token_.text == "critical")
-                                fail("using state.read cannot request a critical write loan");
+                                if (accept("read"))
+                                    fail("using state.write requires critical write callback");
+                                // Bare critical and explicit critical write both
+                                // acquire an exclusive mutable state loan.
+                                (void)accept("write");
+                            } else if (accept("critical")) {
+                                // Java/Graal treats critical read as an explicit
+                                // immutable capability, not a write upgrade.
+                                if (!accept("read")) {
+                                    (void)accept("write");
+                                    fail("using state.read cannot request a critical write loan");
+                                }
+                            }
                         } else {
                             require("self"); require(".");
                             require("handle_state"); require("(");
-                            loan->mode = accept("critical")
-                                ? StateLoan::Mode::Write
-                                : StateLoan::Mode::Read;
+                            loan->mode = StateLoan::Mode::Read;
+                            if (accept("critical")) {
+                                // Plain critical and critical write request
+                                // exclusive mutation. critical read is immutable.
+                                if (!accept("read")) {
+                                    (void)accept("write");
+                                    loan->mode = StateLoan::Mode::Write;
+                                }
+                            }
                         }
                         require("|"); require("state"); require("|");
                         require("->"); require("{");
