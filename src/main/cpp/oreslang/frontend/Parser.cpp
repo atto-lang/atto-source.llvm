@@ -1394,7 +1394,10 @@ private:
                         || field.name == "read" || field.name == "write")
                     throw std::runtime_error("actor state key conflicts with reserved capability name");
                 if (!fields.insert(field.name).second)
-                    throw std::runtime_error("duplicate actor field '" + field.name + "'");
+                    throw std::runtime_error(
+                        std::string(actor.state_declared
+                            ? "duplicate actor state key '" : "duplicate actor field '")
+                        + field.name + "'");
                 if (field.field_mutable) mutableFields.insert(field.name);
             }
             std::unordered_set<std::string> methods;
