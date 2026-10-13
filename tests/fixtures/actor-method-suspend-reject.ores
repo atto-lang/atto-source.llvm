@@ -1,0 +1,9 @@
+define actor Counter as
+    state { value: int = 0; }
+    pub fnc bad(): int with state.read {
+        return using state.read(|s| -> {
+            rt cooperate;
+            return s.value;
+        });
+    }
+end
