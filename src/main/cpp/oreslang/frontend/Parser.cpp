@@ -1582,7 +1582,14 @@ private:
                                 }
                             }
                             if (arm.state_loan) {
-                                if (method.effects_declared) {
+                                // A tagged receive handler is not exempt from
+                                // the canonical function-level effect contract.
+                                // Historically, omitting 'with' silently
+                                // authorized a state read or write here.
+                                if (!method.effects_declared)
+                                    throw std::runtime_error(
+                                        "actor state loan requires explicit with effects");
+                                {
                                     const auto permits = [&](std::string_view effect) {
                                         return std::find(method.declared_effects.begin(),
                                             method.declared_effects.end(), effect)
