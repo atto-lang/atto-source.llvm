@@ -29,6 +29,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Source-owned Assert imports are parsed/checked, not native linked.
+    add_executable(oreslang-assert-import-parser-test
+        tests/native_assert_import_parser_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-assert-import-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-assert-import-parser-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_canonical_import_parser
+        COMMAND oreslang-assert-import-parser-test)
+
     # Host-only fairness budget; not evidence of compiled Oreslang suspension.
     add_executable(oreslang-native-reduction-quantum-test
         tests/native_cooperation_quantum_test.cpp)
@@ -392,6 +404,10 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
+    oreslang_contract_test(reject_unadmitted_core_assert_import
+        unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
+    oreslang_contract_test(reject_unadmitted_nested_core_assert_import
+        unsupported-core-assert-nested-import.ores --diagnostic "native module imports must precede declarations")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
