@@ -16,21 +16,37 @@ acceptance, host-only tests, and a Java Future race are not conformance evidence
 | `Future<T>` | One eventual completion; not another actor/thread | Readiness of completion; losing the select detaches only its listener |
 | `async` / `await` | Callable effects / task suspension, not transport | `when await future` registers readiness **without awaiting first** |
 | `readch` / `writech` | Channel operation expressions | Syntax sugar producing selectable read/write operations |
-| `Selectable<T>` | **One pending operation** with result `T`, not a container or scheduler | Common compiler-recognized typed trait for select arms |
+| `Selectable<T>` | A source or operation reducible to **one event** (or the **next** event) of type `T` | Compiler-recognized reduction to one atomic selection candidate |
 
 ### Target language-level trait
 
-`Selectable<T>` is a standard, compiler-recognized trait. Its publicly
-implementable requirement is a *pure description* returning an approved,
-domain-local `SelectOperation<T>` capability. The runtime registration and
-winner token are sealed and cannot be forged by user code. Illustrative
-contract (not yet valid source for either production frontend):
+`Selectable<T>` is a standard, compiler-recognized trait describing
+**reduction of a source to one event or its next event**. A Future has a
+single completion event (and may be observed repeatedly); a Channel or
+Subscription has a cursor, so each successful selection advances that cursor
+exactly once. This trait does not make a multi-item container itself an
+atomic batch: every `select` arm registers exactly one operation. An empty
+or completed source produces a typed terminal indication, never a fabricated
+`T` value.
+
+The publicly implementable requirement must be a *pure description* returning
+an approved domain-local `SelectOperation<T>` capability. The runtime
+registration, reservation, and winner token are sealed and cannot be forged.
+Illustrative target contract (not yet valid source on either backend):
 
 ```ores
 define trait Selectable<T> as
-  pub fnc select_operation(): SelectOperation<T>;
+  pub fnc select_next(): SelectOperation<T>;
 end
 ```
+
+A `Selectable<T>` source can yield `SelectOperation<T>` every time it is
+selected; one event is **reserved**, not consumed, until that arm wins.
+`Future<T>` is level-triggered (its terminal outcome remains observable),
+whereas streams, mailboxes, and channels are edge/cursor-triggered and must
+preserve losing events. Duplicate observers of one cold Observable may each
+begin from its initial value; a loop that requires progressive consumption
+must hold one explicit Subscription/reader lease rather than re-subscribing.
 
 An implementation can delegate to vetted operations such as
 `SelectOperation.read(channel)`, `write(channel, value)`,
@@ -100,17 +116,38 @@ executes the winner on the actor's serialized continuation lane; `try
 select` probes without leaving registrations. An arm's `nb`/`try` wait
 modifier remains invalid.
 
-`obs.take(1)` must be a safe *one-item selectable view* in this context,
-not merely a returned stream whose subscription may fetch multiple elements
-before arbitration. This requires a real compiler/library adapter; current
-`rx-oreslang-channels` exposes `take(Observable<T>, int): Observable<T>`
-and no compatible `select` lowering. A selected `int a` runs only on an
-actual emitted integer. Empty completion retires the arm without inventing
-an integer; if every arm retires, selection completes with a typed
-`SelectExhausted` outcome. Programs wanting to distinguish EOF explicitly
-use `subscription.next_event(): Selectable<StreamEvent<T>>` or the future
-typed `Option<T>` variant. Terminal errors are preserved and propagated,
-never coerced to an empty value.
+`obs.take(1)` is selectable **only if** it exposes a real lossless
+one-item operation under the selection protocol. Existing
+`rx-oreslang-channels.take(Observable<T>, int): Observable<T>` returns an
+Observable *view*, **not** a selectable one-event operation: compiling
+`when obs.take(1)` as though it were `Selectable<T>` is prohibited until
+an adapter actually owns an atomic reservation. The portable, explicit
+source-level target for a progression of items is:
+
+```ores
+const sub = obs.subscribe();
+select {
+  when sub.next(): int a -> { stdio.println(a); }
+  when await fut: int b -> { stdio.println(b); }
+}
+```
+
+Here `sub.next()` means a **described pending next event** on an exclusive
+subscription lease, not a blocking `next()` call evaluated before select
+arming. Existing `Subscription.next()` currently suspends and returns
+`Option<T>`, so this surface is also a **target**, not currently executable
+source. If an overload cannot distinguish `next()` unambiguously, introduce
+`sub.select_next()` instead and retain `next()` for ordinary pulling.
+`obs.take(1).select_next()` can be implemented on a one-item view once
+its lifetime/rollback semantics are proven.
+
+A selected `int a` arm runs only on an actual emitted integer. Empty
+completion retires the arm without inventing a value; when all arms retire,
+selection completes with typed `SelectExhausted`. To observe EOF explicitly,
+select `Selectable<StreamEvent<T>>` or `Selectable<Option<T>>`.
+Terminal error/cancellation identities are never coerced to an empty value.
+A channel/mailbox/Future that is ready at registration may win immediately,
+without demanding an item from an unready Observable.
 
 ## Atomic heterogeneous arbitration (mandatory)
 
