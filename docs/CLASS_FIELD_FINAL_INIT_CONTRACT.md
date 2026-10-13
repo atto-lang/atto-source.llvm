@@ -95,3 +95,15 @@ A conflict-aware rebase is required; neither replacement of main files
 with stale versions nor force-merge is acceptable. A source-identical
 native Pair constructor guest has been added to the Java test suite and
 the LLVM CTest fixtures (expected result 40); it is not yet executed.
+
+## Constructor argument ownership boundary
+
+Pure integer syntax is insufficient by itself: an experimental owned-int
+variable lowers to a native region-read operation and can fail. Native
+scalar constructors therefore accept only ordinary stack i64 operand
+sources; owned-region reads, class owners and array handles are rejected
+by the ownership checker even when the syntax is a single variable name.
+A negative CTest fixture covers this before LLVM IR generation.
+
+The PR remains merge-conflicted and its current native checks lack
+executed CI evidence.
