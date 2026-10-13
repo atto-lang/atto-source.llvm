@@ -1,0 +1,10 @@
+define class Pair as
+  final int a: start + 1;
+  final mut int b: start * 2;
+  constructor(int start) { return; }
+end
+pub fnc main(): int {
+  const input: int = 13;
+  let Pair p = new Pair(input);
+  return p.a + p.b;
+}
