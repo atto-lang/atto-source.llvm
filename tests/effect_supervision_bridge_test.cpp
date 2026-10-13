@@ -13,9 +13,11 @@ using Lane = oreslang::SupervisorFailureLane;
 struct EventHandler : Lane::Handler {
     std::vector<Lane::Kind> observed;
     std::vector<Lane::Kind> origins;
+    std::vector<std::uint32_t> origin_codes;
     void add(const Lane::Failure& failure) {
         observed.push_back(failure.kind);
         origins.push_back(failure.origin_kind);
+        origin_codes.push_back(failure.origin_code);
     }
     void on_throw(const Lane::Failure& f) override { add(f); }
     void on_raise(const Lane::Failure& f) override { add(f); }
@@ -53,6 +55,7 @@ int main() {
     for (int i = 0; i < 5; ++i) CHECK(lane.dispatch_one(handler));
     CHECK(handler.observed == std::vector<Lane::Kind>(expected, expected + 5));
     CHECK(handler.origins == std::vector<Lane::Kind>(original, original + 5));
+    CHECK(handler.origin_codes == std::vector<std::uint32_t>(5, 11u));
     CHECK(lane.reserved_count() == 0);
 
     // Normal return leaves the reservation intact; lifecycle owner retires it.
@@ -78,6 +81,7 @@ int main() {
     CHECK(delivered.has_value());
     CHECK(delivered->kind == Lane::Kind::Panic);
     CHECK(delivered->origin_kind == Lane::Kind::Panic);
+    CHECK(delivered->origin_code == 99u);
     CHECK(delivered->summary == "defer panic");
     lane.ack(key(6));
 
@@ -112,6 +116,7 @@ int main() {
     CHECK(restored.has_value());
     CHECK(restored->kind == Lane::Kind::Panic);
     CHECK(restored->origin_kind == Lane::Kind::Raise);
+    CHECK(restored->origin_code == 0u);
     invalid_pair.ack(key(9));
     return 0;
 }
