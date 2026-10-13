@@ -265,6 +265,13 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             check_value(*expr.right, locals, functions);
             return;
+        case Expression::Kind::ModuleCall:
+            // Imported functions are not native IR yet. Validate every
+            // argument's ownership without inventing a cross-module loan ABI.
+            // A call argument may not introduce an unscoped native borrow.
+            for (const auto& arg : expr.arguments)
+                check_value(*arg, locals, functions);
+            return;
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
@@ -309,6 +316,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Take:
         case Expression::Kind::Call:
+        case Expression::Kind::ModuleCall:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
@@ -518,6 +526,9 @@ void validate_i64_ownership(const Program& program) {
                     if (!arity || call.arguments.size() != arity)
                         reject(call, "native Array<int> effect supports only add(value) or set(index,value)");
                     for (const auto& arg : call.arguments) check_value(*arg, state, functions);
+                } else if (call.kind == Expression::Kind::ModuleCall) {
+                    // Sealed module receiver is not an owned scalar or a loan.
+                    check_value(call, state, functions);
                 } else if (call.kind == Expression::Kind::Call) {
                     check_call(call, state, functions);
                 } else {
@@ -581,7 +592,10 @@ void validate_i64_ownership(const Program& program) {
             for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
                 const Statement& cleanup = **it;
                 if (cleanup.receiver.empty()) {
-                    check_call(*cleanup.expression, path, functions);
+                    if (cleanup.expression->kind == Expression::Kind::ModuleCall)
+                        check_value(*cleanup.expression, path, functions);
+                    else
+                        check_call(*cleanup.expression, path, functions);
                     continue;
                 }
                 auto& recv = checked_field(cleanup.receiver, cleanup.field,
@@ -668,6 +682,17 @@ void validate_i64_ownership(const Program& program) {
         using Ops = std::vector<ownership::Operation>;
         std::function<void(const Expression&, Ops&)> add_effects;
         add_effects = [&](const Expression& expr, Ops& operations) {
+            if (expr.kind == Expression::Kind::ModuleCall) {
+                // The left child is a *sealed module namespace*, not a
+                // stack-owned scalar place. Analyze only actual arguments;
+                // emitting a read of "Assert" invents a nonexistent owner.
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable
+                        || expr.left->name != "Assert")
+                    reject(expr, "invalid native sealed module qualifier");
+                for (const auto& argument : expr.arguments)
+                    add_effects(*argument, operations);
+                return;
+            }
             if (expr.kind == Expression::Kind::Variable) {
                 const auto found = cfg_entry.find(expr.name);
                 const bool object = found != cfg_entry.end() && !found->second.class_name.empty();
