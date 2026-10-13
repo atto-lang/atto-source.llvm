@@ -145,9 +145,24 @@ struct ActorSealedState {
     std::vector<LocalBinding> fields;
 };
 
+/* Compiler-owned state callback shape. A recognized callback is NOT
+ * executable until effects, loans and actor-scheduler admission lower safely.
+ * Unlike Function, this cannot be reified as an ordinary callable.
+ */
+struct ActorStateAccess {
+    enum class Mode { Read, Write };
+    Mode mode = Mode::Read;
+    std::string method;
+    std::string binding;
+    std::string field;
+    std::unique_ptr<Expression> new_value; // null for critical-read
+    std::size_t offset = 0;
+};
+
 struct ActorDecl {
     std::string name;
     std::optional<ActorSealedState> sealed_state; // syntax only until verified lowering
+    std::vector<ActorStateAccess> state_operations; // typed source syntax, not IR
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
