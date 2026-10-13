@@ -370,6 +370,56 @@ static void test_complete_beats_racing_control(bool stop_carrier) {
     REQUIRE(stats.protocol_failures == 0);
     REQUIRE(stats.worker_thread_tag == state.worker_tag.load());
 }
+struct ReplayEvidence {
+    std::atomic<int> completions{0};
+    std::atomic<int> cleanup{0};
+    std::atomic<int> wrong_cleanup{0};
+};
+static MultiActorCarrier::Outcome replay_slice(
+        void* raw, MultiActorCarrier::Message message,
+        MultiActorCarrier::Cause cause, std::uint64_t) noexcept {
+    auto& e = *static_cast<ReplayEvidence*>(raw);
+    if (message.sequence != 1 || cause != MultiActorCarrier::Cause::initial)
+        e.wrong_cleanup.fetch_add(1);
+    e.completions.fetch_add(1);
+    return MultiActorCarrier::Outcome::complete;
+}
+static void replay_cancel(void* raw, MultiActorCarrier::Message,
+                          bool had_active) noexcept {
+    auto& e = *static_cast<ReplayEvidence*>(raw);
+    if (had_active) e.wrong_cleanup.fetch_add(1);
+    e.cleanup.fetch_add(1);
+}
+static void test_tokens_cannot_cross_carrier_lifetimes() {
+    ReplayEvidence one, two;
+    MultiActorCarrier::ActorToken stale;
+    {
+        MultiActorCarrier first;
+        stale = first.register_actor(&one, replay_slice, replay_cancel);
+        first.start();
+        auto writer = first.producer();
+        REQUIRE(writer.try_send(stale, {1, 11}));
+        REQUIRE(until([&] { return first.actor_stats(stale).completed == 1; }, 2s));
+        first.join();
+        REQUIRE(one.completions.load() == 1);
+    }
+    MultiActorCarrier second;
+    const auto fresh = second.register_actor(&two, replay_slice, replay_cancel);
+    REQUIRE(fresh.slot == stale.slot); // same slot but different authority
+    REQUIRE(fresh.generation != stale.generation);
+    second.start();
+    auto writer = second.producer();
+    REQUIRE(!writer.try_send(stale, {1, 11}));
+    REQUIRE(!writer.request_cancel(stale));
+    REQUIRE(writer.try_send(fresh, {1, 11}));
+    REQUIRE(until([&] { return second.actor_stats(fresh).completed == 1; }, 2s));
+    second.join();
+    REQUIRE(two.completions.load() == 1);
+    REQUIRE(one.completions.load() == 1);
+    REQUIRE(two.wrong_cleanup.load() == 0);
+    REQUIRE(second.stats().accepted == 1 && second.stats().completed == 1);
+    REQUIRE(second.stats().protocol_failures == 0);
+}
 static void test_bad_fuel_and_start_constraints() {
     for (std::uint64_t n : {0ULL, 513ULL}) {
         bool invalid = false;
@@ -392,6 +442,7 @@ static void test_bad_fuel_and_start_constraints() {
     carrier.join();
 }
 int main() {
+    test_tokens_cannot_cross_carrier_lifetimes();
     test_bad_fuel_and_start_constraints();
     test_invalid_outcome_fails_closed();
     test_complete_beats_racing_control(false);
