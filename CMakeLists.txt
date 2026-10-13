@@ -226,6 +226,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_rt_cooperate_failclosed
         native-rt-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
+    oreslang_contract_test(native_rt_unbounded_loop_failclosed
+        native-rt-loop-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_for_loop_failclosed
+        native-rt-for-reject.ores
+        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+    oreslang_contract_test(native_rt_cooperate_expression_failclosed
+        native-rt-cooperate-expression-reject.ores
+        --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
 
 
     add_executable(oreslang-ownership-cfg-dataflow-test
