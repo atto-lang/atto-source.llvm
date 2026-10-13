@@ -121,19 +121,15 @@ int main() {
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
     CHECK(!lane.urgent());
 
-    // A corrupted supervisor hook decision is NOT an acknowledgement.
+    // A forged decision must escalate once rather than silently
+    // acknowledge or loop indefinitely on an unrecognizable host enum.
     Key invalid_decision{"invalid-decision", 5};
     lane.reserve_child(invalid_decision);
     CHECK(lane.publish_child(invalid_decision, Kind::Panic, "panic"));
     hooks.next = static_cast<SupervisorControlTurn::Decision>(0xff);
-    bool rejected_decision = false;
-    try { (void)lane.admit_turn(hooks, true); }
-    catch (const std::invalid_argument&) { rejected_decision = true; }
-    CHECK(rejected_decision);
-    CHECK(lane.urgent());
-    CHECK(lane.pending_count() == 1);
-    hooks.next = SupervisorControlTurn::Decision::Acknowledge;
+    const auto escalations_before = hooks.escalations;
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
+    CHECK(hooks.escalations == escalations_before + 1);
     CHECK(!lane.urgent());
     CHECK(lane.reserved_count() == 0);
     return 0;
