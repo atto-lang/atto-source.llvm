@@ -1,0 +1,80 @@
+# Oreslang exceptional control and root supervision — v1 design contract
+
+**Status: normative target semantics, not an executable source-language parity claim (2026-10-12).**
+Both backends must fail closed for exceptional source constructs that they cannot yet lower. In particular, the Java parser currently reserves `throw`, `raise`, `panic`, and `recover` rather than executing them; LLVM has host-side effect/supervisor machinery but not general guest exception lowering. Do not mark source parity complete from host unit tests.
+
+## Three effect identities, not three names for panic
+
+| Effect | Intent | Ordinary `catch` | `trap` callable | Explicit `recover` | Unhandled terminal category |
+|---|---|---|---|---|---|
+| `throw E` | Typed, expected, recoverable application failure | Matching typed catch | Converts to `None` | Not applicable | `Throw` |
+| `raise E` | Explicit nonlocal abort/escalation | Never | Never | Eligible, authorized recovery boundary only | `Raise` |
+| `panic E` | Broken invariant or unrecoverable guest failure | Never | Never | **Never in the panicking actor**; v1 does not admit source panic recovery elsewhere | `Panic` |
+
+A handler or supervisor may escalate the *delivery scope* of an unhandled failure without altering its original classification. **No implicit `Throw -> Raise -> Panic` coercion.** The original effect and cause remain observable; a new stronger effect thrown by cleanup or a failure hook may supersede it, with the original retained as secondary diagnostic context.
+
+`defer` and `finally` are LIFO cleanup, not exception handlers. They execute while the runtime is still executable on normal return, local catch, trap conversion, recovery, and terminal unwind. Cleanup failure is not allowed to suppress higher-priority termination or panic. Invalid native state, fatal host failure, forced kill, or process death cannot guarantee cleanup execution.
+
+## Callable contracts: checked throws, not an assumed unchecked default
+
+The canonical planned effect spelling is `using throw<E>`, consistent with the existing `using` effect-row proposal. A future `throws E` signature suffix MAY be introduced solely as syntactic sugar for `using throw<E>` (with deterministic format normalization and duplicate-effect rejection); neither spelling is currently established as executable source syntax. Do not introduce a second independent exception system.
+
+```ores
+pub fnc read_user(UserId id): User using io, throw<NotFound> {
+    // may emit throw NotFound(...), once source lowering is implemented
+}
+
+pub trap fnc try_read_user(UserId id): User using io {
+    return read_user(id);
+}
+// The trap call result is Option<User>; its body can throw but no ordinary
+// throw crosses the trap boundary. Raise/panic/cancel still propagate.
+```
+
+Unannotated local/private callables **infer** transitive exceptional effects; they are not implicitly classified as `throws Any`. Explicit `using` is an upper bound / public contract. A public API must expose its inferred typed throw row or explicitly handle/trap it before shipping under the checked-effects profile. Unsupported or unknown FFI/dynamic calls are conservatively effectful and cannot satisfy a proven non-throwing API without a trusted effect summary. Function values, imports, trait slots, generic instantiations, overrides, callback effects, async continuations, JIT/AOT, and Wasm/native metadata must preserve the effect row.
+
+`trap fnc(...): T` preserves its current API shape: success produces `Some(T)`, uncaught ordinary throw produces `None`. If T is itself an Option, preserve `Option<Option<T>>`. Async trap produces `Future<Option<T>>`; late post-await throws are converted at the same trap boundary. Traps must not convert `raise`, `panic`, cancellation, process exit, or host-fatal errors. A `trap` *expression* is not implied by this callable contract.
+
+The `Assert.equal_throws` and similar source-library names are naming conventions for ordinary error-producing operations, **not signature effect metadata**. The existing `rt fail` assertion path will need a typed `throw<AssertionError>` classification before typed source exception release. Deliberate validation errors should throw; invariant failures can panic. Security-sensitive invariant checks must never be compiled away as debug-only assertions.
+
+## Lexical and actor boundaries
+
+1. An ordinary throw first seeks the nearest matching `catch` in the same dynamic continuation; unmatched catches are skipped. On escape from a `trap` callable, it becomes `None` after cleanup. Otherwise it remains a typed `Throw` and unwinds.
+2. A raise bypasses all ordinary catches/traps and searches for a statically admitted `recover` boundary with the required authority. Recovery means resumption at a defined safe enclosing checkpoint, **not** return to the faulting instruction. A recover boundary must not violate borrow, lock, actor turn, or async continuation ownership invariants. If none exists, the terminal effect stays `Raise`.
+3. Panic bypasses catch, trap, source recover, and **all actor-local unhandled hooks**. During actor unwind, any permitted cleanup is best effort and bounded by the actor termination budget; the terminal `Panic` must be published exactly once to the reserved parent/root CONTROL slot before terminal retirement when the hosting runtime is alive. The panicking actor cannot handle, acknowledge, replace, or consume its own panic.
+4. After unwinding the source turn, an actor's uncaught `Throw` MAY enter its compiler-recognized `on_throw` hook; uncaught `Raise` MAY enter `on_raise`. These hooks run only on that actor's exclusive lane, after safe unwind; they cannot run concurrently with its own user code or retain dead lexical borrows. `Handled` terminates the failed turn and permits a subsequent turn only if actor state remains valid. Otherwise the original typed failure goes to its supervisor. Hook failure may strengthen, but not silently weaken, the terminal effect. There is **no actor-local `on_panic`**.
+5. A parent/supervisor receives a detached, bounded, immutable failure **envelope** via a pre-reserved dedicated CONTROL slot, not a guest exception on its call stack and not ordinary mailbox data. The supervisor's `on_panic` may choose stop/restart/escalate for the **child**; it never executes in the child's domain. Deduplicate by actor identity + generation; reserve capacity before spawn; handle CONTROL between single-flight actor turns. A supervisor itself failing is handled by its parent/root, never by recursively invoking its own callback.
+6. No exceptional effect propagates synchronously *through* an actor-send or inter-isolate boundary. An actor task/future may settle with an immutable typed failure outcome; any supervisory routing remains separate. Cancellation is a distinct non-trappable control outcome.
+
+## Non-actor execution, root task and root supervisor
+
+Non-actor functions and ordinary nested calls use the **same lexical catch/trap/recover/unwind semantics**. A non-actor task does not acquire an imaginary actor mailbox. A detached or asynchronous task must have an owning task group or root supervision policy that observes failures; an unobserved task failure must not disappear or count as success.
+
+The outermost non-actor `pub routine main()` runs under a root failure boundary owned by the host launcher/embedding runtime. The root is not its own supervisor. A root supervisor service may handle failures of its *child actors* via CONTROL without treating every child panic as a process-wide panic. But failure of the root routine / root supervisor itself is terminal unless an independent host process/service manager decides to restart it.
+
+| Root outcome | Portable standalone CLI behavior | Embedded host behavior |
+|---|---|---|
+| Normal `main(): void` return | Exit 0 | Successful result |
+| Normal `main(): int` 0..255 | Exit requested value | Successful result with status |
+| Unhandled `throw` | Report typed root failure; exit **1** | Return/complete failure `Throw` |
+| Unrecovered `raise` | Report typed root failure; exit **1** | Return/complete failure `Raise` |
+| Unhandled `panic` | Report typed root failure; exit **1** | Return/complete failure `Panic` |
+| Unhandled root cancellation / failed initialization | Exit **1** | Return/complete distinct failure |
+| Explicit authorized `std.process.exit(n)` | Respect the existing 0..255 and first-authoritative-exit policy | Return explicit status, **do not call OS exit** |
+
+Exit status 2 remains reserved for invalid CLI invocation; do not overload it to mean `raise`. The exit-status contract is `contracts/PROCESS_EXIT_STATUS_V1.md`. A failure that predates deferred `process.exit(0)` must never be converted into success. OS fatal signals and truly uncontainable native faults follow host/OS behavior; do not claim that an in-process root supervisor survives process death.
+
+## Failure precedence and diagnostic integrity
+
+Retain the shared host precedence lattice: `HostFatal/ProcessExit > Cancelled > Panic > Raise > Throw > Return`, with the **existing explicit-process-exit chronological exception** above. This ranking selects a primary failure when simultaneous failures coexist, not an automatic reclassification. On equal priority retain the first failure as primary. Preserve later failures and bounded source breadcrumbs as secondary metadata. Do not carry raw Throwable/C++ exception pointers, mutable guest state, or arbitrary actor-owned objects across domains. Unknown effect tags, allocation failure on CONTROL delivery, stale generation, and exhaustion of failure slots must fail closed.
+
+## Required source-level parity release gates
+
+- Typed signature/effect inference: unannotated local inference, exported upper bounds, trait and function-value substitution, typed catch mismatch, dynamic/FFI unknown effect rejection.
+- Actor source: matching throw catch, trap `None`, unmatched throw -> on_throw -> typed CONTROL; raise -> eligible recover or on_raise/CONTROL; panic -> supervisor CONTROL **without any on_panic/on_throw/on_raise/recover callback on the failing actor**.
+- Non-actor source: nested synchronous, suspended asynchronous, detached task, root `main`, root supervisor child failure, supervisor self-failure, and explicit exit races. Assert exact status **1** for unhandled root throw/raise/panic without inventing kind-specific exit codes.
+- Cleanup: defer/finally LIFO through every channel, throws during panic, stronger cleanup escalation, invalid recovery, pending failure vs process.exit(0), actor teardown budget, and all suppression ordering.
+- CONTROL: slot reservation before spawn, full normal mailbox, one event per generation, stale and duplicate publication, parent termination, root escalation, handler panic, bounded diagnostics and no actor self-interception.
+- AOT/Graal/native LLVM/Wasm as applicable must use the **identical Oreslang fixture blob** and prove behavior after compilation. Host policy unit tests, reserved lexer tokens, and fail-closed fixtures alone do not establish executable guest parity.
+
+**Compatibility note:** older proposals describing actor panic as recoverable or silently changing throw -> raise -> panic are superseded by this v1 target. The intended release gate is an executable, two-backend, source-level proof; until then, reject unsupported syntax.
