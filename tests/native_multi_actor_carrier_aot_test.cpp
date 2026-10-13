@@ -270,6 +270,44 @@ static void test_saturation_and_concurrent_cancel() {
     REQUIRE(stats.cancelled_active == 1 && stats.protocol_failures == 0);
     REQUIRE(stats.worker_thread_tag == busy.tag.load());
 }
+struct InvalidOutcomeEvidence {
+    std::atomic<int> entered{0};
+    std::atomic<int> canceled{0};
+    std::atomic<int> wrong_cause{0};
+};
+static MultiActorCarrier::Outcome invalid_slice(
+        void* raw, MultiActorCarrier::Message,
+        MultiActorCarrier::Cause cause, std::uint64_t) noexcept {
+    auto& evidence = *static_cast<InvalidOutcomeEvidence*>(raw);
+    if (cause != MultiActorCarrier::Cause::initial)
+        evidence.wrong_cause.fetch_add(1);
+    evidence.entered.fetch_add(1);
+    return static_cast<MultiActorCarrier::Outcome>(255);
+}
+static void invalid_cancel(void* raw, MultiActorCarrier::Message,
+                           bool had_active) noexcept {
+    auto& evidence = *static_cast<InvalidOutcomeEvidence*>(raw);
+    if (!had_active) evidence.wrong_cause.fetch_add(1);
+    evidence.canceled.fetch_add(1);
+}
+static void test_invalid_outcome_fails_closed() {
+    InvalidOutcomeEvidence evidence;
+    MultiActorCarrier carrier;
+    const auto token = carrier.register_actor(&evidence, invalid_slice, invalid_cancel);
+    auto producer = carrier.producer();
+    carrier.start();
+    REQUIRE(producer.try_send(token, {1, 7}));
+    REQUIRE(until([&] { return carrier.actor_stats(token).retired; }, 2s));
+    REQUIRE(evidence.entered.load() == 1);
+    REQUIRE(evidence.canceled.load() == 1);
+    REQUIRE(evidence.wrong_cause.load() == 0);
+    REQUIRE(!producer.try_send(token, {2, 7}));
+    carrier.join();
+    const auto stats = carrier.stats();
+    REQUIRE(stats.accepted == 1 && stats.completed == 0);
+    REQUIRE(stats.abandoned == 1 && stats.protocol_failures == 1);
+    REQUIRE(stats.cancelled_active == 1 && stats.cooperations == 0);
+}
 static void test_bad_fuel_and_start_constraints() {
     for (std::uint64_t n : {0ULL, 513ULL}) {
         bool invalid = false;
@@ -293,6 +331,7 @@ static void test_bad_fuel_and_start_constraints() {
 }
 int main() {
     test_bad_fuel_and_start_constraints();
+    test_invalid_outcome_fails_closed();
     test_saturation_and_concurrent_cancel();
     test_bounded_fairness_cancellation_and_lifetime();
     std::puts("TWO_COMPILED_ACTORS_ONE_REAL_CARRIER_PASS");
