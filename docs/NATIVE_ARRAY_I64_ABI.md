@@ -119,6 +119,18 @@ also terminates. The status is saved **before** the shared reverse-order
 owner destruction and region closure, so later typed error propagation
 cannot confuse the cause with cleanup effects. All three terminal blocks
 currently `abort`: returning normally would expose destroyed owners.
+The compiler's validated LIMIT and NO_MEMORY blocks now call a dedicated
+`oreslang_int_array_unhandled_resource_failure(uint32_t status)` ABI
+**after** reverse owner drops and region close; the failed region-open path
+also calls it after independent region cleanup. The ABI is allocation-free,
+non-returning and accepts only the two defined recoverable resource status
+tags, rejecting any other tag as an invariant failure. This provides a
+typed, value-only terminal error handoff that native test wrappers can
+observe without touching guest-owned data. It is not a catch frame or
+supervisor mailbox delivery: the current runtime still aborts, and no guest
+frame resumes. Tests verify exact LIMIT vs NO_MEMORY identity and zero
+double-drop/leaks *before* the terminal handoff.
+
 These status blocks are **not** yet source-visible `throw`, `trap`,
 `Option` or `Result` semantics. The eventual lowering must supply a
 well-defined typed guest exception/unwind handler and error-payload lifetime,

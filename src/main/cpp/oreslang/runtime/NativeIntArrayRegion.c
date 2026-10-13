@@ -22,6 +22,19 @@ struct OresNativeIntArrayRegion {
 static _Atomic uint64_t next_array_token = 1;
 static void fail_closed(void) { abort(); }
 
+/* The status is a value-only fixed-width failure payload: no allocation,
+ * no exception object, no guest pointer, and no handler reentry. A trusted
+ * compiler invokes this only after it has closed/dropped its owned region.
+ * The separate native error/supervisor dispatch is not available yet.
+ */
+void oreslang_int_array_unhandled_resource_failure(uint32_t status) {
+    if (status != ORES_NATIVE_ARRAY_LIMIT &&
+            status != ORES_NATIVE_ARRAY_NO_MEMORY)
+        abort(); /* Invalid status is an invariant violation, not a throw. */
+    abort(); /* Every unhandled ordinary resource failure is terminal. */
+}
+
+
 /* Test-only injector: never consume a failure on a no-op reservation.
  * Allocator failure testing must be deterministic and not need a real OOM.
  */
