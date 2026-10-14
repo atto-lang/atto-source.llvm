@@ -68,7 +68,7 @@ fnc sum(int a, int b): int {
                 "compiler output is not ARM ELF")
 
         reject("pub fnc main(): int { return 42; }\n", "cortex-m")
-        reject("pub fnc a(): int { val int x: 42; return x; }\n", "cortex-m")
+        reject("pub fnc a(): int { val x: int = 42; return x; }\n", "cortex-m")
         reject("pub fnc recur(): int { return recur(); }\n", "recursive")
         reject("fnc a(): int { return b(); }\nfnc b(): int { return a(); }\n",
                "recursive")
@@ -82,7 +82,7 @@ fnc sum(int a, int b): int {
                "call depth")
         reject("fnc f(" + ", ".join("int x%d" % i for i in range(9)) +
                "): int { return x0; }\n", "parameter budget")
-        reject("// comment\n" * 10000 + "fnc f(): int { return 1; }\n",
+        reject("// comment\n" * 14000 + "fnc f(): int { return 1; }\n",
                "source exceeds")
         source.write_text("fnc f(): int { return 1; }\n")
         bad = run([a.compiler, "--target=thumbv6m-none-eabi", str(source)])
