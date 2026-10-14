@@ -774,17 +774,21 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
     set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
-    # Pinned native Future<void> lifecycle frame: host callbacks only record
-    # completion; resumption is admitted on a parent actor's CONTROL lane.
-    # Guest-source await remains compiler-rejected pending typed MIR lowering.
     # Host-only CONTROL timer queue: no guest callback, no source async lowering.
+    # Expiry tickets are held until exactly-once claim/discard, including
+    # accounting for polled-but-not-yet-dispatched timers.
     add_executable(oreslang-native-timer-queue-test tests/native_timer_queue_test.cpp)
     target_include_directories(oreslang-native-timer-queue-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-timer-queue-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-timer-queue-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_monotonic_timer_admission_and_cancel_race
         COMMAND oreslang-native-timer-queue-test)
+    set_tests_properties(native_monotonic_timer_admission_and_cancel_race
+        PROPERTIES TIMEOUT 20)
 
+    # Pinned native Future<void> lifecycle frame: host callbacks only record
+    # completion; resumption is admitted on a parent actor's CONTROL lane.
+    # Guest-source await remains compiler-rejected pending typed MIR lowering.
     add_executable(oreslang-actor-lifecycle-await-test tests/actor_lifecycle_await_test.cpp)
     target_include_directories(oreslang-actor-lifecycle-await-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
