@@ -172,6 +172,41 @@ int main() {
         rejected(source, "unverified typed bool native result lowering");
     }
 
+    // Shape-check the separate scalar-loop fast path, which returns before
+    // ordinary LLVM function lowering and must not discard forged operations.
+    {
+        Program loop;
+        Function fn;
+        fn.name = "bounded_counter";
+        fn.scalar_while = std::make_unique<oreslang::ScalarWhileLoop>();
+        fn.scalar_while->counter = "counter";
+        fn.scalar_while->initial = 0;
+        fn.scalar_while->upper_bound = 3;
+        fn.result = std::make_unique<Expression>();
+        fn.result->kind = Expression::Kind::Variable;
+        fn.result->name = "counter";
+        oreslang::LocalBinding counter;
+        counter.name = "counter";
+        counter.owner_mutable = true;
+        counter.initializer = std::make_unique<Expression>();
+        counter.initializer->kind = Expression::Kind::Integer;
+        counter.initializer->integer = 0;
+        fn.locals.push_back(std::move(counter));
+        loop.functions.push_back(std::move(fn));
+
+        const auto ir = oreslang::emit_verified_llvm_ir(loop);
+        if (ir.find("oreslang_rt_scalar_frame_step") == std::string::npos)
+            throw std::runtime_error("valid scalar-loop AST was not lowered");
+        loop.functions.front().actor_stops.push_back("hidden_effect");
+        rejected(loop, "unverified experimental scalar-loop AST");
+        loop.functions.front().actor_stops.clear();
+        loop.functions.front().result->name = "wrong_counter";
+        rejected(loop, "unverified experimental scalar-loop AST");
+        loop.functions.front().result->name = "counter";
+        loop.functions.front().locals.front().initializer->integer = 8;
+        rejected(loop, "unverified experimental scalar-loop AST");
+    }
+
     // Positive compiler control: the direct emitter still exposes an i1,
     // without needing a source-level import or host-side bool stub.
     const auto native_ir = oreslang::emit_verified_llvm_ir(program("bool_control", true));
