@@ -380,11 +380,14 @@ if(BUILD_TESTING)
         native-explicit-private-function.ores
         --ir "define internal i64 @hidden(")
     oreslang_contract_test(native_implicit_private_module
-        native-module-implicit-private.ores)
+        native-module-implicit-private.ores
+        --ir "define internal i64 @Internal.answer(")
     oreslang_contract_test(native_define_private_module
-        native-module-define-private.ores)
+        native-module-define-private.ores
+        --ir "define internal i64 @Internal.answer(")
     oreslang_contract_test(native_private_define_module
-        native-module-private-define.ores)
+        native-module-private-define.ores
+        --ir "define internal i64 @Internal.answer(")
     oreslang_contract_test(native_public_module_fail_closed
         native-module-public-unsupported.ores
         --diagnostic "native public module export requires checked")
