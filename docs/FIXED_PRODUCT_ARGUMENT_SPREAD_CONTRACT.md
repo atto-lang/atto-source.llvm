@@ -84,6 +84,30 @@ A record is unordered *for label identity, field access, and structural equality
 
 **Differential requirements:** compare Java type diagnostics against LLVM source diagnostics and actual guest output, not parser acceptance alone. Assert the same fixed ABI slot mapping in synchronous, async, suspended, virtual, module, and imported execution routes before enabling them. Never claim LLVM parity from codec/transport tests alone.
 
+## LLVM first executable Copy-only slice (experimental)
+
+The LLVM draft branch now implements a **restricted native guest** subset:
+closed scalar-i64 record locals, ordinary copyable record field reads,
+inline tuple and record spreads, stored record spreads, and
+positional-prefix/named-tail call binding. Source-order evaluation happens
+once, with formal-slot permutation applied to values afterward. A record
+local is represented by an LLVM fixed-layout stack struct with
+`llvm.lifetime.start/end`; no runtime dictionary or dynamic binder is used.
+
+This is **not** general product parity. Source-only record literals remain
+one value, not implicit arguments. Nested records, owned classes/arrays,
+borrow-bearing members, partial `rt take`, unknown shapes and dynamic
+spreads remain rejected without IR. Java still rejects named record
+argument spread until its sync/suspendable checker and invocation paths
+share a checked ownership plan. Named record and generic Entry declarations
+are not implemented.
+
+Exact-source LLVM CI demonstrates 13 negative no-IR cases, nine real
+guest programs compiled/executed at -O0 and -O2, lexical order in emitted
+IR, no guest GC/allocator calls for this scalar subset, full CTest
+(373/373) and compiler ASan/UBSan product-matrix verification. These do
+**not** certify the entire linked OresVM or owned heap actor lifecycle.
+
 ## Integration status and sequencing
 
 At proposal creation, Java `Parser.parseCallArgumentsUntil` constructs `Ast.SpreadExpr`; `TypeChecker.expandFixedCallArguments` explicitly admits *only* `TupleKind.TUPLE` and constructs positional `ExpandedCallArgument` types. The Java evaluator's `evaluateArguments` expands an argument as a sequence; other source-task/suspendable paths independently evaluate arguments. `OwnershipChecker.checkArguments` also assumes tuple-only spread. These must be changed **together**, rather than teaching just the parser to accept record syntax. `docs/NAMED_ARGUMENTS_CONTRACT.md` describes still-proposed named calls; this contract extends but does not itself enable them.
