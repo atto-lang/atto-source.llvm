@@ -84,36 +84,67 @@ def check_rejected(compiler, root, name, source, diagnostic):
 def main(compiler, clang):
     prefix = "fnc sum(int a, int b): int { return a + b; }\n"
     rejected = {
-        "tuple spread": (
-            prefix + "pub fnc main(): int { return sum(...(19, 23)); }",
-            "native product spread requires verified"),
-        "record spread": (
-            prefix + "pub fnc main(): int { return sum(...(b: 23, a: 19)); }",
-            "native product spread requires verified"),
-        "stored record": (
-            "pub fnc main(): int { return (a: 19, b: 23); }",
-            "native record literal requires verified"),
-        "record spread with two mutable loans": (
-            prefix + """pub fnc main(int x): int {
-                return sum(...(a: rt borrow mut x, b: rt borrow mut x));
-            }""",
-            "native product spread requires verified"),
-        "positional tuple product": (
+        "unspread tuple as result": (
             "pub fnc main(): int { return (19, 23); }",
-            "expected ')'"),
-        "record containing borrowed value": (
-            "pub fnc main(int x): int { return (loan: rt borrow x); }",
-            "native record literal requires verified"),
-        "record containing moved value": (
-            "pub fnc main(int x): int { return (owner: rt take x); }",
-            "native record literal requires verified"),
-        "nested record product": (
-            "pub fnc main(): int { return (child: (a: 19, b: 23)); }",
-            "native record literal requires verified"),
+            "native aggregate value requires"),
+        "unspread record as result": (
+            "pub fnc main(): int { return (a: 19, b: 23); }",
+            "native aggregate value requires"),
+        "record with borrowed member": (
+            "pub fnc main(int x): int { const r = (loan: rt borrow x); return r.loan; }",
+            "borrowed reference may only be passed"),
+        "record with nested record": (
+            "pub fnc main(): int { const r = (child: (a: 19, b: 23)); return 0; }",
+            "native aggregate value requires"),
+        "record with duplicate label": (
+            "pub fnc main(): int { const r = (a: 19, a: 23); return 0; }",
+            "duplicate record field"),
+        "record with partial take": (
+            "pub fnc main(): int { const r = (a: 19, b: 23); return rt take r.a; }",
+            "cannot take final class field"),
+        "non-Copy call argument in record spread": (
+            prefix + "pub fnc main(int x): int { return sum(...(a: rt borrow mut x, b: rt borrow mut x)); }",
+            "borrowed reference may only be passed"),
+        "unknown dynamic spread": (
+            prefix + "pub fnc main(int x): int { return sum(...x); }",
+            "native spread requires a statically known closed"),
+        "unknown record member": (
+            "pub fnc main(): int { const r = (a: 19, b: 23); return r.missing; }",
+            "unknown class field or receiver"),
+        "unknown spread parameter label": (
+            prefix + "pub fnc main(): int { return sum(...(c: 23, a: 19)); }",
+            "unknown named argument"),
+        "duplicate bound slot": (
+            prefix + "pub fnc main(): int { return sum(a: 19, ...(a: 23)); }",
+            "duplicate named argument"),
+        "missing bound slot": (
+            prefix + "pub fnc main(): int { return sum(...(a: 19)); }",
+            "wrong call arity"),
+        "positional after named spread": (
+            prefix + "pub fnc main(): int { return sum(...(a: 19), 23); }",
+            "positional argument cannot follow named argument"),
     }
     scalar_named = prefix + """
 pub fnc main(): int {
     return sum(b: 23, a: 19);
+}
+"""
+    scalar_record = prefix + """
+pub fnc main(): int {
+    const r = (b: 23, a: 19);
+    return sum(...r);
+}
+"""
+    inline_record = prefix + """
+pub fnc main(): int { return sum(...(b: 23, a: 19)); }
+"""
+    inline_tuple = prefix + """
+pub fnc main(): int { return sum(...(19, 23)); }
+"""
+    scalar_projection = """
+pub fnc main(): int {
+    const r = (b: 23, a: 19);
+    return r.a + r.b;
 }
 """
     shared_borrow = """
@@ -129,8 +160,16 @@ pub fnc main(): int { return wrapper(41); }
                   scalar_named, 42)
         check_aot(compiler, clang, root, "native-scalar-borrow",
                   shared_borrow, 42)
+        check_aot(compiler, clang, root, "native-stored-record-spread",
+                  scalar_record, 42)
+        check_aot(compiler, clang, root, "native-inline-record-spread",
+                  inline_record, 42)
+        check_aot(compiler, clang, root, "native-inline-tuple-spread",
+                  inline_tuple, 42)
+        check_aot(compiler, clang, root, "native-scalar-record-projection",
+                  scalar_projection, 42)
     print(f"LLVM product admission: {len(rejected)} no-IR rejects; "
-          "two real native guest programs at -O0/-O2, exit 42; "
+          "six real native guest programs at -O0/-O2, exit 42; "
           "no guest GC or allocator calls in emitted IR")
 
 
