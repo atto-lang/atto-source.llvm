@@ -84,6 +84,52 @@ inline std::string checked_actor_identity(std::string_view identity) {
     return std::string(identity);
 }
 
+// Diagnostic values are untrusted text, not terminal or log framing.
+// Preserve the existing bounded UTF-8 validator, then replace terminal
+// controls and Unicode bidi/zero-width formatting with '?'. The replacement
+// never grows the message and is safe for the 1024-byte budget.
+inline std::string sanitized_actor_diagnostic(std::string_view text) {
+    std::string result = bounded_control_diagnostic(text);
+    for (std::size_t i = 0; i < result.size();) {
+        const unsigned char ch = static_cast<unsigned char>(result[i]);
+        if ((ch < 0x20 && ch != '\t') || ch == 0x7f) {
+            result[i++] = '?';
+            continue;
+        }
+        if (i + 1 < result.size() && ch == 0xc2) {
+            const unsigned char second = static_cast<unsigned char>(result[i + 1]);
+            if (second >= 0x80 && second <= 0x9f) {
+                result.replace(i, 2, "?");
+                ++i;
+                continue;
+            }
+        }
+        if (i + 2 < result.size() && ch == 0xe2) {
+            const unsigned char second = static_cast<unsigned char>(result[i + 1]);
+            const unsigned char third = static_cast<unsigned char>(result[i + 2]);
+            const bool format = (second == 0x80
+                    && ((third >= 0xaa && third <= 0xae) || third == 0x8b))
+                    || (second == 0x81 && third >= 0xa6 && third <= 0xa9);
+            if (format) {
+                result.replace(i, 3, "?");
+                ++i;
+                continue;
+            }
+        }
+        if (i + 2 < result.size() && ch == 0xef
+                && static_cast<unsigned char>(result[i + 1]) == 0xbb
+                && static_cast<unsigned char>(result[i + 2]) == 0xbf) {
+            result.replace(i, 3, "?");
+            ++i;
+            continue;
+        }
+        // Walk over entire validated Unicode scalar, not individual
+        // continuation bytes; prevents scanning inside a multibyte codepoint.
+        i += ch < 0x80 ? 1 : ch < 0xe0 ? 2 : ch < 0xf0 ? 3 : 4;
+    }
+    return result;
+}
+
 class ActorErrorEnvelope {
 public:
     static ActorErrorEnvelope make(ActorErrorCode code,
@@ -91,7 +137,7 @@ public:
             std::string_view actor_id,
             std::string_view supervisor_id) {
         (void)actor_error_definition(code); // validate enum before transfer
-        return ActorErrorEnvelope(code, bounded_control_diagnostic(diagnostic),
+        return ActorErrorEnvelope(code, sanitized_actor_diagnostic(diagnostic),
                 checked_actor_identity(actor_id),
                 checked_actor_identity(supervisor_id));
     }
