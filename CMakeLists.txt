@@ -409,6 +409,17 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_private_pub_module_reject
         native-private-pub-module-reject.ores
         --diagnostic "duplicate/conflicting visibility modifier")
+    # Neither the native parser nor the formatter may promote a misplaced
+    # module visibility modifier into a valid cross-module export.
+    oreslang_contract_test(native_module_postfix_pub_reject
+        native-module-postfix-pub-reject.ores
+        --diagnostic "expected non-keyword identifier")
+    oreslang_contract_test(native_module_postfix_private_reject
+        native-module-postfix-private-reject.ores
+        --diagnostic "expected non-keyword identifier")
+    oreslang_contract_test(native_module_predefine_reject
+        native-module-predefine-reject.ores
+        --diagnostic "native module must be the sole outer source declaration")
     oreslang_contract_test(native_private_private_function_reject
         native-private-private-function-reject.ores
         --diagnostic "duplicate/conflicting visibility modifier")
