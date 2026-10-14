@@ -17,7 +17,7 @@ namespace oreslang::runtime {
 struct NativeTimerHandle {
     std::uint64_t domain = 0;
     std::uint64_t id = 0;
-    friend bool operator==(NativeTimerHandle, NativeTimerHandle) = default;
+    friend bool operator==(NativeTimerHandle lhs, NativeTimerHandle rhs) noexcept {\n        return lhs.domain == rhs.domain && lhs.id == rhs.id;\n    }
 };
 
 /**
