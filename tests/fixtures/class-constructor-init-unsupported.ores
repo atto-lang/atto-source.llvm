@@ -1,5 +1,5 @@
 define class Pair as
-  final int a: supplied_a;
+  pub final int a: supplied_a;
   constructor(int supplied_a) {
     return;
   }

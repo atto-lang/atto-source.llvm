@@ -129,3 +129,15 @@ Previously public member guest programs remain the positive cases.
 These edits are **unverified** pending a conflict-aware integration with
 main, a real CMake/CTest run and native ASan/UBSan. A mergeable PR status
 would not substitute for those gates.
+
+## Mainline forward-port hardening
+
+The native LLVM compiler now checks public visibility on scalar and owned-array
+field projections from free functions. A private field cannot be read, written,
+destructively taken, or accessed through the Array<int> member ABI. Slot
+fixedness is independent of referent mutability, and bare `mut Array<int>` is
+admitted with the same owner/cleanup restrictions as `let mut Array<int>`.
+
+All native compiler and sanitizer acceptance gates must execute on the exact
+updated Git source tree. Earlier parity evidence is not transferable after a
+source commit, even if only the checker changed.

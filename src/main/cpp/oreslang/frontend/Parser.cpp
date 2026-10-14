@@ -373,8 +373,8 @@ private:
             }
             const bool mutable_referent = accept("mut");
             if (mutable_referent && accept("Array")) {
-                if (!legacy_let && !field.final_field)
-                    fail("native owned Array<int> requires explicit mut owner capability");
+                // 'mut Array<int>' is canonical: mut is the referent
+                // capability, independent of whether the slot is final.
                 require("<"); require("int"); require(">");
                 field.int_array = true;
                 field.name = identifier();
