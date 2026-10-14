@@ -144,7 +144,36 @@ int main() {
             "sealed Assert module alias cannot be shadowed");
         expect_rejected(
             "pub fnc check(): bool { return 1; }",
-            "native bool return requires sealed module ABI linking");
+            "native bool result requires typed bool expression");
+        expect_rejected(
+            "pub fnc main(): int { return true; }",
+            "native int return cannot return bool");
+        expect_rejected(
+            "pub fnc main(): bool { return true; }",
+            "native bool main violates process exit ABI");
+        expect_rejected(
+            "pub fnc choose(int x): bool { return true; } "
+            "pub fnc main(): int { return 0; }",
+            "native bool literal AOT requires pure zero-argument function");
+        expect_rejected(
+            "pub fnc main(): int { return true + 1; }",
+            "typed bool cannot be used as native int");
+        expect_rejected(
+            "pub fnc choice(): bool { return true; } "
+            "pub fnc main(): int { return choice(); }",
+            "typed bool result cannot be used as an int expression");
+        auto literal_bool = oreslang::parse_program(
+            "pub fnc yes(): bool { return true; } "
+            "pub fnc no(): bool { return false; } "
+            "pub fnc main(): int { return 0; }");
+        if (literal_bool.functions.size() != 3 ||
+            !literal_bool.functions[0].returns_bool ||
+            !literal_bool.functions[1].returns_bool ||
+            literal_bool.functions[0].result->kind !=
+                oreslang::Expression::Kind::Boolean ||
+            literal_bool.functions[0].result->integer != 1 ||
+            literal_bool.functions[1].result->integer != 0)
+            throw std::runtime_error("native typed bool literal AST mismatch");
         expect_rejected(
             "import module Assert from \"std/assert\"; "
             "pub fnc check(int x): bool { return Assert.equal(rt borrow x, 7); }",
