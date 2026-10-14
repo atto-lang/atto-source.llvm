@@ -96,6 +96,30 @@ https://github.com/canonical-cloud/canonical-docs/actions/runs/38624951416
 This internal helper assertion is a defense-in-depth runtime check, not a
 proof that all source borrow aliases and LLVM lowering steps are correct.
 
+## 2026-10-14 per-loan ticket identity hardening
+
+The compiler no longer relies solely on a shared-loan count and exclusive
+Boolean to validate releases. Each acquired native checker loan is given a
+monotonic nonzero ticket; the checker tracks live shared tickets and exactly one
+optional exclusive ticket per owner, rejects replay/forged/wrong-mode releases
+without changing other live loans, and fails closed before ticket exhaustion or
+shared-count overflow. Tickets are compiler-only bookkeeping, not guest ABI.
+
+The direct invariant regression constructs actual loan acquisition expressions
+and tests two concurrent shared loans, individual release, repeated first-loan
+release while the second remains active, wrong-mode/forged tickets, exclusive
+release, retired ticket reuse, and identity exhaustion. The funded, private,
+exact-blob CI run is:
+https://github.com/canonical-cloud/canonical-docs/actions/runs/38637846053
+Both the native checker-invariant/admission suite and original LLVM source-to-IR,
+four negative/two positive admissibility tests, and ASan/UBSan native execution
+passed.
+
+The separate Z3 abstract proof still models counts/flags, **not** ticket
+identity, alias-root resolution, exceptional CFG joins, or compiler-to-IR
+refinement. Ticket replay tests are an implementation regression gate, not a
+machine-checked ticket uniqueness theorem.
+
 ## Follow-up formal program
 
 Prove (using a proof assistant or a checked transition-system/refinement proof)
