@@ -103,6 +103,24 @@ NEGATIVE = {
     """,
 }
 
+# A negative test should fail for the intended contract, not because a
+# regression caused all source parsing or LLVM emission to fail.
+EXPECTED_DIAGNOSTICS = {
+    "wrong-ok-arity": "expected ')'",
+    "wrong-error-tag": "unknown nominal ArrayError case",
+    "foreign-error": "expected 'ArrayError'",
+    "wrong-error-payload": "expected 'ArrayError'",
+    "result-as-main": "requires zero parameters and non-main function",
+    "unverified-public-export": "public export requires verified",
+    "nominal-error-class-spoof": "native builtin Result/Option/ArrayError names cannot be redefined",
+    "result-module-shadow": "cannot be shadowed by module namespace",
+    "error-module-shadow": "cannot be shadowed by module namespace",
+    "constructor-count-exceeds-limit": "function limit exceeded (64)",
+    "result-local-unhandled": "requires tagged construction",
+    "duplicate-constructor-names": "name collides",
+    "result-collides-with-scalar": "name collides",
+}
+
 
 def checked(args, **kwargs):
     result = subprocess.run(args, capture_output=True, check=False,
@@ -148,9 +166,13 @@ def main():
             path.write_text(invalid_source, encoding="utf8")
             result = subprocess.run([str(args.compiler), str(path)],
                                     capture_output=True, check=False, timeout=30)
-            if result.returncode != 1 or result.stdout:
+            diagnostic = EXPECTED_DIAGNOSTICS.get(name)
+            if (result.returncode != 1 or result.stdout
+                    or (diagnostic is not None
+                        and diagnostic.encode("utf8") not in result.stderr)):
                 raise AssertionError(
-                    f"{name}: invalid source emitted IR or passed: "
+                    f"{name}: expected a precise fail-closed diagnostic "
+                    f"{diagnostic!r} and no LLVM IR: "
                     f"rc={result.returncode} stdout={result.stdout!r} "
                     f"stderr={result.stderr!r}")
         print("PASS: typed Result guest constructors emit verified struct IR and execute")
