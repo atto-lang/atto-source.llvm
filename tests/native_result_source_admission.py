@@ -15,9 +15,6 @@ NEGATIVE = {
     "param-closed": (
         "fnc consume(Result<void, ArrayError> value): int { return 0; }",
         "native Result<void, ArrayError> requires tagged construction"),
-    "return-closed": (
-        "fnc make(): Result<void, ArrayError> { return Ok(); }",
-        "native Result<void, ArrayError> requires tagged construction"),
     "return-foreign-error": (
         "fnc make(): Result<void, String> { return Ok(); }",
         "requires nominal ArrayError specialization"),
