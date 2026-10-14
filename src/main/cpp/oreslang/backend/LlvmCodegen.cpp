@@ -488,7 +488,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
-        const auto linkage = fn.exported
+        // This native subset cannot yet export named modules (there is no
+        // checked public-module ABI). A public-looking function inside the
+        // private source module must remain internal at the LLVM boundary.
+        const auto linkage = fn.exported && source.module.empty()
                 ? llvm::Function::ExternalLinkage
                 : llvm::Function::InternalLinkage;
         llvm::Function* declaration = llvm::Function::Create(
