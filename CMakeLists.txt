@@ -127,6 +127,13 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_actor_error_abi.py"
             --root "${CMAKE_CURRENT_SOURCE_DIR}" --backend llvm)
     set_tests_properties(native_actor_error_v1_abi_static PROPERTIES TIMEOUT 20)
+    add_test(NAME native_guest_error_admission_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_error_admission_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_guest_error_admission_fail_closed
+        PROPERTIES TIMEOUT 90)
+
     add_test(NAME llvm_flags2env_env_argv_contract
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/flags2env_cli_env_matrix.py"
