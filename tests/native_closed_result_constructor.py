@@ -112,10 +112,11 @@ def main():
         if "ret i64" in ir or "ret i32" in ir:
             raise AssertionError("Result constructor accidentally lowered to scalar status")
         ll.write_bytes(compiled.stdout + b"\n" + LLVM_CALLER.encode("utf8"))
-        exe = root / "result-execution"
-        checked([str(args.clang), "-Werror", "-Wno-override-module",
-                 "-x", "ir", str(ll), "-o", str(exe)])
-        checked([str(exe)])
+        for optimization in ("-O0", "-O2"):
+            exe = root / ("result-execution-" + optimization[1:])
+            checked([str(args.clang), "-Werror", "-Wno-override-module",
+                     optimization, "-x", "ir", str(ll), "-o", str(exe)])
+            checked([str(exe)])
         for name, invalid_source in NEGATIVE.items():
             path = root / (name + ".ores")
             path.write_text(invalid_source, encoding="utf8")
