@@ -4,7 +4,14 @@
 #include <stdexcept>
 #include <string>
 
+#include "llvm/Config/llvm-config.h"
+#if LLVM_VERSION_MAJOR >= 18
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/TargetParser/Host.h"
+#else
+#include "llvm/ADT/Triple.h"
+#include "llvm/Support/Host.h"
+#endif
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -13,7 +20,6 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/TargetParser/Host.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace oreslang {
@@ -151,7 +157,11 @@ std::string emit_native_assert_scalar_llvm_ir_v0() {
         !target.isLittleEndian() || sizeof(void*) != 8)
         throw std::runtime_error(
             "native Assert scalar ABI v0 requires little-endian x86-64 or AArch64 host");
+#if LLVM_VERSION_MAJOR >= 21
+    module.setTargetTriple(target);
+#else
     module.setTargetTriple(target.str());
+#endif
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* i8 = llvm::Type::getInt8Ty(context);
