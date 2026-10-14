@@ -72,6 +72,21 @@ NEGATIVE = {
         end
         fnc wrong(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
     """,
+    "nominal-result-actor-spoof": """
+        define actor Result as
+        end
+        fnc wrong(): Result<void, ArrayError> { return Ok(); }
+    """,
+    "nominal-error-actor-spoof": """
+        define actor ArrayError as
+        end
+        fnc wrong(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
+    """,
+    "nominal-option-actor-spoof": """
+        define actor Option as
+        end
+        fnc wrong(): Result<void, ArrayError> { return Ok(); }
+    """,
     "result-module-shadow": """
         define module Result as
           fnc wrong(): Result<void, ArrayError> { return Ok(); }
@@ -113,6 +128,9 @@ EXPECTED_DIAGNOSTICS = {
     "result-as-main": "requires zero parameters and non-main function",
     "unverified-public-export": "public export requires verified",
     "nominal-error-class-spoof": "native builtin Result/Option/ArrayError names cannot be redefined",
+    "nominal-result-actor-spoof": "native builtin Result/Option/ArrayError names cannot be redefined as actors",
+    "nominal-error-actor-spoof": "native builtin Result/Option/ArrayError names cannot be redefined as actors",
+    "nominal-option-actor-spoof": "native builtin Result/Option/ArrayError names cannot be redefined as actors",
     "result-module-shadow": "cannot be shadowed by module namespace",
     "error-module-shadow": "cannot be shadowed by module namespace",
     "constructor-count-exceeds-limit": "function limit exceeded (64)",
