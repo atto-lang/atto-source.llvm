@@ -90,6 +90,20 @@ inline bool canonicalUuid(std::string_view text) noexcept {
 inline void validateSymbolUnicode(std::string_view name) {
     if (name.empty() || name.size() > kSymbolBytes || !validUtf8(name))
         throw std::invalid_argument("Symbol requires 1..256 valid UTF-8 bytes");
+
+    // ASCII Symbols are independent of Unicode data versions. Even if an
+    // ICU deployment is missing or has unexpected tables, ASCII remains
+    // available, while non-ASCII identities fail closed.
+    bool ascii = true;
+    for (unsigned char cp : name) {
+        if (cp >= 0x80u) {
+            ascii = false;
+            break;
+        }
+        if (cp < 0x20u || cp == 0x7fu)
+            throw std::invalid_argument("control character in Symbol");
+    }
+    if (ascii) return;
 #ifdef ORES_SYMBOL_V1_ICU_NFC
     UVersionInfo version{};
     u_getUnicodeVersion(version);
@@ -132,11 +146,8 @@ inline void validateSymbolUnicode(std::string_view name) {
         }
     }
 #else
-    for (unsigned char cp : name) {
-        if (cp < 0x20u || cp > 0x7eu)
-            throw std::invalid_argument(
-                "non-ASCII Symbol requires pinned ICU NFC tables");
-    }
+    throw std::invalid_argument(
+        "non-ASCII Symbol requires pinned ICU NFC tables");
 #endif
 }
 
