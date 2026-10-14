@@ -17,6 +17,19 @@ fnc limited(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
 fnc no_memory(): Result<void, ArrayError> { return Err(ArrayError.NoMemory); }
 """
 
+# The experimental scalar-frame emitter previously returned early and
+# could drop all tagged constructors from the generated LLVM module.
+MIXED_SCALAR_LOOP = """
+pub routine count_to_one_thousand(): int {
+    val count: int = 0;
+    while (count < 1000) {
+        count = count + 1;
+    }
+    return count;
+}
+fnc tagged(): Result<void, ArrayError> { return Ok(); }
+"""
+
 LLVM_CALLER = """
 ; The caller is deliberately compiled from LLVM IR with the SAME exact
 ; nominal aggregate type. A C struct return is NOT a verified FFI ABI.
@@ -193,6 +206,20 @@ def main():
                     f"{diagnostic!r} and no LLVM IR: "
                     f"rc={result.returncode} stdout={result.stdout!r} "
                     f"stderr={result.stderr!r}")
+        # This must fail before IR: the scalar-loop compiler has a special
+        # early-emission path which cannot silently omit tagged functions.
+        mixed = root / "mixed-scalar-result.ores"
+        mixed.write_text(MIXED_SCALAR_LOOP, encoding="utf8")
+        result = subprocess.run(
+            [str(args.compiler), "--experimental-rt-scalar-loop", str(mixed)],
+            capture_output=True, check=False, timeout=30)
+        if (result.returncode != 1 or result.stdout
+                or b"experimental scalar loop requires exactly one standalone function"
+                    not in result.stderr):
+            raise AssertionError(
+                "scalar-loop fast path silently dropped Result or failed for wrong reason: "
+                f"rc={result.returncode} stdout={result.stdout!r} "
+                f"stderr={result.stderr!r}")
         print("PASS: typed Result guest constructors emit verified struct IR and execute")
 
 
