@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """A -O / PYTHONOPTIMIZE run must enforce, not erase, native contract checks."""
+import ast
 import os
 from pathlib import Path
 import subprocess
@@ -69,6 +70,20 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
              "--compiler", str(compiler), "--fixture", str(self.fixture), *flags],
             capture_output=True, text=True, check=False, timeout=15, env=env,
         )
+
+    def test_native_security_gates_cannot_reintroduce_bare_assert(self):
+        # Python strips ast.Assert entirely under -O/-OO. A security
+        # regression gate must fail explicitly instead of disappearing.
+        for name in (
+            "contract.py",
+            "native_class_field_move_admission.py",
+            "class_multifield_layout_matrix.py",
+            "wasm32_owned_classes_matrix.py",
+        ):
+            module = ast.parse(Path(__file__).with_name(name).read_text(encoding="utf-8"))
+            bare_lines = [node.lineno for node in ast.walk(module)
+                          if isinstance(node, ast.Assert)]
+            self.assertEqual(bare_lines, [], f"{name}: bare assert at {bare_lines}")
 
     def test_valid_negative_still_passes_under_optimization(self):
         compiler = self.compiler(status=1, stderr="private class field")
