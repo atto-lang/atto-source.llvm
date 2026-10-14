@@ -227,6 +227,20 @@
       "description": "stop and async finalization release accelerator and buffer leases once",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-031",
+      "expected": "reject",
+      "description": "ProxyActor may not expose remote actor state, forge remote capability or supervisor CONTROL event, or bypass typed transport authorization",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-032",
+      "expected": "runtime_target",
+      "description": "ProxyActor transports typed forward/backward messages across an admitted IPC/TCP/HTTP link with bounded byte/item credits, peer generation fencing, cancellation and explicit disconnect failure",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
