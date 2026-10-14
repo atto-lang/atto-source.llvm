@@ -1738,6 +1738,8 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
+             !program.closed_array_results.empty() ||
+             !program.cooperative_loops.empty() ||
              !program.classes.empty() || !program.actors.empty() ||
              !program.module.empty()))
         throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
