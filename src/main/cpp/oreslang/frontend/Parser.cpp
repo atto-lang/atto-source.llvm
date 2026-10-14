@@ -1612,6 +1612,33 @@ private:
             }
         }
 
+        // Prove an exact private producer for every match consumer. These
+        // calls are never inserted into the scalar name/arity lookup.
+        std::unordered_set<std::string> match_names;
+        for (const auto& consumer : program.closed_result_matches) {
+            if (!match_names.insert(consumer.name).second
+                    || closed_names.count(consumer.name) || functions.count(consumer.name)
+                    || classes.count(consumer.name)
+                    || consumer.name == "main" || consumer.name == "abort"
+                    || consumer.name == "__oreslang_guest_main"
+                    || consumer.name.rfind("oreslang_", 0) == 0
+                    || std::any_of(program.actors.begin(), program.actors.end(),
+                        [&](const ActorDecl& actor) { return actor.name == consumer.name; })) {
+                throw std::runtime_error(
+                    "native Result match name collides with another or reserved source symbol '"
+                    + consumer.name + "'");
+            }
+            if (!closed_names.count(consumer.producer)) {
+                throw std::runtime_error(
+                    "native Result match requires a known closed Result<void,ArrayError> producer '"
+                    + consumer.producer + "'");
+            }
+            if (consumer.local.empty() || consumer.local == consumer.producer)
+                throw std::runtime_error("invalid Result match local or producer identity");
+            if (consumer.exported)
+                throw std::runtime_error("native Result match public export is not verified");
+        }
+
         std::unordered_map<std::string, const ActorDecl*> actor_types;
         for (const auto& actor : program.actors) {
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
