@@ -122,6 +122,13 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --source "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
     set_tests_properties(llvm_flags2env_env_argv_contract PROPERTIES TIMEOUT 120)
+    # Self-test for a measurement-only compile benchmark. No performance
+    # threshold is asserted in CI: runner timing is not reproducible.
+    add_test(NAME native_compile_benchmark_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_compile_benchmark_harness.py")
+    set_tests_properties(native_compile_benchmark_harness_selftest
+        PROPERTIES TIMEOUT 30)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_NATIVE_ARRAY_CLANG)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
@@ -931,6 +938,17 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-effect-supervision-bridge-test PRIVATE Threads::Threads)
     add_test(NAME native_effect_unwind_supervisor_control_bridge
         COMMAND oreslang-effect-supervision-bridge-test)
+    # Actual host-runtime path: native cleanup -> CONTROL publication ->
+    # supervisor admission, with promoted Panic and original typed origin.
+    add_executable(oreslang-effect-supervisor-e2e-test
+        tests/effect_supervisor_end_to_end_test.cpp)
+    target_include_directories(oreslang-effect-supervisor-e2e-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-effect-supervisor-e2e-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-effect-supervisor-e2e-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_effect_unwind_supervisor_end_to_end
+        COMMAND oreslang-effect-supervisor-e2e-test)
     add_executable(oreslang-supervisor-failure-lane-test tests/supervisor_failure_lane_test.cpp)
     target_include_directories(oreslang-supervisor-failure-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-supervisor-failure-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -1691,6 +1709,26 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-refreshed-control-data-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME refreshed_actor_control_data_lane COMMAND oreslang-refreshed-control-data-lane-test)
     set_tests_properties(refreshed_actor_control_data_lane PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-test-assertions-test tests/test_assertions_enabled.cpp)
+    add_test(NAME native_test_assertions_remain_enabled
+        COMMAND oreslang-test-assertions-test)
+
+    # Release tests use assertions for ownership checks and sometimes for
+    # operations such as pthread_create. NDEBUG must not erase those operations
+    # or turn safety tests into false passes. Keep the compiler's Release flags.
+    get_property(oreslang_directory_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(oreslang_test_target IN LISTS oreslang_directory_targets)
+        get_target_property(oreslang_target_type ${oreslang_test_target} TYPE)
+        if(oreslang_target_type STREQUAL "EXECUTABLE"
+                AND NOT oreslang_test_target STREQUAL "oreslang-llvmc")
+            if(MSVC)
+                target_compile_options(${oreslang_test_target} PRIVATE /UNDEBUG)
+            else()
+                target_compile_options(${oreslang_test_target} PRIVATE -UNDEBUG)
+            endif()
+        endif()
+    endforeach()
 endif()
 
 if(BUILD_TESTING AND ORE_CLANG)
