@@ -21,18 +21,26 @@ python3 scripts/benchmark_compile.py \
   --warmups 3 --samples 20 --json-out /tmp/oreslang-native-baseline.json
 ```
 
-The script executes a **fresh child process per sample**, discards stdout
-from the report but hashes IR to detect nondeterministic output, and fails
-on compiler failure, empty IR, timeout or conflicting IR. Each result
-includes source SHA-256, executable and arguments, wall-clock median and
-nearest-rank p95. The warmups warm the OS and surrounding environment,
+The script executes a **fresh child process per sample**, hashes IR without
+retaining the entire output in memory, and fails on compiler failure, empty
+IR, timeout, excessive output, changing source/compiler binaries, or
+conflicting IR. It bounds repetitions, warmups, timeouts, and stdout/stderr
+file size. On POSIX the child receives a kernel `RLIMIT_FSIZE` quota for each
+output stream; on other operating systems the cap is checked after process
+exit, so external tooling should additionally enforce disk quotas.
+Each report includes the SHA-256 of both source and compiler binary, output
+size, executable and arguments, wall-clock median and nearest-rank p95.
+The hash checks detect lasting changes during a run but cannot prove that
+untrusted build inputs were never transiently swapped. The warmups warm the OS and surrounding environment,
 **not an in-process compiler cache**.
 
 To compare cleanly, run the same source and compiler mode on the same
 machine, pin CPU frequency where possible, record OS/hardware and compiler
 commit separately, and use at least 20 samples. CI exercises correctness
 of the harness only; it **does not gate on wall time**, which is noisy
-across hosted runners.
+across hosted runners. The isolation gate for the benchmark harness passed
+6 unit tests in [GitHub Actions run 38519095796](https://github.com/canonical-cloud/canonical-mcp-server.rs/actions/runs/38519095796).
+This is not evidence that the private LLVM compiler compiled guest source.
 
 This script does not measure LLVM/Clang object-code optimization or final
 binary linking. Measure those separately when a native object/link stage
