@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Verify native checker accounting invariants directly; no JIT or
+    # runtime ABI is needed to detect silent size_t underflow.
+    add_executable(oreslang-native-loan-invariant-test
+        tests/native_loan_release_invariant_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp)
+    target_include_directories(oreslang-native-loan-invariant-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-loan-invariant-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>)
+    add_test(NAME native_borrow_loan_release_invariant
+        COMMAND oreslang-native-loan-invariant-test)
+    set_tests_properties(native_borrow_loan_release_invariant PROPERTIES TIMEOUT 20)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
