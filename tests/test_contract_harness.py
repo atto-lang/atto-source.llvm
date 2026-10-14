@@ -205,6 +205,26 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         bad_ir = self.compiler(stdout="not LLVM IR")
         self.assertNotEqual(self.run_contract(bad_ir).returncode, 0)
 
+    def test_ir_expectation_cannot_be_fulfilled_by_comment(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 "; ret i64 42\n"
+                                 "ret i64 0 ; ret i64 42\n")
+        p = self.run_contract(compiler, "--ir", "ret i64 42")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("comments do not count", p.stderr)
+
+    def test_expected_ir_remains_visible_outside_comments(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 "ret i64 42 ; harmless note\n")
+        p = self.run_contract(compiler, "--ir", "ret i64 42")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_comment_token_inside_llvm_string_is_not_comment(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 '@msg = private constant [11 x i8] c"hello;world"\n')
+        p = self.run_contract(compiler, "--ir", 'c"hello;world"')
+        self.assertEqual(p.returncode, 0, p.stderr)
+
     def test_positive_rejects_stderr_and_forbidden_abi(self):
         compiler = self.compiler(stdout="; ModuleID = 'good'\n",
                                  stderr="unexpected warning")
