@@ -17,27 +17,33 @@ pub fnc limited(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
 pub fnc no_memory(): Result<void, ArrayError> { return Err(ArrayError.NoMemory); }
 """
 
-HARNESS = """
-#include <stdint.h>
-#include <stdio.h>
-
-typedef struct { uint8_t variant, error; } ArrayResult;
-extern ArrayResult success(void);
-extern ArrayResult limited(void);
-extern ArrayResult no_memory(void);
-_Static_assert(sizeof(ArrayResult) == 2, "unexpected tagged ABI struct layout");
-
-int main(void) {
-    const ArrayResult ok = success();
-    const ArrayResult limit = limited();
-    const ArrayResult memory = no_memory();
-    if (ok.variant != 0 || ok.error != 0
-            || limit.variant != 1 || limit.error != 1
-            || memory.variant != 1 || memory.error != 2) {
-        fprintf(stderr, "incorrect nominal Result constructor ABI");
-        return 2;
-    }
-    return 0;
+LLVM_CALLER = """
+; The caller is deliberately compiled from LLVM IR with the SAME exact
+; nominal aggregate type. A C struct return is NOT a verified FFI ABI.
+define i32 @main() {
+entry:
+  %a = call %ores.result.void.array_error @success()
+  %b = call %ores.result.void.array_error @limited()
+  %c = call %ores.result.void.array_error @no_memory()
+  %a0 = extractvalue %ores.result.void.array_error %a, 0
+  %a1 = extractvalue %ores.result.void.array_error %a, 1
+  %b0 = extractvalue %ores.result.void.array_error %b, 0
+  %b1 = extractvalue %ores.result.void.array_error %b, 1
+  %c0 = extractvalue %ores.result.void.array_error %c, 0
+  %c1 = extractvalue %ores.result.void.array_error %c, 1
+  %ac0 = icmp eq i8 %a0, 0
+  %ac1 = icmp eq i8 %a1, 0
+  %bc0 = icmp eq i8 %b0, 1
+  %bc1 = icmp eq i8 %b1, 1
+  %cc0 = icmp eq i8 %c0, 1
+  %cc1 = icmp eq i8 %c1, 2
+  %one = and i1 %ac0, %ac1
+  %two = and i1 %bc0, %bc1
+  %three = and i1 %cc0, %cc1
+  %four = and i1 %one, %two
+  %all = and i1 %four, %three
+  %rc = select i1 %all, i32 0, i32 2
+  ret i32 %rc
 }
 """
 
@@ -105,12 +111,10 @@ def main():
             raise AssertionError("missing distinct nominal error payloads")
         if "ret i64" in ir or "ret i32" in ir:
             raise AssertionError("Result constructor accidentally lowered to scalar status")
-        ll.write_bytes(compiled.stdout)
-        harness = root / "harness.c"
-        harness.write_text(HARNESS, encoding="utf8")
+        ll.write_bytes(compiled.stdout + b"\n" + LLVM_CALLER.encode("utf8"))
         exe = root / "result-execution"
-        checked([str(args.clang), "-Werror", "-x", "ir", str(ll),
-                 "-x", "c", str(harness), "-o", str(exe)])
+        checked([str(args.clang), "-Werror", "-Wno-override-module",
+                 "-x", "ir", str(ll), "-o", str(exe)])
         checked([str(exe)])
         for name, invalid_source in NEGATIVE.items():
             path = root / (name + ".ores")
