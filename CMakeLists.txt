@@ -29,6 +29,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only v1 error-code/transport contract; does not claim guest lowering.
+    add_executable(oreslang-actor-error-catalog-test
+        tests/actor_error_catalog_test.cpp)
+    target_include_directories(oreslang-actor-error-catalog-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-error-catalog-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME actor_error_catalog_host_only
+        COMMAND oreslang-actor-error-catalog-test)
+    set_tests_properties(actor_error_catalog_host_only PROPERTIES TIMEOUT 20)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
