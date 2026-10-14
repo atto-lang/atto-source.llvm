@@ -35,7 +35,11 @@ if(BUILD_TESTING)
         tests/native_assert_scalar_ir_driver.cpp
         src/main/cpp/oreslang/backend/NativeAssertScalarIR.cpp)
     target_include_directories(oreslang-assert-scalar-ir-driver PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # External LLVM headers can emit unused-parameter warnings under GCC's
+    # -Wextra; keep -Werror for our source, not third-party development headers.
+    target_include_directories(oreslang-assert-scalar-ir-driver SYSTEM PRIVATE
+        "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-assert-scalar-ir-driver PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(oreslang-assert-scalar-ir-driver PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
