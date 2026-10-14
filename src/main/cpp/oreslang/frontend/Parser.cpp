@@ -606,6 +606,10 @@ private:
             require("do"); require("match");
             if (identifier() != consumer->local)
                 fail("native Result match must consume its exact named local");
+            // A syntactic match discharges the obligation exactly once
+            // because every arm must return, and no intervening expression
+            // can read, move, capture, or alias the immutable Result.
+            consumer->consumed_once = true;
             require("over");
             bool seen_ok = false, seen_err = false;
             for (int n = 0; n < 2; ++n) {
@@ -621,7 +625,14 @@ private:
                 if (!is_ok) {
                     // A typed Err binding is local to this arm, and cannot be
                     // referenced or transferred in this restricted slice.
-                    (void)identifier();
+                    // For now reject shadowing the only Result owner, its
+                    // producer, or nominal type/variant names.
+                    const std::string binding = identifier();
+                    if (binding == consumer->local || binding == consumer->producer
+                            || binding == "Result" || binding == "Option"
+                            || binding == "ArrayError" || binding == "Ok"
+                            || binding == "Err")
+                        fail("native Result match Err binding cannot shadow the Result owner or nominal identities");
                 }
                 require(")");
                 require("->");
@@ -631,9 +642,11 @@ private:
                 require(";"); require("}");
                 if (is_ok) {
                     seen_ok = true;
+                    consumer->proved_ok_arm = true;
                     consumer->ok_return = outcome;
                 } else {
                     seen_err = true;
+                    consumer->proved_err_arm = true;
                     consumer->err_return = outcome;
                 }
             }
@@ -1639,6 +1652,10 @@ private:
                 throw std::runtime_error("invalid Result match local or producer identity");
             if (consumer.exported)
                 throw std::runtime_error("native Result match public export is not verified");
+            if (!consumer.consumed_once || !consumer.proved_ok_arm
+                    || !consumer.proved_err_arm)
+                throw std::runtime_error(
+                    "native Result match must prove exactly-once consumption and exhaustive Ok/Err arms");
         }
 
         std::unordered_map<std::string, const ActorDecl*> actor_types;
