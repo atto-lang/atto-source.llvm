@@ -74,10 +74,17 @@ def main():
     if args.no_native_abi:
         require("oreslang_owned_i64_region_" not in compile_result.stdout,
                 "ordinary source unexpectedly references the experimental native heap ABI")
+    # Match a real IR *definition*, not a substring inside LLVM comments.
+    # The Oreslang host wrapper must define a zero-argument i32 main.
+    host_main = re.search(
+        r"(?m)^[ \t]*define[ \t]+(?:[A-Za-z_][A-Za-z0-9_().]*[ \t]+)*"
+        r"i32[ \t]+@main[ \t]*\([ \t]*\)",
+        compile_result.stdout,
+    )
     if args.no_main_link:
         require(args.run is None, "--no-main-link cannot request successful execution")
         require(bool(args.clang), "--no-main-link requires clang")
-        require("define i32 @main()" not in compile_result.stdout,
+        require(host_main is None,
                 "library-only source unexpectedly received a native OS entrypoint")
         with tempfile.TemporaryDirectory(prefix="oreslang-missing-main-") as directory:
             object_file = str(pathlib.Path(directory) / "guest.o")
@@ -140,6 +147,8 @@ def main():
     if args.run is None:
         return
     require(bool(args.clang), "--run requires a clang executable")
+    require(host_main is not None,
+            "native executable lacks an i32 main entrypoint wrapper")
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
         clang_cmd = [args.clang, "-x", "ir", "-"]
@@ -156,10 +165,6 @@ def main():
         result = subprocess.run(
             [executable], capture_output=True, text=True, check=False, timeout=10
         )
-        # Only a checked i32 OS wrapper may produce the process status.
-        # Raw i64 guest results must never rely on platform truncation.
-        require("define i32 @main()" in compile_result.stdout,
-                "native executable lacks an i32 main entrypoint wrapper")
         require(result.returncode == args.run,
                 f"native exit {result.returncode}, expected {args.run}: {result.stderr}")
 
