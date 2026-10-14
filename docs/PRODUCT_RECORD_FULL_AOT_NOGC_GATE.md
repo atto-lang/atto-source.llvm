@@ -1,6 +1,6 @@
 # Product records: mandatory LLVM native AOT and zero-tracing-GC admission gate
 
-Status: **blocking acceptance contract**, not proof that native record spread is implemented.
+Status: **general owned-record release gate**. The Copy-only i64 record slice has native executable evidence; heap-owned products and the full runtime remain unverified.
 
 ## Definition of complete AOT
 
@@ -31,4 +31,6 @@ LLVM strict mode must not link a tracing or moving garbage collector, call `GC_m
 
 ## Current honest boundary
 
-The LLVM repository documents native scalar and actor-owned i64 heap subsets, and deterministic heap/loan substrates, but these do **not** establish general compiled tuple/record spread, native class/struct lowering parity, or full no-GC application support. Until the executable matrix above passes, record spread stays **compile-time rejected**, not partially interpreted.
+The first fixed-size i64 record subset is now actually compiled to native guest code: closed, Copy-only labeled record locals use stack `struct` layout; inline tuple/record spread and stored record spread statically bind slots. Nine actual guest programs run at -O0/-O2 with the right result, source-order checks, and no guest GC/heap-allocator references in emitted IR. The corresponding native CTest suite, full 373-test regression and compiler ASan/UBSan matrix pass on an identical source tree.
+
+This result is deliberately **limited**: owned class/Array values, escaped or nested records, field-level moves with destructors, actor-domain cross-message ownership, async and cancellation cleanup, fully linked application no-GC certification and complete Java parity are still unproven. Those unsupported shapes **must fail closed without IR**. Do not promote this narrow Copy-only result into a general promise of zero GC for all LLVM code.
