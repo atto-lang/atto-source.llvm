@@ -35,7 +35,7 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         return path
 
     def linker(self, *, exit_code=0, link_status=0, compile_status=0,
-               link_error="undefined reference to main"):
+               link_error="undefined reference to main", stub_link_status=0):
         path = self.root / "fake-clang"
         executable_contents = (
             "#!" + sys.executable + "\n"
@@ -52,6 +52,12 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
             + "        sys.stderr.write('malformed LLVM IR')\n"
             + f"        sys.exit({compile_status})\n"
             + "    result.write_bytes(b'fake object')\n"
+            + "    sys.exit(0)\n"
+            + "if any('entrypoint.o' in x for x in sys.argv):\n"
+            + f"    if {stub_link_status}:\n"
+            + "        sys.stderr.write('unresolved other_dependency')\n"
+            + "        sys.exit(1)\n"
+            + "    result.write_text('linked with main stub')\n"
             + "    sys.exit(0)\n"
             + f"if {link_status}:\n"
             + f"    sys.stderr.write({link_error!r})\n"
@@ -252,6 +258,15 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         clang = self.linker(link_status=1)
         p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
         self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_other_undefined_library_symbol_cannot_hide_behind_missing_main(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\n")
+        clang = self.linker(link_status=1, stub_link_status=1,
+                            link_error="ld: undefined reference to main\n"
+                                       "ld: undefined reference to other_dependency")
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("library failed positive link with main stub", p.stderr)
 
     def test_malformed_library_ir_cannot_pass_missing_main_gate(self):
         compiler = self.compiler(stdout="; ModuleID = 'bad library'\n")
