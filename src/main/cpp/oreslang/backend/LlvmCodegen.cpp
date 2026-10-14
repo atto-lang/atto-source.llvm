@@ -213,6 +213,10 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::Boolean:
+            // i1 values may only be lowered by verified typed bool returns,
+            // never by the generic native i64 expression code generator.
+            throw std::runtime_error("typed bool cannot be lowered as native i64");
         case Expression::Kind::ModuleCall:
             // Import AST has no native symbol until typed stdlib linking is
             // certified. Do not create a fake user/host function.
@@ -220,6 +224,8 @@ llvm::Value* lower(const Expression& expr,
                 "native Assert module call awaits typed source-owned linking");
         case Expression::Kind::Call: {
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            if (callee->getReturnType()->isIntegerTy(1))
+                throw std::runtime_error("typed bool call requires bool-aware expression lowering");
             if (callee->arg_size() != expr.arguments.size()) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
@@ -495,7 +501,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
                 : class_types.at(param.class_name)->getPointerTo());
         llvm::FunctionType* signature = llvm::FunctionType::get(
-            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
+            fn.returns_void ? llvm::Type::getVoidTy(context) :
+            (fn.returns_bool ? llvm::Type::getInt1Ty(context) : i64),
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module);
@@ -509,6 +516,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
+        if (fn.returns_bool) {
+            // Strictly pure, zero-argument source Boolean literal slice:
+            // no integer coercion, host callbacks, heap or GC allocation.
+            // All other typed bool forms remain parser-gated, and imported
+            // std/assert stays rejected before LLVM module creation.
+            if (!fn.result || fn.result->kind != Expression::Kind::Boolean ||
+                    !fn.parameters.empty() || !fn.locals.empty() ||
+                    !fn.statements.empty() || !fn.early_returns.empty() ||
+                    !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                    !fn.actor_field_writes.empty() || fn.caught_throw_value)
+                throw std::runtime_error("unverified typed bool native result lowering");
+            builder.CreateRet(builder.getInt1(fn.result->integer != 0));
+            continue;
+        }
         std::unordered_map<std::string, llvm::Value*> storage;
         std::unordered_map<std::string, llvm::Value*> field_storage;
         std::size_t index = 0;
