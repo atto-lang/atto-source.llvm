@@ -398,6 +398,24 @@ if(BUILD_TESTING)
         native-conflicting-visibility.ores
         --diagnostic "duplicate/conflicting visibility modifier")
 
+    # Parser must not reinterpret malformed private+pub order as a public
+    # declaration. Rejected source must emit no partial LLVM IR.
+    oreslang_contract_test(native_private_pub_function_reject
+        native-private-pub-function-reject.ores
+        --diagnostic "duplicate/conflicting visibility modifier")
+    oreslang_contract_test(native_private_pub_class_reject
+        native-private-pub-class-reject.ores
+        --diagnostic "duplicate/conflicting visibility modifier")
+    oreslang_contract_test(native_private_pub_module_reject
+        native-private-pub-module-reject.ores
+        --diagnostic "duplicate/conflicting visibility modifier")
+    oreslang_contract_test(native_private_private_function_reject
+        native-private-private-function-reject.ores
+        --diagnostic "duplicate/conflicting visibility modifier")
+    oreslang_contract_test(native_pub_private_function_reject
+        native-pub-private-function-reject.ores
+        --diagnostic "duplicate/conflicting visibility modifier")
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
