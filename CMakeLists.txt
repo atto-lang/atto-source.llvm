@@ -29,6 +29,32 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Imported Assert is source-owned but still unlinked. This parser/ownership
+    # test explicitly does not claim guest std/assert execution.
+    add_executable(oreslang-assert-import-parser-test
+        tests/native_assert_import_parser_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-assert-import-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-assert-import-parser-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_canonical_import_parser
+        COMMAND oreslang-assert-import-parser-test)
+
+    # Generated, verifiable LLVM IR for the primitive scalar ABI only.
+    # Compiled guest std/assert linking is a separate milestone.
+    add_executable(oreslang-assert-scalar-ir-driver
+        tests/native_assert_scalar_ir_driver.cpp
+        src/main/cpp/oreslang/backend/NativeAssertScalarIR.cpp)
+    target_include_directories(oreslang-assert-scalar-ir-driver PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-assert-scalar-ir-driver PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-assert-scalar-ir-driver PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_scalar_ir_module_verifies
+        COMMAND oreslang-assert-scalar-ir-driver)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
@@ -441,6 +467,10 @@ if(BUILD_TESTING)
         --diagnostic "native floating division unsupported")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
         --diagnostic "native integer remainder unsupported")
+    oreslang_contract_test(reject_unadmitted_core_assert_import
+        unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
+    oreslang_contract_test(reject_unadmitted_nested_core_assert_import
+        unsupported-core-assert-nested-import.ores --diagnostic "native module imports must precede declarations")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
@@ -904,6 +934,17 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-effect-supervision-bridge-test PRIVATE Threads::Threads)
     add_test(NAME native_effect_unwind_supervisor_control_bridge
         COMMAND oreslang-effect-supervision-bridge-test)
+    # Actual host-runtime path: native cleanup -> CONTROL publication ->
+    # supervisor admission, with promoted Panic and original typed origin.
+    add_executable(oreslang-effect-supervisor-e2e-test
+        tests/effect_supervisor_end_to_end_test.cpp)
+    target_include_directories(oreslang-effect-supervisor-e2e-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-effect-supervisor-e2e-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-effect-supervisor-e2e-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_effect_unwind_supervisor_end_to_end
+        COMMAND oreslang-effect-supervisor-e2e-test)
     add_executable(oreslang-supervisor-failure-lane-test tests/supervisor_failure_lane_test.cpp)
     target_include_directories(oreslang-supervisor-failure-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-supervisor-failure-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
