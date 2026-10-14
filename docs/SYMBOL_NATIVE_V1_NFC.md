@@ -31,6 +31,16 @@ c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror \
 /tmp/ores-symbol-v1-icu
 ```
 
+If the full LLVM SDK is unavailable, run the repository's standalone harness directly:
+
+```sh
+python3 tests/run_symbol_key_codec_host.py
+python3 tests/run_symbol_key_codec_host.py --sanitize
+python3 tests/run_symbol_key_codec_host.py --require-icu
+```
+
+The harness compiles and executes the **actual repository test source** in an ASCII-only variant and also with ICU 76.x when `pkg-config` finds the pinned version. Each mode uses `-Wall -Wextra -Wpedantic -Werror`; the optional sanitizer mode adds ASan and UBSan. This is useful even when the top-level LLVM CMake package is missing.
+
 The full CMake CTest target is `native_symbol_key_codec_v1_host_only`. It is a host implementation test, **not proof** that the LLVM Oreslang frontend parses, typechecks or lowers Symbol/Map guest programs.
 
 ## Required before any guest-facing integration
