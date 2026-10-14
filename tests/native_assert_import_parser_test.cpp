@@ -166,7 +166,7 @@ int main() {
             "pub fnc main(): int { return 0; }",
             "reserved native runtime ABI symbol 'oreslang_assert_future_v1'");
         expect_rejected(
-            "pub fnc choose(): bool using read { return true; } "
+            "pub fnc choose(): bool using state.read { return true; } "
             "pub fnc main(): int { return 0; }",
             "native bool literal AOT requires pure zero-argument function");
 
