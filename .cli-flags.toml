@@ -1,0 +1,37 @@
+# Canonical flags-2-env v0.3.x schema for the native LLVM compiler.
+# A standalone native runtime CLI is not implemented yet; do not invent one.
+[help]
+url = "https://github.com/ores-truffle-oreslang/oreslang-source.llvm"
+[env]
+load = false
+[parse]
+allow_unknown = false
+unknown_options_env = "ORES_LLVM_UNKNOWN_OPTIONS"
+errors_env = "ORES_LLVM_FLAGS2ENV_ERRORS"
+
+[flags.target]
+env = "ORES_LLVM_TARGET"
+aliases = ["target"]
+type = "string"
+default = "host"
+help = "host, wasm32 or wasm32-unknown-unknown."
+
+[flags.cpu]
+env = "ORES_LLVM_CPU"
+aliases = ["cpu"]
+type = "string"
+help = "Reserved: currently rejected by the LLVM compiler."
+
+[flags.experimental-owned-int]
+env = "ORES_LLVM_EXPERIMENTAL_OWNED_INT"
+aliases = ["experimental-owned-int"]
+type = "bool"
+default = "false"
+help = "Enable experimental owned-int lowering."
+
+[flags.experimental-rt-scalar-loop]
+env = "ORES_LLVM_EXPERIMENTAL_RT_SCALAR_LOOP"
+aliases = ["experimental-rt-scalar-loop"]
+type = "bool"
+default = "false"
+help = "Enable experimental scalar loop lowering."
