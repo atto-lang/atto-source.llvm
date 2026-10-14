@@ -46,6 +46,30 @@ if(BUILD_TESTING)
     add_test(NAME native_assert_scalar_ir_module_verifies
         COMMAND oreslang-assert-scalar-ir-driver)
 
+    # Merely emitting a verified module is insufficient: the generated IR must
+    # execute the actual hostile ABI differential suite under both -O0 and -O2.
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_ASSERT_IR_CLANG NAMES
+        clang++-${LLVM_VERSION_MAJOR} clang++-21 clang++-20 clang++-19
+        clang++-18 clang++-17 clang++-16 clang++)
+    if(ORE_ASSERT_IR_CLANG)
+        foreach(ORE_ASSERT_OPT IN ITEMS 0 2)
+            add_test(NAME native_assert_scalar_ir_execute_O${ORE_ASSERT_OPT}
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_assert_scalar_ir_execute.py"
+                    --driver "$<TARGET_FILE:oreslang-assert-scalar-ir-driver>"
+                    --clang "${ORE_ASSERT_IR_CLANG}"
+                    --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                    --opt "${ORE_ASSERT_OPT}")
+            set_tests_properties(native_assert_scalar_ir_execute_O${ORE_ASSERT_OPT}
+                PROPERTIES TIMEOUT 240)
+        endforeach()
+    else()
+        message(WARNING "No clang++: native Assert IR executable ABI checks cannot pass")
+        add_test(NAME native_assert_scalar_ir_requires_clang
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
