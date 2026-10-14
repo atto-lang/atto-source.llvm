@@ -33,8 +33,10 @@ Proposed abstract/library actor families, **not shipped built-ins**:
 | `DataActor<I,O>` | Ingestion, ETL, partitioning, windows and durable sinks | `Partitioned<I>`, `Windowed<O>`, `TransactionalSink` |
 | `ModelActor<I,O>` | ML model loading, batching, inference/training coordination | `Batching`, `ModelVersioned`, `Checkpointable<S>` |
 | `LLMActor<T>` | Token generation, session routing and model orchestration | `TokenStream<T>`, `KVCacheOwner`, `InferenceEngine` |
-| `RemoteActor<M>` | Location-transparent *typed* remote protocol endpoints | `VersionedWireProtocol<M>`, `IdempotentReceiver` |
+| `ProxyActor<M>` | Local typed actor-facing proxy for a possibly remote actor (IPC/TCP/HTTP); preserves identity, lifecycle and transport admission boundaries | `VersionedWireProtocol<M>`, `IdempotentReceiver` |
 | `ComputeActor<I,O>` | CPU/GPU/accelerator job submission and resource leases | `DeviceLeaseOwner`, `ComputeKernel<I,O>` |
+
+**Canonical name: `ProxyActor`, not `RemoteActor`.** Oreslang already uses the proxy-actor concept. The proxy is a local, actor-shaped endpoint that forwards typed messages to a separately owned actor across an explicitly authorized transport; it is **not** a remotely located class instance exposing remote state or public methods. A proxy keeps its own local transport/session metadata under runtime authority, never copies the target's `state {}` or claims ownership of its lifecycle. Remote failure, disconnection, retries, delivery uncertainty, quotas, cancellation and generation/identity changes must surface through explicit protocols. `self.forward()` and `self.backward()` remain directed, typed pipeline messages when an edge uses a proxy; the proxy may not forge supervisor CONTROL events, remote capabilities or result receipts.
 
 These are largely *abstract behaviors plus library composition*, not ten scheduler subclasses. A concrete `LLMActor` can participate in a `PipelineStage` and satisfy a streaming interface without multiple concrete state-bearing inheritance paths. Performance-critical tensor kernels and numerical solver inner loops run in compiled compute kernels/owned data regions, **not an actor/message hop per scalar or per tensor element**.
 
