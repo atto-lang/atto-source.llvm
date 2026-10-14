@@ -6,6 +6,7 @@ appended to the SAME LLVM module; there is no claim about a public C ABI.
 """
 import argparse
 import re
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -84,6 +85,15 @@ NEGATIVE = {
     "missing-err": (
         PRODUCER + CONSUMER % "on Ok() -> { return 1; }",
         "non-exhaustive native Result match"),
+    "reserved-result-producer": (
+        "fnc Result(): Result<void, ArrayError> { return Ok(); }",
+        "native tagged Result name collides"),
+    "reserved-variant-producer": (
+        "fnc Ok(): Result<void, ArrayError> { return Ok(); }",
+        "native tagged Result name collides"),
+    "reserved-variant-consumer": (
+        PRODUCER + (CONSUMER % ARMS).replace("fnc use():", "fnc Err():"),
+        "native Result match name collides"),
     "missing-ok": (
         PRODUCER + CONSUMER % "on Err(problem) -> { return 2; }",
         "non-exhaustive native Result match"),
@@ -223,9 +233,15 @@ def main():
                     raise AssertionError(
                         f"{fault} malformed injected LLVM IR: {built.stderr!r}")
                 crashed = run([str(bad_exe)])
-                if crashed.returncode == 0:
+                # A nonzero result is NOT evidence of a trap: the wrong
+                # branch could simply return an ordinary nonzero status.
+                # On POSIX the LLVM trap intrinsic must terminate via a
+                # trap/illegal-instruction signal, not by normal return.
+                if crashed.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
                     raise AssertionError(
-                        f"{fault}: invalid nominal tag escaped trap at {optimization}")
+                        f"{fault}: expected actual hardware trap at {optimization}, "
+                        f"got ordinary exit/signal {crashed.returncode}; "
+                        f"stderr={crashed.stderr!r}")
 
         for label, (code, diagnostic) in NEGATIVE.items():
             path = root / (label + ".ores")
