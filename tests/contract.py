@@ -62,14 +62,25 @@ def main():
         require("define i32 @main()" not in compile_result.stdout,
                 "library-only source unexpectedly received a native OS entrypoint")
         with tempfile.TemporaryDirectory(prefix="oreslang-missing-main-") as directory:
+            object_file = str(pathlib.Path(directory) / "guest.o")
             executable = str(pathlib.Path(directory) / "guest")
-            link = subprocess.run(
-                [args.clang, "-x", "ir", "-", "-o", executable],
+            # A failure to parse/compile bad LLVM IR is NOT proof that an
+            # otherwise valid library lacks a process entry point.
+            assembled = subprocess.run(
+                [args.clang, "-x", "ir", "-", "-c", "-o", object_file],
                 input=compile_result.stdout, capture_output=True,
                 text=True, check=False, timeout=30,
             )
+            require(assembled.returncode == 0,
+                    "library-only LLVM IR failed object compilation: " + assembled.stderr)
+            link = subprocess.run(
+                [args.clang, object_file, "-o", executable],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
             require(link.returncode != 0,
                     "source with no main() linked as a successful standalone process")
+            require("main" in link.stderr.lower(),
+                    "library link failed without a missing-main diagnostic: " + link.stderr)
         return
     if args.run is None:
         return
