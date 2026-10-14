@@ -1613,7 +1613,9 @@ private:
             if (!closed_names.insert(tagged.name).second
                     || functions.count(tagged.name) || classes.count(tagged.name)
                     || tagged.name == "main" || tagged.name == "__oreslang_guest_main"
-                    || tagged.name == "abort"
+                    || tagged.name == "abort" || tagged.name == "Result"
+                    || tagged.name == "Option" || tagged.name == "ArrayError"
+                    || tagged.name == "Ok" || tagged.name == "Err"
                     || tagged.name.rfind("oreslang_", 0) == 0
                     || std::any_of(program.actors.begin(), program.actors.end(),
                         [&](const ActorDecl& actor) { return actor.name == tagged.name; })) {
@@ -1636,6 +1638,9 @@ private:
                     || classes.count(consumer.name)
                     || consumer.name == "main" || consumer.name == "abort"
                     || consumer.name == "__oreslang_guest_main"
+                    || consumer.name == "Result" || consumer.name == "Option"
+                    || consumer.name == "ArrayError"
+                    || consumer.name == "Ok" || consumer.name == "Err"
                     || consumer.name.rfind("oreslang_", 0) == 0
                     || std::any_of(program.actors.begin(), program.actors.end(),
                         [&](const ActorDecl& actor) { return actor.name == consumer.name; })) {
