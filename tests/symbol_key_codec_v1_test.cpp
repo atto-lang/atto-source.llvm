@@ -59,7 +59,21 @@ int main() {
             == Key{Kind::Text, "tenant/private"});
     rejects([&] { encode({Kind::Process, ""}); });
     rejects([&] { encode({Kind::Process, "\x1b"}); });
-    rejects([&] { encode({Kind::Process, "\xc3\xa9"}); }); // NFC not yet available
+#ifdef ORES_SYMBOL_V1_ICU_NFC
+    const std::string composed = "\xc3\xa9";
+    const std::string decomposed = "e\xcc\x81";
+    require(decode(encode({Kind::Process, composed}))
+            == Key{Kind::Process, composed});
+    rejects([&] { encode({Kind::Process, decomposed}); }); // not NFC on wire
+    auto nonNfcWire = encode({Kind::Text, decomposed});
+    nonNfcWire[3] = static_cast<std::uint8_t>(Kind::Process);
+    rejects([&] { decode(nonNfcWire); });
+    rejects([&] { encode({Kind::Process, "x\xe2\x80\xae" }); }); // bidi override
+    rejects([&] { encode({Kind::Process, "x\xe2\x80\x8b" }); }); // format char
+    rejects([&] { encode({Kind::Process, "\xc2\x85"}); }); // C1 control
+#else
+    rejects([&] { encode({Kind::Process, "\xc3\xa9"}); }); // no pinned NFC backend
+#endif
     rejects([&] { encode({Kind::Stable, "550E8400-e29b-41d4-a716-446655440000"}); });
     rejects([&] { encode({Kind::Text, "\xc0\x80"}); }); // overlong UTF-8
     rejects([&] { encode({Kind::Text, "\xed\xa0\x80"}); }); // surrogate UTF-8
