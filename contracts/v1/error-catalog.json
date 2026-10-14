@@ -1,0 +1,753 @@
+{
+  "schemaVersion": 1,
+  "package": "std/error",
+  "entries": [
+    {
+      "name": "Error",
+      "parent": null,
+      "code": 0,
+      "abstract": false,
+      "interfaces": [
+        "CodedError",
+        "Serializable"
+      ]
+    },
+    {
+      "name": "ArgumentError",
+      "parent": "Error",
+      "code": 1000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "InvalidArgumentError",
+      "parent": "ArgumentError",
+      "code": 1001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "MissingArgumentError",
+      "parent": "ArgumentError",
+      "code": 1002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "UnexpectedArgumentError",
+      "parent": "ArgumentError",
+      "code": 1003,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ArityError",
+      "parent": "ArgumentError",
+      "code": 1004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "TypeMismatchError",
+      "parent": "ArgumentError",
+      "code": 1005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "CastError",
+      "parent": "ArgumentError",
+      "code": 1006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "RangeError",
+      "parent": "ArgumentError",
+      "code": 1007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "IndexError",
+      "parent": "ArgumentError",
+      "code": 1008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "StateError",
+      "parent": "Error",
+      "code": 2000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "InvalidStateError",
+      "parent": "StateError",
+      "code": 2001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "AlreadyInitializedError",
+      "parent": "StateError",
+      "code": 2002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "NotInitializedError",
+      "parent": "StateError",
+      "code": 2003,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ClosedError",
+      "parent": "StateError",
+      "code": 2004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ReadOnlyError",
+      "parent": "StateError",
+      "code": 2005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ImmutableError",
+      "parent": "StateError",
+      "code": 2006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ConcurrentModificationError",
+      "parent": "StateError",
+      "code": 2007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "StaleHandleError",
+      "parent": "StateError",
+      "code": 2008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "IOError",
+      "parent": "Error",
+      "code": 3000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "FileSystemError",
+      "parent": "IOError",
+      "code": 3090,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "FileNotFoundError",
+      "parent": "FileSystemError",
+      "code": 3001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "FileAlreadyExistsError",
+      "parent": "FileSystemError",
+      "code": 3002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "NotDirectoryError",
+      "parent": "FileSystemError",
+      "code": 3003,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "IsDirectoryError",
+      "parent": "FileSystemError",
+      "code": 3004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DirectoryNotEmptyError",
+      "parent": "FileSystemError",
+      "code": 3005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ReadOnlyFileSystemError",
+      "parent": "FileSystemError",
+      "code": 3006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "EndOfFileError",
+      "parent": "IOError",
+      "code": 3007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "BrokenPipeError",
+      "parent": "IOError",
+      "code": 3008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "NetworkError",
+      "parent": "IOError",
+      "code": 4000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "DnsResolutionError",
+      "parent": "NetworkError",
+      "code": 4001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ConnectionRefusedError",
+      "parent": "NetworkError",
+      "code": 4002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ConnectionResetError",
+      "parent": "NetworkError",
+      "code": 4003,
+      "abstract": false,
+      "interfaces": [
+        "RetryAdvisory"
+      ]
+    },
+    {
+      "name": "ConnectionAbortedError",
+      "parent": "NetworkError",
+      "code": 4004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "HostUnreachableError",
+      "parent": "NetworkError",
+      "code": 4005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "NetworkUnreachableError",
+      "parent": "NetworkError",
+      "code": 4006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "TlsHandshakeError",
+      "parent": "NetworkError",
+      "code": 4007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ProtocolError",
+      "parent": "NetworkError",
+      "code": 4008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "TimingError",
+      "parent": "Error",
+      "code": 5000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "TimeoutError",
+      "parent": "TimingError",
+      "code": 5001,
+      "abstract": false,
+      "interfaces": [
+        "RetryAdvisory"
+      ]
+    },
+    {
+      "name": "DeadlineExceededError",
+      "parent": "TimingError",
+      "code": 5002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "WouldBlockError",
+      "parent": "TimingError",
+      "code": 5003,
+      "abstract": false,
+      "interfaces": [
+        "RetryAdvisory"
+      ]
+    },
+    {
+      "name": "RetryLimitExceededError",
+      "parent": "TimingError",
+      "code": 5004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "BackpressureError",
+      "parent": "TimingError",
+      "code": 5005,
+      "abstract": false,
+      "interfaces": [
+        "RetryAdvisory"
+      ]
+    },
+    {
+      "name": "RateLimitedError",
+      "parent": "TimingError",
+      "code": 5006,
+      "abstract": false,
+      "interfaces": [
+        "RetryAdvisory"
+      ]
+    },
+    {
+      "name": "TimerConfigurationError",
+      "parent": "TimingError",
+      "code": 5007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ClockError",
+      "parent": "TimingError",
+      "code": 5008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DataError",
+      "parent": "Error",
+      "code": 6000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "ParseError",
+      "parent": "DataError",
+      "code": 6001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "SyntaxError",
+      "parent": "DataError",
+      "code": 6002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "EncodingError",
+      "parent": "DataError",
+      "code": 6003,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DecodingError",
+      "parent": "DataError",
+      "code": 6004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ValidationError",
+      "parent": "DataError",
+      "code": 6005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "SerializationError",
+      "parent": "DataError",
+      "code": 6006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DeserializationError",
+      "parent": "DataError",
+      "code": 6007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "SchemaMismatchError",
+      "parent": "DataError",
+      "code": 6008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "SecurityError",
+      "parent": "Error",
+      "code": 7000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "AccessDeniedError",
+      "parent": "SecurityError",
+      "code": 7001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "AuthenticationError",
+      "parent": "SecurityError",
+      "code": 7002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "AuthorizationError",
+      "parent": "SecurityError",
+      "code": 7003,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "CapabilityDeniedError",
+      "parent": "SecurityError",
+      "code": 7004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "SignatureVerificationError",
+      "parent": "SecurityError",
+      "code": 7005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "IntegrityError",
+      "parent": "SecurityError",
+      "code": 7006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "SandboxViolationError",
+      "parent": "SecurityError",
+      "code": 7007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "CertificateError",
+      "parent": "SecurityError",
+      "code": 7008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "OperationError",
+      "parent": "Error",
+      "code": 8000,
+      "abstract": true,
+      "interfaces": []
+    },
+    {
+      "name": "ArithmeticError",
+      "parent": "OperationError",
+      "code": 8001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DivisionByZeroError",
+      "parent": "OperationError",
+      "code": 8002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "IntegerOverflowError",
+      "parent": "OperationError",
+      "code": 8003,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "NumericConversionError",
+      "parent": "OperationError",
+      "code": 8004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "UnsupportedOperationError",
+      "parent": "OperationError",
+      "code": 8005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "VersionMismatchError",
+      "parent": "OperationError",
+      "code": 8006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "FeatureUnavailableError",
+      "parent": "OperationError",
+      "code": 8007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DependencyFailureError",
+      "parent": "OperationError",
+      "code": 8008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "KeyNotFoundError",
+      "parent": "DataError",
+      "code": 6009,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DuplicateKeyError",
+      "parent": "DataError",
+      "code": 6010,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "InvalidFormatError",
+      "parent": "DataError",
+      "code": 6011,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "EmptyCollectionError",
+      "parent": "StateError",
+      "code": 2009,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "IteratorExhaustedError",
+      "parent": "StateError",
+      "code": 2010,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "DeadlockDetectedError",
+      "parent": "StateError",
+      "code": 2011,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ProcessNotFoundError",
+      "parent": "StateError",
+      "code": 2012,
+      "abstract": false,
+      "interfaces": [
+        "ActorApiError"
+      ]
+    },
+    {
+      "name": "MailboxFullError",
+      "parent": "StateError",
+      "code": 2013,
+      "abstract": false,
+      "interfaces": [
+        "ActorApiError"
+      ]
+    },
+    {
+      "name": "NotImplementedError",
+      "parent": "OperationError",
+      "code": 8009,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ResourceExhaustedError",
+      "parent": "OperationError",
+      "code": 8010,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorError",
+      "parent": "Error",
+      "code": 9000,
+      "abstract": true,
+      "interfaces": [
+        "ActorApiError"
+      ]
+    },
+    {
+      "name": "ActorSpawnRejectedError",
+      "parent": "ActorError",
+      "code": 9001,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorInitializationError",
+      "parent": "ActorError",
+      "code": 9002,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorTerminatedError",
+      "parent": "ActorError",
+      "code": 9003,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorMailboxClosedError",
+      "parent": "ActorError",
+      "code": 9004,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorMessageRejectedError",
+      "parent": "ActorError",
+      "code": 9005,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorProtocolMismatchError",
+      "parent": "ActorError",
+      "code": 9006,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorAskTimeoutError",
+      "parent": "ActorError",
+      "code": 9007,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorReplyUnavailableError",
+      "parent": "ActorError",
+      "code": 9008,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorReferenceExpiredError",
+      "parent": "ActorError",
+      "code": 9009,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorNodeUnreachableError",
+      "parent": "ActorError",
+      "code": 9010,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorNameConflictError",
+      "parent": "ActorError",
+      "code": 9011,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorSpawnQuotaExceededError",
+      "parent": "ActorError",
+      "code": 9012,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorSupervisorUnavailableError",
+      "parent": "ActorError",
+      "code": 9013,
+      "abstract": false,
+      "interfaces": []
+    },
+    {
+      "name": "ActorOutputClosedError",
+      "parent": "ActorError",
+      "code": 9014,
+      "abstract": false,
+      "interfaces": []
+    }
+  ],
+  "traits": [
+    {
+      "name": "CodedError",
+      "parents": [],
+      "methods": [
+        "code(): int"
+      ]
+    },
+    {
+      "name": "RetryAdvisory",
+      "parents": [
+        "CodedError"
+      ],
+      "methods": [
+        "retry_hint(): bool"
+      ]
+    },
+    {
+      "name": "ActorApiError",
+      "parents": [
+        "CodedError"
+      ],
+      "methods": []
+    },
+    {
+      "name": "Serializable",
+      "parents": [],
+      "methods": [
+        "to_string(): String",
+        "to_json(): String",
+        "to_messagepack(): Array<u8>",
+        "to_proto_buf(): Array<u8>"
+      ]
+    }
+  ]
+}
