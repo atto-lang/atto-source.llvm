@@ -1,0 +1,5 @@
+define module Internal as
+  pub fnc answer(): int {
+    return 7;
+  }
+end
