@@ -135,7 +135,21 @@ struct ScalarWhileLoop {
     std::int64_t upper_bound = 0;
 };
 
+// Closed, statically exhaustive consumer with exactly one immutable typed
+// Result local, one producer call and two terminal branches. The payload
+// variable in Err(error) is lexical only; no general Result ownership escape.
+struct ClosedArrayResultMatchFunction {
+    std::string name;
+    std::string producer;
+    std::string local;
+    std::int64_t ok_return = 0;
+    std::int64_t err_return = 0;
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
 struct Function {
+    std::unique_ptr<ClosedArrayResultMatchFunction> closed_result_match;
     std::string name;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
@@ -193,6 +207,7 @@ struct ClosedArrayResultFunction {
 };
 
 struct Program {
+    std::vector<ClosedArrayResultMatchFunction> closed_result_matches;
     std::vector<ClosedArrayResultFunction> closed_array_results;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
