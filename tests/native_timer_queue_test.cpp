@@ -32,6 +32,9 @@ int main() {
         check(expired.size() == 1 && expired[0].handle == sooner,
               "poll did not expire earliest deadline first");
         check(!queue.cancel(sooner), "expired timer was cancelled again");
+        check(queue.outstanding() == 2, "unclaimed delivery escaped capacity");
+        check(queue.claim_delivery(sooner), "polled timer not claimable");
+        check(!queue.claim_delivery(sooner), "duplicate delivery claim accepted");
         check(queue.cancel(later), "live timer was not cancellable");
         check(!queue.next_deadline_ns().has_value(), "cancelled deadline leaked");
     }
@@ -42,6 +45,7 @@ int main() {
         check(target.id == unrelated.id, "fixture did not reuse local ids");
         check(target.domain != unrelated.domain, "owner domain was reused");
         check(!second.cancel(target), "cross-tenant timer handle cancelled");
+        check(!second.claim_delivery(target), "cross-tenant delivery token accepted");
         check(first.cancel(target), "correct owner could not cancel handle");
         check(!first.cancel(target), "stale cancellation succeeded twice");
         second.close();
@@ -63,7 +67,24 @@ int main() {
         auto due = queue.poll(200, 1);
         check(due.size() == 1 && due[0].handle == instant,
               "zero-delay event did not become ready");
-        check(queue.pending() == 0, "expired timer retained a slot");
+        check(queue.pending() == 0, "expired timer remained scheduled");
+        check(queue.outstanding() == 1, "polled ticket was not retained");
+        check(!queue.claim_delivery(NativeTimerHandle{instant.domain, instant.id + 1}),
+              "unpolled fabricated timer token accepted");
+        check(queue.discard_delivery(instant), "retired continuation did not release ticket");
+        check(queue.outstanding() == 0, "discarded ticket kept capacity");
+    }
+    {
+        NativeTimerQueue queue(1);
+        const auto token = queue.arm_after(100, 0);
+        check(queue.poll(100, 1).size() == 1, "ready token not polled");
+        bool full = false;
+        try { (void) queue.arm_after(100, 0); }
+        catch (const std::length_error&) { full = true; }
+        check(full, "polled but unclaimed token bypassed capacity");
+        queue.close();
+        check(!queue.claim_delivery(token), "owner shutdown resurrected polled token");
+        check(queue.outstanding() == 0, "shutdown leaked delivery tickets");
     }
     {
         NativeTimerQueue queue;
@@ -75,8 +96,12 @@ int main() {
             other.join();
             check((cancelled.load() ? 1 : 0) + static_cast<int>(due.size()) == 1,
                   "concurrent cancel and expiry both won or both lost");
+            if (!due.empty()) {
+                check(queue.claim_delivery(timer), "raced expiry did not claim once");
+                check(!queue.claim_delivery(timer), "raced expiry claimed twice");
+            }
         }
-        check(queue.pending() == 0, "race leaked timer reservations");
+        check(queue.outstanding() == 0, "race leaked timer reservations");
         queue.close();
         bool rejected = false;
         try {
