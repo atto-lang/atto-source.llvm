@@ -83,5 +83,22 @@ int main() {
     } catch (const std::invalid_argument&) {
         // Invalid effect tags must fail closed before publication.
     }
+    try {
+        (void)ActorFailureControlNotice::from_guest_effect(
+                ActorExceptionalEffect::Raise, "", "parent-1");
+        return 15;
+    } catch (const std::invalid_argument&) {
+        // Generic envelopes permit empty IDs; actor terminal notices do not.
+    }
+    try {
+        (void)ActorFailureControlNotice::from_guest_effect(
+                ActorExceptionalEffect::Panic, "actor-1", "unsafe/parent");
+        return 16;
+    } catch (const std::invalid_argument&) {
+        // Supervisor identity must pass the same strict validation.
+    }
+    const auto root = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "actor-1", "");
+    if (!root.envelope().supervisor_id().empty()) return 17;
     return 0;
 }
