@@ -44,4 +44,16 @@ int main() {
     const auto invalid = ActorErrorEnvelope::make(
             ActorErrorCode::ActorTransport, std::string("\xFF\xFE", 2), "a", "b");
     if (invalid.diagnostic() != "??") return 9;
+    const auto control = ActorErrorEnvelope::make(
+            ActorErrorCode::ActorSendRejected, std::string("a\\x1b" "b\\xe2\\x80\\xae" "c"),
+            "a", "b");
+    if (control.diagnostic() != "a?b?c") return 10;
+    const auto valid = ActorErrorEnvelope::make(
+            ActorErrorCode::ActorTransport, std::string(1023, 'A') + "\\xc3\\xa9",
+            "a", "b");
+    if (valid.diagnostic() != std::string(1023, 'A')) return 11;
+    const auto replacement = ActorErrorEnvelope::make(
+            ActorErrorCode::ActorTransport, std::string("\\xe2\\x81\\xa7", 3),
+            "a", "b");
+    if (replacement.diagnostic() != "?") return 12;
 }
