@@ -78,6 +78,24 @@ establish the necessary simulation relation between all AST/CFG transfer rules
 and abstract model steps. No unbounded machine-checked theorem for the entire
 Oreslang borrow checker is claimed.
 
+## Native loan accounting audit (2026-10-14)
+
+The native C++ checker now checks that every release corresponds to an
+actually active shared or exclusive loan. Releasing a shared loan from a
+zero count used to decrement an unsigned counter, risking silent underflow.
+Double-release of exclusive loans previously silently reset false state.
+Both now fail closed with an internal ownership logic error.
+
+`tests/native_loan_release_invariant_test.cpp` directly tests the internal
+loan release helper with two shared acquisitions, an exclusive acquisition,
+and deliberate invalid releases. It is registered as a CTest test. The
+private funded CI source mirror compiled this exact checker implementation
+and executed the invariant case plus the six native admission cases:
+https://github.com/canonical-cloud/canonical-docs/actions/runs/38624951416
+
+This internal helper assertion is a defense-in-depth runtime check, not a
+proof that all source borrow aliases and LLVM lowering steps are correct.
+
 ## Follow-up formal program
 
 Prove (using a proof assistant or a checked transition-system/refinement proof)
