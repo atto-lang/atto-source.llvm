@@ -213,6 +213,45 @@ int main() {
         rejected(loop, "experimental scalar loop requires exactly one standalone function");
     }
 
+    // Forged Programs bypass parser symbol-table uniqueness. In particular,
+    // LLVM auto-renames duplicate StructType and actor init/handler exports;
+    // accepting either changes the native ABI without source authorization.
+    {
+        auto source = program("duplicate_class_ast", true);
+        oreslang::ClassDecl first;
+        first.name = "Ledger";
+        source.classes.push_back(std::move(first));
+        oreslang::ClassDecl second;
+        second.name = "Ledger";
+        source.classes.push_back(std::move(second));
+        rejected(source, "duplicate or unnamed native class/actor declaration");
+    }
+    {
+        auto source = program("duplicate_actor_ast", true);
+        oreslang::ActorDecl first;
+        first.name = "Worker";
+        source.actors.push_back(std::move(first));
+        oreslang::ActorDecl second;
+        second.name = "Worker";
+        source.actors.push_back(std::move(second));
+        rejected(source, "duplicate or unnamed native class/actor declaration");
+    }
+    {
+        auto source = program("class_actor_collision_ast", true);
+        oreslang::ClassDecl cls;
+        cls.name = "Worker";
+        source.classes.push_back(std::move(cls));
+        oreslang::ActorDecl actor;
+        actor.name = "Worker";
+        source.actors.push_back(std::move(actor));
+        rejected(source, "duplicate or unnamed native class/actor declaration");
+    }
+    {
+        auto source = program("unnamed_actor_ast", true);
+        source.actors.emplace_back();
+        rejected(source, "duplicate or unnamed native class/actor declaration");
+    }
+
     // Positive compiler control: the direct emitter still exposes an i1,
     // without needing a source-level import or host-side bool stub.
     const auto native_ir = oreslang::emit_verified_llvm_ir(program("bool_control", true));
