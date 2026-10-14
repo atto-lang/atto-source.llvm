@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "verification/borrow_protocol_model.py"
+      - "verification/borrow_inductive.smt2"
       - ".github/workflows/borrow-protocol-formal.yml"
       - "src/main/java/dev/oreslang/types/OwnershipChecker.java"
       - "src/main/cpp/oreslang/types/OwnershipChecker.cpp"
@@ -13,6 +14,7 @@ on:
     branches: [main]
     paths:
       - "verification/borrow_protocol_model.py"
+      - "verification/borrow_inductive.smt2"
       - ".github/workflows/borrow-protocol-formal.yml"
   workflow_dispatch:
 
@@ -32,3 +34,19 @@ jobs:
           python-version: "3.11"
       - name: Exhaust bounded loan states and require mutation counterexamples
         run: python3 verification/borrow_protocol_model.py
+      - name: Machine-check unbounded single-root loan induction
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq z3
+          python3 - <<'PY'
+          import subprocess
+          p = subprocess.run(
+              ["z3", "-smt2", "verification/borrow_inductive.smt2"],
+              text=True, capture_output=True, check=True, timeout=30)
+          verdicts = p.stdout.strip().splitlines()
+          expected = ["unsat"] * 8 + ["sat"] * 3
+          if verdicts != expected:
+              raise SystemExit(f"Unexpected Z3 result {verdicts}; stderr={p.stderr}")
+          print("PASS 8 symbolic preservation obligations and 3 unsafe mutation witnesses")
+          PY
