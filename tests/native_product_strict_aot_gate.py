@@ -13,6 +13,7 @@ record lowering, native heaps or full-application zero-GC execution.
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,37 @@ def validate_no_guest_gc(ir, label):
                 f"{label}: collector/allocator symbol in guest IR: {pattern}")
 
 
+def validate_linked_heap_symbols(binary, label):
+    """Check defined *and* imported allocator/collector symbols in the guest ELF.
+
+    This is stronger than scanning emitted IR alone: libraries and link-time
+    transformations can introduce calls not present in the guest LLVM module.
+    It is still a symbol-level gate for this scalar subset, not proof that all
+    future opaque native dependencies or the entire OresVM are zero-GC.
+    """
+    nm = shutil.which("nm")
+    require(nm is not None, f"{label}: nm required for linked native symbol audit")
+    symbols = run([nm, "-a", str(binary)], timeout=30)
+    require(symbols.returncode == 0,
+            f"{label}: linked symbol inspection failed: {symbols.stderr}")
+    blocked = {
+        "malloc", "calloc", "realloc", "free",
+        "aligned_alloc", "memalign", "posix_memalign", "valloc", "pvalloc",
+        "__libc_malloc", "__libc_free", "je_malloc", "je_free",
+        "mi_malloc", "mi_free",
+    }
+    for line in symbols.stdout.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        symbol = fields[-1].split("@", 1)[0]
+        forbidden = (symbol in blocked or symbol.startswith("GC_")
+                     or symbol.startswith("_Znwm") or symbol.startswith("_Znam")
+                     or symbol.startswith("_ZdlP") or symbol.startswith("_ZdaP"))
+        require(not forbidden,
+                f"{label}: native executable contains heap/collector symbol {symbol}")
+
+
 def check_aot(compiler, clang, root, title, program, exit_code):
     source_path = root / (title + ".ores")
     source_path.write_text(program, encoding="utf-8")
@@ -69,6 +101,7 @@ def check_aot(compiler, clang, root, title, program, exit_code):
                         str(ir_path), "-o", str(binary)])
         require(compiled.returncode == 0,
                 f"{title} O{optimization}: native link failed: {compiled.stderr}")
+        validate_linked_heap_symbols(binary, f"{title} O{optimization}")
         # Run away from the build directory without .ores source or PATH
         # resolution. Absolute executable paths preserve portable invocation.
         guest = run([str(binary.resolve())], cwd=runtime_dir, env=runtime_env)
@@ -225,7 +258,7 @@ pub fnc main(): int { return wrapper(41); }
     print(f"LLVM product admission: {len(rejected)} no-IR rejects; "
           "nine real native guest programs at -O0/-O2, exit 42; "
           "source-free, PATH-isolated guest runs; "
-          "no guest GC or allocator calls in emitted IR")
+          "no heap/collector symbols in guest IR or linked executable")
 
 
 if __name__ == "__main__":
