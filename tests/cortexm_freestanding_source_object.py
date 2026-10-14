@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise compiler admission and ARM codegen, not merely an IR text fixture."""
+"""Fail-closed admission and real ARM ELF compilation, including -O-safe checks."""
 import argparse
 import pathlib
 import shutil
@@ -7,9 +7,14 @@ import subprocess
 import tempfile
 
 
-def run(args, **kwargs):
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def run(args):
     return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          text=True, **kwargs)
+                          text=True, timeout=90)
 
 
 def main():
@@ -17,53 +22,77 @@ def main():
     p.add_argument("--compiler", required=True)
     a = p.parse_args()
     clang = shutil.which("clang")
-    if not clang:
-        raise SystemExit("clang missing: cannot certify Cortex-M object output")
+    require(bool(clang), "Clang required for real Cortex-M ELF validation")
+
     with tempfile.TemporaryDirectory(prefix="ores-cortexm-") as tmp:
         root = pathlib.Path(tmp)
         source = root / "probe.ores"
-        source.write_text("""pub fnc ores_embedded_probe(): int {
-    return sum(40, 2);
+        cmd = [a.compiler, "--target=thumbv7m-none-eabi", str(source)]
+
+        def reject(text, needle=None):
+            source.write_text(text)
+            bad = run(cmd)
+            require(bad.returncode != 0 and not bad.stdout,
+                    "unexpected Cortex-M admission for: " + text[:140])
+            if needle is not None:
+                require(needle in bad.stderr.lower(),
+                        "expected failure diagnostic " + needle + ": " + bad.stderr)
+
+        source.write_text("""pub fnc ores_embedded_probe(int a, int b): int {
+    return sum(a * 3, b);
 }
 fnc sum(int a, int b): int {
     return a + b;
 }
 """)
-        cmd = [a.compiler, "--target=thumbv7m-none-eabi", str(source)]
         good = run(cmd)
-        assert good.returncode == 0, good.stderr
-        assert 'target triple = "thumbv7m-none-eabi"' in good.stdout, good.stdout[:500]
-        assert 'ores_embedded_probe' in good.stdout
-        assert 'define' in good.stdout and '@sum' in good.stdout
+        require(good.returncode == 0, good.stderr)
+        require('target triple = "thumbv7m-none-eabi"' in good.stdout,
+                "Cortex-M triple missing from IR")
+        require("ores_embedded_probe" in good.stdout and "@sum" in good.stdout,
+                "guest symbols missing")
+        require("define" in good.stdout, "IR has no guest definitions")
+        require("define i32 @main" not in good.stdout, "unexpected host entrypoint")
+
         ir = root / "guest.ll"
         ir.write_text(good.stdout)
         obj = root / "guest.o"
         compiled = run([clang, "--target=thumbv7m-none-eabi", "-mcpu=cortex-m3",
                         "-mthumb", "-O2", "-ffreestanding", "-x", "ir", "-c",
                         str(ir), "-o", str(obj)])
-        assert compiled.returncode == 0, compiled.stderr
+        require(compiled.returncode == 0, compiled.stderr)
         raw = obj.read_bytes()
-        assert raw[:4] == b"\x7fELF" and raw[4:6] == b"\x01\x01"
-        assert int.from_bytes(raw[18:20], "little") == 40
+        require(len(raw) >= 52 and raw[:4] == b"\x7fELF" and raw[4:6] == b"\x01\x01",
+                "compiler output is not ELF32 little-endian")
+        require(int.from_bytes(raw[18:20], "little") == 40,
+                "compiler output is not ARM ELF")
 
-        # No native OS main wrapper: Zephyr owns the entrypoint.
-        source.write_text("pub fnc main(): int { return 42; }\n")
-        bad = run(cmd)
-        assert bad.returncode != 0 and not bad.stdout
-        assert "cortex-m" in bad.stderr.lower(), bad.stderr
-
-        # Only stateless scalar expressions are admitted.
-        source.write_text("pub fnc ores_embedded_probe(): int { val int x: 42; return x; }\n")
-        bad = run(cmd)
-        assert bad.returncode != 0 and not bad.stdout
-        source.write_text("pub fnc ores_embedded_probe(): int { return 42; }\n")
+        reject("pub fnc main(): int { return 42; }\n", "cortex-m")
+        reject("pub fnc a(): int { val int x: 42; return x; }\n", "cortex-m")
+        reject("pub fnc recur(): int { return recur(); }\n", "recursive")
+        reject("fnc a(): int { return b(); }\nfnc b(): int { return a(); }\n",
+               "recursive")
+        reject("fnc a(): int { return 1; }\nfnc a(int x): int { return x; }\n",
+               "overloaded")
+        reject("fnc f(): int { return " + "-" * 40 + "1; }\n", "budget")
+        reject("".join("fnc f%d(): int { return %d; }\n" % (i, i)
+                       for i in range(65)), "function count")
+        reject("".join("fnc f%d(): int { return f%d(); }\n" % (i, i + 1)
+                       for i in range(17)) + "fnc f17(): int { return 1; }\n",
+               "call depth")
+        reject("fnc f(" + ", ".join("int x%d" % i for i in range(9)) +
+               "): int { return x0; }\n", "parameter budget")
+        reject("// comment\n" * 10000 + "fnc f(): int { return 1; }\n",
+               "source exceeds")
+        source.write_text("fnc f(): int { return 1; }\n")
         bad = run([a.compiler, "--target=thumbv6m-none-eabi", str(source)])
-        assert bad.returncode != 0 and not bad.stdout
-        assert "target" in bad.stderr.lower()
+        require(bad.returncode != 0 and not bad.stdout and "target" in bad.stderr.lower(),
+                "unsupported target admitted")
         bad = run([a.compiler, "--target=thumbv7m-none-eabi",
                    "--experimental-owned-int", str(source)])
-        assert bad.returncode != 0 and not bad.stdout
-    print("Cortex-M: source IR/ARM object and negative admission checks passed.")
+        require(bad.returncode != 0 and not bad.stdout,
+                "owned-int experimental runtime admitted")
+    print("Cortex-M scalar ABI, ARM ELF, recursion and bounded-admission tests PASS")
 
 
 if __name__ == "__main__":
