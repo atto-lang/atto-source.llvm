@@ -106,6 +106,11 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME flags2env_wrapper_no_eval
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flags2env_wrapper.py"
+            --root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(flags2env_wrapper_no_eval PROPERTIES TIMEOUT 90)
     add_test(NAME native_actor_error_v1_abi_static
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_actor_error_abi.py"
