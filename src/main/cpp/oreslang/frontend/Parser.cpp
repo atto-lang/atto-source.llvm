@@ -587,7 +587,8 @@ private:
         // Only intercept a typed, immutable local of the built-in closed
         // Result specialization. Every other local follows the old parser.
         // One producer call, one explicit two-arm match, no alias/copy/escape.
-        if (token_.text == "const" && lexer_.next().text == "Result") {
+        Lexer lookahead = lexer_;
+        if (token_.text == "const" && lookahead.next().text == "Result") {
             if (value.returns_void || !value.parameters.empty() || value.exported
                     || value.name == "main" || value.has_declared_effects)
                 fail("native Result match requires private, unqualified zero-argument int function");
