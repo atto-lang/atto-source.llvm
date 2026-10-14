@@ -82,6 +82,12 @@ llvm::Value* lower(const Expression& expr,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+            // A source integer literal has no children, callee or labels.
+            // Crafted ASTs must not smuggle operations that this fast path
+            // would silently discard when creating a constant.
+            if (!expr.name.empty() || expr.left || expr.right ||
+                    !expr.arguments.empty() || !expr.argument_names.empty())
+                throw std::runtime_error("unverified native integer literal AST");
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable: {
             llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
@@ -323,6 +329,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     for (const auto& actor : source.actors) {
         if (!source_identifier(actor.name) || !type_names.insert(actor.name).second)
             throw std::runtime_error("duplicate or unnamed native class/actor declaration");
+    }
+    // Native field indices and initialized actor slots are derived from
+    // ordered source declarations. A parser-bypassing AST with duplicate
+    // fields would silently bind reads/writes to the first field, while
+    // allocating and initializing multiple distinct slots.
+    for (const auto& cls : source.classes) {
+        if (cls.fields.empty() || cls.fields.size() > 16)
+            throw std::runtime_error("invalid native class field layout");
+        std::unordered_set<std::string> fields;
+        for (const auto& field : cls.fields)
+            if (field.name.empty() || !fields.insert(field.name).second)
+                throw std::runtime_error("duplicate or unnamed native class field");
+    }
+    for (const auto& actor : source.actors) {
+        if (actor.fields.empty() || actor.fields.size() > 16)
+            throw std::runtime_error("invalid native actor field layout");
+        std::unordered_set<std::string> fields;
+        for (const auto& field : actor.fields)
+            if (field.name.empty() || !fields.insert(field.name).second)
+                throw std::runtime_error("duplicate or unnamed native actor field");
     }
     // Public AST entrypoint: validate reserved linker ABI names before the
     // scalar-loop fast path can return without emitting ordinary functions.
