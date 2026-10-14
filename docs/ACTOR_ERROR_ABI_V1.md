@@ -52,9 +52,12 @@ Do not infer stages 2–3 are complete from existence of these files.
 - Java's `TypedExceptionalEffectAdmissionTest` currently requires
   `throw`, `raise`, `panic` and `recover` to be rejected as unsupported
   typed effects. This needs a deliberate compiler/runtime migration.
-- The LLVM compiler supports only a source subset, and `src/core` is not an
-  executable native core loader. Its sources do not establish LLVM guest
-  inheritance, constructors, typed effects or catchability.
+- LLVM still compiles only a narrow native source subset: its class
+  parser now rejects `Error` redeclaration and inherited classes with
+  explicit diagnostics, rather than silently implying support. `src/core`
+  remains staged Oreslang source, not a linked guest Error hierarchy.
+  Negative native compiler admission tests and host-side effect-priority
+  tests have been added, but not yet executed in CI.
 - The host `recoverable` value is **classification metadata**, not a proof
   that the runtime correctly catches, escalates, retries or supervises it.
 - The cross-backend static verifier `scripts/verify_actor_error_abi.py`
