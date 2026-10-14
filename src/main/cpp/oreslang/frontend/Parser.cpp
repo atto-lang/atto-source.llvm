@@ -167,6 +167,21 @@ bool native_pure_scalar_tree(const Expression& expr) {
     return false;
 }
 
+// Native constructor initializers admit only syntactically pure stack-i64
+// arithmetic. Unknown operations must fail before LLVM IR is generated.
+bool native_constructor_scalar_tree(const Expression& expr) {
+    using Kind = Expression::Kind;
+    if (expr.kind == Kind::Integer || expr.kind == Kind::Variable) return true;
+    if (expr.kind == Kind::Negate)
+        return expr.left && native_constructor_scalar_tree(*expr.left);
+    if (expr.kind == Kind::Add || expr.kind == Kind::Subtract
+            || expr.kind == Kind::Multiply)
+        return expr.left && expr.right
+            && native_constructor_scalar_tree(*expr.left)
+            && native_constructor_scalar_tree(*expr.right);
+    return false;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -315,18 +330,65 @@ private:
         result.name = identifier();
         require("as");
         std::unordered_set<std::string> seen;
-        // Ordered i64 scalar slots and owned Array<int> handles only.
-        // No nested class, arbitrary initializer, method, or pointer escape.
+        // Bounded native subset: ordered i64 slots and owned Array<int>.
+        // Preserve mainline line-separated literal initializer admission.
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            const bool public_member = accept("pub");
+            if (token_.text == "constructor") {
+                if (result.explicit_constructor)
+                    fail("native class may declare only one scalar constructor");
+                result.explicit_constructor = true;
+                advance();
+                require("(");
+                std::unordered_set<std::string> parameters;
+                if (!accept(")")) {
+                    do {
+                        if (result.constructor_parameters.size() == 16)
+                            fail("native scalar constructor parameter limit exceeded (16)");
+                        require("int");
+                        std::string name = identifier();
+                        if (!parameters.insert(name).second)
+                            fail("duplicate native constructor parameter '" + name + "'");
+                        result.constructor_parameters.push_back(std::move(name));
+                    } while (accept(","));
+                    require(")");
+                }
+                require("{");
+                if (accept("return")) require(";");
+                if (token_.text != "}")
+                    fail("native scalar constructor body must be empty or contain only 'return;'");
+                require("}");
+                if (token_.text != "end")
+                    fail("native scalar constructor must be the last class member");
+                continue;
+            }
+            if (result.explicit_constructor)
+                fail("native scalar constructor must be the last class member");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
-            const bool legacy_let = accept("let");
+            bool fixed = false;
+            bool mutable_referent = false;
+            if (accept("final") || accept("const")) {
+                fixed = true;
+            } else if (accept("val")) {
+                fixed = true;
+                mutable_referent = true;
+            } else {
+                accept("let");
+            }
+            if (accept("mut")) {
+                if (mutable_referent)
+                    fail("duplicate mut class field qualifier");
+                mutable_referent = true;
+            }
             ClassField field;
-            if (!legacy_let) field.final_field = accept("final");
-            if (legacy_let && accept("mut")) {
-                require("Array");
+            field.final_field = fixed;
+            field.mutable_referent = mutable_referent;
+            field.public_member = public_member;
+            if (accept("Array")) {
+                if (!mutable_referent)
+                    fail("native Array<int> field requires mut referent capability");
                 require("<");
                 require("int");
                 require(">");
@@ -349,16 +411,38 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                if (!accept(":")) require("=");
-                if (token_.kind != Kind::Integer)
-                    fail("class field requires i64 literal initializer");
-                const std::size_t initializer_end = token_.offset + token_.text.size();
-                field.initial = integer_literal();
-                class_field_terminator(initializer_end);
+                if (!accept(":") && !accept("="))
+                    fail(fixed ? "final class field requires declaration-site initializer" :
+                                 "class field requires declaration-site initializer");
+                const bool starts_integer = token_.kind == Kind::Integer;
+                const std::size_t literal_end = token_.offset + token_.text.size();
+                field.initializer_expression = expression();
+                if (!native_constructor_scalar_tree(*field.initializer_expression))
+                    fail("native class field initializer requires pure scalar constructor parameters or integers");
+                if (field.initializer_expression->kind == Expression::Kind::Integer) {
+                    field.initial = field.initializer_expression->integer;
+                    class_field_terminator(literal_end);
+                } else {
+                    // General expressions in the bounded native subset
+                    // require an explicit terminator for unambiguous parsing.
+                    (void)starts_integer;
+                    require(";");
+                }
             }
             result.fields.push_back(std::move(field));
         }
         if (result.fields.empty()) fail("native class requires at least one field");
+        std::unordered_set<std::string> initializer_names(
+            result.constructor_parameters.begin(), result.constructor_parameters.end());
+        for (const auto& field : result.fields) {
+            if (field.int_array && result.explicit_constructor)
+                fail("native owned Array<int> constructor requires checked failure cleanup");
+            if (!field.initializer_expression) continue;
+            if (!result.explicit_constructor
+                    && field.initializer_expression->kind != Expression::Kind::Integer)
+                fail("native nonliteral class field initializer requires explicit scalar constructor");
+            validate_expression(*field.initializer_expression, initializer_names, {});
+        }
         require("end");
         return result;
     }
@@ -532,7 +616,12 @@ private:
                     const std::string ctor = identifier();
                     if (ctor != binding.class_name) fail("class constructor type mismatch");
                     require("(");
-                    require(")");
+                    if (!accept(")")) {
+                        do {
+                            binding.constructor_arguments.push_back(expression());
+                        } while (accept(","));
+                        require(")");
+                    }
                     binding.new_class = true;
                 } else {
                     require("rt");
@@ -1480,6 +1569,19 @@ private:
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
                     if (binding.move_class && !params.count(binding.move_source))
                         throw std::runtime_error("unknown class move source '" + binding.move_source + "'");
+                    if (binding.new_class) {
+                        const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                            [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                        if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
+                            throw std::runtime_error("native class constructor argument arity mismatch for '"
+                                                     + cls->name + "'");
+                        for (const auto& argument : binding.constructor_arguments) {
+                            if (!native_constructor_scalar_tree(*argument))
+                                throw std::runtime_error(
+                                    "native scalar constructor argument requires pure integer expression");
+                            validate_expression(*argument, params, functions);
+                        }
+                    }
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }
