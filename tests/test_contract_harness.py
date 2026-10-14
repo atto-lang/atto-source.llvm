@@ -33,6 +33,26 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         path.chmod(0o700)
         return path
 
+    def linker(self, *, exit_code=0, link_status=0):
+        path = self.root / "fake-clang"
+        executable_contents = (
+            "#!" + sys.executable + "\n"
+            + "import sys\n"
+            + f"sys.exit({exit_code})\n"
+        )
+        path.write_text(
+            "#!" + sys.executable + "\n"
+            + "from pathlib import Path\n"
+            + "import sys\n"
+            + f"if {link_status}: sys.exit({link_status})\n"
+            + "result = Path(sys.argv[sys.argv.index('-o') + 1])\n"
+            + f"result.write_text({executable_contents!r}, encoding='utf-8')\n"
+            + "result.chmod(0o700)\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o700)
+        return path
+
     def run_contract(self, compiler, *flags, optimize="-O"):
         env = dict(os.environ, PYTHONOPTIMIZE="2")
         return subprocess.run(
@@ -99,6 +119,29 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         p = self.run_contract(compiler, "--diagnostic", "private class field",
                               optimize="-OO")
         self.assertNotEqual(p.returncode, 0)
+
+    def test_library_only_must_not_link_successfully(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\n")
+        clang = self.linker()
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("linked as a successful standalone process", p.stderr)
+
+    def test_native_wrong_exit_code_is_detected(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 "define i32 @main() { ret i32 41 }\n")
+        clang = self.linker(exit_code=41)
+        p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("native exit 41, expected 42", p.stderr)
+
+    def test_valid_native_execution_gate_still_passes(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 "define i32 @main() { ret i32 42 }\n")
+        clang = self.linker(exit_code=42)
+        p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
 
 
 if __name__ == "__main__":
