@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorErrorCatalog.hpp"
+#include "oreslang/runtime/ActorFailureControl.hpp"
 #include "oreslang/runtime/ExceptionPolicy.hpp"
 
 #include <stdexcept>
@@ -62,5 +63,25 @@ int main() {
     const auto cancel = ActorErrorEnvelope::make(
             ActorErrorCode::ActorCancelled, "cancelled", "worker", "parent");
     if (!mailbox.recoverable() || cancel.recoverable()) return 7;
+
+    const auto raised = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "actor-1", "parent-1");
+    const auto panicked = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Panic, "actor-1", "parent-1");
+    if (raised.envelope().code() != ActorErrorCode::ActorSupervision) return 8;
+    if (panicked.envelope().code() != ActorErrorCode::ActorSupervision) return 9;
+    if (raised.envelope().diagnostic() != "actor raised a typed Error") return 10;
+    if (panicked.envelope().diagnostic() != "actor panicked with a typed Error") return 11;
+    if (raised.envelope().actor_id() != "actor-1"
+            || raised.envelope().supervisor_id() != "parent-1") return 12;
+    if (panicked.effect() != ActorExceptionalEffect::Panic) return 13;
+
+    try {
+        (void)ActorFailureControlNotice::from_guest_effect(
+                static_cast<ActorExceptionalEffect>(255), "actor-1", "parent-1");
+        return 14;
+    } catch (const std::invalid_argument&) {
+        // Invalid effect tags must fail closed before publication.
+    }
     return 0;
 }
