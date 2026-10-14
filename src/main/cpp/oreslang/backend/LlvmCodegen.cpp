@@ -268,6 +268,9 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
+    if (wasm32_target && !source.closed_array_results.empty())
+        throw std::runtime_error(
+            "wasm32 nominal tagged Result ABI awaits verified target lowering");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -1427,6 +1430,36 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::Value* narrowed = builder.CreateTrunc(result, i32);
             builder.CreateRet(builder.CreateSelect(valid, narrowed,
                 llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
+        }
+    }
+
+    // The first genuine Result<void,ArrayError> guest IR slice uses a
+    // named, non-scalar aggregate. Success is {variant=0,error=0};
+    // recoverable failures are {variant=1,error=1|2}. A zero-payload
+    // Ok() does not construct a dummy i64. Return values cannot be used
+    // as numeric status codes because their LLVM type is a named struct.
+    // Source parser restricts these functions to zero-argument, single
+    // terminal constructors; no ownership can escape this first slice.
+    if (!source.closed_array_results.empty()) {
+        llvm::Type* i8 = llvm::Type::getInt8Ty(context);
+        llvm::StructType* result_type = llvm::StructType::create(
+            context, {i8, i8}, "ores.result.void.array_error");
+        for (const auto& tagged : source.closed_array_results) {
+            const std::string symbol = source.module.empty()
+                ? tagged.name : source.module + "." + tagged.name;
+            if (module.getFunction(symbol))
+                throw std::runtime_error(
+                    "native tagged Result symbol collision: " + symbol);
+            auto* declaration = llvm::Function::Create(
+                llvm::FunctionType::get(result_type, {}, false),
+                llvm::Function::ExternalLinkage, symbol, module);
+            auto* entry = llvm::BasicBlock::Create(context, "entry", declaration);
+            llvm::IRBuilder<> builder(entry);
+            llvm::Constant* aggregate = llvm::ConstantStruct::get(
+                result_type,
+                {llvm::ConstantInt::get(i8, tagged.ok ? 0 : 1),
+                 llvm::ConstantInt::get(i8, tagged.error)});
+            builder.CreateRet(aggregate);
         }
     }
 
