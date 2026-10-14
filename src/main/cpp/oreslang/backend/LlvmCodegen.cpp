@@ -488,19 +488,45 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    std::unordered_set<std::string> emitted_slots;
     for (const auto& fn : source.functions) {
-        // Parser validation is the primary gate; protect this compiler API
-        // against synthetic/prevalidated Program ASTs as well. An unqualified
-        // guest export must not impersonate a linker-owned assertion ABI.
-        if (source.module.empty() && fn.name.rfind("oreslang_assert_", 0) == 0)
-            throw std::runtime_error(
-                "reserved native runtime ABI symbol '" + fn.name + "'");
+        // The backend is public to other compiler passes. Its Program input
+        // may be constructed without passing through the parser or ownership
+        // checker. Mirror all source ABI reservations here, *before* creating
+        // a symbol: LLVM silently renames colliding exports with ".1".
+        if (fn.name.rfind("oreslang_int_array_", 0) == 0)
+            throw std::runtime_error("reserved native Array<int> ABI symbol");
+        if (source.module.empty()) {
+            const bool reserved =
+                fn.name == "abort" ||
+                fn.name == "__oreslang_guest_main" ||
+                fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_assert_", 0) == 0;
+            if (reserved)
+                throw std::runtime_error(
+                    "reserved native runtime ABI symbol '" + fn.name + "'");
+        }
+        if (fn.returns_bool && fn.returns_void)
+            throw std::runtime_error("native bool/void return flags conflict");
+        if (fn.returns_bool && fn.name == "main")
+            throw std::runtime_error("native bool main violates process exit ABI");
+        if (fn.name == "main" && family_sizes.at(fn.name) != 1)
+            throw std::runtime_error("duplicate native entrypoint 'main'");
+        const std::string slot = native_function_slot(fn.name, fn.parameters.size());
+        if (!emitted_slots.insert(slot).second)
+            throw std::runtime_error("duplicate native function slot '" + slot + "'");
         const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name);
         const std::string symbol = family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, fn.parameters.size())
             : base_symbol;
+        if (module.getNamedValue(symbol))
+            throw std::runtime_error("native LLVM symbol collision '" + symbol + "'");
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
@@ -512,11 +538,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module);
+        if (declaration->getName().str() != symbol)
+            throw std::runtime_error("native LLVM export was silently renamed");
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args())
             formal.setName(fn.parameters[label_index++].name);
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        if (!declarations.emplace(slot, declaration).second)
+            throw std::runtime_error("duplicate native function declaration slot");
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
