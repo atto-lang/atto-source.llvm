@@ -205,6 +205,12 @@ int main() {
         loop.functions.front().result->name = "counter";
         loop.functions.front().locals.front().initializer->integer = 8;
         rejected(loop, "unverified experimental scalar-loop AST");
+        loop.functions.front().locals.front().initializer->integer = 0;
+        // With a second function, the ordinary LLVM path used to ignore the
+        // pending scalar loop entirely. Mixed Programs fail before codegen.
+        auto second = program("companion");
+        loop.functions.push_back(std::move(second.functions.front()));
+        rejected(loop, "experimental scalar loop requires exactly one standalone function");
     }
 
     // Positive compiler control: the direct emitter still exposes an i1,
