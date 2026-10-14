@@ -22,6 +22,27 @@ import time
 MAX_SAMPLES = 1000
 MAX_WARMUPS = 100
 DEFAULT_OUTPUT_LIMIT = 64 * 1024 * 1024
+MAX_OUTPUT_LIMIT = 512 * 1024 * 1024
+
+
+def child_file_size_limit(max_output_bytes):
+    """Apply a kernel file-size quota for compiler stdout/stderr on POSIX.
+
+    subprocess stdout/stderr use distinct temporary regular files. A compiler
+    must not write arbitrarily much output before the parent inspects it.
+    This standalone benchmark is intentionally single-threaded; preexec_fn
+    must never be transplanted into a multi-threaded build service.
+    """
+    if os.name != "posix":
+        return None
+    import resource
+
+    def apply_limit():
+        _, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        limit = max_output_bytes if hard == resource.RLIM_INFINITY else min(hard, max_output_bytes)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, hard))
+
+    return apply_limit
 
 
 def percentile_nearest_rank(values, percentile):
@@ -45,7 +66,8 @@ def measure(compiler, arguments, source, warmups, samples, timeout,
             or not 0 <= warmups <= MAX_WARMUPS
             or not 1 <= samples <= MAX_SAMPLES
             or not math.isfinite(timeout) or timeout <= 0
-            or not isinstance(max_output_bytes, int) or max_output_bytes < 1):
+            or not isinstance(max_output_bytes, int)
+            or not 1 <= max_output_bytes <= MAX_OUTPUT_LIMIT):
         raise ValueError("invalid sample, timeout or output budget")
     # Resolve paths before launching child processes. A relative source path
     # must not accidentally be reinterpreted by a child in another directory.
@@ -68,7 +90,8 @@ def measure(compiler, arguments, source, warmups, samples, timeout,
             try:
                 completed = subprocess.run(
                     command, stdin=subprocess.DEVNULL, stdout=output,
-                    stderr=errors, timeout=timeout, check=False)
+                    stderr=errors, timeout=timeout, check=False,
+                    preexec_fn=child_file_size_limit(max_output_bytes))
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(f"LLVM compiler timed out after {timeout}s") from exc
             elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000
@@ -79,6 +102,9 @@ def measure(compiler, arguments, source, warmups, samples, timeout,
             if output_size > max_output_bytes or error_size > max_output_bytes:
                 raise RuntimeError("compiler output exceeded output budget")
             if completed.returncode != 0:
+                if (os.name == "posix"
+                        and completed.returncode == -getattr(__import__("signal"), "SIGXFSZ", 25)):
+                    raise RuntimeError("compiler output exceeded output budget")
                 errors.seek(0)
                 snippet = errors.read(2000).decode("utf-8", errors="replace")
                 raise RuntimeError(f"LLVM compiler exit {completed.returncode}: {snippet}")
