@@ -1226,6 +1226,47 @@ if(BUILD_TESTING)
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}")
         set_tests_properties(class_native_1_to_16_field_layout_matrix PROPERTIES TIMEOUT 240)
+        # Fixed class-slot lowering: native success, no-IR parser and
+        # ownership rejections. Keep these adjacent to the real LLVM guest gate.
+        # The native subset has no instance methods: every free-function
+        # field projection must require pub, including Array<int> access.
+        oreslang_contract_test(reject_native_private_field_read class-private-read-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(reject_native_private_field_write class-private-write-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(reject_native_private_field_take class-private-take-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(reject_native_private_array_size class-private-array-size-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(native_class_final_read class-final-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_class_colon_write class-colon-rebindable-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_native_final_write class-final-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_const_alias_write class-final-alias-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_final_take class-final-take-reject.ores --diagnostic "cannot take final class field")
+        oreslang_contract_test(reject_native_final_uninitialized class-final-uninitialized-reject.ores --diagnostic "final class field requires declaration-site initializer")
+        # Aliases must retain fixed-slot semantics on the native path too.
+        oreslang_contract_test(native_class_val_final_mut_read class-val-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_native_val_alias_write class-val-alias-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_final_mut_write class-final-mut-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_const_alias_take class-const-take-reject.ores --diagnostic "cannot take final class field")
+        oreslang_contract_test(native_scalar_constructor_field_init
+            class-constructor-init-unsupported.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_scalar_public_constructor_field_init
+            class-public-constructor-init-unsupported.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_scalar_constructor_arithmetic
+            class-scalar-constructor-arithmetic-native.ores --run 40 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_native_constructor_arity
+            class-scalar-constructor-arity-reject.ores --diagnostic "native class constructor argument arity mismatch")
+        oreslang_contract_test(reject_native_constructor_effectful_initializer
+            class-scalar-constructor-call-reject.ores --diagnostic "native class field initializer requires pure scalar")
+        oreslang_contract_test(reject_native_constructor_unknown_parameter
+            class-scalar-constructor-unknown-reject.ores --diagnostic "unknown parameter 'other'")
+        oreslang_contract_test(reject_native_constructor_duplicate_parameter
+            class-scalar-constructor-duplicate-reject.ores --diagnostic "duplicate native constructor parameter")
+        oreslang_contract_test(reject_native_constructor_owned_array
+            class-scalar-constructor-owned-reject.ores --diagnostic "native owned Array<int> constructor requires checked failure cleanup")
+        oreslang_contract_test(reject_native_constructor_effectful_argument
+            class-scalar-constructor-args-effect-reject.ores --diagnostic "native scalar constructor argument requires pure integer expression")
+        oreslang_contract_test(reject_native_constructor_owned_region_argument
+            class-scalar-constructor-owned-arg-reject.ores --experimental-owned-int --diagnostic "native scalar constructor arguments require plain stack i64 values")
+        oreslang_contract_test(reject_native_constructor_effectful_body
+            class-scalar-constructor-effectful-body-reject.ores --diagnostic "native scalar constructor body must be empty or contain only")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
