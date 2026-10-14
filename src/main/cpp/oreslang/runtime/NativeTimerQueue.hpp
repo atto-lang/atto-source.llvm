@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -51,7 +52,9 @@ public:
         }
         std::lock_guard<std::mutex> lock(mutex_);
         if (closed_) throw std::logic_error("timer owner closed");
-        if (by_id_.size() >= capacity_) throw std::length_error("timer admission full");
+        // Polled-but-unclaimed handles still consume admission capacity.
+        if (by_id_.size() + ready_.size() >= capacity_)
+            throw std::length_error("timer admission full");
         if (next_id_ == std::numeric_limits<std::uint64_t>::max()) {
             throw std::overflow_error("timer identity exhausted");
         }
@@ -91,6 +94,10 @@ public:
             if (it->first.first > now_ns) break;
             const auto deadline = it->first.first;
             const auto id = it->first.second;
+            // Insert into the delivery registry BEFORE retiring the
+            // pending registration, so an allocation failure cannot lose
+            // a live timer. Delivery requires a separate exactly-once claim.
+            ready_.insert(id);
             result.push_back(Expired{NativeTimerHandle{domain_, id}, deadline});
             by_id_.erase(id);
             by_deadline_.erase(it);
@@ -105,15 +112,28 @@ public:
     }
 
     /**
-     * Post-poll owner gate for a token enqueued into a scheduler CONTROL lane.
-     * This rejects all tokens after owner shutdown, even if poll() won first.
-     * The scheduler must additionally revalidate actor generation and
-     * execution authority AT DISPATCH. A check here alone is not a lease.
+     * Called at scheduler CONTROL dispatch, not by the clock thread.
+     * Only a token actually returned by poll() can be claimed, once.
+     * Cancellation/owner teardown invalidate all unclaimed tokens.
+     * A successful claim must still be followed by actor-generation,
+     * heap-lease and execution-authority checks at guest dispatch.
      */
-    bool owner_allows_delivery(NativeTimerHandle handle) const {
+    bool claim_delivery(NativeTimerHandle handle) {
         std::lock_guard<std::mutex> lock(mutex_);
         return !closed_ && handle.domain == domain_ &&
-               handle.id > 0 && handle.id < next_id_;
+               ready_.erase(handle.id) == 1;
+    }
+
+    /** Release a polled token when the target continuation was retired. */
+    bool discard_delivery(NativeTimerHandle handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !closed_ && handle.domain == domain_ &&
+               ready_.erase(handle.id) == 1;
+    }
+
+    std::size_t outstanding() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return by_id_.size() + ready_.size();
     }
 
     std::size_t pending() const {
@@ -126,6 +146,7 @@ public:
         closed_ = true;
         by_id_.clear();
         by_deadline_.clear();
+        ready_.clear();
     }
 
 private:
@@ -154,6 +175,8 @@ private:
     std::uint64_t next_id_ = 1;
     DeadlineMap by_deadline_;
     std::map<std::uint64_t, DeadlineMap::iterator> by_id_;
+    // Bounded delivery tickets retained until scheduler claim or discard.
+    std::set<std::uint64_t> ready_;
 };
 
 }  // namespace oreslang::runtime
