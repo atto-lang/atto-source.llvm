@@ -525,9 +525,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     !fn.parameters.empty() || !fn.locals.empty() ||
                     !fn.statements.empty() || !fn.early_returns.empty() ||
                     !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
-                    !fn.actor_field_writes.empty() || fn.caught_throw_value)
+                    !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                    !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
+                    fn.scalar_while || fn.has_declared_effects ||
+                    (fn.result->integer != 0 && fn.result->integer != 1))
                 throw std::runtime_error("unverified typed bool native result lowering");
-            builder.CreateRet(builder.getInt1(fn.result->integer != 0));
+            builder.CreateRet(builder.getInt1(fn.result->integer == 1));
             continue;
         }
         std::unordered_map<std::string, llvm::Value*> storage;
