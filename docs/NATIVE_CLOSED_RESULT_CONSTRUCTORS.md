@@ -35,6 +35,9 @@ The raw array native status ABI also remains separate.
   legally observe the aggregate until the language and FFI ABI, must-use
   ownership and cancellation contracts are proven independently.
 - At most 64 tagged constructor functions may occur per translation unit.
+- Tagged functions cannot coexist with the experimental standalone scalar
+  loop/AOT fast path. Both source admission and LLVM codegen reject the mix,
+  because an early-emitted loop module must never silently omit declarations.
 - Constructors may not have parameters, locals, arbitrary expressions, calls,
   side effects, deferred cleanup, exceptions, actor state, await, or match
   until those stages have complete borrow and CFG correctness proofs.
