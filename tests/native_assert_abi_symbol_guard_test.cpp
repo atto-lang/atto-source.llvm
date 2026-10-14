@@ -422,6 +422,78 @@ int main() {
         rejected(source, "unverified native integer literal AST");
     }
 
+    // Emitting a constructed Program must not retain the first of multiple
+    // native lexical/ActorRef bindings when LLVM or unordered_map renames or
+    // ignores a later slot.
+    {
+        auto source = program("duplicate_native_param_ast");
+        oreslang::Parameter one;
+        one.name = "x";
+        source.functions.front().parameters.push_back(one);
+        source.functions.front().parameters.push_back(one);
+        rejected(source, "duplicate or unnamed native function binding");
+    }
+    {
+        auto source = program("parameter_local_collision_ast");
+        oreslang::Parameter param;
+        param.name = "x";
+        source.functions.front().parameters.push_back(std::move(param));
+        oreslang::LocalBinding local;
+        local.name = "x";
+        source.functions.front().locals.push_back(std::move(local));
+        rejected(source, "duplicate or unnamed native function binding");
+    }
+    {
+        auto source = program("duplicate_native_locals_ast");
+        oreslang::LocalBinding first;
+        first.name = "owned";
+        source.functions.front().locals.push_back(std::move(first));
+        oreslang::LocalBinding second;
+        second.name = "owned";
+        source.functions.front().locals.push_back(std::move(second));
+        rejected(source, "duplicate or unnamed native function binding");
+    }
+    {
+        auto source = program("actor_ref_shadows_local_ast");
+        oreslang::LocalBinding local;
+        local.name = "worker";
+        source.functions.front().locals.push_back(std::move(local));
+        oreslang::ActorSpawnBinding spawn;
+        spawn.name = "worker";
+        source.functions.front().actor_spawns.push_back(std::move(spawn));
+        rejected(source, "duplicate or unnamed native function binding");
+    }
+    {
+        auto source = program("duplicate_actor_refs_ast");
+        oreslang::ActorSpawnBinding first;
+        first.name = "worker";
+        source.functions.front().actor_spawns.push_back(std::move(first));
+        oreslang::ActorSpawnBinding second;
+        second.name = "worker";
+        source.functions.front().actor_spawns.push_back(std::move(second));
+        rejected(source, "duplicate or unnamed native function binding");
+    }
+    {
+        auto source = program("unnamed_native_param_ast");
+        source.functions.front().parameters.emplace_back();
+        rejected(source, "duplicate or unnamed native function binding");
+    }
+    {
+        auto source = program("unique_bindings_control");
+        oreslang::Parameter param;
+        param.name = "input";
+        source.functions.front().parameters.push_back(std::move(param));
+        oreslang::LocalBinding local;
+        local.name = "offset";
+        local.initializer = std::make_unique<Expression>();
+        local.initializer->kind = Expression::Kind::Integer;
+        local.initializer->integer = 5;
+        source.functions.front().locals.push_back(std::move(local));
+        source.functions.front().result->kind = Expression::Kind::Variable;
+        source.functions.front().result->name = "offset";
+        (void)oreslang::emit_verified_llvm_ir(source);
+    }
+
     // Positive canonical field and scalar controls must still compile.
     {
         auto source = program("canonical_class_control", true);
