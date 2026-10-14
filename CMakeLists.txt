@@ -49,7 +49,11 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/backend/LlvmCodegen.cpp
         src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
     target_include_directories(oreslang-assert-abi-symbol-guard-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # LLVM is third-party; do not turn warnings inside installed LLVM 18+
+    # headers into errors while keeping -Werror for our own source.
+    target_include_directories(oreslang-assert-abi-symbol-guard-test SYSTEM PRIVATE
+        "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-assert-abi-symbol-guard-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(oreslang-assert-abi-symbol-guard-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
