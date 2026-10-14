@@ -283,23 +283,53 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     if (!source.imports.empty())
         throw std::runtime_error(
             "native module imports are unsupported until linked stdlib and typed assertion/trap lowering are implemented");
+    // The public backend accepts constructed Program ASTs that did not pass
+    // source parsing. Reject synthetic linker names which the lexer could
+    // never have produced (including NUL, dots and native arity suffixes).
+    const auto source_identifier = [](const std::string& name) {
+        if (name.empty()) return false;
+        const auto start = [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+        };
+        if (!start(name.front())) return false;
+        return std::all_of(name.begin() + 1, name.end(), [&](char c) {
+            return start(c) || (c >= '0' && c <= '9');
+        });
+    };
+    if (!source.module.empty() && !source_identifier(source.module))
+        throw std::runtime_error("invalid native module linker identifier");
+    // Parser admission permits exactly one standalone cooperative continuation.
+    // This alternative codegen path must not silently accept a mixed or
+    // duplicate continuation list from an unverified Program.
+    if (!source.cooperative_loops.empty()) {
+        if (wasm32_target || source.cooperative_loops.size() != 1 ||
+                !source.functions.empty() || !source.classes.empty() ||
+                !source.actors.empty() || !source.module.empty())
+            throw std::runtime_error(
+                "unverified native cooperative-loop Program shape");
+        const auto& loop = source.cooperative_loops.front();
+        if (!source_identifier(loop.name) || !source_identifier(loop.variable))
+            throw std::runtime_error("invalid native cooperative-loop identifier");
+    }
     // The parser rejects duplicate user type names, but this public emitter
     // also accepts constructed Program ASTs. LLVM silently renames duplicate
     // StructType and Function symbols, breaking source-to-ABI identity;
     // reject them before any native or scalar-loop fast path is selected.
     std::unordered_set<std::string> type_names;
     for (const auto& cls : source.classes) {
-        if (cls.name.empty() || !type_names.insert(cls.name).second)
+        if (!source_identifier(cls.name) || !type_names.insert(cls.name).second)
             throw std::runtime_error("duplicate or unnamed native class/actor declaration");
     }
     for (const auto& actor : source.actors) {
-        if (actor.name.empty() || !type_names.insert(actor.name).second)
+        if (!source_identifier(actor.name) || !type_names.insert(actor.name).second)
             throw std::runtime_error("duplicate or unnamed native class/actor declaration");
     }
     // Public AST entrypoint: validate reserved linker ABI names before the
     // scalar-loop fast path can return without emitting ordinary functions.
     // Do not permit LLVM's collision renaming to change guest symbol identity.
     for (const auto& fn : source.functions) {
+        if (!source_identifier(fn.name))
+            throw std::runtime_error("invalid native function linker identifier");
         if (fn.name.rfind("oreslang_int_array_", 0) == 0)
             throw std::runtime_error("reserved native Array<int> ABI symbol");
         if (source.module.empty()) {
@@ -311,6 +341,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                 fn.name.rfind("oreslang_actor_", 0) == 0 ||
                 fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_rt_", 0) == 0 ||
                 fn.name.rfind("oreslang_assert_", 0) == 0;
             if (reserved)
                 throw std::runtime_error(
