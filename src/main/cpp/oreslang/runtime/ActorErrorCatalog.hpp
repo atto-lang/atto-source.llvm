@@ -92,7 +92,7 @@ inline std::string sanitized_actor_diagnostic(std::string_view text) {
     std::string result = bounded_control_diagnostic(text);
     for (std::size_t i = 0; i < result.size();) {
         const unsigned char ch = static_cast<unsigned char>(result[i]);
-        if ((ch < 0x20 && ch != '\t') || ch == 0x7f) {
+        if (ch < 0x20 || ch == 0x7f) {
             result[i++] = '?';
             continue;
         }
@@ -108,8 +108,9 @@ inline std::string sanitized_actor_diagnostic(std::string_view text) {
             const unsigned char second = static_cast<unsigned char>(result[i + 1]);
             const unsigned char third = static_cast<unsigned char>(result[i + 2]);
             const bool format = (second == 0x80
-                    && ((third >= 0xaa && third <= 0xae) || third == 0x8b))
-                    || (second == 0x81 && third >= 0xa6 && third <= 0xa9);
+                    && ((third >= 0xa8 && third <= 0xae)
+                            || (third >= 0x8b && third <= 0x8f)))
+                    || (second == 0x81 && third >= 0xa0 && third <= 0xaf);
             if (format) {
                 result.replace(i, 3, "?");
                 ++i;
