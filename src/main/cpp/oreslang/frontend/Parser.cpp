@@ -214,6 +214,9 @@ public:
             } else {
                 Function parsed = function();
                 if (parsed.closed_array_result) {
+                    if (program.closed_array_results.size() >= 64) {
+                        fail("native tagged Result constructor function limit exceeded (64)");
+                    }
                     program.closed_array_results.push_back({
                         parsed.name, parsed.exported, parsed.closed_result_ok,
                         parsed.closed_result_error, parsed.offset
@@ -225,6 +228,11 @@ public:
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        if (!program.closed_array_results.empty()
+                && (program.module == "Result" || program.module == "Option"
+                    || program.module == "ArrayError")) {
+            fail("native builtin Result/Option/ArrayError cannot be shadowed by module namespace");
+        }
         if (program.functions.empty() && program.closed_array_results.empty()
                 && program.actors.empty() && program.cooperative_loops.empty())
             fail("expected at least one function or actor");
@@ -325,8 +333,9 @@ private:
         // Result and Option are compiler-managed tagged sum type families.
         // A user class with either spelling must not spoof nominal ADT
         // identity or inherit the old scalar-only class representation.
-        if (result.name == "Result" || result.name == "Option") {
-            fail("native builtin Result/Option names cannot be redefined as classes");
+        if (result.name == "Result" || result.name == "Option"
+                || result.name == "ArrayError") {
+            fail("native builtin Result/Option/ArrayError names cannot be redefined as classes");
         }
         require("as");
         std::unordered_set<std::string> seen;
@@ -505,6 +514,12 @@ private:
             require(">");
             if (!value.parameters.empty() || value.name == "main") {
                 fail("native tagged Result constructor slice requires zero parameters and non-main function");
+            }
+            // Public export makes an unverified cross-module/FFI return ABI
+            // observable before the language has typed Result callers,
+            // status validation or must-use ownership at that boundary.
+            if (value.exported) {
+                fail("native tagged Result public export requires verified cross-module ABI and must-use proof");
             }
             require("{");
             require("return");
