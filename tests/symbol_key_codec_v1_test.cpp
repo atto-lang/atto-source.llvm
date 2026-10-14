@@ -13,6 +13,12 @@ template <typename F> void rejects(F&& f) {
     require(rejected);
 }
 
+template <typename F> void denies(F&& f) {
+    bool denied = false;
+    try { f(); } catch (const AdmissionDenied&) { denied = true; }
+    require(denied);
+}
+
 int main() {
     const auto text = encode({Kind::Text, "foo"});
     const auto process = encode({Kind::Process, "foo"});
@@ -34,17 +40,23 @@ int main() {
             == Key{Kind::Process, "error"});
     require(decodeForUntrusted(encode({Kind::Process, "Symbol.iterator"}))
             == Key{Kind::Process, "Symbol.iterator"});
-    rejects([&] { decodeForUntrusted(encode({Kind::Process, "tenant/private"})); });
-    rejects([&] { decodeForUntrusted(encode({Kind::Stable, uuid})); });
+    denies([&] { decodeForUntrusted(encode({Kind::Process, "tenant/private"})); });
+    denies([&] { decodeForUntrusted(encode({Kind::Stable, uuid})); });
     require(decodeDistinctForUntrusted({
             encode({Kind::Text, "ready"}),
             encode({Kind::Process, "ready"})}).size() == 2);
-    rejects([&] { decodeDistinctForUntrusted({
+    denies([&] { decodeDistinctForUntrusted({
             encode({Kind::Text, "ready"}),
             encode({Kind::Process, "tenant/private"})}); });
     rejects([&] { decodeDistinctForUntrusted({
             encode({Kind::Text, "x"}), encode({Kind::Text, "x"})}); });
     rejects([&] { encode({static_cast<Kind>(0xff), "arbitrary"}); });
+    auto invalidUntrustedWire = process;
+    invalidUntrustedWire[2] = 99;
+    // Malformed wire is an argument error, NOT an authorization denial.
+    rejects([&] { decodeForUntrusted(invalidUntrustedWire); });
+    require(decodeForUntrusted(encode({Kind::Text, "tenant/private"}))
+            == Key{Kind::Text, "tenant/private"});
     rejects([&] { encode({Kind::Process, ""}); });
     rejects([&] { encode({Kind::Process, "\x1b"}); });
     rejects([&] { encode({Kind::Process, "\xc3\xa9"}); }); // NFC not yet available
