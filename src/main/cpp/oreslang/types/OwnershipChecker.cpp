@@ -456,6 +456,41 @@ void validate_i64_ownership(const Program& program) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.new_class) {
+                // Syntactically pure constructor operands may still read an
+                // experimental owned-int region. Require plain stack i64
+                // expressions before any record field is initialized.
+                std::function<void(const Expression&)> scalar_operand;
+                scalar_operand = [&](const Expression& expr) {
+                    switch (expr.kind) {
+                        case Expression::Kind::Integer:
+                            return;
+                        case Expression::Kind::Variable: {
+                            auto it = locals.find(expr.name);
+                            if (it == locals.end() || it->second.heap_owned ||
+                                    it->second.int_array ||
+                                    !it->second.class_name.empty()) {
+                                reject(expr,
+                                    "native scalar constructor arguments require plain stack i64 values");
+                            }
+                            check_value(expr, locals, functions);
+                            return;
+                        }
+                        case Expression::Kind::Negate:
+                            scalar_operand(*expr.left);
+                            return;
+                        case Expression::Kind::Add:
+                        case Expression::Kind::Subtract:
+                        case Expression::Kind::Multiply:
+                            scalar_operand(*expr.left);
+                            scalar_operand(*expr.right);
+                            return;
+                        default:
+                            reject(expr,
+                                "native scalar constructor argument requires pure integer expression");
+                    }
+                };
+                for (const auto& argument : binding.constructor_arguments)
+                    scalar_operand(*argument);
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
