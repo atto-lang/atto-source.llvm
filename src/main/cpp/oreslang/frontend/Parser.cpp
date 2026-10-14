@@ -609,6 +609,8 @@ private:
             require("over");
             bool seen_ok = false, seen_err = false;
             for (int n = 0; n < 2; ++n) {
+                if (token_.text == "end")
+                    fail("non-exhaustive native Result match: requires Ok and Err arms");
                 require("on");
                 const bool is_ok = accept("Ok");
                 if (!is_ok && !accept("Err"))
