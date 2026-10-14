@@ -52,7 +52,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial"
+        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -93,6 +93,20 @@ public:
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+            // Keep 'critical-read' / 'critical-write' as ordinary
+            // IDENT '-' IDENT tokens. The parser recognizes them *only*
+            // in callable modifier positions: arbitrary expressions must
+            // never lose subtraction because of declaration syntax.
+            // Existing nb-select recognition is intentionally unchanged
+            // until native select lowering supports that grammar.
+            const auto first = source_.substr(start, at_ - start);
+            if (first == "nb" && source_.substr(at_, 7) == "-select") {
+                const auto end = at_ + 7;
+                if (end == source_.size() ||
+                        (source_[end] != '-' && !identifier_part(source_[end]))) {
+                    at_ = end;
+                }
+            }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
         if (digit(ch)) {
@@ -107,7 +121,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -157,57 +171,74 @@ class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
                     bool experimental_rt_scalar_loop)
-        : lexer_(source), token_(lexer_.next()),
+        : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        // 'define' is optional for supported named declarations. Legacy
-        // 'pub define' remains accepted; 'define pub' is canonical.
+        // The native subset preserves its closed-world wrapper constraints.
+        // A source modifier before or after 'define' is equivalent, but
+        // conflicting/duplicate visibility is always an error.
         while (token_.kind != Kind::End &&
                 !(wrapped_module && token_.text == "end")) {
-            const bool leading_pub = accept("pub");
-            const bool leading_private = accept("private");
+            const bool before_pub = accept("pub");
+            const bool before_private = accept("private");
             const bool defined = accept("define");
-            const bool after_define_pub = defined && accept("pub");
-            const bool after_define_private = defined && accept("private");
-            if ((leading_pub && after_define_pub) ||
-                    (leading_pub || after_define_pub) &&
-                    (leading_private || after_define_private) ||
-                    (leading_private && after_define_private))
+            const bool after_pub = defined && accept("pub");
+            const bool after_private = defined && accept("private");
+            const int vis_count = int(before_pub) + int(before_private)
+                + int(after_pub) + int(after_private);
+            if (vis_count > 1)
                 fail("duplicate/conflicting visibility modifier");
-            const bool exported = leading_pub || after_define_pub;
+            const bool exported = before_pub || after_pub;
+
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
-                if (wrapped_module || !program.classes.empty() ||
-                        !program.actors.empty() || !program.functions.empty())
-                    fail("native module must be the outer source declaration");
-                if (exported || leading_private || after_define_private)
-                    fail("native module visibility requires an exported-module ABI");
+                if (!defined || wrapped_module || !program.module.empty() ||
+                        !program.classes.empty() || !program.actors.empty() ||
+                        !program.functions.empty() || !program.cooperative_loops.empty())
+                    fail("native module must be the sole outer source declaration with 'define'");
+                if (exported)
+                    fail("native public module export requires checked module-level ABI lowering");
+                // Explicit private and omitted visibility are identical here.
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
             } else if (accept("class")) {
+                if (token_.text == "pub" || token_.text == "private")
+                    fail("class visibility must appear before 'class'");
                 ClassDecl klass = class_declaration();
                 klass.exported = exported;
                 program.classes.push_back(std::move(klass));
             } else if (accept("actor")) {
-                ActorDecl actor = actor_declaration();
-                program.actors.push_back(std::move(actor));
+                if (exported)
+                    fail("native public actor export requires checked actor ABI lowering");
+                program.actors.push_back(actor_declaration());
+            } else if (accept_transform_pipe_modifier()) {
+                require("actor");
+                fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+            } else if (token_.text == "suspend" && !defined && !before_private && !exported) {
+                program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
                 if (defined) fail("expected module, class or actor after 'define'");
-                // Explicit 'private fnc' is equivalent to the private default.
                 program.functions.push_back(function(exported));
             }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty()) fail("expected at least one function or actor");
+        if (program.functions.empty() && program.actors.empty() &&
+                program.cooperative_loops.empty())
+            fail("expected at least one function or actor");
+        if (!program.cooperative_loops.empty() &&
+                (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
+                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+            fail("first AOT continuation slice requires exactly one standalone suspend function");
+        }
         validate(program);
         return program;
     }
@@ -252,7 +283,16 @@ private:
         if (token_.text == "suspend" || token_.text == "suspends") {
             fail("native suspends actor method requires continuation lowering");
         }
+        // Actor method modifiers have their own admission boundary. Do not
+        // allow the fixed-int actor subset to parse these as method names or
+        // quietly route a read declaration through the legacy write lane.
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         if (!accept("fnc")) accept("method"); // optional method marker
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
@@ -296,11 +336,14 @@ private:
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             ClassField field;
-            field.exported = accept("pub");
-            if (accept("private") && field.exported)
+            const bool public_modifier = accept("pub");
+            const bool private_modifier = accept("private");
+            if (public_modifier && private_modifier)
                 fail("duplicate/conflicting visibility modifier on class field");
-            require("let");
-            if (accept("mut")) {
+            field.exported = public_modifier;
+            const bool legacy_let = accept("let");
+            if (!legacy_let) field.final_field = accept("final");
+            if (legacy_let && accept("mut")) {
                 require("Array");
                 require("<");
                 require("int");
@@ -309,30 +352,46 @@ private:
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 require("new");
                 require("Array");
                 require("<");
                 require("int");
                 require(">");
                 require("(");
+                const std::size_t initializer_end = token_.offset + token_.text.size();
                 require(")");
+                class_field_terminator(initializer_end);
             } else {
                 require("int");
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
-                require("=");
+                if (!accept(":")) require("=");
                 if (token_.kind != Kind::Integer)
                     fail("class field requires i64 literal initializer");
+                const std::size_t initializer_end = token_.offset + token_.text.size();
                 field.initial = integer_literal();
+                class_field_terminator(initializer_end);
             }
-            require(";");
             result.fields.push_back(std::move(field));
         }
         if (result.fields.empty()) fail("native class requires at least one field");
         require("end");
         return result;
+    }
+
+    void class_field_terminator(std::size_t initializer_end) {
+        if (accept(";")) return;
+        if (token_.kind == Kind::End || token_.offset < initializer_end)
+            fail("class field requires ';' or a line break");
+        // Unlike expression statements, native class fields may omit ';'
+        // only at a real lexical line boundary. A same-line next member is
+        // never silently admitted by whitespace or comments alone.
+        const auto gap = source_.substr(initializer_end, token_.offset - initializer_end);
+        if (gap.find('\n') == std::string_view::npos &&
+                gap.find('\r') == std::string_view::npos)
+            fail("class field requires ';' or a line break");
     }
 
     std::int64_t integer_literal() {
@@ -347,6 +406,41 @@ private:
             fail("integer literal overflows signed 64-bit result");
         advance();
         return value;
+    }
+
+    CooperativeScalarLoop cooperative_scalar_loop() {
+        // Explicitly narrow syntax avoids accidentally accepting unpinned
+        // loans, exception cleanup, arbitrary calls or nonresumable CFG.
+        CooperativeScalarLoop loop;
+        loop.offset = token_.offset;
+        require("suspend");
+        if (token_.text != "fnc") {
+            fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+        }
+        require("fnc");
+        loop.name = identifier();
+        require("("); require(")");
+        require(":"); require("void");
+        require("{");
+        require("val");
+        loop.variable = identifier();
+        require(":"); require("int"); require("=");
+        loop.initial = integer_literal();
+        require(";");
+        require("while"); require("("); require("true"); require(")");
+        require("{");
+        if (identifier() != loop.variable)
+            fail("AOT continuation requires assignment to its sole frame-owned scalar");
+        require("=");
+        if (identifier() != loop.variable)
+            fail("AOT continuation update must read its frame-owned scalar");
+        require("+");
+        if (integer_literal() != 1)
+            fail("first AOT continuation supports only increment by one");
+        require(";");
+        require("}");
+        require("}");
+        return loop;
     }
 
     Function function(bool preexported = false) {
@@ -366,6 +460,11 @@ private:
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
+        // Check compound READ/WRITE modes before handling legacy critical,
+        // otherwise declaration parsing could report WRITE-only semantics.
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         if (token_.text == "critical") {
             fail("native critical declaration requires compiler lowering and scheduler-owned logical critical tickets");
         }
@@ -374,6 +473,9 @@ private:
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
         if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+        if (at_unsupported_critical_mode()) {
+            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
         value.name = identifier();
         require("(");
         if (!accept(")")) {
@@ -951,7 +1053,16 @@ private:
 
     std::unique_ptr<Expression> product() {
         auto left = unary();
-        while (token_.text == "*") {
+        while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
+            // Java defines int/int division as a FLOAT result; this native
+            // source compiler lowers expressions only to signed i64. Reject
+            // at the operator before either lowering or emitting partial IR.
+            if (token_.text == "/")
+                fail("native floating division unsupported: int/int yields float in Java; "
+                     "LLVM float typing and zero-divisor semantics are not implemented");
+            if (token_.text == "%")
+                fail("native integer remainder unsupported: zero-divisor and overflow contracts "
+                     "are not implemented");
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::Multiply, offset);
@@ -1033,8 +1144,22 @@ private:
         expr->name = identifier();
         if (accept("(")) {
             expr->kind = Expression::Kind::Call;
+            bool named_seen = false;
+            std::unordered_set<std::string> labels;
             if (!accept(")")) {
                 do {
+                    if (named_argument_ahead()) {
+                        std::string label = identifier();
+                        require(":");
+                        if (!labels.insert(label).second) {
+                            fail("duplicate named argument '" + label + "'");
+                        }
+                        named_seen = true;
+                        expr->argument_names.push_back(std::move(label));
+                    } else {
+                        if (named_seen) fail("positional argument cannot follow named argument");
+                        expr->argument_names.emplace_back();
+                    }
                     expr->arguments.push_back(expression());
                 } while (accept(","));
                 require(")");
@@ -1052,6 +1177,9 @@ private:
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
+                        if (named_argument_ahead()) {
+                            fail("native array method arguments have no named parameter contract");
+                        }
                         field->arguments.push_back(expression());
                     } while (accept(","));
                     require(")");
@@ -1063,8 +1191,42 @@ private:
         return expr;
     }
 
+    bool named_argument_ahead() const {
+        if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
+        Lexer lookahead = lexer_;
+        return lookahead.next().text == ":";
+    }
+
     bool accept(std::string_view text) {
         if (token_.text != text) return false;
+        advance();
+        return true;
+    }
+
+    // Consult a copy of the scanner rather than merging arithmetic tokens.
+    // The original scanner position and error offset remain unchanged.
+    bool at_unsupported_critical_mode() const {
+        if (token_.text != "critical") return false;
+        Lexer probe = lexer_;
+        const Token dash = probe.next();
+        if (dash.text != "-" || dash.offset != token_.offset + token_.text.size())
+            return false;
+        const Token mode = probe.next();
+        return (mode.text == "read" || mode.text == "write")
+            && mode.offset == dash.offset + 1;
+    }
+
+    // Parse the role only after 'define'. A plain transform-pipe expression
+    // must still lex as identifier, minus, identifier.
+    bool accept_transform_pipe_modifier() {
+        if (token_.text != "transform") return false;
+        const auto start = token_.offset;
+        advance();
+        if (token_.text != "-" || token_.offset != start + 9)
+            fail("expected contiguous transform-pipe actor modifier");
+        advance();
+        if (token_.text != "pipe" || token_.offset != start + 10)
+            fail("expected contiguous transform-pipe actor modifier");
         advance();
         return true;
     }
@@ -1095,7 +1257,7 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::unordered_set<std::size_t>>& functions) {
+                                    const std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>>& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1114,13 +1276,41 @@ private:
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
-                if (found == functions.end() || found->second.count(expr.arguments.size()) == 0) {
+                if (found == functions.end() ||
+                    found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
                                              + expr.name + "' at byte "
                                              + std::to_string(expr.offset));
                 }
-                for (const auto& arg : expr.arguments) {
-                    validate_expression(*arg, parameters, functions);
+                if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
+                    throw std::runtime_error("invalid named call argument layout");
+                const auto& formals = found->second.at(expr.arguments.size());
+                std::vector<bool> bound(formals.size(), false);
+                bool saw_named = false;
+                std::size_t positional = 0;
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const std::string label = expr.argument_names.empty()
+                        ? std::string{} : expr.argument_names[i];
+                    std::size_t slot = positional;
+                    if (!label.empty()) {
+                        saw_named = true;
+                        auto it = std::find(formals.begin(), formals.end(), label);
+                        if (it == formals.end())
+                            throw std::runtime_error("unknown named argument '" + label
+                                                     + "' for " + expr.name);
+                        slot = static_cast<std::size_t>(it - formals.begin());
+                    } else {
+                        if (saw_named)
+                            throw std::runtime_error("positional argument after named argument");
+                        ++positional;
+                    }
+                    if (slot >= formals.size() || bound[slot])
+                        throw std::runtime_error("duplicate binding of parameter '"
+                                                 + formals[slot] + "'");
+                    bound[slot] = true;
+                    // Check nested calls in lexical order, not formal-slot order.
+                    validate_expression(*expr.arguments[i], parameters, functions);
                 }
                 return;
             }
@@ -1206,7 +1396,7 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
-        std::unordered_map<std::string, std::unordered_set<std::size_t>> functions;
+        std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
             // Compiler-owned ABI imports and generated exports may be
@@ -1238,7 +1428,9 @@ private:
             // Parameter types, borrow modes and returns cannot select a slot.
             if (fn.name == "main" && functions.count("main"))
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
-            if (!functions[fn.name].insert(fn.parameters.size()).second)
+            std::vector<std::string> labels;
+            for (const auto& param : fn.parameters) labels.push_back(param.name);
+            if (!functions[fn.name].emplace(fn.parameters.size(), std::move(labels)).second)
                 throw std::runtime_error("function '" + fn.name + "' already has arity "
                     + std::to_string(fn.parameters.size()) +
                     "; parameter and return types do not select overloads at byte " +
@@ -1414,8 +1606,9 @@ private:
         // Syntactic admission is a safety boundary: rejecting actor/channel
         // keywords also means no unverified borrowed reference can enter a
         // suspended/native execution frame or deferred callback.
-        if (token_.text == "select" || token_.text == "readch" ||
-            token_.text == "writech" || token_.text == "nb" ||
+        if (token_.text == "select" || token_.text == "nb-select" ||
+            token_.text == "readch" || token_.text == "writech" ||
+            token_.text == "nb" ||
             token_.text == "do" || token_.text == "await" ||
             token_.text == "yield" || token_.text == "cooperate") {
             throw std::runtime_error(
@@ -1426,6 +1619,7 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::string_view source_;
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;

@@ -20,6 +20,7 @@ struct Expression {
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
+    std::vector<std::string> argument_names; // indexed in lexical source order
 };
 
 struct Parameter {
@@ -46,11 +47,12 @@ struct LocalBinding {
 };
 
 struct ClassField {
-    // Private by default. Export state only when a source 'pub' modifier exists.
+    // Visibility is explicit: an unmarked class slot stays private.
     bool exported = false;
     std::string name;
     std::int64_t initial = 0;
     bool int_array = false; // owned opaque handle; never exposed as an int
+    bool final_field = false; // fixed field slot: writes rejected by ownership checker
 };
 
 struct ClassDecl {
@@ -167,7 +169,18 @@ struct ActorDecl {
     std::size_t offset = 0;
 };
 
+// First AOT-only resumable source slice. No owned borrows, calls, FFI,
+// lexical cleanup or actor scheduler integration is admitted yet.
+// The host supplies a zeroed, single-owner two-i64 continuation frame.
+struct CooperativeScalarLoop {
+    std::string name;
+    std::string variable;
+    std::int64_t initial = 0;
+    std::size_t offset = 0;
+};
+
 struct Program {
+    std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;

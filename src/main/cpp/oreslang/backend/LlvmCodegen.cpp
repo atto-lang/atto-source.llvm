@@ -214,11 +214,51 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
-            std::vector<llvm::Value*> arguments;
-            for (const auto& arg : expr.arguments)
-                arguments.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
-            return builder.CreateCall(callee, arguments,
+            if (callee->arg_size() != expr.arguments.size()) {
+                throw std::runtime_error("native named call argument count mismatch");
+            }
+            if (!expr.argument_names.empty()
+                    && expr.argument_names.size() != expr.arguments.size()) {
+                throw std::runtime_error("invalid native call label layout");
+            }
+            std::vector<llvm::Value*> ordered(expr.arguments.size(), nullptr);
+            std::vector<bool> filled(expr.arguments.size(), false);
+            std::size_t positional = 0;
+            bool named_seen = false;
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                const std::string label = expr.argument_names.empty()
+                        ? std::string{} : expr.argument_names[i];
+                std::size_t target;
+                if (!label.empty()) {
+                    named_seen = true;
+                    target = 0;
+                    bool matched = false;
+                    for (const auto& formal : callee->args()) {
+                        if (formal.getName().str() == label) {
+                            matched = true;
+                            break;
+                        }
+                        ++target;
+                    }
+                    if (!matched) {
+                        throw std::runtime_error("unknown native named argument '" + label + "'");
+                    }
+                } else {
+                    if (named_seen) {
+                        throw std::runtime_error("native positional argument after named argument");
+                    }
+                    target = positional++;
+                }
+                if (target >= ordered.size() || filled[target]) {
+                    throw std::runtime_error("duplicate native named call binding");
+                }
+                filled[target] = true;
+                // Emit instructions in source order, not in formal-slot order.
+                ordered[target] = lower(*expr.arguments[i], builder, i64,
+                                        storage, field_storage, functions, moves);
+            }
+            return builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
         }
     }
@@ -448,14 +488,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
-        // The guest linker ABI is explicitly public only when declared 'pub'.
-        // Internal helper callables remain reachable by same-module calls,
-        // but must not be exported as externally linkable symbols.
-        const auto linkage = fn.exported
-            ? llvm::Function::ExternalLinkage
-            : llvm::Function::InternalLinkage;
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
-            llvm::Function::Create(signature, linkage, symbol, module));
+        // This native subset cannot yet export named modules (there is no
+        // checked public-module ABI). A public-looking function inside the
+        // private source module must remain internal at the LLVM boundary.
+        const auto linkage = fn.exported && source.module.empty()
+                ? llvm::Function::ExternalLinkage
+                : llvm::Function::InternalLinkage;
+        llvm::Function* declaration = llvm::Function::Create(
+            signature, linkage, symbol, module);
+        // Forward references must already expose parameter labels.
+        std::size_t label_index = 0;
+        for (auto& formal : declaration->args())
+            formal.setName(fn.parameters[label_index++].name);
+        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
@@ -1119,6 +1164,108 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
     }
 
+
+    // First compiler-generated heap continuation: exactly one frame-owned
+    // scalar updated at a committed loop backedge. There is no actor or
+    // scheduler admission here. The host owns the frame and must dispatch
+    // on a single carrier with a strictly bounded fuel allowance.
+    for (const auto& loop : source.cooperative_loops) {
+        if (wasm32_target)
+            throw std::runtime_error("wasm32 resumable source loop is unsupported");
+        auto* i32 = llvm::Type::getInt32Ty(context);
+        const std::string prefix = "oreslang_rt_" + loop.name + "_";
+        auto* frame_type = loan_ptr;
+        auto* initialize = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {frame_type}, false),
+            llvm::Function::ExternalLinkage, prefix + "init", module);
+        auto* resume = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {frame_type, i64}, false),
+            llvm::Function::ExternalLinkage, prefix + "resume", module);
+        auto* cancel = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {frame_type}, false),
+            llvm::Function::ExternalLinkage, prefix + "cancel", module);
+        auto* zero = llvm::ConstantInt::get(i64, 0);
+        auto* one = llvm::ConstantInt::get(i64, 1);
+        auto* two = llvm::ConstantInt::get(i64, 2);
+        auto* max_fuel = llvm::ConstantInt::get(i64, 512);
+        auto* init_value = llvm::ConstantInt::getSigned(i64, loop.initial);
+
+        // INIT: only an uninitialized (zero-tagged) frame can be published.
+        // Reinitializing a cancelled or active frame would resurrect work.
+        {
+            auto* entry = llvm::BasicBlock::Create(context, "entry", initialize);
+            auto* publish = llvm::BasicBlock::Create(context, "publish", initialize);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", initialize);
+            llvm::IRBuilder<> b(entry);
+            auto* frame = initialize->getArg(0);
+            auto* tag = b.CreateLoad(i64, frame, "state");
+            auto* fresh = b.CreateICmpEQ(tag, zero);
+            b.CreateCondBr(fresh, publish, invalid);
+            b.SetInsertPoint(publish);
+            auto* counter = b.CreateInBoundsGEP(i64, frame, one);
+            b.CreateStore(init_value, counter);
+            b.CreateStore(one, frame);
+            b.CreateRet(llvm::ConstantInt::get(i32, 1));
+            b.SetInsertPoint(invalid);
+            b.CreateRet(llvm::ConstantInt::get(i32, 0));
+        }
+        // RESUME: cap the number of guest iterations independently of
+        // untrusted host fuel; report YIELD only after a committed update.
+        {
+            auto* entry = llvm::BasicBlock::Create(context, "entry", resume);
+            auto* body = llvm::BasicBlock::Create(context, "body", resume);
+            auto* iteration = llvm::BasicBlock::Create(context, "iteration", resume);
+            auto* handoff = llvm::BasicBlock::Create(context, "handoff", resume);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", resume);
+            llvm::IRBuilder<> b(entry);
+            auto* frame = resume->getArg(0);
+            auto* fuel = resume->getArg(1);
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* active = b.CreateICmpEQ(state, one);
+            auto* valid_fuel = b.CreateICmpSGT(fuel, zero);
+            b.CreateCondBr(b.CreateAnd(active, valid_fuel), body, invalid);
+            b.SetInsertPoint(body);
+            auto* bounded = b.CreateSelect(b.CreateICmpUGT(fuel, max_fuel),
+                                            max_fuel, fuel, "bounded.fuel");
+            b.CreateBr(iteration);
+            b.SetInsertPoint(iteration);
+            auto* remaining = b.CreatePHI(i64, 2, "remaining");
+            remaining->addIncoming(bounded, body);
+            auto* counter = b.CreateInBoundsGEP(i64, frame, one);
+            auto* current = b.CreateLoad(i64, counter, "committed.counter");
+            // Match the existing native i64 arithmetic: LLVM add without
+            // 'nsw' or 'nuw' wraps modulo 2^64. Do not silently introduce
+            // saturation into the resumable form of the same expression.
+            // A guest-visible update is committed before the next yield.
+            auto* next = b.CreateAdd(current, one, "next.counter");
+            b.CreateStore(next, counter);
+            auto* left = b.CreateSub(remaining, one);
+            auto* expired = b.CreateICmpEQ(left, zero);
+            b.CreateCondBr(expired, handoff, iteration);
+            remaining->addIncoming(left, iteration);
+            b.SetInsertPoint(handoff);
+            b.CreateRet(llvm::ConstantInt::get(i32, 1)); // yielded
+            b.SetInsertPoint(invalid);
+            b.CreateRet(llvm::ConstantInt::getSigned(i32, -1));
+        }
+        // Cancellation is a trusted owner-turn action. Never interrupt
+        // an in-flight native stack or revive a previously cancelled frame.
+        {
+            auto* entry = llvm::BasicBlock::Create(context, "entry", cancel);
+            auto* retired = llvm::BasicBlock::Create(context, "retired", cancel);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", cancel);
+            llvm::IRBuilder<> b(entry);
+            auto* frame = cancel->getArg(0);
+            b.CreateCondBr(b.CreateICmpEQ(b.CreateLoad(i64, frame), one),
+                           retired, invalid);
+            b.SetInsertPoint(retired);
+            b.CreateStore(two, frame);
+            b.CreateStore(zero, b.CreateInBoundsGEP(i64, frame, one));
+            b.CreateRet(llvm::ConstantInt::get(i32, 1));
+            b.SetInsertPoint(invalid);
+            b.CreateRet(llvm::ConstantInt::get(i32, 0));
+        }
+    }
 
     // Native source actors execute only on OresVM scheduler turns. The
     // portable guest below uses an independent, no-import single-actor ABI.

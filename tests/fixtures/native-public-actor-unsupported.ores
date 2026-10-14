@@ -1,0 +1,6 @@
+pub define actor Worker as
+  let count: int = 0;
+  pub on_message(int value): int {
+    return value;
+  }
+end

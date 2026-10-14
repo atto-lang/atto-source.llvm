@@ -1,0 +1,4 @@
+define actor Counter as {
+  const item: owned Widget = new Widget();
+  pub fnc on_message(int message): int { return 1; }
+}
