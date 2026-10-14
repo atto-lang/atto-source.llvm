@@ -268,6 +268,14 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
+    // The scalar code generator must never see an AST that still carries
+    // unresolved nominal Result obligations. The parser moves those nodes
+    // into the dedicated checked tables before this lowering entrypoint.
+    for (const auto& fn : source.functions) {
+        if (fn.closed_array_result || fn.closed_result_match)
+            throw std::runtime_error(
+                "unlowered nominal Result reached scalar LLVM function codegen");
+    }
     if (wasm32_target && (!source.closed_array_results.empty()
             || !source.closed_result_matches.empty()))
         throw std::runtime_error(
@@ -1497,6 +1505,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     || !consumer.proved_err_arm)
                 throw std::runtime_error(
                     "closed Result match lacks proof of single consumption and exhaustive arms");
+            if (consumer.local.empty() || consumer.name.empty()
+                    || consumer.producer.empty() || consumer.local == consumer.producer)
+                throw std::runtime_error(
+                    "closed Result match has invalid owner/producer identity");
             if (consumer.exported || !producer_names.count(consumer.producer))
                 throw std::runtime_error(
                     "closed Result match has unverified export or producer");
