@@ -307,9 +307,41 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             throw std::runtime_error("unverified typed bool native result lowering");
     }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
-        if (wasm32_target || !source.classes.empty() || !source.actors.empty())
-            throw std::runtime_error("experimental scalar loop unsupported target/owners");
-        return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
+        const Function& fn = source.functions.front();
+        const ScalarWhileLoop& loop = *fn.scalar_while;
+        // This special emitter returns before generic function emission.
+        // Validate the COMPLETE source function, not just loop bounds:
+        // otherwise a synthetic AST can hide effects, ownership operations
+        // or an unrelated return behind a seemingly harmless loop.
+        if (wasm32_target || !source.classes.empty() || !source.actors.empty() ||
+                !source.cooperative_loops.empty() || !source.module.empty() ||
+                fn.returns_void || fn.returns_bool || !fn.parameters.empty() ||
+                fn.locals.size() != 1 || !fn.statements.empty() ||
+                !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
+                !fn.catch_binding.empty() || fn.has_declared_effects ||
+                fn.declared_effects.bits != 0 || !fn.result ||
+                fn.result->kind != Expression::Kind::Variable ||
+                fn.result->name != loop.counter || fn.result->left ||
+                fn.result->right || !fn.result->arguments.empty() ||
+                !fn.result->argument_names.empty())
+            throw std::runtime_error("unverified native scalar-loop AST fast path");
+        const LocalBinding& local = fn.locals.front();
+        if (local.name != loop.counter || !local.owner_mutable ||
+                local.heap_owned || local.int_array || local.new_class ||
+                local.move_class || local.field_mutable ||
+                !local.class_name.empty() || !local.move_source.empty() ||
+                !local.initializer ||
+                local.initializer->kind != Expression::Kind::Integer ||
+                local.initializer->integer != loop.initial ||
+                !local.initializer->name.empty() || local.initializer->left ||
+                local.initializer->right ||
+                !local.initializer->arguments.empty() ||
+                !local.initializer->argument_names.empty())
+            throw std::runtime_error("unverified native scalar-loop local owner");
+        return emit_scalar_while_frame_llvm_ir(loop);
     }
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
