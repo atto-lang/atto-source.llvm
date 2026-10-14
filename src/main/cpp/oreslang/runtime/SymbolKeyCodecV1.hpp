@@ -13,6 +13,14 @@
 #include <utility>
 #include <vector>
 
+#ifdef ORES_SYMBOL_V1_ICU_NFC
+#include <unicode/uchar.h>
+#include <unicode/unorm2.h>
+#include <unicode/ustring.h>
+#include <unicode/utf16.h>
+#include <unicode/uversion.h>
+#endif
+
 namespace oreslang::runtime::symbol_key_v1 {
 
 enum class Kind : std::uint8_t { Text = 0, Process = 1, Stable = 2 };
@@ -76,6 +84,62 @@ inline bool canonicalUuid(std::string_view text) noexcept {
     return true;
 }
 
+// A pinned Unicode 16.0 data version matches the intended Java 25 Symbol
+// target. Do not silently accept code points with a different ICU table
+// version. When ICU is unavailable, the codec remains ASCII-only.
+inline void validateSymbolUnicode(std::string_view name) {
+    if (name.empty() || name.size() > kSymbolBytes || !validUtf8(name))
+        throw std::invalid_argument("Symbol requires 1..256 valid UTF-8 bytes");
+#ifdef ORES_SYMBOL_V1_ICU_NFC
+    UVersionInfo version{};
+    u_getUnicodeVersion(version);
+    if (version[0] != 16 || version[1] != 0)
+        throw std::invalid_argument(
+            "native Symbol NFC requires pinned Unicode 16.0 data tables");
+
+    UErrorCode status = U_ZERO_ERROR;
+    const UNormalizer2* nfc = unorm2_getNFCInstance(&status);
+    if (U_FAILURE(status) || nfc == nullptr)
+        throw std::runtime_error("native Unicode NFC normalizer unavailable");
+
+    // UTF-16 units <= UTF-8 bytes for valid Unicode. No unbounded ICU
+    // conversions or caller-owned output buffers at this boundary.
+    std::vector<UChar> utf16(name.size() + 1);
+    int32_t length = 0;
+    status = U_ZERO_ERROR;
+    u_strFromUTF8(utf16.data(), static_cast<int32_t>(utf16.size()),
+                  &length, name.data(), static_cast<int32_t>(name.size()),
+                  &status);
+    if (U_FAILURE(status) || length < 0)
+        throw std::invalid_argument("invalid Symbol UTF-8 sequence");
+
+    status = U_ZERO_ERROR;
+    const UBool isNfc = unorm2_isNormalized(
+            nfc, utf16.data(), length, &status);
+    if (U_FAILURE(status) || !isNfc)
+        throw std::invalid_argument("noncanonical NFC Symbol wire name");
+
+    for (int32_t index = 0; index < length;) {
+        UChar32 cp = 0;
+        U16_NEXT(utf16.data(), index, length, cp);
+        if (cp < 0 || cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)
+                || u_charType(cp) == U_FORMAT_CHAR
+                || cp == 0x061c || cp == 0x200e || cp == 0x200f
+                || (cp >= 0x202a && cp <= 0x202e)
+                || (cp >= 0x2066 && cp <= 0x2069)) {
+            throw std::invalid_argument(
+                "control, formatting or bidi character in Symbol");
+        }
+    }
+#else
+    for (unsigned char cp : name) {
+        if (cp < 0x20u || cp > 0x7eu)
+            throw std::invalid_argument(
+                "non-ASCII Symbol requires pinned ICU NFC tables");
+    }
+#endif
+}
+
 inline void validate(const Key& key) {
     switch (key.kind) {
         case Kind::Text:
@@ -84,13 +148,7 @@ inline void validate(const Key& key) {
             return;
         case Kind::Process:
         case Kind::Stable:
-            if (key.name.empty() || key.name.size() > kSymbolBytes)
-                throw std::invalid_argument("Symbol name exceeds 1..256 byte budget");
-            // TODO: replace ASCII-only gate with pinned Unicode NFC tables.
-            for (unsigned char c : key.name) {
-                if (c < 0x20u || c > 0x7eu)
-                    throw std::invalid_argument("non-ASCII Symbol needs NFC verification");
-            }
+            validateSymbolUnicode(key.name);
             if (key.kind == Kind::Stable && !canonicalUuid(key.name))
                 throw std::invalid_argument("stable Symbol requires canonical lowercase UUID");
             return;
