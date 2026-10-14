@@ -51,3 +51,13 @@ implements `ActorApiError`. That validator was inconsistent with the source
 manifest and would fail the C++ static assertion before tests ran. The
 validator now permits abstract interface implementers and checks inherited
 interface membership separately, including a compile-time assertion.
+
+## Audit verifier expansion
+
+`native_core_error_catalog_manifest_sync` now parses the *active*
+`std::array` initializer instead of collecting matching rows anywhere in the
+header. Missing, commented-out, duplicate, malformed, reordered or altered
+rows fail closed, and invalid manifest parents/codes/interfaces are rejected.
+`native_core_error_catalog_manifest_adversarial` exercises these negative
+cases. The actual C++ host test remains separate; a manifest check is not
+evidence that the compiler or guest runtime executes native errors.
