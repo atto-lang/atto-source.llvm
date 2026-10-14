@@ -26,6 +26,25 @@ int main() {
     require(decodeDistinct({encode({Kind::Text, "ready"}),
                            encode({Kind::Process, "ready"})}).size() == 2);
     rejects([&] { decodeDistinct({process, process}); });
+    require(decodeForUntrusted(encode({Kind::Text, "#private"}))
+            == Key{Kind::Text, "#private"});
+    require(decodeForUntrusted(encode({Kind::Process, "ready"}))
+            == Key{Kind::Process, "ready"});
+    require(decodeForUntrusted(encode({Kind::Process, "error"}))
+            == Key{Kind::Process, "error"});
+    require(decodeForUntrusted(encode({Kind::Process, "Symbol.iterator"}))
+            == Key{Kind::Process, "Symbol.iterator"});
+    rejects([&] { decodeForUntrusted(encode({Kind::Process, "tenant/private"})); });
+    rejects([&] { decodeForUntrusted(encode({Kind::Stable, uuid})); });
+    require(decodeDistinctForUntrusted({
+            encode({Kind::Text, "ready"}),
+            encode({Kind::Process, "ready"})}).size() == 2);
+    rejects([&] { decodeDistinctForUntrusted({
+            encode({Kind::Text, "ready"}),
+            encode({Kind::Process, "tenant/private"})}); });
+    rejects([&] { decodeDistinctForUntrusted({
+            encode({Kind::Text, "x"}), encode({Kind::Text, "x"})}); });
+    rejects([&] { encode({static_cast<Kind>(0xff), "arbitrary"}); });
     rejects([&] { encode({Kind::Process, ""}); });
     rejects([&] { encode({Kind::Process, "\x1b"}); });
     rejects([&] { encode({Kind::Process, "\xc3\xa9"}); }); // NFC not yet available
