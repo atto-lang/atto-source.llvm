@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Verify AI smoke admission unit tests
+        run: python3 scripts/test_ai_conformance_smoke.py
       - name: Prepare Python schema validator
         run: python3 -m pip install --break-system-packages 'jsonschema>=4.20,<5'
       - name: Verify conformance runner failure handling
