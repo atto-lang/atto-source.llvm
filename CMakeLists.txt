@@ -985,6 +985,14 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_ownership_boundary_matrix.py"
             "$<TARGET_FILE:oreslang-llvmc>")
+    # Source-level witness for the abstract shared-loan/refinement contract:
+    # disallowed overlaps emit no IR; legal shared/sequential loans emit IR.
+    add_test(NAME native_borrow_admission_formal_refinement
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_admission.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_borrow_admission_formal_refinement
+        PROPERTIES TIMEOUT 60)
     # LLVM has no native I/O binding registry or continuation lowering yet.
     # Both spellings must fail closed with no IR until implementation lands.
     oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
