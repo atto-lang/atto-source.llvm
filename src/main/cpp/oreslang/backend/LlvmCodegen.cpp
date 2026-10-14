@@ -350,6 +350,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             if (field.name.empty() || !fields.insert(field.name).second)
                 throw std::runtime_error("duplicate or unnamed native actor field");
     }
+    // The source parser guarantees one binding per lexical slot, but this
+    // public backend accepts constructed Programs too. Ignore no duplicate:
+    // storage.emplace and actorRefs.emplace otherwise retain an earlier
+    // address/ActorRef, potentially using an unintended owner or capability.
+    for (const auto& fn : source.functions) {
+        std::unordered_set<std::string> bindings;
+        for (const auto& param : fn.parameters)
+            if (param.name.empty() || !bindings.insert(param.name).second)
+                throw std::runtime_error("duplicate or unnamed native function binding");
+        for (const auto& local : fn.locals)
+            if (local.name.empty() || !bindings.insert(local.name).second)
+                throw std::runtime_error("duplicate or unnamed native function binding");
+        for (const auto& spawn : fn.actor_spawns)
+            if (spawn.name.empty() || !bindings.insert(spawn.name).second)
+                throw std::runtime_error("duplicate or unnamed native function binding");
+    }
     // Public AST entrypoint: validate reserved linker ABI names before the
     // scalar-loop fast path can return without emitting ordinary functions.
     // Do not permit LLVM's collision renaming to change guest symbol identity.
