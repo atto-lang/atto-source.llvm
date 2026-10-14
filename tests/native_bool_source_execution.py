@@ -39,10 +39,10 @@ def main():
     if ("define i1 @BoolProbe.yes()" not in emitted or
             "define i1 @BoolProbe.no()" not in emitted):
         raise AssertionError("missing native Boolean guest exports")
-    if re.search(r"(?m)^\\s*declare\\b", emitted):
+    if re.search(r"(?m)^\s*declare\b", emitted):
         raise AssertionError("pure Boolean guest declares an external dependency")
-    if re.search(r"(?m)^\\s*(?:[%@][^=\\n]*=\\s*)?"
-                 r"(?:(?:tail|musttail|notail)\\s+)?(?:call|invoke|callbr)\\b", emitted):
+    if re.search(r"(?m)^\s*(?:[%@][^=\n]*=\s*)?"
+                 r"(?:(?:tail|musttail|notail)\s+)?(?:call|invoke|callbr)\b", emitted):
         raise AssertionError("pure Boolean guest contains an unexpected call")
 
     with tempfile.TemporaryDirectory(prefix="oreslang-bool-aot-") as d:
