@@ -38,6 +38,15 @@ fnc from_memory(): int {
         on Err(reason) -> { return 66; }
     end
 }
+
+fnc forward_consumer(): int {
+    const Result<void, ArrayError> deferred = later_producer();
+    do match deferred over
+        on Err(error) -> { return 88; }
+        on Ok() -> { return 77; }
+    end
+}
+fnc later_producer(): Result<void, ArrayError> { return Ok(); }
 """
 
 CALLER = """
@@ -46,11 +55,14 @@ entry:
   %a = call i64 @from_success()
   %b = call i64 @from_limit()
   %c = call i64 @from_memory()
+  %d = call i64 @forward_consumer()
   %a_ok = icmp eq i64 %a, 11
   %b_ok = icmp eq i64 %b, 33
   %c_ok = icmp eq i64 %c, 66
+  %d_ok = icmp eq i64 %d, 77
   %ab = and i1 %a_ok, %b_ok
-  %all = and i1 %ab, %c_ok
+  %cd = and i1 %c_ok, %d_ok
+  %all = and i1 %ab, %cd
   %code = select i1 %all, i32 0, i32 3
   ret i32 %code
 }
@@ -139,7 +151,7 @@ def main():
             raise AssertionError(
                 f"source compiler failed: {compiled.returncode} {compiled.stderr!r}")
         ir = compiled.stdout.decode("utf-8")
-        for name in ("from_success", "from_limit", "from_memory"):
+        for name in ("from_success", "from_limit", "from_memory", "forward_consumer"):
             if ("define internal i64 @" + name + "()") not in ir:
                 raise AssertionError("missing private typed Result consumer: " + name)
         for fragment in (
