@@ -40,6 +40,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-error-catalog-test)
     set_tests_properties(actor_error_catalog_host_only PROPERTIES TIMEOUT 20)
 
+    # Fail-closed native throw/raise/panic policy only, not guest effect lowering.
+    add_executable(oreslang-actor-error-effect-policy-test
+        tests/actor_error_effect_policy_test.cpp)
+    target_include_directories(oreslang-actor-error-effect-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-error-effect-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME actor_error_effect_policy_host_only
+        COMMAND oreslang-actor-error-effect-policy-test)
+    set_tests_properties(actor_error_effect_policy_host_only PROPERTIES TIMEOUT 20)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
