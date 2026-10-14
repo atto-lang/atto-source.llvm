@@ -49,15 +49,29 @@ def main() -> int:
         # Budget rejection must happen before UTF-8 or language parsing, and
         # an under-budget malformed input must still be rejected separately.
         malformed = base / "oversized-malformed.ores"
-        malformed.write_bytes(b" " * LIMIT + b"\\xff")
+        malformed.write_bytes(b" " * LIMIT + b"\xff")
         require_rejected(compiler, malformed)
 
         nul = base / "under-budget-nul.ores"
-        nul.write_bytes(b"\\x00")
+        nul.write_bytes(b"\x00")
         invalid = invoke(compiler, nul)
         if invalid.returncode == 0 or invalid.stdout or "NUL byte" not in invalid.stderr:
             raise SystemExit("FAIL: under-budget NUL was accepted or misclassified")
-    print("native source input budget: exact boundary, overflow and NUL checks passed")
+        # Under-budget malformed Unicode must fail for encoding, not just syntax.
+        for label, payload in (
+            ("overlong", bytes([0xC0, 0xAF])),
+            ("surrogate", bytes([0xED, 0xA0, 0x80])),
+            ("truncated", bytes([0xE2, 0x82])),
+            ("out-of-range", bytes([0xF4, 0x90, 0x80, 0x80])),
+        ):
+            bad = base / (label + ".ores")
+            bad.write_bytes(b"// " + payload)
+            rejected = invoke(compiler, bad)
+            if rejected.returncode == 0 or rejected.stdout:
+                raise SystemExit(f"FAIL: {label} was accepted or emitted IR")
+            if "not valid UTF-8" not in rejected.stderr:
+                raise SystemExit(f"FAIL: {label} bypassed encoding admission")
+    print("native source input budget: byte boundary, invalid UTF-8 and NUL checks passed")
     return 0
 
 
