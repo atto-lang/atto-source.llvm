@@ -1,0 +1,3 @@
+pub private fnc invalid(): int {
+  return 7;
+}
