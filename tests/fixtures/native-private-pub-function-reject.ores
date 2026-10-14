@@ -1,0 +1,3 @@
+private pub fnc accidentally_public(): int {
+  return 7;
+}
