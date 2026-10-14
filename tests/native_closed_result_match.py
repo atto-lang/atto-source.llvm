@@ -5,6 +5,7 @@ Producer and consumer use internal linkage. The handwritten IR test runner is
 appended to the SAME LLVM module; there is no claim about a public C ABI.
 """
 import argparse
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -83,6 +84,21 @@ NEGATIVE = {
     "missing-err": (
         PRODUCER + CONSUMER % "on Ok() -> { return 1; }",
         "non-exhaustive native Result match"),
+    "missing-ok": (
+        PRODUCER + CONSUMER % "on Err(problem) -> { return 2; }",
+        "non-exhaustive native Result match"),
+    "err-shadows-owner": (
+        PRODUCER + CONSUMER %
+        "on Ok() -> { return 1; } on Err(pending) -> { return 2; }",
+        "Err binding cannot shadow the Result owner"),
+    "err-shadows-producer": (
+        PRODUCER + CONSUMER %
+        "on Ok() -> { return 1; } on Err(produce) -> { return 2; }",
+        "Err binding cannot shadow the Result owner"),
+    "err-shadows-nominal": (
+        PRODUCER + CONSUMER %
+        "on Ok() -> { return 1; } on Err(ArrayError) -> { return 2; }",
+        "Err binding cannot shadow the Result owner"),
     "duplicate-ok": (
         PRODUCER + CONSUMER %
         "on Ok() -> { return 1; } on Ok() -> { return 2; }",
@@ -174,6 +190,43 @@ def main():
                 raise AssertionError(
                     f"Result match branches incorrect {optimization}: "
                     f"status={ran.returncode} stderr={ran.stderr!r}")
+        # Exercise the runtime invalid-tag trap, not merely the presence of
+        # its LLVM intrinsic in a text search. Corrupt the closed producer
+        # inside the generated LLVM module, preserving every other instruction.
+        signature = "define internal %ores.result.void.array_error @limit()"
+        start = ir.find(signature)
+        if start < 0:
+            raise AssertionError("missing nominal producer for trap injection")
+        end = ir.find("\n}", start)
+        if end < 0:
+            raise AssertionError("unterminated producer LLVM definition")
+        prefix, body, suffix = ir[:start], ir[start:end], ir[end:]
+        for fault, payload in (
+                ("invalid-variant", "{ i8 7, i8 1 }"),
+                ("unknown-error", "{ i8 1, i8 7 }")):
+            mutated, count = re.subn(
+                r"\{\s*i8\s+1\s*,\s*i8\s+1\s*\}",
+                payload, body, count=1)
+            if count != 1:
+                raise AssertionError(
+                    "LLVM closed producer IR did not contain exactly one "
+                    "canonical recoverable-error return")
+            corrupt = root / (fault + ".ll")
+            corrupt.write_text(prefix + mutated + suffix + "\n" + CALLER,
+                               encoding="utf-8")
+            for optimization in ("-O0", "-O2"):
+                bad_exe = root / (fault + "-" + optimization[1:])
+                built = run([str(args.clang), "-Werror",
+                             "-Wno-override-module", optimization, "-x",
+                             "ir", str(corrupt), "-o", str(bad_exe)], timeout=45)
+                if built.returncode:
+                    raise AssertionError(
+                        f"{fault} malformed injected LLVM IR: {built.stderr!r}")
+                crashed = run([str(bad_exe)])
+                if crashed.returncode == 0:
+                    raise AssertionError(
+                        f"{fault}: invalid nominal tag escaped trap at {optimization}")
+
         for label, (code, diagnostic) in NEGATIVE.items():
             path = root / (label + ".ores")
             path.write_text(code, encoding="utf-8")
