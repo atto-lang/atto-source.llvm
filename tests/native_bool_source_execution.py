@@ -7,6 +7,7 @@ separate native fixture, avoiding a handwritten implementation of its result.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
