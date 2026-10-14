@@ -1,5 +1,6 @@
 #include "oreslang/runtime/SymbolKeyCodecV1.hpp"
 #include <iostream>
+#include <random>
 #include <stdexcept>
 
 using namespace oreslang::runtime::symbol_key_v1;
@@ -120,6 +121,40 @@ int main() {
             == Key{Kind::Text, std::string("a\0b", 3)});
     rejects([&] { encode({Kind::Text, "\xf4\x90\x80\x80"}); });
     rejects([&] { encode({Kind::Text, "\xe2\x82"}); });
+
+    // Seeded corpus: accepted frames must round-trip byte-for-byte, and
+    // malformed frames may never be accepted as a different logical key.
+    // Force candidate versioned headers rather than testing only random
+    // magic bytes, which would trivially reject every corpus sample.
+    std::mt19937_64 random(0x4f4b2026ULL);
+    for (int round = 0; round < 1'200; ++round) {
+        const std::size_t length = static_cast<std::size_t>(random() % 350);
+        std::vector<std::uint8_t> frame = {
+                'O', 'K', 1, static_cast<std::uint8_t>(random() % 5),
+                static_cast<std::uint8_t>((length >> 8u) & 0xffu),
+                static_cast<std::uint8_t>(length & 0xffu)};
+        for (std::size_t i = 0; i < length; ++i) {
+            const bool textLike = round % 3 != 0;
+            frame.push_back(textLike
+                    ? static_cast<std::uint8_t>('a' + random() % 26)
+                    : static_cast<std::uint8_t>(random() & 0xffu));
+        }
+        if (round % 7 == 0) frame[2] = 2;
+        if (round % 11 == 0) ++frame[5];
+        try {
+            const auto decoded = decode(frame);
+            require(encode(decoded) == frame);
+            if (decoded.kind == Kind::Text) {
+                require(decodeForUntrusted(frame) == decoded);
+            } else if (publicToUntrustedCore(decoded)) {
+                require(decodeForUntrusted(frame) == decoded);
+            } else {
+                denies([&] { decodeForUntrusted(frame); });
+            }
+        } catch (const std::invalid_argument&) {
+            // Invalid wire keys must never escape as accepted data.
+        }
+    }
 
     std::cout << "Symbol-key v1 host-only conformance: OK\n";
 }
