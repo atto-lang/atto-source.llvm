@@ -33,19 +33,23 @@ def sha256(path):
 def run(argv, timeout, cwd):
     start = time.monotonic()
     try:
-        completed = subprocess.run(
-            argv, cwd=cwd, capture_output=True, timeout=timeout, check=False,
-        )
-        raw_out = completed.stdout
-        raw_err = completed.stderr
-        overflow = len(raw_out) > MAX_OUTPUT or len(raw_err) > MAX_OUTPUT
-        return {
-            "argv": argv, "exit_code": completed.returncode,
-            "stdout": raw_out[:MAX_OUTPUT].decode("utf-8", errors="replace"),
-            "stderr": raw_err[:MAX_OUTPUT].decode("utf-8", errors="replace"),
-            "output_truncated": overflow, "timeout": False,
-            "duration_ms": int((time.monotonic() - start) * 1000),
-        }
+        # Temporary files bound in-process memory even if a faulty compiler
+        # floods stdout/stderr. Truncation is still a hard test failure.
+        with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
+            completed = subprocess.run(
+                argv, cwd=cwd, stdout=out_file, stderr=err_file,
+                timeout=timeout, check=False,
+            )
+            overflow = (out_file.tell() > MAX_OUTPUT or err_file.tell() > MAX_OUTPUT)
+            out_file.seek(0)
+            err_file.seek(0)
+            return {
+                "argv": argv, "exit_code": completed.returncode,
+                "stdout": out_file.read(MAX_OUTPUT).decode("utf-8", errors="replace"),
+                "stderr": err_file.read(MAX_OUTPUT).decode("utf-8", errors="replace"),
+                "output_truncated": overflow, "timeout": False,
+                "duration_ms": int((time.monotonic() - start) * 1000),
+            }
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {
             "argv": argv, "exit_code": None, "stdout": "", "stderr": str(exc)[:MAX_OUTPUT],
@@ -92,7 +96,7 @@ def main():
         "source_commit_declared": args.source_sha,
         "source_commit_binary_link_attested": False,
         "compiler_path": str(compiler),
-        "compiler_sha256": sha256(compiler),
+        "process_invoker_sha256": sha256(compiler),
         "platform": sys.platform,
         "runner_id": os.environ.get("GITHUB_RUN_ID"),
         "runner_sha": os.environ.get("GITHUB_SHA"),
@@ -114,6 +118,8 @@ def main():
         if not clazz.is_file() or not cp.is_file() or not cp.read_text().strip():
             parser.error("real Java launcher classes and Maven classpath must be built first")
         evidence["launcher_class_sha256"] = sha256(clazz)
+        evidence["compiler_artifact_sha256"] = sha256(clazz)
+        evidence["compiler_artifact_kind"] = "java-launcher-class-only"
         evidence["maven_classpath_sha256"] = sha256(cp)
         evidence["java_probe_sha256"] = sha256(probe)
         compile_argv = lambda source: [str(compiler), str(probe), str(source)]
@@ -125,6 +131,8 @@ def main():
         if not clang.is_absolute() or not clang.is_file():
             parser.error("--clang must be an existing absolute file")
         evidence["clang_sha256"] = sha256(clang)
+        evidence["compiler_artifact_sha256"] = sha256(compiler)
+        evidence["compiler_artifact_kind"] = "llvm-native-executable"
         compile_argv = lambda source: [str(compiler), str(source)]
 
     with tempfile.TemporaryDirectory(prefix="ores-ai-smoke-") as directory:
