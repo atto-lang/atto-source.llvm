@@ -319,6 +319,124 @@ int main() {
             throw std::runtime_error("valid standalone continuation IR missing");
     }
 
+    // Field tables are compiler-owned ordered layouts, not dictionaries
+    // that may silently select the first of multiple matching field names.
+    {
+        auto source = program("duplicate_class_field_ast", true);
+        oreslang::ClassDecl cls;
+        cls.name = "Ledger";
+        oreslang::ClassField first;
+        first.name = "balance";
+        cls.fields.push_back(first);
+        cls.fields.push_back(first);
+        source.classes.push_back(std::move(cls));
+        rejected(source, "duplicate or unnamed native class field");
+    }
+    {
+        auto source = program("oversized_class_ast", true);
+        oreslang::ClassDecl cls;
+        cls.name = "Ledger";
+        for (int i = 0; i < 17; ++i) {
+            oreslang::ClassField field;
+            field.name = "field_" + std::to_string(i);
+            cls.fields.push_back(std::move(field));
+        }
+        source.classes.push_back(std::move(cls));
+        rejected(source, "invalid native class field layout");
+    }
+    {
+        auto source = program("empty_class_ast", true);
+        oreslang::ClassDecl cls;
+        cls.name = "Ledger";
+        source.classes.push_back(std::move(cls));
+        rejected(source, "invalid native class field layout");
+    }
+    {
+        auto source = program("duplicate_actor_field_ast", true);
+        oreslang::ActorDecl actor;
+        actor.name = "Worker";
+        oreslang::LocalBinding first;
+        first.name = "count";
+        actor.fields.push_back(std::move(first));
+        oreslang::LocalBinding second;
+        second.name = "count";
+        actor.fields.push_back(std::move(second));
+        source.actors.push_back(std::move(actor));
+        rejected(source, "duplicate or unnamed native actor field");
+    }
+    {
+        auto source = program("oversized_actor_ast", true);
+        oreslang::ActorDecl actor;
+        actor.name = "Worker";
+        for (int i = 0; i < 17; ++i) {
+            oreslang::LocalBinding field;
+            field.name = "field_" + std::to_string(i);
+            actor.fields.push_back(std::move(field));
+        }
+        source.actors.push_back(std::move(actor));
+        rejected(source, "invalid native actor field layout");
+    }
+    {
+        auto source = program("empty_actor_ast", true);
+        oreslang::ActorDecl actor;
+        actor.name = "Worker";
+        source.actors.push_back(std::move(actor));
+        rejected(source, "invalid native actor field layout");
+    }
+
+    // Reject invisible children and labels on any integer literal, including
+    // literals nested in arithmetic rather than returned directly.
+    {
+        auto source = program("integer_hidden_operand");
+        source.functions.front().result->left = std::make_unique<Expression>();
+        rejected(source, "unverified native integer literal AST");
+    }
+    {
+        auto source = program("integer_hidden_argument");
+        source.functions.front().result->arguments.push_back(
+            std::make_unique<Expression>());
+        rejected(source, "unverified native integer literal AST");
+    }
+    {
+        auto source = program("integer_hidden_name");
+        source.functions.front().result->name = "hidden_call";
+        rejected(source, "unverified native integer literal AST");
+    }
+    {
+        auto source = program("integer_hidden_labels");
+        source.functions.front().result->argument_names.push_back("unseen");
+        rejected(source, "unverified native integer literal AST");
+    }
+    {
+        auto source = program("nested_integer_hidden_call");
+        auto root = std::make_unique<Expression>();
+        root->kind = Expression::Kind::Add;
+        root->left = std::make_unique<Expression>();
+        root->left->kind = Expression::Kind::Integer;
+        root->left->integer = 1;
+        root->left->arguments.push_back(std::make_unique<Expression>());
+        root->right = std::make_unique<Expression>();
+        root->right->kind = Expression::Kind::Integer;
+        root->right->integer = 2;
+        source.functions.front().result = std::move(root);
+        rejected(source, "unverified native integer literal AST");
+    }
+
+    // Positive canonical field and scalar controls must still compile.
+    {
+        auto source = program("canonical_class_control", true);
+        oreslang::ClassDecl cls;
+        cls.name = "Ledger";
+        oreslang::ClassField field;
+        field.name = "balance";
+        cls.fields.push_back(std::move(field));
+        source.classes.push_back(std::move(cls));
+        (void)oreslang::emit_verified_llvm_ir(source);
+    }
+    const auto int_ir = oreslang::emit_verified_llvm_ir(program("int_control"));
+    if (int_ir.find("ret i64 7") == std::string::npos)
+        throw std::runtime_error("canonical integer literal was rejected");
+
     // Positive compiler control: the direct emitter still exposes an i1,
     // without needing a source-level import or host-side bool stub.
     const auto native_ir = oreslang::emit_verified_llvm_ir(program("bool_control", true));
