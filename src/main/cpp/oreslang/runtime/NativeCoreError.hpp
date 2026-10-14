@@ -163,6 +163,36 @@ constexpr bool core_error_is_a(const CoreErrorDescriptor& type,
     return false;
 }
 
+// Interface membership is inherited nominally from abstract parents; no
+// structural method matching and no guest-owned code/name identity proof.
+enum class CoreErrorInterface : std::uint8_t {
+    CodedError, Serializable, RetryAdvisory, ActorApiError
+};
+
+constexpr bool core_error_implements(const CoreErrorDescriptor& type,
+                                     CoreErrorInterface iface) noexcept {
+    if (!is_canonical_core_error_descriptor(type)) return false;
+    const CoreErrorDescriptor* cursor = &type;
+    for (std::size_t depth = 0; cursor && depth < core_error_catalog.size(); ++depth) {
+        switch (iface) {
+            case CoreErrorInterface::CodedError:
+            case CoreErrorInterface::Serializable:
+                if (cursor == &core_error_catalog[0]) return true;
+                break;
+            case CoreErrorInterface::RetryAdvisory:
+                if (cursor->retry_advisory) return true;
+                break;
+            case CoreErrorInterface::ActorApiError:
+                if (cursor->actor_api_error) return true;
+                break;
+            default:
+                return false; // malformed external enum fails closed
+        }
+        cursor = find_core_error_by_code(cursor->parent_code);
+    }
+    return false;
+}
+
 constexpr bool validate_core_error_catalog() noexcept {
     if (core_error_catalog.size() != 99
             || core_error_catalog[0].name != "Error"
@@ -180,12 +210,22 @@ constexpr bool validate_core_error_catalog() noexcept {
             if (previous.code == e.parent_code) parent_seen = true;
         }
         if (!parent_seen) return false;
-        if (e.abstract_type && (e.retry_advisory || e.actor_api_error))
-            return false;
+        // Abstract classes MAY implement nominal interfaces (ActorError does).
+        // Forbid neither declaration nor inherited membership here.
     }
     return true;
 }
 static_assert(validate_core_error_catalog(), "invalid std/error v1 native catalog");
+static_assert(core_error_implements(core_error_catalog[0], CoreErrorInterface::CodedError),
+              "Error root must implement CodedError");
+static_assert(core_error_implements(core_error_catalog[0], CoreErrorInterface::Serializable),
+              "Error root must implement Serializable");
+static_assert(core_error_implements(*find_core_error_by_name("ActorError"),
+                                   CoreErrorInterface::ActorApiError),
+              "abstract ActorError declares ActorApiError");
+static_assert(core_error_implements(*find_core_error_by_name("ActorAskTimeoutError"),
+                                   CoreErrorInterface::ActorApiError),
+              "actor subclasses inherit ActorApiError");
 
 // A host-native value with owned diagnostics, but no reference to mutable
 // guest objects or Throwable/exception_ptr. Not a source-level Oreslang Error.
@@ -208,8 +248,17 @@ public:
     bool is_a(const CoreErrorDescriptor& ancestor) const noexcept {
         return core_error_is_a(*descriptor_, ancestor);
     }
-    // Classification only: never schedule an automatic retry from this flag.
-    bool has_retry_advisory() const noexcept { return descriptor_->retry_advisory; }
+    bool implements_interface(CoreErrorInterface iface) const noexcept {
+        return core_error_implements(*descriptor_, iface);
+    }
+
+    // Classification only: never automatically retry non-idempotent work.
+    bool has_retry_advisory() const noexcept {
+        return implements_interface(CoreErrorInterface::RetryAdvisory);
+    }
+    bool is_actor_api_error() const noexcept {
+        return implements_interface(CoreErrorInterface::ActorApiError);
+    }
 
 private:
     NativeCoreError(const CoreErrorDescriptor* descriptor, std::string diagnostic)
