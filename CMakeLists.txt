@@ -777,6 +777,14 @@ if(BUILD_TESTING)
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
+    # Host-only CONTROL timer queue: no guest callback, no source async lowering.
+    add_executable(oreslang-native-timer-queue-test tests/native_timer_queue_test.cpp)
+    target_include_directories(oreslang-native-timer-queue-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-timer-queue-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-timer-queue-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_monotonic_timer_admission_and_cancel_race
+        COMMAND oreslang-native-timer-queue-test)
+
     add_executable(oreslang-actor-lifecycle-await-test tests/actor_lifecycle_await_test.cpp)
     target_include_directories(oreslang-actor-lifecycle-await-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
