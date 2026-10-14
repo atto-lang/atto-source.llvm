@@ -44,7 +44,8 @@ def main():
         cmd, capture_output=True, text=True, check=False, timeout=20
     )
     if args.diagnostic:
-        require(compile_result.returncode != 0, "invalid source unexpectedly accepted")
+        require(compile_result.returncode == 1,
+                f"invalid source must produce a compiler diagnostic (exit 1), got {compile_result.returncode}")
         require(args.diagnostic in compile_result.stderr, compile_result.stderr)
         require(not compile_result.stdout.strip(), "emitted IR after rejection")
         return
