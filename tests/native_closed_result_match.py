@@ -12,6 +12,14 @@ import subprocess
 import sys
 import tempfile
 
+# Runtime fault injection deliberately triggers llvm.trap. Prevent core
+# dumps from filling developer/CI disks while exercising negative paths.
+try:
+    import resource
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+except (ImportError, OSError, ValueError):
+    pass
+
 SOURCE = """
 fnc success(): Result<void, ArrayError> { return Ok(); }
 fnc limit(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
