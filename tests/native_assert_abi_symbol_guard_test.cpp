@@ -33,6 +33,26 @@ static void rejected(const Program& source, const std::string& message) {
     throw std::runtime_error("unverified source AST emitted native LLVM IR");
 }
 
+static Program valid_scalar_loop() {
+    Program source = program("scalar_loop");
+    auto& fn = source.functions.front();
+    fn.scalar_while = std::make_unique<oreslang::ScalarWhileLoop>();
+    fn.scalar_while->counter = "n";
+    fn.scalar_while->initial = 0;
+    fn.scalar_while->upper_bound = 3;
+    oreslang::LocalBinding local;
+    local.name = "n";
+    local.owner_mutable = true;
+    local.initializer = std::make_unique<Expression>();
+    local.initializer->kind = Expression::Kind::Integer;
+    local.initializer->integer = 0;
+    fn.locals.push_back(std::move(local));
+    fn.result->kind = Expression::Kind::Variable;
+    fn.result->name = "n";
+    fn.result->integer = 0;
+    return source;
+}
+
 int main() {
     // Program is public AST input to the LLVM emitter. Even hand-built
     // Programs cannot spoof native Assert ABI symbols around the parser.
@@ -178,4 +198,37 @@ int main() {
     if (native_ir.find("define i1 @bool_control()") == std::string::npos ||
         native_ir.find("ret i1 true") == std::string::npos)
         throw std::runtime_error("valid forged bool control did not emit native i1");
+
+    // Positive control ensures the scalar fast path still admits the exact
+    // bounded, single-owner shape while rejects come from direct codegen.
+    const auto scalar_ir = oreslang::emit_verified_llvm_ir(valid_scalar_loop());
+    if (scalar_ir.find("@oreslang_rt_scalar_frame_step(") == std::string::npos)
+        throw std::runtime_error("valid scalar-loop frame was not lowered");
+    {
+        auto source = valid_scalar_loop();
+        source.functions.push_back(std::move(program("other").functions.front()));
+        rejected(source, "native scalar loop requires one standalone function");
+    }
+    {
+        auto source = valid_scalar_loop();
+        source.functions.front().result->integer = 7;
+        rejected(source, "unverified experimental scalar-loop AST");
+    }
+    {
+        auto source = valid_scalar_loop();
+        source.functions.front().locals.front().field_mutable = true;
+        rejected(source, "unverified experimental scalar-loop AST");
+    }
+    {
+        auto source = valid_scalar_loop();
+        source.functions.front().scalar_while->name = "ignored-payload";
+        rejected(source, "unverified experimental scalar-loop AST");
+    }
+    {
+        auto source = valid_scalar_loop();
+        source.functions.front().scalar_while->counter.clear();
+        source.functions.front().result->name.clear();
+        source.functions.front().locals.front().name.clear();
+        rejected(source, "unverified experimental scalar-loop AST");
+    }
 }
