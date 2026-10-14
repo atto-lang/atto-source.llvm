@@ -270,7 +270,8 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+    if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -331,6 +332,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.
+    if (cortex_m_target) {
+        // Experimental Cortex-M3 native ABI: scalar i64 functions, no OS wrapper.
+        const auto profile = TargetAbi::parse("thumbv7m-none-eabi");
+        if (!profile.experimental_cortexm_ir())
+            throw std::runtime_error("Cortex-M IR emission is not admitted");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
+        module.setTargetTriple(std::string(profile.triple()));
+#endif
+        module.setDataLayout("e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64");
+        if (module.getDataLayout().getPointerSizeInBits(0) != 32 ||
+            !module.getDataLayout().isLittleEndian())
+            throw std::runtime_error("Cortex-M ABI/data layout mismatch");
+    }
     if (wasm32_target) {
         const auto profile = TargetAbi::parse("wasm32-unknown-unknown");
         if (!profile.experimental_wasm32_ir())
