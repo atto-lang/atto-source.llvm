@@ -110,7 +110,10 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("native source exceeds 8 MiB admission limit");
             text.append(buffer.data(), static_cast<std::size_t>(n));
         }
-        // eofbit + failbit is the normal short final read; every other\n        // read failure must be rejected even when badbit was not set.\n        if (source.bad() || (source.fail() && !source.eof()))\n            throw std::runtime_error("failed reading Oreslang source");
+        // A short final read normally sets eofbit and failbit. Other I/O
+        // errors must be rejected rather than admitting a truncated source.
+        if (source.bad() || (source.fail() && !source.eof()))
+            throw std::runtime_error("failed reading Oreslang source");
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
