@@ -83,6 +83,9 @@ llvm::Value* lower(const Expression& expr,
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
+        case Expression::Kind::Record:
+        case Expression::Kind::Tuple:
+            throw std::runtime_error("native aggregate must lower to checked source-ordered scalar slots");
         case Expression::Kind::Variable: {
             llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
                 expr.name + ".read");
@@ -658,6 +661,40 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             return builder.CreateLoad(i64, address, label + ".array.new");
         };
         for (const auto& binding : fn.locals) {
+            if (binding.record_scalar) {
+                const Expression& record = *binding.initializer;
+                if (record.kind != Expression::Kind::Record ||
+                        record.arguments.empty() ||
+                        record.arguments.size() != record.argument_names.size())
+                    throw std::runtime_error("native scalar record lacks verified layout");
+                if (record.arguments.size() > 16)
+                    throw std::runtime_error("native scalar record layout exceeds 16 slots");
+                // Concrete, fixed LLVM struct layout: registers/stack only.
+                // No heap allocation, host Map or dynamic argument binder.
+                auto* shape = llvm::StructType::get(context,
+                    std::vector<llvm::Type*>(record.arguments.size(), i64));
+                llvm::Value* slot = builder.CreateAlloca(shape, nullptr,
+                    binding.name + ".product.stack");
+                const std::uint64_t bytes =
+                    static_cast<std::uint64_t>(record.arguments.size()) * 8;
+                builder.CreateLifetimeStart(slot,
+                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                for (std::size_t i = 0; i < record.arguments.size(); ++i) {
+                    // Evaluate each initializer exactly once, in lexical
+                    // source order, before publishing its field address.
+                    llvm::Value* value = lower(*record.arguments[i], builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    llvm::Value* address = builder.CreateStructGEP(shape, slot,
+                        static_cast<unsigned>(i),
+                        binding.name + "." + record.argument_names[i]);
+                    builder.CreateStore(value, address);
+                    field_storage.emplace(
+                        field_key(binding.name, record.argument_names[i]), address);
+                }
+                storage.emplace(binding.name, slot);
+                lexical_slots.push_back({binding.name, slot, false, bytes});
+                continue;
+            }
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
