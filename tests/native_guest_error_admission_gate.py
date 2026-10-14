@@ -24,6 +24,10 @@ cases = [
      "Error is a compiler-owned guest root"),
     ("pub fnc main(): int { throw 1; return 0; }\n",
      "not supported"),
+    ("pub fnc main(): int { raise 1; return 0; }\n",
+     "not supported"),
+    ("pub fnc main(): int { panic 1; return 0; }\n",
+     "not supported"),
 ]
 with tempfile.TemporaryDirectory(prefix="ores-native-error-gate-") as tmp:
     source = Path(tmp) / "main.ores"
