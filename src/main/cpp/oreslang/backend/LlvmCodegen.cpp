@@ -309,7 +309,38 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
-        return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
+        // This early-return path bypasses normal function emission. Reject
+        // AST mutations that would erase owners, effects or actual return
+        // computation, rather than trusting parser-only admission rules.
+        const Function& fn = source.functions.front();
+        const ScalarWhileLoop& loop = *fn.scalar_while;
+        if (!source.module.empty() || !source.cooperative_loops.empty() ||
+                fn.returns_bool || fn.returns_void || !fn.parameters.empty() ||
+                fn.has_declared_effects || fn.declared_effects.bits != 0 ||
+                !fn.statements.empty() || !fn.early_returns.empty() ||
+                !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                !fn.catch_binding.empty() || !fn.caught_throw_defers.empty() ||
+                fn.locals.size() != 1 || !fn.result ||
+                fn.result->kind != Expression::Kind::Variable ||
+                fn.result->name != loop.counter || fn.result->left ||
+                fn.result->right || !fn.result->arguments.empty() ||
+                !fn.result->argument_names.empty())
+            throw std::runtime_error("unverified experimental scalar-loop AST");
+        const LocalBinding& local = fn.locals.front();
+        if (!local.owner_mutable || local.heap_owned || local.int_array ||
+                !local.class_name.empty() || local.new_class ||
+                local.move_class || !local.move_source.empty() ||
+                local.name != loop.counter || !local.initializer ||
+                local.initializer->kind != Expression::Kind::Integer ||
+                local.initializer->integer != loop.initial ||
+                local.initializer->left || local.initializer->right ||
+                !local.initializer->name.empty() ||
+                !local.initializer->arguments.empty() ||
+                !local.initializer->argument_names.empty())
+            throw std::runtime_error("unverified experimental scalar-loop AST");
+        return emit_scalar_while_frame_llvm_ir(loop);
     }
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
