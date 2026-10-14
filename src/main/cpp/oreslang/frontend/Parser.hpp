@@ -12,10 +12,10 @@ namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ModuleCall, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Boolean, Variable, Negate, Add, Subtract, Multiply, Call, ModuleCall, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
-    std::int64_t integer = 0;
+    std::int64_t integer = 0; // Boolean kind stores canonical 0 or 1
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
