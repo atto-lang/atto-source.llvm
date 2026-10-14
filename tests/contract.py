@@ -6,6 +6,7 @@ under -O / PYTHONOPTIMIZE; a release harness must never silently skip gates.
 """
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -80,7 +81,14 @@ def main():
             )
             require(link.returncode != 0,
                     "source with no main() linked as a successful standalone process")
-            require("main" in link.stderr.lower(),
+            # A substring like "-lmain" or "__libc_start_main" must never
+            # make an unrelated linker failure count as a missing entry point.
+            missing_main = re.search(
+                r"(?:undefined reference to|undefined symbols?(?: for architecture [^\n:]+)?:|unresolved external symbol|entry point)"
+                r".{0,90}?(?<![A-Za-z0-9_])_?main\b",
+                link.stderr, flags=re.IGNORECASE | re.DOTALL,
+            )
+            require(missing_main is not None,
                     "library link failed without a missing-main diagnostic: " + link.stderr)
         return
     if args.run is None:
