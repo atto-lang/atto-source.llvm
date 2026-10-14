@@ -313,6 +313,17 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (result.name == "Error") {
+            fail("Error is a compiler-owned guest root and cannot be redeclared");
+        }
+        // The C++ frontend currently has only scalar class slots; it cannot
+        // truthfully link a parent vtable or construct an Error hierarchy.
+        // Reject this explicitly until typed native class ancestry and effect
+        // lowering are implemented, instead of pretending source parses.
+        if (token_.text == "extends") {
+            fail("native guest Error/class inheritance is not enabled until "
+                 "nominal ancestry and typed exception lowering are verified");
+        }
         require("as");
         std::unordered_set<std::string> seen;
         // Ordered i64 scalar slots and owned Array<int> handles only.
