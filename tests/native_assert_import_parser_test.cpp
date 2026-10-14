@@ -166,6 +166,10 @@ int main() {
             "pub fnc main(): int { return 0; }",
             "reserved native runtime ABI symbol 'oreslang_assert_future_v1'");
         expect_rejected(
+            "pub fnc oreslang_rt_counter_resume(): int { return 7; } "
+            "pub fnc main(): int { return 0; }",
+            "reserved native runtime ABI symbol 'oreslang_rt_counter_resume'");
+        expect_rejected(
             "pub fnc choose(): bool using state.read { return true; } "
             "pub fnc main(): int { return 0; }",
             "native bool literal AOT requires pure zero-argument function");
