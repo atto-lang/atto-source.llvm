@@ -120,6 +120,58 @@ int main() {
         rejected(source, "duplicate native entrypoint");
     }
 
+    // Special scalar-loop lowering used to return before the symbol guard.
+    // Validate linker identity before selecting any backend fast path.
+    {
+        auto source = program("oreslang_assert_scalar_bypass_v1");
+        source.functions.front().scalar_while =
+            std::make_unique<oreslang::ScalarWhileLoop>();
+        rejected(source, "reserved native runtime ABI symbol");
+    }
+    {
+        auto source = program("boolean_scalar_bypass", true);
+        source.functions.front().scalar_while =
+            std::make_unique<oreslang::ScalarWhileLoop>();
+        rejected(source, "unverified typed bool native result lowering");
+    }
+    {
+        auto source = program("array_namespace_qualified");
+        source.module = "Named";
+        source.functions.front().name = "oreslang_int_array_try_new";
+        rejected(source, "reserved native Array<int> ABI symbol");
+    }
+
+    // A fabricated effect row must not become implicitly pure when the
+    // has_declared_effects flag is unset.
+    {
+        auto source = program("boolean_hidden_effect_row", true);
+        source.functions.front().declared_effects.bits = 1;
+        rejected(source, "unverified typed bool native result lowering");
+    }
+    // Boolean literals have no operands, call labels or bound names. A
+    // hand-built AST with such fields is not a canonical source literal.
+    {
+        auto source = program("boolean_hidden_operand", true);
+        source.functions.front().result->left = std::make_unique<Expression>();
+        rejected(source, "unverified typed bool native result lowering");
+    }
+    {
+        auto source = program("boolean_hidden_arguments", true);
+        source.functions.front().result->arguments.push_back(
+            std::make_unique<Expression>());
+        rejected(source, "unverified typed bool native result lowering");
+    }
+    {
+        auto source = program("boolean_hidden_labels", true);
+        source.functions.front().result->argument_names.push_back("hidden");
+        rejected(source, "unverified typed bool native result lowering");
+    }
+    {
+        auto source = program("boolean_hidden_name", true);
+        source.functions.front().result->name = "hidden";
+        rejected(source, "unverified typed bool native result lowering");
+    }
+
     // Positive compiler control: the direct emitter still exposes an i1,
     // without needing a source-level import or host-side bool stub.
     const auto native_ir = oreslang::emit_verified_llvm_ir(program("bool_control", true));
