@@ -82,5 +82,30 @@ int main() {
             + std::to_string(n)}));
     }
     rejects([&] { decodeDistinct(oversized); });
+    // Exact aggregate boundary: 63 maximum-size text keys are admitted;
+    // 64 would exceed the inclusive 1 MiB budget even though the entry
+    // count is well below 4,096.
+    std::vector<std::vector<std::uint8_t>> boundary;
+    for (int i = 0; i < 64; ++i) {
+        std::string name(16'380, 'x');
+        const std::string serial = std::to_string(i);
+        name.replace(name.size() - serial.size(), serial.size(), serial);
+        boundary.push_back(encode({Kind::Text, name}));
+    }
+    auto allowedBoundary = std::vector<std::vector<std::uint8_t>>(
+            boundary.begin(), boundary.end() - 1);
+    require(decodeDistinct(allowedBoundary).size() == 63);
+    rejects([&] { decodeDistinct(boundary); });
+    require(encode({Kind::Process, std::string(256, 'x')}).size() == 262);
+    rejects([&] { encode({Kind::Process, std::string(257, 'x')}); });
+    // Ordinary Strings retain non-ASCII UTF-8 and embedded NUL identity:
+    // these are not PROCESS Symbol names and must not be normalized.
+    const std::string face = "\xf0\x9f\x98\x80";
+    require(decode(encode({Kind::Text, face})) == Key{Kind::Text, face});
+    require(decode(encode({Kind::Text, std::string("a\0b", 3)}))
+            == Key{Kind::Text, std::string("a\0b", 3)});
+    rejects([&] { encode({Kind::Text, "\xf4\x90\x80\x80"}); });
+    rejects([&] { encode({Kind::Text, "\xe2\x82"}); });
+
     std::cout << "Symbol-key v1 host-only conformance: OK\n";
 }
