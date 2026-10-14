@@ -305,6 +305,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         if (fn.returns_bool && fn.scalar_while)
             throw std::runtime_error("unverified typed bool native result lowering");
+        // An embedded scalar loop must not silently fall through to the
+        // ordinary i64 emitter, which does not execute that loop.
+        if (fn.scalar_while && source.functions.size() != 1)
+            throw std::runtime_error("native scalar loop requires one standalone function");
     }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         const Function& fn = source.functions.front();
@@ -324,7 +328,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 !fn.catch_binding.empty() || fn.has_declared_effects ||
                 fn.declared_effects.bits != 0 || !fn.result ||
                 fn.result->kind != Expression::Kind::Variable ||
-                fn.result->name != loop.counter || fn.result->left ||
+                fn.result->name != loop.counter || fn.result->integer != 0 ||
+                fn.result->left ||
                 fn.result->right || !fn.result->arguments.empty() ||
                 !fn.result->argument_names.empty())
             throw std::runtime_error("unverified native scalar-loop AST fast path");
