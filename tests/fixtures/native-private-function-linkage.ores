@@ -1,0 +1,9 @@
+fnc hidden(): int {
+  return 5;
+}
+pub fnc visible(): int {
+  return hidden();
+}
+pub fnc main(): int {
+  return visible();
+}
