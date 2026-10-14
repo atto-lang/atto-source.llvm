@@ -20,3 +20,13 @@ are owned by `oreslang-platform.embedded`.
 The target ABI table labels this `experimental-cortexm-scalar-ir`;
 no broad ARM native runtime parity is implied. Compiler and platform
 target profiles must be versioned before expanding support.
+
+## Static resource admission (audit 2026-10-14)
+
+The Cortex-M target rejects source larger than 128 KiB, more than 64 top-level
+functions, more than 8 parameters/arguments per function/call, more than 4096
+expression nodes, nesting deeper than 32 AST edges, call paths deeper than 16,
+and recursion (including mutual recursion). Distinct overloads by name are
+not admitted to keep the embedded call graph unambiguous. These are coarse
+compiler resource controls, **not** a proof of a precise stack/flash upper
+bound; inspect Zephyr map/stack usage before claiming a memory budget.
