@@ -38,6 +38,30 @@ discover a concrete shortest counterexample for every mutation. This is a
 finite-state model check with a bounded loan count and root count; it is **not**
 a proof of unbounded checker soundness or an equivalence proof for Java/C++.
 
+## SMT inductive step proof (symbolic count, independent of finite bound)
+
+`verification/borrow_inductive.smt2` uses Z3 linear-integer arithmetic
+and Boolean state to check **eight guarded transition preservation
+obligations** for an abstract single owner root: acquire/release shared
+and exclusive loans, move, reinitialize, suspend, and resume. Each
+obligation searches for a counterexample where the pre-state is safe,
+the operation's stated guard holds, and the post-state is unsafe.
+An `unsat` result certifies that no such counterexample exists **for
+the modeled arithmetic and Boolean state**, without imposing a maximum
+shared-loan count. Three deliberately unguarded mutations must produce
+`sat` counterexamples. CI checks the exact ordered verdict list, not
+just the tool's exit status.
+
+This is a **conditional inductive proof of the abstract transfer
+system**, not a proof that either compiler correctly computes owner
+roots, enforces all guards, handles aliasing, or refines this system.
+It excludes CFG joins, partial moves, reborrow parent freezing,
+nested projections, exceptional paths, inter-actor lifetimes and native
+region generations. Multi-root composition assumes sound disjointness
+and canonical alias roots; this is not established by the SMT checks.
+The existing bounded two-root model exercises a different slice of
+the safety contract and is retained alongside this proof.
+
 ## Refinement and implementation tests
 
 - **GraalVM:** `BorrowFormalBoundaryRegressionTest` exercises actual parsed
