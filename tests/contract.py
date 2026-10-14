@@ -91,6 +91,25 @@ def main():
             )
             require(assembled.returncode == 0,
                     "library-only LLVM IR failed object compilation: " + assembled.stderr)
+            # Supplying a valid main must make the otherwise linkable library
+            # succeed. Otherwise a diagnostic about a missing main can hide
+            # *additional* unresolved library dependencies and pass falsely.
+            # Assemble the stub independently so no extra source is injected
+            # into the generated LLVM IR compilation.
+            stub_object = str(pathlib.Path(directory) / "entrypoint.o")
+            stub = subprocess.run(
+                [args.clang, "-x", "c", "-", "-c", "-o", stub_object],
+                input="int main(void) { return 0; }\n",
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            require(stub.returncode == 0,
+                    "main stub failed object compilation: " + stub.stderr)
+            control = subprocess.run(
+                [args.clang, object_file, stub_object, "-o", executable],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            require(control.returncode == 0,
+                    "library failed positive link with main stub: " + control.stderr)
             link = subprocess.run(
                 [args.clang, object_file, "-o", executable],
                 capture_output=True, text=True, check=False, timeout=30,
