@@ -144,6 +144,11 @@ struct ClosedArrayResultMatchFunction {
     std::string local;
     std::int64_t ok_return = 0;
     std::int64_t err_return = 0;
+    // The source parser must prove one unguarded terminal arm for each
+    // nominal variant. Code generation refuses any incomplete/fabricated AST.
+    bool proved_ok_arm = false;
+    bool proved_err_arm = false;
+    bool consumed_once = false;
     bool exported = false;
     std::size_t offset = 0;
 };
