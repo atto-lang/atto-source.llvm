@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <string_view>
 #include <iostream>
 #include <iterator>
@@ -28,6 +29,7 @@ int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
+    bool cortex_m_target = false;
     bool target_seen = false;
     if (!read_env_flag("ORES_LLVM_EXPERIMENTAL_OWNED_INT", experimental_owned_int)
             || !read_env_flag("ORES_LLVM_EXPERIMENTAL_RT_SCALAR_LOOP", experimental_rt_scalar_loop)) {
@@ -67,6 +69,8 @@ int main(int argc, char** argv) {
     }
     if (target_value == "host") {
         // Default target and ABI are inferred downstream.
+    } else if (target_value == "thumbv7m-none-eabi") {
+        cortex_m_target = oreslang::TargetAbi::parse(target_value).experimental_cortexm_ir();
     } else if (target_value == "wasm32" || target_value == "wasm32-unknown-unknown") {
         wasm32_target = oreslang::TargetAbi::parse("wasm32-unknown-unknown").experimental_wasm32_ir();
     } else {
@@ -79,7 +83,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -101,7 +105,48 @@ int main(int argc, char** argv) {
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target);
+        if (cortex_m_target) {
+            // Deliberately small freestanding ABI: i64 scalar functions only.
+            // Never lower native actors, heap regions or unverified host calls
+            // merely because they happen to compile into some LLVM IR.
+            if (experimental_owned_int || experimental_rt_scalar_loop ||
+                !ast.module.empty() || !ast.classes.empty() || !ast.actors.empty() ||
+                !ast.cooperative_loops.empty() || ast.functions.empty())
+                throw std::runtime_error("cortex-m target supports only freestanding scalar functions");
+            std::function<bool(const oreslang::Expression&)> scalar =
+                [&](const oreslang::Expression& expr) -> bool {
+                using Kind = oreslang::Expression::Kind;
+                switch (expr.kind) {
+                    case Kind::Integer: case Kind::Variable: return true;
+                    case Kind::Negate:
+                        return expr.left && scalar(*expr.left);
+                    case Kind::Add: case Kind::Subtract: case Kind::Multiply:
+                        return expr.left && expr.right &&
+                               scalar(*expr.left) && scalar(*expr.right);
+                    case Kind::Call:
+                        for (const auto& arg : expr.arguments)
+                            if (!arg || !scalar(*arg)) return false;
+                        return true;
+                    default: return false;
+                }
+            };
+            for (const auto& fn : ast.functions) {
+                if (fn.name == "main" || fn.returns_void || !fn.result ||
+                    !fn.locals.empty() || !fn.statements.empty() ||
+                    !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                    !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                    !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                    fn.scalar_while || fn.caught_throw_value ||
+                    !fn.caught_throw_defers.empty() || fn.has_declared_effects ||
+                    !scalar(*fn.result))
+                    throw std::runtime_error("cortex-m target rejects main, effects or non-scalar functions");
+                for (const auto& param : fn.parameters)
+                    if (!param.class_name.empty() ||
+                        param.mode != oreslang::Parameter::Mode::Value)
+                        throw std::runtime_error("cortex-m target requires value int parameters");
+            }
+        }
+        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';
