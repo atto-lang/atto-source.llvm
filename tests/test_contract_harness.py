@@ -237,6 +237,30 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("linked as a successful standalone process", p.stderr)
 
+    def test_comment_cannot_spoof_i32_native_entrypoint(self):
+        compiler = self.compiler(stdout="; ModuleID = 'spoof'\n"
+                                 "; define i32 @main()\n"
+                                 "define i64 @main() { ret i64 42 }\n")
+        clang = self.linker(exit_code=42)
+        p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("native executable lacks an i32 main entrypoint wrapper", p.stderr)
+
+    def test_inline_ir_comment_cannot_spoof_native_entrypoint(self):
+        compiler = self.compiler(stdout="; ModuleID = 'spoof'\n"
+                                 "define i64 @main() { ret i64 42 } ; define i32 @main()\n")
+        clang = self.linker(exit_code=42)
+        p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("native executable lacks an i32 main entrypoint wrapper", p.stderr)
+
+    def test_host_main_with_visibility_modifier_is_recognized(self):
+        compiler = self.compiler(stdout="; ModuleID = 'native'\n"
+                                 "define dso_local i32 @main() { ret i32 42 }\n")
+        clang = self.linker(exit_code=42)
+        p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
     def test_native_wrong_exit_code_is_detected(self):
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
                                  "define i32 @main() { ret i32 41 }\n")
