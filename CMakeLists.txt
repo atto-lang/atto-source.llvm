@@ -113,6 +113,11 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeCoreError.hpp")
     set_tests_properties(native_core_error_catalog_manifest_sync
         PROPERTIES TIMEOUT 20)
+    add_test(NAME native_core_error_catalog_manifest_adversarial
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_core_error_catalog_sync.py")
+    set_tests_properties(native_core_error_catalog_manifest_adversarial
+        PROPERTIES TIMEOUT 20)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_NATIVE_ARRAY_CLANG)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
