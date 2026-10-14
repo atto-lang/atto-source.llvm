@@ -357,6 +357,15 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
+    # admission/IR checks into a green CTest. Uses only fake compilers;
+    # no LLVM toolchain or private-source mirror is needed.
+    add_test(NAME native_contract_harness_optimize_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_harness.py")
+    set_tests_properties(native_contract_harness_optimize_failclosed
+        PROPERTIES TIMEOUT 30)
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
