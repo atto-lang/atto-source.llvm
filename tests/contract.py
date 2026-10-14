@@ -35,6 +35,22 @@ def main():
     parser.add_argument("--no-native-abi", action="store_true")
     parser.add_argument("--no-main-link", action="store_true")
     args = parser.parse_args()
+    # A rejected-source test must never silently skip other requested gates.
+    if args.diagnostic is not None:
+        require(bool(args.diagnostic), "--diagnostic requires nonempty text")
+        require(args.run is None and args.ir is None and
+                not args.no_native_abi and not args.no_main_link and
+                args.native_runtime is None,
+                "--diagnostic cannot be combined with positive test modes")
+    if args.ir is not None:
+        require(bool(args.ir), "--ir requires nonempty text")
+    if args.run is not None:
+        require(0 <= args.run <= 255,
+                "--run requires an OS exit code in [0, 255]")
+    require(not (args.no_main_link and args.run is not None),
+            "--no-main-link cannot request successful execution")
+    require(args.native_runtime is None or args.run is not None,
+            "--native-runtime requires --run")
     cmd = [args.compiler]
     if args.target:
         cmd.append("--target=" + args.target)
@@ -48,7 +64,7 @@ def main():
         require(compile_result.returncode == 1,
                 f"invalid source must produce a compiler diagnostic (exit 1), got {compile_result.returncode}")
         require(args.diagnostic in compile_result.stderr, compile_result.stderr)
-        require(not compile_result.stdout.strip(), "emitted IR after rejection")
+        require(not compile_result.stdout, "compiler emitted stdout after rejection")
         return
     require(compile_result.returncode == 0, compile_result.stderr)
     require(compile_result.stdout.startswith("; ModuleID"), compile_result.stdout)
@@ -83,10 +99,21 @@ def main():
                     "source with no main() linked as a successful standalone process")
             # A substring like "-lmain" or "__libc_start_main" must never
             # make an unrelated linker failure count as a missing entry point.
-            missing_main = re.search(
-                r"(?:undefined reference to|undefined symbols?(?: for architecture [^\n:]+)?:|unresolved external symbol|entry point)"
-                r".{0,90}?(?<![A-Za-z0-9_])_?main\b",
-                link.stderr, flags=re.IGNORECASE | re.DOTALL,
+            # Match main as the actual missing symbol, never as a mention
+            # on a subsequent line in an otherwise unrelated linker error.
+            missing_main = (
+                re.search(
+                    r"(?im)\b(?:undefined reference to|undefined symbol:|unresolved external symbol)"
+                    r"\s+[^A-Za-z0-9_\s]?_?main\b", link.stderr,
+                )
+                or re.search(
+                    r'(?im)^undefined symbols? for architecture [^\n:]+:\s*\n\s*"?_main\b',
+                    link.stderr,
+                )
+                or re.search(
+                    r"(?im)\b(?:entry point|entrypoint)\s+[^A-Za-z0-9_\s]?_?main\b",
+                    link.stderr,
+                )
             )
             require(missing_main is not None,
                     "library link failed without a missing-main diagnostic: " + link.stderr)
