@@ -143,8 +143,18 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
 
 void release(const Loan& loan, Locals& locals) {
     auto& source = locals.at(loan.name);
-    if (loan.exclusive) source.exclusive_loan = false;
-    else --source.shared_loans;
+    // Fail closed if compiler control flow ever attempts to release a loan
+    // that is not active. In particular, decrementing a size_t at zero would
+    // silently wrap into an apparently enormous number of shared loans.
+    if (loan.exclusive) {
+        if (!source.exclusive_loan)
+            throw std::logic_error("internal ownership error: releasing inactive exclusive loan");
+        source.exclusive_loan = false;
+    } else {
+        if (source.shared_loans == 0)
+            throw std::logic_error("internal ownership error: releasing inactive shared loan");
+        --source.shared_loans;
+    }
 }
 
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
