@@ -86,6 +86,20 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         p = self.run_contract(compiler, "--diagnostic", "private class field")
         self.assertNotEqual(p.returncode, 0)
 
+    def test_rejection_must_not_accept_compiler_usage_error(self):
+        # llvmc returns 2 for invalid flags and 1 for source diagnostics.
+        # A runner invoking the wrong CLI must never count as negative proof.
+        compiler = self.compiler(status=2, stderr="private class field")
+        p = self.run_contract(compiler, "--diagnostic", "private class field")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("got 2", p.stderr)
+
+    def test_rejection_must_not_accept_compiler_crash(self):
+        compiler = self.compiler(status=139, stderr="private class field")
+        p = self.run_contract(compiler, "--diagnostic", "private class field")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("got 139", p.stderr)
+
     def test_rejection_must_not_emit_any_ir(self):
         compiler = self.compiler(status=1, stderr="private class field",
                                  stdout="; ModuleID = 'bad'\n")
