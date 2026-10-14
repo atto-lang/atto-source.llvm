@@ -16,6 +16,13 @@
 namespace oreslang::runtime::symbol_key_v1 {
 
 enum class Kind : std::uint8_t { Text = 0, Process = 1, Stable = 2 };
+
+// Keep authorization failures distinct from malformed wire input. Java's
+// SecurityException is not an invalid-argument/codec failure either.
+class AdmissionDenied final : public std::runtime_error {
+public:
+    explicit AdmissionDenied(const char* reason) : std::runtime_error(reason) {}
+};
 struct Key {
     Kind kind;
     std::string name;
@@ -131,8 +138,7 @@ inline bool publicToUntrustedCore(const Key& key) noexcept {
 inline Key decodeForUntrusted(const std::vector<std::uint8_t>& bytes) {
     Key key = decode(bytes);
     if (key.kind != Kind::Text && !publicToUntrustedCore(key))
-        throw std::invalid_argument(
-            "Symbol key is not visible to untrusted actor");
+        throw AdmissionDenied("Symbol key is not visible to untrusted actor");
     return key;
 }
 
