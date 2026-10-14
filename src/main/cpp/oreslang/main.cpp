@@ -2,9 +2,13 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -72,6 +76,8 @@ int main(int argc, char** argv) {
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
+        if (cortex_m_target && text.size() > 128u * 1024u)
+            throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
         if (cortex_m_target) {
@@ -82,19 +88,36 @@ int main(int argc, char** argv) {
                 !ast.module.empty() || !ast.classes.empty() || !ast.actors.empty() ||
                 !ast.cooperative_loops.empty() || ast.functions.empty())
                 throw std::runtime_error("cortex-m target supports only freestanding scalar functions");
-            std::function<bool(const oreslang::Expression&)> scalar =
-                [&](const oreslang::Expression& expr) -> bool {
+            constexpr std::size_t max_functions = 64;
+            constexpr std::size_t max_parameters = 8;
+            constexpr std::size_t max_expression_nodes = 4096;
+            constexpr std::size_t max_expression_depth = 32;
+            constexpr std::size_t max_call_depth = 16;
+            if (ast.functions.size() > max_functions)
+                throw std::runtime_error("cortex-m function count exceeds 64");
+            std::size_t expression_nodes = 0;
+            std::unordered_map<std::string, std::vector<std::string>> edges;
+            std::function<bool(const oreslang::Expression&, std::size_t,
+                               std::vector<std::string>&)> scalar =
+                [&](const oreslang::Expression& expr, std::size_t depth,
+                    std::vector<std::string>& calls) -> bool {
+                if (depth > max_expression_depth || ++expression_nodes > max_expression_nodes)
+                    throw std::runtime_error("cortex-m expression budget exceeded");
+
                 using Kind = oreslang::Expression::Kind;
                 switch (expr.kind) {
                     case Kind::Integer: case Kind::Variable: return true;
                     case Kind::Negate:
-                        return expr.left && scalar(*expr.left);
+                        return expr.left && scalar(*expr.left, depth + 1, calls);
                     case Kind::Add: case Kind::Subtract: case Kind::Multiply:
                         return expr.left && expr.right &&
-                               scalar(*expr.left) && scalar(*expr.right);
+                               scalar(*expr.left, depth + 1, calls) &&
+                               scalar(*expr.right, depth + 1, calls);
                     case Kind::Call:
+                        if (expr.arguments.size() > max_parameters) return false;
+                        calls.push_back(expr.name);
                         for (const auto& arg : expr.arguments)
-                            if (!arg || !scalar(*arg)) return false;
+                            if (!arg || !scalar(*arg, depth + 1, calls)) return false;
                         return true;
                     default: return false;
                 }
@@ -106,14 +129,45 @@ int main(int argc, char** argv) {
                     !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                     !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
                     fn.scalar_while || fn.caught_throw_value ||
-                    !fn.caught_throw_defers.empty() || fn.has_declared_effects ||
-                    !scalar(*fn.result))
+                    !fn.caught_throw_defers.empty() || fn.has_declared_effects)
                     throw std::runtime_error("cortex-m target rejects main, effects or non-scalar functions");
+                if (fn.parameters.size() > max_parameters)
+                    throw std::runtime_error("cortex-m parameter budget exceeded");
                 for (const auto& param : fn.parameters)
                     if (!param.class_name.empty() ||
                         param.mode != oreslang::Parameter::Mode::Value)
                         throw std::runtime_error("cortex-m target requires value int parameters");
+                std::vector<std::string> calls;
+                if (!scalar(*fn.result, 0, calls))
+                    throw std::runtime_error("cortex-m target requires bounded scalar expressions");
+                if (!edges.emplace(fn.name, std::move(calls)).second)
+                    throw std::runtime_error("cortex-m target rejects overloaded function names");
             }
+            // Source-level cycles are forbidden on tiny stacks. The call-graph
+            // path limit caps nesting even when individual ASTs are shallow.
+            std::unordered_set<std::string> active;
+            std::unordered_map<std::string, std::size_t> longest;
+            std::function<std::size_t(const std::string&)> walk =
+                [&](const std::string& name) -> std::size_t {
+                const auto known = longest.find(name);
+                if (known != longest.end()) return known->second;
+                if (!active.insert(name).second)
+                    throw std::runtime_error("cortex-m recursive call graph rejected");
+                auto node = edges.find(name);
+                if (node == edges.end())
+                    throw std::runtime_error("cortex-m unresolved function call");
+                std::size_t depth = 1;
+                for (const auto& dependency : node->second) {
+                    const auto child = walk(dependency);
+                    if (child >= max_call_depth)
+                        throw std::runtime_error("cortex-m call depth budget exceeded");
+                    depth = std::max(depth, child + 1);
+                }
+                active.erase(name);
+                longest.emplace(name, depth);
+                return depth;
+            };
+            for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
         return 0;
