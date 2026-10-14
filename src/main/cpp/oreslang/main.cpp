@@ -2,6 +2,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -57,8 +58,19 @@ int main(int argc, char** argv) {
         if (!source.is_open()) {
             throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
         }
-        const std::string text((std::istreambuf_iterator<char>(source)),
-                               std::istreambuf_iterator<char>());
+        // Bound input before lexing and IR construction; istreambuf_iterator
+        // used to grow memory without limit for attacker-controlled files.
+        constexpr std::size_t kMaxSourceBytes = 8 * 1024 * 1024;
+        std::array<char, 8192> buffer{};
+        std::string text;
+        while (source) {
+            source.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const auto n = source.gcount();
+            if (n <= 0) break;
+            if (static_cast<std::size_t>(n) > kMaxSourceBytes - text.size())
+                throw std::runtime_error("native source exceeds 8 MiB admission limit");
+            text.append(buffer.data(), static_cast<std::size_t>(n));
+        }
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
