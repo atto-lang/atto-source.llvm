@@ -305,6 +305,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         if (fn.returns_bool && fn.scalar_while)
             throw std::runtime_error("unverified typed bool native result lowering");
+        // Never silently ignore a scalar continuation on a multi-function
+        // synthetic Program: the single-function frame path is the only
+        // certified lowering of this AST node.
+        if (fn.scalar_while && source.functions.size() != 1)
+            throw std::runtime_error(
+                "experimental scalar loop requires exactly one standalone function");
     }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
@@ -324,15 +330,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 !fn.catch_binding.empty() || !fn.caught_throw_defers.empty() ||
                 fn.locals.size() != 1 || !fn.result ||
                 fn.result->kind != Expression::Kind::Variable ||
-                fn.result->name != loop.counter || fn.result->left ||
-                fn.result->right || !fn.result->arguments.empty() ||
+                fn.result->name != loop.counter || fn.result->integer != 0 ||
+                fn.result->left || fn.result->right ||
+                !fn.result->arguments.empty() ||
                 !fn.result->argument_names.empty())
             throw std::runtime_error("unverified experimental scalar-loop AST");
         const LocalBinding& local = fn.locals.front();
         if (!local.owner_mutable || local.heap_owned || local.int_array ||
                 !local.class_name.empty() || local.new_class ||
                 local.move_class || !local.move_source.empty() ||
-                local.name != loop.counter || !local.initializer ||
+                local.field_mutable || local.name != loop.counter ||
+                loop.counter.empty() || !local.initializer ||
                 local.initializer->kind != Expression::Kind::Integer ||
                 local.initializer->integer != loop.initial ||
                 local.initializer->left || local.initializer->right ||
