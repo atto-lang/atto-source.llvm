@@ -213,6 +213,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return;
+        case Expression::Kind::Boolean:
+            reject(expr, "typed bool cannot be used as native int");
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
             if (source.moved)
@@ -317,6 +319,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Call:
             if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
+            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_bool)
+                reject(expr, "typed bool result cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
         case Expression::Kind::Borrow:
@@ -347,6 +351,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             check_pure_guard(*expr.left, locals, functions);
             check_pure_guard(*expr.right, locals, functions);
             return;
+        case Expression::Kind::Boolean:
         case Expression::Kind::Take:
         case Expression::Kind::Call:
         case Expression::Kind::ModuleCall:
@@ -693,10 +698,14 @@ void validate_i64_ownership(const Program& program) {
             check_deferred_exit(taken);
         }
         if (function.result) {
-            if (function.caught_throw_value)
+            if (function.returns_bool &&
+                function.result->kind == Expression::Kind::Boolean) {
+                // Pure literal i1 needs no loan, heap, drop or ownership transfer.
+            } else if (function.caught_throw_value) {
                 check_caught_throw_scalar_read(*function.result, locals, functions);
-            else
+            } else {
                 check_value(*function.result, locals, functions);
+            }
         }
         check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
