@@ -213,6 +213,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return;
+        case Expression::Kind::Record:
+        case Expression::Kind::Tuple:
+            reject(expr, "native product requires a closed Copy-only record local or explicit call spread");
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
             if (source.moved)
@@ -450,6 +453,22 @@ void validate_i64_ownership(const Program& program) {
                 entry.final_fields = class_finals.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
+            } else if (binding.record_scalar) {
+                if (!binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::Record ||
+                        binding.initializer->arguments.size() !=
+                            binding.initializer->argument_names.size())
+                    throw std::runtime_error("native record ownership shape was not checked");
+                entry.class_name = "$closed_i64_record";
+                for (std::size_t i = 0; i < binding.initializer->arguments.size(); ++i) {
+                    const std::string& label = binding.initializer->argument_names[i];
+                    if (!entry.class_fields.insert(label).second)
+                        throw std::runtime_error("duplicate native i64 record field");
+                    entry.final_fields.insert(label);
+                    // A record retains only owned Copy i64s. Check fields in
+                    // lexical source order before making the owner visible.
+                    check_value(*binding.initializer->arguments[i], locals, functions);
+                }
             } else if (binding.move_class) {
                 // Transfer the whole class's unique array-owned places, not
                 // individual fields. A source with moved fields or live
