@@ -163,9 +163,13 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
         reject(expr, "invalid native named call argument layout");
 
     std::vector<Loan> loans;
+    // Allocate before taking any loan so an allocation failure cannot leave
+    // a partially reserved set of lexical call-argument loans behind.
+    loans.reserve(expr.arguments.size());
     std::vector<bool> assigned(parameters.size(), false);
     std::size_t positional = 0;
     bool named_seen = false;
+    try {
     for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
         const Expression& argument = *expr.arguments[i];
         const std::string label = expr.argument_names.empty()
@@ -200,10 +204,20 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
             // for temporaries and missing explicit 'rt borrow' markers.
             Loan loan = acquire(argument, parameter.mode, locals);
             const auto& source = locals.at(loan.name);
-            if (source.class_name != parameter.class_name)
+            if (source.class_name != parameter.class_name) {
+                release(loan, locals);
                 reject(argument, "ownership violation: borrowed argument type mismatch");
+            }
             loans.push_back(std::move(loan));
         }
+    }
+    } catch (...) {
+        // Preserve the loan-count invariant even if a later argument fails.
+        // The compiler currently aborts validation on an error, but future
+        // diagnostics/recovery must never observe leaked reservations.
+        for (auto it = loans.rbegin(); it != loans.rend(); ++it)
+            release(*it, locals);
+        throw;
     }
     for (auto it = loans.rbegin(); it != loans.rend(); ++it)
         release(*it, locals);
