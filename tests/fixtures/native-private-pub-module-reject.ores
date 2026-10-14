@@ -1,0 +1,3 @@
+private pub define module Hidden as
+  pub fnc answer(): int { return 7; }
+end
