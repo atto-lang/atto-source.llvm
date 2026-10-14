@@ -252,6 +252,73 @@ int main() {
         rejected(source, "duplicate or unnamed native class/actor declaration");
     }
 
+    // A separately lowered cooperative continuation is exclusive to its
+    // Program. A crafted AST must not mix its generated ABI with functions,
+    // classes, actors or a second continuation.
+    {
+        auto mixed = program("mixed_continuation", true);
+        mixed.cooperative_loops.emplace_back();
+        mixed.cooperative_loops.front().name = "counter";
+        mixed.cooperative_loops.front().variable = "value";
+        rejected(mixed, "unverified native cooperative-loop Program shape");
+    }
+    {
+        Program duplicate;
+        duplicate.cooperative_loops.resize(2);
+        rejected(duplicate, "unverified native cooperative-loop Program shape");
+    }
+    {
+        Program mixed;
+        mixed.cooperative_loops.emplace_back();
+        mixed.classes.emplace_back();
+        rejected(mixed, "unverified native cooperative-loop Program shape");
+    }
+    {
+        Program named;
+        named.cooperative_loops.emplace_back();
+        named.cooperative_loops.front().name = "counter";
+        named.cooperative_loops.front().variable = "value";
+        named.module = "Fake";
+        rejected(named, "unverified native cooperative-loop Program shape");
+    }
+    {
+        Program malformed;
+        malformed.cooperative_loops.emplace_back();
+        malformed.cooperative_loops.front().name = "counter.with.dot";
+        malformed.cooperative_loops.front().variable = "value";
+        rejected(malformed, "invalid native cooperative-loop identifier");
+    }
+    {
+        auto source = program("oreslang_rt_injected_resume");
+        rejected(source, "reserved native runtime ABI symbol");
+    }
+    {
+        auto source = program("malformed$name");
+        rejected(source, "invalid native function linker identifier");
+    }
+    {
+        auto source = program("normal", true);
+        source.module = "module.with.dot";
+        rejected(source, "invalid native module linker identifier");
+    }
+    {
+        auto source = program("class_bad_name", true);
+        oreslang::ClassDecl cls;
+        cls.name = "Bad.Class";
+        source.classes.push_back(std::move(cls));
+        rejected(source, "duplicate or unnamed native class/actor declaration");
+    }
+    {
+        Program valid;
+        valid.cooperative_loops.emplace_back();
+        valid.cooperative_loops.front().name = "counter";
+        valid.cooperative_loops.front().variable = "value";
+        valid.cooperative_loops.front().initial = 0;
+        const auto ir = oreslang::emit_verified_llvm_ir(valid);
+        if (ir.find("oreslang_rt_counter_resume") == std::string::npos)
+            throw std::runtime_error("valid standalone continuation IR missing");
+    }
+
     // Positive compiler control: the direct emitter still exposes an i1,
     // without needing a source-level import or host-side bool stub.
     const auto native_ir = oreslang::emit_verified_llvm_ir(program("bool_control", true));
