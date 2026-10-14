@@ -41,6 +41,21 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_assert_canonical_import_parser
         COMMAND oreslang-assert-import-parser-test)
+    # Backend entrypoint is callable with compiler-constructed Program ASTs:
+    # defend reserved assertion symbols and pure bool result from bypassing
+    # parser-only checks. This is a real LLVM codegen rejection test.
+    add_executable(oreslang-assert-abi-symbol-guard-test
+        tests/native_assert_abi_symbol_guard_test.cpp
+        src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+        src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
+    target_include_directories(oreslang-assert-abi-symbol-guard-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-assert-abi-symbol-guard-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-assert-abi-symbol-guard-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_assert_linker_owned_abi_and_bool_ast_guard
+        COMMAND oreslang-assert-abi-symbol-guard-test)
+
 
     # Generated, verifiable LLVM IR for the primitive scalar ABI only.
     # Compiled guest std/assert linking is a separate milestone.
