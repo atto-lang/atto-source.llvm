@@ -106,6 +106,12 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME llvm_flags2env_env_argv_contract
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/flags2env_cli_env_matrix.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --source "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
+    set_tests_properties(llvm_flags2env_env_argv_contract PROPERTIES TIMEOUT 120)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_NATIVE_ARRAY_CLANG)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
