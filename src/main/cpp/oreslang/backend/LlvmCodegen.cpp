@@ -704,7 +704,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     binding.name + ".array.owner");
                 builder.CreateStore(handle, slot);
                 storage.emplace(binding.name, slot);
-                lexical_slots.push_back({binding.name, slot, false, 8, true});
+                lexical_slots.push_back({binding.name, slot, false, 8, true, {}});
                 continue;
             }
             if (binding.new_class || binding.move_class) {
@@ -783,7 +783,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 builder.CreateStore(initial, slot);
             }
             storage.emplace(binding.name, slot);
-            lexical_slots.push_back({binding.name, slot, binding.heap_owned, 8});
+            lexical_slots.push_back({binding.name, slot, binding.heap_owned, 8, false, {}});
         }
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
