@@ -1617,6 +1617,9 @@ private:
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                    // Standalone resumable continuations export
+                    // oreslang_rt_<name>_{init,resume,cancel} symbols.
+                    fn.name.rfind("oreslang_rt_", 0) == 0 ||
                     // These exact exported symbols are reserved for the
                     // compiler-owned typed native Assert/Option ABI. No
                     // source function may hijack a later stdlib linker slot.
