@@ -27,9 +27,9 @@ The raw array native status ABI also remains separate.
 
 ## Safety admission
 
-- No user Result, Option **or ArrayError** class may redefine a builtin
-  nominal type. A source module named any of those is also rejected while
-  these constructors are present, preventing unresolved namespace spoofing.
+- No user Result, Option **or ArrayError** class or actor may redefine a
+  builtin nominal type. A source module named any of those is also rejected
+  while these constructors are present, preventing unresolved namespace spoofing.
 - Tagged functions are **module-private only** in this slice: `pub` is
   rejected and LLVM uses `internal` linkage. A cross-module caller cannot
   legally observe the aggregate until the language and FFI ABI, must-use
