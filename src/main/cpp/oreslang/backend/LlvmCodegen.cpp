@@ -1445,14 +1445,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::StructType* result_type = llvm::StructType::create(
             context, {i8, i8}, "ores.result.void.array_error");
         for (const auto& tagged : source.closed_array_results) {
+            if (tagged.exported)
+                throw std::runtime_error(
+                    "native tagged Result export awaits verified cross-module/FFI ABI");
+            if (tagged.ok ? tagged.error != 0
+                          : (tagged.error != 1 && tagged.error != 2))
+                throw std::runtime_error(
+                    "invalid nominal Result<void,ArrayError> constructor");
             const std::string symbol = source.module.empty()
                 ? tagged.name : source.module + "." + tagged.name;
-            if (module.getFunction(symbol))
+            if (module.getNamedValue(symbol))
                 throw std::runtime_error(
                     "native tagged Result symbol collision: " + symbol);
             auto* declaration = llvm::Function::Create(
                 llvm::FunctionType::get(result_type, {}, false),
-                llvm::Function::ExternalLinkage, symbol, module);
+                llvm::Function::InternalLinkage, symbol, module);
             auto* entry = llvm::BasicBlock::Create(context, "entry", declaration);
             llvm::IRBuilder<> builder(entry);
             llvm::Constant* aggregate = llvm::ConstantStruct::get(
