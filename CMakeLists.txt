@@ -37,6 +37,15 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-symbol-key-codec-v1-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    # ICU 76 ships Unicode 16.0 tables. Until a cross-backend Unicode data
+    # manifest is pinned, no other major ICU version may unlock non-ASCII
+    # Symbol admission. Missing/unsupported ICU keeps the ASCII-only mode.
+    find_package(ICU 76 QUIET COMPONENTS uc)
+    if(ICU_FOUND AND ICU_VERSION VERSION_LESS 77)
+        target_compile_definitions(oreslang-symbol-key-codec-v1-test PRIVATE
+            ORES_SYMBOL_V1_ICU_NFC=1)
+        target_link_libraries(oreslang-symbol-key-codec-v1-test PRIVATE ICU::uc)
+    endif()
     add_test(NAME native_symbol_key_codec_v1_host_only
         COMMAND oreslang-symbol-key-codec-v1-test)
     set_tests_properties(native_symbol_key_codec_v1_host_only
