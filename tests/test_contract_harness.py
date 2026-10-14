@@ -79,7 +79,7 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         compiler = self.compiler(status=0, stdout="; ModuleID = 'wrong'\n")
         p = self.run_contract(compiler, "--diagnostic", "private class field")
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("invalid source unexpectedly accepted", p.stderr)
+        self.assertIn("invalid source must produce a compiler diagnostic (exit 1), got 0", p.stderr)
 
     def test_rejection_must_not_accept_missing_diagnostic(self):
         compiler = self.compiler(status=1, stderr="wrong diagnostic")
