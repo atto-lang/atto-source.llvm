@@ -283,6 +283,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     if (!source.imports.empty())
         throw std::runtime_error(
             "native module imports are unsupported until linked stdlib and typed assertion/trap lowering are implemented");
+    // The parser rejects duplicate user type names, but this public emitter
+    // also accepts constructed Program ASTs. LLVM silently renames duplicate
+    // StructType and Function symbols, breaking source-to-ABI identity;
+    // reject them before any native or scalar-loop fast path is selected.
+    std::unordered_set<std::string> type_names;
+    for (const auto& cls : source.classes) {
+        if (cls.name.empty() || !type_names.insert(cls.name).second)
+            throw std::runtime_error("duplicate or unnamed native class/actor declaration");
+    }
+    for (const auto& actor : source.actors) {
+        if (actor.name.empty() || !type_names.insert(actor.name).second)
+            throw std::runtime_error("duplicate or unnamed native class/actor declaration");
+    }
     // Public AST entrypoint: validate reserved linker ABI names before the
     // scalar-loop fast path can return without emitting ordinary functions.
     // Do not permit LLVM's collision renaming to change guest symbol identity.
