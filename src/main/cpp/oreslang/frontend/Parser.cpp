@@ -551,8 +551,9 @@ private:
         value.returns_void = accept("void");
         if (!value.returns_void) {
             if (accept("bool")) {
-                if (!has_assert_import_)
-                    fail("native bool return requires sealed module ABI linking");
+                // Booleans are a separate native value category, never an
+                // implicit i64. Only a pure literal-return slice is lowered
+                // without an imported verified typed source module.
                 value.returns_bool = true;
             } else {
                 require("int");
@@ -1194,6 +1195,12 @@ private:
             require(")");
             return inner;
         }
+        if (token_.text == "true" || token_.text == "false") {
+            auto expr = make_expression(Expression::Kind::Boolean, offset);
+            expr->integer = token_.text == "true" ? 1 : 0;
+            advance();
+            return expr;
+        }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
             expr->integer = integer_literal();
@@ -1369,7 +1376,8 @@ private:
                                     const std::unordered_set<std::string>& parameters,
                                     const std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>>& functions) {
         switch (expr.kind) {
-            case Expression::Kind::Integer: return;
+            case Expression::Kind::Integer:
+            case Expression::Kind::Boolean: return;
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
@@ -1565,6 +1573,28 @@ private:
         std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
+            // A bool is an LLVM i1, never a disguised i64. Keep initial
+            // import-free admission strictly literal, side-effect free and
+            // independent of cleanup/continuation/ownership lifetimes.
+            if (fn.returns_bool) {
+                if (fn.name == "main")
+                    throw std::runtime_error("native bool main violates process exit ABI");
+                if (!fn.result ||
+                    (fn.result->kind != Expression::Kind::Boolean &&
+                     !( !program.imports.empty() &&
+                        fn.result->kind == Expression::Kind::ModuleCall)))
+                    throw std::runtime_error("native bool result requires typed bool expression");
+                if (fn.result->kind == Expression::Kind::Boolean &&
+                    (!fn.parameters.empty() || !fn.locals.empty() ||
+                     !fn.statements.empty() || !fn.early_returns.empty() ||
+                     !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                     !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                     !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                     fn.scalar_while || fn.has_declared_effects))
+                    throw std::runtime_error("native bool literal AOT requires pure zero-argument function");
+            } else if (fn.result && fn.result->kind == Expression::Kind::Boolean) {
+                throw std::runtime_error("native int return cannot return bool");
+            }
             // Compiler-owned ABI imports and generated exports may be
             // inserted before source function definitions. LLVM silently
             // renames duplicate Function::Create symbols (e.g. abort.1),
