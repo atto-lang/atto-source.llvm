@@ -13,9 +13,12 @@ It provides `CoreErrorDescriptor`, trusted ancestry traversal, and
   lookups are for metadata, never by themselves guest type authentication.
 - Constructing abstract family classes rejects admission. A concrete
   `Error` root (code 0) is allowed and does not automatically capture a trace.
-- The nominal class tree supports reflexive, transitive ancestry. The direct
-  RetryAdvisory/ActorApiError interface flags are metadata; they do not grant
-  capabilities or trigger retries. Other nominal interfaces are not lowered.
+- The nominal class tree supports reflexive, transitive ancestry. Declared
+  RetryAdvisory/ActorApiError flags are inherited from abstract parent classes:
+  `ActorError` is abstract and implements `ActorApiError`, therefore all its
+  concrete descendants inherit that interface. The root's CodedError and
+  Serializable contracts are inherited by every core error. Interface identity
+  is not structural and confers no runtime capabilities or automatic retry.
 - The native value owns its diagnostic string; it holds no guest object,
   function, mutable heap pointer, or native exception object. This is *not*
   permission to send or serialize the value across an actor boundary.
@@ -39,3 +42,12 @@ allocation of guest Error instances; nominal class payload layout in LLVM IR;
 typed catch/throw/raise/panic, cause/suppressed graphs, stacks, protobuf/
 MessagePack source APIs, actor transport and supervisor dispatch. No LLVM
 source-execution parity is claimed by this host-only addition.
+
+## Audit: false compile-time rejection corrected
+
+The initial `validate_core_error_catalog` incorrectly rejected interfaces
+on abstract classes. `ActorError` is intentionally abstract *and* directly
+implements `ActorApiError`. That validator was inconsistent with the source
+manifest and would fail the C++ static assertion before tests ran. The
+validator now permits abstract interface implementers and checks inherited
+interface membership separately, including a compile-time assertion.
