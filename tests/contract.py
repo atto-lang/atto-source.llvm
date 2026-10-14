@@ -84,8 +84,8 @@ def main():
             # A substring like "-lmain" or "__libc_start_main" must never
             # make an unrelated linker failure count as a missing entry point.
             missing_main = re.search(
-                r"(?:undefined reference to|undefined symbols?(?: for architecture [^\\n:]+)?:|unresolved external symbol|entry point)"
-                r".{0,90}?(?<![A-Za-z0-9_])_?main\\b",
+                r"(?:undefined reference to|undefined symbols?(?: for architecture [^\n:]+)?:|unresolved external symbol|entry point)"
+                r".{0,90}?(?<![A-Za-z0-9_])_?main\b",
                 link.stderr, flags=re.IGNORECASE | re.DOTALL,
             )
             require(missing_main is not None,
