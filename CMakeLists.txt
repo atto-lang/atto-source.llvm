@@ -357,6 +357,44 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Native visibility conformance against Java's private-by-default contract.
+    # Unknown/public module and actor exports fail closed while the native
+    # backend has no checked cross-module/actor ABI.
+    oreslang_contract_test(native_private_class_field_read
+        class-private-field-read-reject.ores
+        --diagnostic "private native class field")
+    oreslang_contract_test(native_private_class_field_write
+        class-private-field-write-reject.ores
+        --diagnostic "private native class field")
+    oreslang_contract_test(native_legacy_pub_define_class
+        class-explicit-public-visible.ores)
+    oreslang_contract_test(native_canonical_define_pub_class
+        class-canonical-public-visible.ores)
+    oreslang_contract_test(native_private_callable_internal_linkage
+        native-private-function-linkage.ores
+        --ir "define internal i64 @hidden(")
+    oreslang_contract_test(native_public_callable_external_linkage
+        native-private-function-linkage.ores
+        --ir "define i64 @visible(")
+    oreslang_contract_test(native_explicit_private_callable_internal_linkage
+        native-explicit-private-function.ores
+        --ir "define internal i64 @hidden(")
+    oreslang_contract_test(native_implicit_private_module
+        native-module-implicit-private.ores)
+    oreslang_contract_test(native_define_private_module
+        native-module-define-private.ores)
+    oreslang_contract_test(native_private_define_module
+        native-module-private-define.ores)
+    oreslang_contract_test(native_public_module_fail_closed
+        native-module-public-unsupported.ores
+        --diagnostic "native public module export requires checked")
+    oreslang_contract_test(native_public_actor_fail_closed
+        native-public-actor-unsupported.ores
+        --diagnostic "native public actor export requires checked")
+    oreslang_contract_test(native_visibility_conflict
+        native-conflicting-visibility.ores
+        --diagnostic "duplicate/conflicting visibility modifier")
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
