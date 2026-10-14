@@ -104,6 +104,18 @@ public:
         return by_deadline_.begin()->first.first;
     }
 
+    /**
+     * Post-poll owner gate for a token enqueued into a scheduler CONTROL lane.
+     * This rejects all tokens after owner shutdown, even if poll() won first.
+     * The scheduler must additionally revalidate actor generation and
+     * execution authority AT DISPATCH. A check here alone is not a lease.
+     */
+    bool owner_allows_delivery(NativeTimerHandle handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !closed_ && handle.domain == domain_ &&
+               handle.id > 0 && handle.id < next_id_;
+    }
+
     std::size_t pending() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return by_id_.size();
