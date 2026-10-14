@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <new>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -97,7 +98,14 @@ public:
             // Insert into the delivery registry BEFORE retiring the
             // pending registration, so an allocation failure cannot lose
             // a live timer. Delivery requires a separate exactly-once claim.
-            ready_.insert(id);
+            try {
+                ready_.insert(id);
+            } catch (const std::bad_alloc&) {
+                // Return the already-collected tokens. Throwing here would
+                // destroy that result and strand their in-flight tickets.
+                // The current due timer remains scheduled for a later poll.
+                break;
+            }
             result.push_back(Expired{NativeTimerHandle{domain_, id}, deadline});
             by_id_.erase(id);
             by_deadline_.erase(it);
