@@ -74,6 +74,14 @@ pub fnc main(): int {
   return f.a;
 }
 """, "cannot reassign final class field"),
+    "final-const-take": ("""define class Foo as
+  final const int a: 5;
+end
+pub fnc main(): int {
+  let mut Foo f = new Foo();
+  return rt take f.a;
+}
+""", "cannot take final class field"),
     "final-reassign": ("""define class Foo as
   final int a: 5;
 end
