@@ -363,8 +363,17 @@ if(BUILD_TESTING)
     add_test(NAME native_contract_harness_optimize_failclosed
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_harness.py")
-    set_tests_properties(native_contract_harness_optimize_failclosed
-        PROPERTIES TIMEOUT 30)
+    add_test(NAME native_contract_harness_python_O
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_harness.py")
+    add_test(NAME native_contract_harness_python_OO
+        COMMAND "${Python3_EXECUTABLE}" -OO
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_harness.py")
+    set_tests_properties(
+        native_contract_harness_optimize_failclosed
+        native_contract_harness_python_O
+        native_contract_harness_python_OO
+        PROPERTIES TIMEOUT 120)
 
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
