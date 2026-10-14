@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Fail-closed LLVM product AOT / no-tracing-GC source admission.
 
-The actual record/tuple spread subset must remain rejected without any
-emitted IR until field ownership, ABI slots and deterministic drops are
-implemented. Independently verify *compiled native execution* at -O0/-O2
-for currently supported scalar named-call and explicit shared borrow forms.
+This gate admits *only* closed, fixed-layout Copy-only scalar products.
+Unknown/dynamic products, nested/borrowed aggregates, partial field takes and
+implicit conversions are rejected without IR. It proves real guest execution
+of stack records, source-ordered spreads and scalar borrows at -O0 and -O2.
 
 These checks use explicit exceptions, not Python 'assert': PYTHONOPTIMIZE
 must never disable a CI safety gate. This is not certification of general
@@ -67,6 +67,20 @@ def check_aot(compiler, clang, root, title, program, exit_code):
                 f"{guest.returncode}, expected {exit_code}: {guest.stderr}")
         require(not guest.stdout and not guest.stderr,
                 f"{title} O{optimization}: unexpected guest output")
+
+
+def check_lexical_record_order(compiler, root, name, program):
+    """A numerically correct result alone cannot prove initializer ordering."""
+    path = root / (name + ".ores")
+    path.write_text(program, encoding="utf-8")
+    compiled = run([compiler, str(path)])
+    require(compiled.returncode == 0, f"{name}: {compiled.stderr}")
+    ir = compiled.stdout
+    validate_no_guest_gc(ir, name)
+    first = ir.find("call i64 @read_first(")
+    second = ir.find("call i64 @read_second(")
+    require(second >= 0 and first >= 0 and second < first,
+            f"{name}: side-effectful scalar fields reordered in native IR")
 
 
 def check_rejected(compiler, root, name, source, diagnostic):
@@ -147,6 +161,26 @@ pub fnc main(): int {
     return r.a + r.b;
 }
 """
+    effectful_record = prefix + """
+fnc read_first(): int { return 19; }
+fnc read_second(): int { return 23; }
+pub fnc main(): int {
+    const r = (b: read_second(), a: read_first());
+    return sum(...r);
+}
+"""
+    effectful_inline = prefix + """
+fnc read_first(): int { return 19; }
+fnc read_second(): int { return 23; }
+pub fnc main(): int { return sum(...(b: read_second(), a: read_first())); }
+"""
+    mixed_prefix = """
+fnc sum3(int prefix, int a, int b): int { return prefix + a + b; }
+pub fnc main(): int {
+    const r = (b: 23, a: 19);
+    return sum3(0, ...r);
+}
+"""
     shared_borrow = """
 fnc inspect(borrow int x): int { return x + 1; }
 fnc wrapper(int x): int { return inspect(rt borrow x); }
@@ -168,8 +202,18 @@ pub fnc main(): int { return wrapper(41); }
                   inline_tuple, 42)
         check_aot(compiler, clang, root, "native-scalar-record-projection",
                   scalar_projection, 42)
+        check_aot(compiler, clang, root, "native-mixed-prefix-record-spread",
+                  mixed_prefix, 42)
+        check_aot(compiler, clang, root, "native-record-effectful",
+                  effectful_record, 42)
+        check_aot(compiler, clang, root, "native-inline-effectful",
+                  effectful_inline, 42)
+        check_lexical_record_order(compiler, root,
+                                   "source-order-stored-record", effectful_record)
+        check_lexical_record_order(compiler, root,
+                                   "source-order-inline-record", effectful_inline)
     print(f"LLVM product admission: {len(rejected)} no-IR rejects; "
-          "six real native guest programs at -O0/-O2, exit 42; "
+          "nine real native guest programs at -O0/-O2, exit 42; "
           "no guest GC or allocator calls in emitted IR")
 
 
