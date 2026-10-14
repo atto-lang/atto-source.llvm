@@ -32,10 +32,34 @@ int main() {
     check(core_error_is_a(file, fs) && core_error_is_a(file, io), "filesystem inheritance");
     check(!core_error_is_a(file, net) && !core_error_is_a(io, file), "sibling/parent exclusion");
     check(core_error_is_a(ask, actor) && !core_error_is_a(ask, net), "actor inheritance");
+    check(actor.abstract_type && actor.actor_api_error, "abstract ActorError interface");
+    check(core_error_implements(*find_core_error_by_name("ActorError"),
+                                CoreErrorInterface::ActorApiError),
+          "abstract ActorError must implement ActorApiError");
+    check(core_error_implements(ask, CoreErrorInterface::ActorApiError),
+          "actor leaf inherits ActorApiError");
+    check(core_error_implements(*find_core_error_by_name("MailboxFullError"),
+                                CoreErrorInterface::ActorApiError),
+          "state leaf direct ActorApiError membership");
+    check(core_error_implements(*find_core_error_by_name("ProcessNotFoundError"),
+                                CoreErrorInterface::ActorApiError),
+          "process lookup direct ActorApiError membership");
+    check(!core_error_implements(io, CoreErrorInterface::ActorApiError),
+          "unrelated IOError not ActorApiError");
+    check(!core_error_implements(ask, CoreErrorInterface::RetryAdvisory),
+          "actor error must not imply retry");
+    check(core_error_implements(ask, CoreErrorInterface::CodedError),
+          "actor leaf inherits CodedError");
+    check(core_error_implements(ask, CoreErrorInterface::Serializable),
+          "actor leaf inherits Serializable");
+    check(!core_error_implements(ask, static_cast<CoreErrorInterface>(0xff)),
+          "unknown interface tag rejected");
 
     const CoreErrorDescriptor forged{"FileNotFoundError", 3001, 3090, false, false, false};
     check(!is_canonical_core_error_descriptor(forged), "value-spoofed descriptor accepted");
     check(!core_error_is_a(forged, io), "forged descriptor satisfied ancestry");
+    check(!core_error_implements(forged, CoreErrorInterface::ActorApiError),
+          "forged descriptor got inherited interface membership");
     try { (void)NativeCoreError::make_trusted(forged, "x"); check(false, "forged value accepted"); }
     catch (const std::invalid_argument&) {}
     try { (void)NativeCoreError::make_trusted(io, "x"); check(false, "abstract constructed"); }
@@ -44,6 +68,10 @@ int main() {
     const auto concrete = NativeCoreError::make_trusted(file, "missing");
     check(concrete.code() == 3001 && concrete.diagnostic() == "missing", "native value payload");
     check(concrete.is_a(io) && !concrete.is_a(net), "native value ancestry");
+    const auto actor_value = NativeCoreError::make_trusted(ask, "request failure");
+    check(actor_value.is_actor_api_error() && !actor_value.has_retry_advisory(),
+          "actor failure API interface inheritance");
+    check(!concrete.is_actor_api_error(), "filesystem type acquired actor marker");
 
     std::size_t advisories = 0;
     for (const auto& entry : core_error_catalog) if (entry.retry_advisory) ++advisories;
