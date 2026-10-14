@@ -33,7 +33,8 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         path.chmod(0o700)
         return path
 
-    def linker(self, *, exit_code=0, link_status=0):
+    def linker(self, *, exit_code=0, link_status=0, compile_status=0,
+               link_error="undefined reference to main"):
         path = self.root / "fake-clang"
         executable_contents = (
             "#!" + sys.executable + "\n"
@@ -44,8 +45,16 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
             "#!" + sys.executable + "\n"
             + "from pathlib import Path\n"
             + "import sys\n"
-            + f"if {link_status}: sys.exit({link_status})\n"
             + "result = Path(sys.argv[sys.argv.index('-o') + 1])\n"
+            + "if '-c' in sys.argv:\n"
+            + f"    if {compile_status}:\n"
+            + "        sys.stderr.write('malformed LLVM IR')\n"
+            + f"        sys.exit({compile_status})\n"
+            + "    result.write_bytes(b'fake object')\n"
+            + "    sys.exit(0)\n"
+            + f"if {link_status}:\n"
+            + f"    sys.stderr.write({link_error!r})\n"
+            + f"    sys.exit({link_status})\n"
             + f"result.write_text({executable_contents!r}, encoding='utf-8')\n"
             + "result.chmod(0o700)\n",
             encoding="utf-8",
@@ -141,6 +150,27 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         clang = self.linker(exit_code=42)
         p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
         self.assertEqual(p.returncode, 0, p.stderr)
+
+
+    def test_valid_library_ir_fails_link_for_missing_main(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\n")
+        clang = self.linker(link_status=1)
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_malformed_library_ir_cannot_pass_missing_main_gate(self):
+        compiler = self.compiler(stdout="; ModuleID = 'bad library'\n")
+        clang = self.linker(compile_status=1, link_status=1)
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("LLVM IR failed object compilation", p.stderr)
+
+    def test_unrelated_link_failure_cannot_pass_missing_main_gate(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\n")
+        clang = self.linker(link_status=1, link_error="unrelated library missing")
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("missing-main diagnostic", p.stderr)
 
 
 
