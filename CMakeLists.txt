@@ -117,6 +117,13 @@ if(BUILD_TESTING)
             --clang "${ORE_NATIVE_ARRAY_CLANG}")
     set_tests_properties(native_result_closed_constructor_execution
         PROPERTIES TIMEOUT 120)
+    add_test(NAME native_result_closed_match_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_closed_result_match.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}")
+    set_tests_properties(native_result_closed_match_execution
+        PROPERTIES TIMEOUT 180)
     add_test(NAME native_annotation_macro_aot_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/annotation_macro_aot_admission_matrix.py"
