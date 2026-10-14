@@ -18,13 +18,14 @@ flags2env audit .cli-flags.toml
 ```
 
 The wrapper invokes `flags2env shell-env --config <repo>/.cli-flags.toml --
-<binary> ...`, evaluates only upstream shell-escaped export statements,
-then `exec`s the binary with the original argv. Any parser failure or missing
-upstream executable fails closed, not to a second bespoke flag parser. The
-binary still checks its argv (including duplicate, unsupported, and privileged
-permission flags); the environment is a **configuration source**, not an
-authorization source. `[env] load=false` prevents untrusted local `.env`
-files being loaded implicitly.
+<binary> ...`, but **never evaluates** returned shell text. A small
+Python 3 boundary parses only shell-quoted assignment values, rejects
+unauthorized or repeated environment keys, then invokes `execvpe` with the
+original arguments (no shell interpolation). Python 3 must be installed for
+this wrapper. Unknown, malformed or oversized export streams, parser errors,
+and missing dependencies fail closed. The binary also validates its argv.
+The environment is a **configuration source**, not an authorization source.
+`[env] load=false` prevents untrusted local `.env` files being loaded.
 
 **Java:** `dev.oreslang.launcher.OresMain` is the combined compiler/run CLI:
 `--check` and `--build-analysis` compile/analyze; supplying a source executes
