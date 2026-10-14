@@ -1491,6 +1491,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         for (const auto& tagged : source.closed_array_results)
             producer_names.insert(tagged.name);
         for (const auto& consumer : source.closed_result_matches) {
+            // The IR constructor must never trust an incomplete synthetic
+            // typed AST even when the primary parser enforces exhaustive arms.
+            if (!consumer.consumed_once || !consumer.proved_ok_arm
+                    || !consumer.proved_err_arm)
+                throw std::runtime_error(
+                    "closed Result match lacks proof of single consumption and exhaustive arms");
             if (consumer.exported || !producer_names.count(consumer.producer))
                 throw std::runtime_error(
                     "closed Result match has unverified export or producer");
