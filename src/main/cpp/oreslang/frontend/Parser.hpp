@@ -148,6 +148,11 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    // Closed nominal Result<void,ArrayError> constructors are parsed into a
+    // separate zero-owner native AST, never the scalar expression model.
+    bool closed_array_result = false;
+    bool closed_result_ok = true;
+    std::uint8_t closed_result_error = 0;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
@@ -176,7 +181,19 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// First real LLVM-native, nominal, zero-payload Result construction slice.
+// Deliberately no parameters, locals, calls, or match until ownership and
+// exhaustive case lowering have separate proofs.
+struct ClosedArrayResultFunction {
+    std::string name;
+    bool exported = false;
+    bool ok = true;
+    std::uint8_t error = 0; // 0 for Ok, 1 Limit, 2 NoMemory
+    std::size_t offset = 0;
+};
+
 struct Program {
+    std::vector<ClosedArrayResultFunction> closed_array_results;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
     std::vector<ClassDecl> classes;
