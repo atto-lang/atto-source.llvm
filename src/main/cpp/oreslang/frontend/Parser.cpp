@@ -116,6 +116,11 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Explicit spread is one lexical token, never three independent field dots.
+        if (source_.substr(at_, 3) == "...") {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -426,6 +431,7 @@ private:
     }
 
     Function function() {
+        record_locals_.clear();
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
@@ -596,8 +602,16 @@ private:
                     continue;
                 }
                 if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires ': int'");
                 binding.initializer = expression();
+                if (!explicit_type) {
+                    if (binding.initializer->kind != Expression::Kind::Record)
+                        fail("scalar local requires ': int'; inferred native locals require a closed i64 record");
+                    binding.record_scalar = true;
+                    record_locals_.emplace(binding.name, binding.initializer->argument_names);
+                } else if (binding.initializer->kind == Expression::Kind::Record ||
+                           binding.initializer->kind == Expression::Kind::Tuple) {
+                    fail("int local cannot contain a tuple or record product");
+                }
             }
             require(";");
             value.locals.push_back(std::move(binding));
@@ -1101,24 +1115,43 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
-        // Do not parse guest tuple/record spreading as ordinary argument
-        // punctuation, and do not emit LLVM IR without a statically checked
-        // argument permutation and ownership/drop plan.
-        if (token_.text == ".") {
-            fail("native product spread requires verified fixed-product "
-                 "argument binding, borrowing and zero-GC AOT lowering");
+        if (token_.text == "...") {
+            fail("explicit product spread is only valid in an ordinary call argument");
         }
         if (accept("(")) {
-            // A labeled parenthesized product is a record literal in Java.
-            // Native scalar grammar must fail closed until the native record
-            // layout, ownership and drop proof are implemented.
             if (named_argument_ahead()) {
-                fail("native record literal requires verified static layout, "
-                     "borrowing and zero-GC AOT lowering");
+                auto record = make_expression(Expression::Kind::Record, offset);
+                std::unordered_set<std::string> labels;
+                do {
+                    if (!named_argument_ahead())
+                        fail("closed record fields require a name and colon");
+                    std::string name = identifier();
+                    require(":");
+                    if (!labels.insert(name).second) fail("duplicate record field '" + name + "'");
+                    if (record->arguments.size() == 16)
+                        fail("native scalar record exceeds 16 fields");
+                    record->argument_names.push_back(std::move(name));
+                    record->arguments.push_back(expression());
+                } while (accept(",") && token_.text != ")");
+                require(")");
+                return record;
             }
-            auto inner = expression();
+            auto first = expression();
+            if (!accept(",")) {
+                require(")");
+                return first;
+            }
+            auto tuple = make_expression(Expression::Kind::Tuple, offset);
+            tuple->arguments.push_back(std::move(first));
+            if (token_.text != ")") {
+                do {
+                    if (tuple->arguments.size() == 16)
+                        fail("native scalar tuple exceeds 16 elements");
+                    tuple->arguments.push_back(expression());
+                } while (accept(",") && token_.text != ")");
+            }
             require(")");
-            return inner;
+            return tuple;
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
