@@ -3,9 +3,9 @@
 ## Exact source admitted (synchronous, no owners, no arguments)
 
 ```oreslang
-pub fnc success(): Result<void, ArrayError> { return Ok(); }
-pub fnc limit(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
-pub fnc oom(): Result<void, ArrayError> { return Err(ArrayError.NoMemory); }
+fnc success(): Result<void, ArrayError> { return Ok(); }
+fnc limit(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
+fnc oom(): Result<void, ArrayError> { return Err(ArrayError.NoMemory); }
 ```
 
 These functions are a *separate native type/AST category* from the existing
@@ -27,7 +27,14 @@ The raw array native status ABI also remains separate.
 
 ## Safety admission
 
-- No user Result or Option class may redefine builtin type identity.
+- No user Result, Option **or ArrayError** class may redefine a builtin
+  nominal type. A source module named any of those is also rejected while
+  these constructors are present, preventing unresolved namespace spoofing.
+- Tagged functions are **module-private only** in this slice: `pub` is
+  rejected and LLVM uses `internal` linkage. A cross-module caller cannot
+  legally observe the aggregate until the language and FFI ABI, must-use
+  ownership and cancellation contracts are proven independently.
+- At most 64 tagged constructor functions may occur per translation unit.
 - Constructors may not have parameters, locals, arbitrary expressions, calls,
   side effects, deferred cleanup, exceptions, actor state, await, or match
   until those stages have complete borrow and CFG correctness proofs.
@@ -56,6 +63,11 @@ Such a C wrapper must have its own explicit and verified FFI ABI (e.g. an
 out-parameter, architecture-specific calling convention, and schema envelope).
 The test purposely exercises a caller compiled with the identical LLVM
 function type, rather than incorrectly claiming C ABI interoperability.
+The test caller is appended within the **same LLVM module**, where it can
+reference `internal` functions, and compiled at both `-O0` and `-O2`.
+This demonstrates the tagged representation, not a public calling convention.
+Negative fixtures also require their **specific** diagnostics instead of
+accepting arbitrary parser failures as a safety pass.
 
 Before merging: run pinned native Release/Debug compiler CTests and sanitizers,
 then JVM/GraalVM differential cases. CI failing before executing steps does
