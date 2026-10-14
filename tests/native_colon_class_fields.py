@@ -7,8 +7,8 @@ import tempfile
 
 SUCCESSES = {
     "canonical": """define class Foo as
-  int a: 13
-  final int b: 29
+  pub int a: 13
+  pub final int b: 29
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -16,8 +16,8 @@ pub fnc main(): int {
 }
 """,
     "compatibility": """define class Foo as
-  int a = 13
-  final int b = 29
+  pub int a = 13
+  pub final int b = 29
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -36,13 +36,21 @@ pub fnc main(): int {
 """,
 }
 REJECTIONS = {
+    "private-default-field": ("""define class Foo as
+  int a: 5
+end
+pub fnc main(): int {
+  let Foo f = new Foo();
+  return f.a;
+}
+""", "private class field"),
     "same-line-field-without-semicolon": ("""define class Foo as
   int a: 5 int b: 9
 end
 pub fnc main(): int { return 0; }
 """, "class field requires ';' or a line break"),
     "final-reassign": ("""define class Foo as
-  final int a: 5;
+  pub final int a: 5;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -51,7 +59,7 @@ pub fnc main(): int {
 }
 """, "cannot reassign final class field"),
     "final-take": ("""define class Foo as
-  final int a: 42;
+  pub final int a: 42;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -59,7 +67,7 @@ pub fnc main(): int {
 }
 """, "cannot take final class field"),
     "final-after-owner-move": ("""define class Foo as
-  final int a: 5;
+  pub final int a: 5;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -69,7 +77,7 @@ pub fnc main(): int {
 }
 """, "cannot reassign final class field"),
     "final-conditional-write": ("""define class Foo as
-  final int a: 5;
+  pub final int a: 5;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -99,24 +107,29 @@ def main():
             src = root / f"{name}.ores"
             src.write_text(source, encoding="utf-8")
             result = subprocess.run([opts.compiler, str(src)], capture_output=True, text=True, timeout=60)
-            assert result.returncode == 0 and result.stdout.startswith("; ModuleID"), (
-                name, result.returncode, result.stderr)
-            assert not result.stderr, (name, result.stderr)
+            if result.returncode != 0 or not result.stdout.startswith("; ModuleID"):
+                raise AssertionError((name, result.returncode, result.stderr))
+            if result.stderr:
+                raise AssertionError((name, result.stderr))
             if opts.clang:
                 ir = root / f"{name}.ll"
                 ir.write_text(result.stdout, encoding="utf-8")
                 exe = root / name
                 compiled = subprocess.run([opts.clang, "-O1", "-x", "ir", str(ir), "-o", str(exe)],
                                           capture_output=True, text=True, timeout=60)
-                assert compiled.returncode == 0, (name, compiled.stderr)
+                if compiled.returncode != 0:
+                    raise AssertionError((name, compiled.stderr))
                 ran = subprocess.run([str(exe)], capture_output=True, timeout=60)
-                assert ran.returncode == 42, (name, ran.returncode, ran.stderr)
+                if ran.returncode != 42:
+                    raise AssertionError((name, ran.returncode, ran.stderr))
         for name, (source, diagnostic) in REJECTIONS.items():
             src = root / f"{name}.ores"
             src.write_text(source, encoding="utf-8")
             result = subprocess.run([opts.compiler, str(src)], capture_output=True, text=True, timeout=60)
-            assert result.returncode != 0 and not result.stdout, (name, result.returncode, result.stdout)
-            assert diagnostic in result.stderr, (name, diagnostic, result.stderr)
+            if result.returncode != 1 or result.stdout:
+                raise AssertionError((name, result.returncode, result.stdout))
+            if diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.stderr))
     print(f"PASS: {len(SUCCESSES)} class field forms, {len(REJECTIONS)} no-IR rejections")
 
 if __name__ == "__main__":
