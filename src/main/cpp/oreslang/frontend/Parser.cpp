@@ -212,17 +212,26 @@ public:
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
-                program.functions.push_back(function());
+                Function parsed = function();
+                if (parsed.closed_array_result) {
+                    program.closed_array_results.push_back({
+                        parsed.name, parsed.exported, parsed.closed_result_ok,
+                        parsed.closed_result_error, parsed.offset
+                    });
+                } else {
+                    program.functions.push_back(std::move(parsed));
+                }
             }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
+        if (program.functions.empty() && program.closed_array_results.empty()
+                && program.actors.empty() && program.cooperative_loops.empty())
             fail("expected at least one function or actor");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.closed_array_results.empty() || !program.actors.empty()
+                 || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         validate(program);
@@ -481,7 +490,50 @@ private:
             require(")");
         }
         require(":");
-        reject_unlowered_result_type();
+        if (accept("Result")) {
+            // Closed constructor-only source admission. This path cannot
+            // return i64 or call the scalar lowering machinery. The entire
+            // function is validated before LLVM IR creation.
+            require("<");
+            if (!accept("void")) {
+                fail("native generic Result<T,E> requires source tagged-value lowering");
+            }
+            require(",");
+            if (!accept("ArrayError")) {
+                fail("native Result<void,E> requires nominal ArrayError specialization and tagged lowering");
+            }
+            require(">");
+            if (!value.parameters.empty() || value.name == "main") {
+                fail("native tagged Result constructor slice requires zero parameters and non-main function");
+            }
+            require("{");
+            require("return");
+            value.closed_array_result = true;
+            if (accept("Ok")) {
+                require("(");
+                require(")");
+                value.closed_result_ok = true;
+                value.closed_result_error = 0;
+            } else if (accept("Err")) {
+                require("(");
+                require("ArrayError");
+                require(".");
+                if (accept("Limit")) {
+                    value.closed_result_error = 1;
+                } else if (accept("NoMemory")) {
+                    value.closed_result_error = 2;
+                } else {
+                    fail("unknown nominal ArrayError case; expected Limit or NoMemory");
+                }
+                require(")");
+                value.closed_result_ok = false;
+            } else {
+                fail("native tagged Result return requires Ok() or Err(ArrayError.Limit/NoMemory)");
+            }
+            require(";");
+            require("}");
+            return value;
+        }
         value.returns_void = accept("void");
         if (!value.returns_void) require("int");
         if (accept("using")) {
