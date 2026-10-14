@@ -151,6 +151,25 @@ int main() {
         expect_rejected(
             "pub fnc main(): bool { return true; }",
             "native bool main violates process exit ABI");
+        // The runtime ABI is linker-owned; user functions cannot export
+        // identifiers that future std/assert lowering may call directly.
+        expect_rejected(
+            "pub fnc oreslang_assert_equal_scalar_v0(): int { return 7; } "
+            "pub fnc main(): int { return 0; }",
+            "reserved native runtime ABI symbol 'oreslang_assert_equal_scalar_v0'");
+        expect_rejected(
+            "pub fnc oreslang_assert_trap_bool_v0(): bool { return true; } "
+            "pub fnc main(): int { return 0; }",
+            "reserved native runtime ABI symbol 'oreslang_assert_trap_bool_v0'");
+        expect_rejected(
+            "pub fnc oreslang_assert_future_v1(): bool { return false; } "
+            "pub fnc main(): int { return 0; }",
+            "reserved native runtime ABI symbol 'oreslang_assert_future_v1'");
+        expect_rejected(
+            "pub fnc choose(): bool using read { return true; } "
+            "pub fnc main(): int { return 0; }",
+            "native bool literal AOT requires pure zero-argument function");
+
         expect_rejected(
             "pub fnc choose(int x): bool { return true; } "
             "pub fnc main(): int { return 0; }",
