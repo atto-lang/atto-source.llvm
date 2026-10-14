@@ -24,6 +24,20 @@ CASES = {
     ),
 }
 
+# These cases must produce LLVM IR: model-checker safety is not useful
+# without positive source-level evidence for permitted nonaliasing loans.
+ACCEPT = {
+    "two-shared-loans": (
+        "fnc add(borrow int a, borrow int b): int { return a + b; }\\n"
+        "pub fnc main(int x): int { return add(rt borrow x, rt borrow x); }\\n"
+    ),
+    "sequential-call-loans": (
+        "fnc read(borrow int a): int { return a; }\\n"
+        "pub fnc main(int x): int { return read(rt borrow x) + read(rt borrow x); }\\n"
+    ),
+}
+
+
 def main():
     if len(sys.argv) != 2:
         raise ValueError("usage: native_borrow_admission.py COMPILER")
@@ -35,7 +49,14 @@ def main():
                                     text=True, check=False, timeout=20)
             if result.returncode == 0 or result.stdout.strip() or expected not in result.stderr:
                 raise AssertionError(f"{title}: must reject without emitted IR: {result.stderr}")
-    print("native borrow admission: four invalid programs rejected without LLVM IR")
+        for title, source in ACCEPT.items():
+            path = pathlib.Path(folder) / (title + ".ores")
+            path.write_text(source, encoding="utf-8")
+            result = subprocess.run([sys.argv[1], str(path)], capture_output=True,
+                                    text=True, check=False, timeout=20)
+            if result.returncode != 0 or not result.stdout.startswith("; ModuleID"):
+                raise AssertionError(f"{title}: safe borrow program was rejected: {result.stderr}")
+    print("native borrow admission: four rejections and two admitted shared-loan programs")
 
 if __name__ == "__main__":
     try:
