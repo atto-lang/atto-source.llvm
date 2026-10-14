@@ -76,9 +76,16 @@ both backend select lowering paths are supported.
 
 ## Actual implementation status
 
-- **Java/GraalVM:** `OresTimers.afterNanos/sleepNanos` create cancellable `OresFuture<Void>` values, `Interval.next()` provides demand-driven ticks, and a bounded per-owner admission set is cancelled on close. Existing `OresScheduler` turns already support awaiting these futures. This is a runtime foundation, **not yet the exported `time.*` language module**.
-- **LLVM:** `NativeTimerQueue` provides bounded monotonic deadline registration, deterministic due polling, cancellation, owner-domain stale-token fencing and teardown. Its poll result is a CONTROL-plane notification token, **not a source-level Future or continuation**. No guest lowering is implied.
+- **Java/GraalVM:** `OresTimers.afterNanos/sleepNanos` create cancellable `OresFuture<Void>` values. `Interval.next()` provides demand-driven ticks and a cancellable, single-consumer contract. Timer admissions are bounded per owner (4,096) and globally (16,384); live intervals are also bounded (4,096 per owner). Explicit owner `close()` revokes both pending timers and idle/pending interval capabilities. Existing `OresScheduler` turns can await the futures. **The OresVM/context and actor lifecycle do not automatically own/close this helper yet**. This is a runtime foundation, **not the exported `time.*` language module**.
+- **LLVM:** `NativeTimerQueue` provides bounded monotonic deadline registration, deterministic due polling, cancellation and owner-domain fencing. A poll atomically moves a timer into an in-flight, still-capacity-charged delivery registry; a scheduler must exactly-once `claim_delivery` or `discard_delivery`, checking actor generation and executor authority before dispatch. Owner close revokes both scheduled and unclaimed-polled tokens. A successful claim is **not** a guest-continuation or lifetime lease. General typed Future/await lowering remains incomplete.
 - **Not complete:** source-level Duration literals, builtins/stdlib bindings, compiler effect checking for `sleep_blocking`, LLVM `Future<T>`/await continuation frames, `set_timeout` / `set_interval` guest callback admission, unified `select` timeout lowering, and compiler-generated lifecycle deregistration.
+
+## Hardening notes (October 14, 2026)
+
+- **Cancellation linearization:** A pending timer can be cancelled. Once a native timer is polled, expiration has won over cancellation; the unclaimed delivery token remains charged to the owner until CONTROL dispatch claims it, a dropped continuation discards it, or owner close revokes it.
+- **No guest reentry:** A native poll/claim is not authorization to call a guest continuation directly. The scheduler must still validate actor generation, owning domain, task admission and execution lease at actual dispatch.
+- **Global load:** The Java runtime cap applies across all `OresTimers` instances sharing the executor, preventing bypass through many timer-owner instances. It is not a substitute for tenant-specific time quota and explicit OresVM-owned lifecycle wiring.
+- **Evidence scope:** An isolated native C++17 test harness was compiled and executed using GCC, Clang, and Clang ASan/UBSan. Full repository CI could not be validated: GitHub Actions reported failure with no job steps/logs available. Source-level timer syntax is still an unimplemented proposal.
 
 ## Verification gates
 
