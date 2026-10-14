@@ -85,6 +85,72 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
                           if isinstance(node, ast.Assert)]
             self.assertEqual(bare_lines, [], f"{name}: bare assert at {bare_lines}")
 
+    def test_blank_diagnostic_is_never_an_unchecked_positive(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\\n")
+        p = self.run_contract(compiler, "--diagnostic", "")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--diagnostic requires nonempty text", p.stderr)
+
+    def test_blank_ir_expectation_is_rejected(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\\n")
+        p = self.run_contract(compiler, "--ir", "")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--ir requires nonempty text", p.stderr)
+
+    def test_negative_source_cannot_skip_requested_native_execution(self):
+        compiler = self.compiler(status=1, stderr="private class field")
+        p = self.run_contract(compiler, "--diagnostic", "private class field",
+                              "--run", "42")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("cannot be combined with positive test modes", p.stderr)
+
+    def test_negative_source_cannot_skip_ir_or_abi_gates(self):
+        compiler = self.compiler(status=1, stderr="private class field")
+        for flags in (("--ir", "ret i64 42"), ("--no-native-abi",),
+                      ("--no-main-link",)):
+            with self.subTest(flags=flags):
+                p = self.run_contract(compiler, "--diagnostic",
+                                      "private class field", *flags)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("cannot be combined with positive test modes",
+                              p.stderr)
+
+    def test_negative_compiler_must_emit_zero_bytes_not_whitespace(self):
+        compiler = self.compiler(status=1, stderr="private class field",
+                                 stdout="\\n")
+        p = self.run_contract(compiler, "--diagnostic", "private class field")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("compiler emitted stdout after rejection", p.stderr)
+
+    def test_native_status_must_be_possible_unsigned_exit_code(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\\n")
+        for expected in ("-9", "256", "99999"):
+            with self.subTest(expected=expected):
+                p = self.run_contract(compiler, "--run", expected)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("--run requires an OS exit code", p.stderr)
+
+    def test_native_runtime_cannot_be_ignored_without_run(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\\n")
+        p = self.run_contract(compiler, "--native-runtime", "/tmp/unused.c")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--native-runtime requires --run", p.stderr)
+
+    def test_unrelated_linker_error_followed_by_main_note_is_rejected(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\\n")
+        clang = self.linker(link_status=1,
+                            link_error="ld: undefined reference to alpha\\n"
+                                       "note: main was invoked")
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("missing-main diagnostic", p.stderr)
+
+    def test_lld_style_missing_main_diagnostic_is_accepted(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\\n")
+        clang = self.linker(link_status=1, link_error="ld.lld: undefined symbol: main")
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
     def test_valid_negative_still_passes_under_optimization(self):
         compiler = self.compiler(status=1, stderr="private class field")
         p = self.run_contract(compiler, "--diagnostic", "private class field")
