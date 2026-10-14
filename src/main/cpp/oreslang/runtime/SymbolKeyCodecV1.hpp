@@ -118,6 +118,24 @@ inline Key decode(const std::vector<std::uint8_t>& bytes) {
     return result;
 }
 
+// Default untrusted policy. The C++ host-only codec intentionally does not
+// accept a caller-supplied export list: receiver-authenticated tenant scopes
+// are not wired into native transport yet. For now admit ordinary String
+// keys and the sealed public PROCESS core list only.
+inline bool publicToUntrustedCore(const Key& key) noexcept {
+    return key.kind == Kind::Process
+        && (key.name == "ready" || key.name == "error"
+            || key.name == "Symbol.iterator");
+}
+
+inline Key decodeForUntrusted(const std::vector<std::uint8_t>& bytes) {
+    Key key = decode(bytes);
+    if (key.kind != Kind::Text && !publicToUntrustedCore(key))
+        throw std::invalid_argument(
+            "Symbol key is not visible to untrusted actor");
+    return key;
+}
+
 inline std::vector<Key> decodeDistinct(const std::vector<std::vector<std::uint8_t>>& frames) {
     if (frames.size() > kMaxKeys)
         throw std::invalid_argument("too many property keys");
@@ -133,6 +151,19 @@ inline std::vector<Key> decodeDistinct(const std::vector<std::vector<std::uint8_
         if (!seen.insert(key).second)
             throw std::invalid_argument("duplicate logical property key");
         keys.push_back(std::move(key));
+    }
+    return keys;
+}
+
+// Use the same aggregate wire budget and nominal duplicate rules for trusted
+// and untrusted callers; the only difference is the additional admission gate.
+inline std::vector<Key> decodeDistinctForUntrusted(
+        const std::vector<std::vector<std::uint8_t>>& frames) {
+    auto keys = decodeDistinct(frames);
+    for (const auto& key : keys) {
+        if (key.kind != Kind::Text && !publicToUntrustedCore(key))
+            throw std::invalid_argument(
+                "Symbol key is not visible to untrusted actor");
     }
     return keys;
 }
