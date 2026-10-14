@@ -46,6 +46,14 @@ jobs:
         run: python3 contracts/v1/semantics/traces/native_probe.py --binary ./build/oreslang-actor-trace-test --repeat 12 --timeout 15
       - name: Check normative LLVM admissions
         run: python3 contracts/v1/run.py --backend llvm --command './build/oreslang-llvmc {source}' --report build/conformance-llvm.json
+      - name: Real LLVM compiler AI smoke (source acceptance, rejection, executed native result)
+        run: |
+          python3 scripts/ai-conformance-smoke.py \
+            --backend llvm \
+            --compiler "$(realpath build/oreslang-llvmc)" \
+            --clang "$(command -v clang)" \
+            --source-sha "${{ github.sha }}" \
+            --report build/ai-conformance-llvm.json
       - name: Check compiled native results and diagnostic semantics
         run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "${{ github.sha }}" --report build/semantics-llvm.json
       - name: Verify seeded native metamorphic arithmetic
@@ -62,6 +70,7 @@ jobs:
           path: |
             build/conformance-llvm.json
             build/semantics-llvm.json
+            build/ai-conformance-llvm.json
             build/metamorphic-llvm.json
             build/metamorphic-llvm-seed-20261009.json
             build/metamorphic-llvm-seed-314159.json
