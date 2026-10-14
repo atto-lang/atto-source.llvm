@@ -268,7 +268,8 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
-    if (wasm32_target && !source.closed_array_results.empty())
+    if (wasm32_target && (!source.closed_array_results.empty()
+            || !source.closed_result_matches.empty()))
         throw std::runtime_error(
             "wasm32 nominal tagged Result ABI awaits verified target lowering");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
@@ -276,6 +277,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         // nominal tagged constructors or unrelated declarations.
         if (wasm32_target || !source.classes.empty() || !source.actors.empty()
                 || !source.closed_array_results.empty()
+                || !source.closed_result_matches.empty()
                 || !source.cooperative_loops.empty() || !source.module.empty())
             throw std::runtime_error(
                 "experimental scalar loop unsupported target/owners or tagged Result declarations");
@@ -1472,6 +1474,77 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 {llvm::ConstantInt::get(i8, tagged.ok ? 0 : 1),
                  llvm::ConstantInt::get(i8, tagged.error)});
             builder.CreateRet(aggregate);
+        }
+    }
+
+    // Exactly one immutable typed local, one private Result-producing call,
+    // and one exhaustive two-arm match. No aliases, loops, copies or escapes.
+    if (!source.closed_result_matches.empty()) {
+        llvm::Type* i8 = llvm::Type::getInt8Ty(context);
+        llvm::StructType* tagged_type =
+            llvm::StructType::getTypeByName(context, "ores.result.void.array_error");
+        if (!tagged_type || tagged_type->getNumElements() != 2
+                || tagged_type->getElementType(0) != i8
+                || tagged_type->getElementType(1) != i8)
+            throw std::runtime_error("closed Result match requires exact nominal LLVM type");
+        std::unordered_set<std::string> producer_names;
+        for (const auto& tagged : source.closed_array_results)
+            producer_names.insert(tagged.name);
+        for (const auto& consumer : source.closed_result_matches) {
+            if (consumer.exported || !producer_names.count(consumer.producer))
+                throw std::runtime_error(
+                    "closed Result match has unverified export or producer");
+            const std::string symbol = source.module.empty()
+                ? consumer.name : source.module + "." + consumer.name;
+            const std::string producer_symbol = source.module.empty()
+                ? consumer.producer : source.module + "." + consumer.producer;
+            if (module.getNamedValue(symbol))
+                throw std::runtime_error("closed Result match symbol collision");
+            llvm::Function* producer = module.getFunction(producer_symbol);
+            if (!producer || producer->getLinkage() != llvm::GlobalValue::InternalLinkage
+                    || producer->getReturnType() != tagged_type
+                    || producer->arg_size() != 0)
+                throw std::runtime_error(
+                    "closed Result match producer has incompatible nominal signature");
+            auto* fn = llvm::Function::Create(
+                llvm::FunctionType::get(i64, {}, false),
+                llvm::Function::InternalLinkage, symbol, module);
+            auto* entry = llvm::BasicBlock::Create(context, "result.entry", fn);
+            auto* valid = llvm::BasicBlock::Create(context, "result.valid", fn);
+            auto* invalid = llvm::BasicBlock::Create(context, "result.invalid", fn);
+            auto* ok_arm = llvm::BasicBlock::Create(context, "result.ok", fn);
+            auto* err_arm = llvm::BasicBlock::Create(context, "result.err", fn);
+            llvm::IRBuilder<> builder(entry);
+            llvm::Value* constructed = builder.CreateCall(producer, {}, "result.constructed");
+            llvm::Value* local = builder.CreateAlloca(
+                tagged_type, nullptr, consumer.local + ".typed.slot");
+            builder.CreateStore(constructed, local);
+            llvm::Value* moved = builder.CreateLoad(
+                tagged_type, local, consumer.local + ".consumed");
+            llvm::Value* tag = builder.CreateExtractValue(moved, {0}, "result.variant");
+            llvm::Value* error = builder.CreateExtractValue(moved, {1}, "result.error");
+            auto* zero = llvm::ConstantInt::get(i8, 0);
+            auto* one = llvm::ConstantInt::get(i8, 1);
+            auto* two = llvm::ConstantInt::get(i8, 2);
+            llvm::Value* is_ok = builder.CreateICmpEQ(tag, zero, "is.ok");
+            llvm::Value* is_err = builder.CreateICmpEQ(tag, one, "is.err");
+            llvm::Value* valid_error = builder.CreateOr(
+                builder.CreateICmpEQ(error, one),
+                builder.CreateICmpEQ(error, two), "is.known.error");
+            llvm::Value* valid_value = builder.CreateOr(
+                builder.CreateAnd(is_ok, builder.CreateICmpEQ(error, zero)),
+                builder.CreateAnd(is_err, valid_error), "valid.closed.result");
+            builder.CreateCondBr(valid_value, valid, invalid);
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(
+                llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            builder.CreateCondBr(is_ok, ok_arm, err_arm);
+            builder.SetInsertPoint(ok_arm);
+            builder.CreateRet(llvm::ConstantInt::getSigned(i64, consumer.ok_return));
+            builder.SetInsertPoint(err_arm);
+            builder.CreateRet(llvm::ConstantInt::getSigned(i64, consumer.err_return));
         }
     }
 
