@@ -129,8 +129,7 @@ int main(int argc, char** argv) {
                     !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                     !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
                     fn.scalar_while || fn.caught_throw_value ||
-                    !fn.caught_throw_defers.empty() || fn.has_declared_effects ||
-                    !scalar(*fn.result))
+                    !fn.caught_throw_defers.empty() || fn.has_declared_effects)
                     throw std::runtime_error("cortex-m target rejects main, effects or non-scalar functions");
                 if (fn.parameters.size() > max_parameters)
                     throw std::runtime_error("cortex-m parameter budget exceeded");
