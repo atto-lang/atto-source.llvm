@@ -45,13 +45,16 @@ Do not infer stages 2–3 are complete from existence of these files.
 
 ## Current hard blockers (October 14, 2026)
 
-- The Java typechecker resolves class parents from the linked class registry.
-  The canonical guest `Error` base is **not yet registered** here. As a result,
-  the new inherited guest declarations are *staged API source*, not executable
-  `Error` subclasses. Parsing `.ores` text is insufficient evidence.
-- Java's `TypedExceptionalEffectAdmissionTest` currently requires
-  `throw`, `raise`, `panic` and `recover` to be rejected as unsupported
-  typed effects. This needs a deliberate compiler/runtime migration.
+- The Java/GraalVM draft branch now has a compiler-owned nominal `Error`
+  root, restricted lexical guest `throw/catch`, and separate non-suspending
+  actor `raise/panic` effects with immutable host-supervisor CONTROL queue
+  delivery. The parent-actor recovery hooks and cross-backend execution
+  tests remain unverified and gated.
+- LLVM retains staged guest `Error` source declarations only. It has a
+  **host-only** matching `ActorFailureControlNotice` schema with strict
+  Raise/Panic tags and a fixed, value-only diagnostic. The native C++ guest
+  parser still rejects inheritance and typed effects; this header does
+  not constitute LLVM guest exception lowering.
 - LLVM still compiles only a narrow native source subset: its class
   parser now rejects `Error` redeclaration and inherited classes with
   explicit diagnostics, rather than silently implying support. `src/core`
