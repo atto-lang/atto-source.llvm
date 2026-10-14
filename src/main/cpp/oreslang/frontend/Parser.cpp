@@ -193,6 +193,11 @@ public:
             if (vis_count > 1)
                 fail("duplicate/conflicting visibility modifier");
             const bool exported = before_pub || after_pub;
+            // No second visibility modifier may be consumed later by
+            // function(), class_declaration(), or another parser branch.
+            // In particular "private pub fnc" must not turn into an export.
+            if (token_.text == "pub" || token_.text == "private")
+                fail("duplicate/conflicting visibility modifier");
 
             if (accept("serial")) {
                 require("actor");
