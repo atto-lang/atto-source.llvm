@@ -1,0 +1,7 @@
+define class Pair as
+  pub const int a: 13;
+end
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  return rt take p.a;
+}
