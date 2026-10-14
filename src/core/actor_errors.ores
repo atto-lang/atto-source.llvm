@@ -1,0 +1,99 @@
+// Oreslang-owned actor error taxonomy, v1.
+// Source declarations are not yet proof of JVM/LLVM typed throw lowering.
+// Exception transfer across actors uses value-only envelope fields, NEVER
+// a live error instance, method, function, Throwable, or captured closure.
+define module actor_errors as
+
+  // Inherits the canonical guest Error, not a Java/C++ host exception.
+  pub define class ActorError extends Error as
+    pub val int code;
+    pub val String message;
+    pub val String actor_id;
+    pub val String supervisor_id;
+  end
+
+  // 1001 stopped: Actor already stopped or retired. Control: recoverable.
+  pub define class ActorStoppedError extends ActorError as
+  end
+
+  // 1002 mailbox_full: Mailbox admission capacity exhausted. Control: recoverable.
+  pub define class ActorMailboxFullError extends ActorError as
+  end
+
+  // 1003 mailbox_closed: Mailbox closed before send. Control: recoverable.
+  pub define class ActorMailboxClosedError extends ActorError as
+  end
+
+  // 1004 send_rejected: Actor send contract rejected. Control: recoverable.
+  pub define class ActorSendRejectedError extends ActorError as
+  end
+
+  // 1005 transport: Actor message transport failed. Control: recoverable.
+  pub define class ActorTransportError extends ActorError as
+  end
+
+  // 1006 isolation: Cross-actor ownership boundary violation. Control: terminal.
+  pub define class ActorIsolationError extends ActorError as
+  end
+
+  // 1007 capability_revoked: Actor capability no longer valid. Control: terminal.
+  pub define class ActorCapabilityRevokedError extends ActorError as
+  end
+
+  // 1008 spawn: Actor spawn denied or failed. Control: recoverable.
+  pub define class ActorSpawnError extends ActorError as
+  end
+
+  // 1009 supervision: Supervisor routing or admission failed. Control: terminal.
+  pub define class ActorSupervisionError extends ActorError as
+  end
+
+  // 1010 restart_limit: Supervisor restart limit reached. Control: terminal.
+  pub define class ActorRestartLimitError extends ActorError as
+  end
+
+  // 1011 deadline_exceeded: Actor deadline exceeded. Control: terminal.
+  pub define class ActorDeadlineExceededError extends ActorError as
+  end
+
+  // 1012 cancelled: Actor cancelled by control plane. Control: terminal.
+  pub define class ActorCancelledError extends ActorError as
+  end
+
+  // 1013 lease_expired: Actor lease expired. Control: terminal.
+  pub define class ActorLeaseExpiredError extends ActorError as
+  end
+
+  // 1014 fencing: Actor fencing token rejected. Control: terminal.
+  pub define class ActorFencingError extends ActorError as
+  end
+
+  // 1015 group_closed: Actor group is closed. Control: recoverable.
+  pub define class ActorGroupClosedError extends ActorError as
+  end
+
+  // 1016 group_permit: Actor group membership permit rejected. Control: terminal.
+  pub define class ActorGroupPermitError extends ActorError as
+  end
+
+  // 1017 remote_unavailable: Remote actor endpoint unavailable. Control: recoverable.
+  pub define class ActorRemoteUnavailableError extends ActorError as
+  end
+
+  // 1018 serialization: Actor payload cannot be transported. Control: recoverable.
+  pub define class ActorSerializationError extends ActorError as
+  end
+
+  // 1019 heap_exhausted: Actor heap allocation limit exceeded. Control: terminal.
+  pub define class ActorHeapExhaustedError extends ActorError as
+  end
+
+  // 1020 runtime_invariant: Actor runtime invariant violated. Control: terminal.
+  pub define class ActorRuntimeInvariantError extends ActorError as
+  end
+
+  pub fnc is_actor_error_code(int code): bool {
+    return code >= 1001 && code <= 1020;
+  }
+
+end
