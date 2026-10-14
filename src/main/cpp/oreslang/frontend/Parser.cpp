@@ -251,6 +251,10 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (actor.name == "Result" || actor.name == "Option"
+                || actor.name == "ArrayError") {
+            fail("native builtin Result/Option/ArrayError names cannot be redefined as actors");
+        }
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
