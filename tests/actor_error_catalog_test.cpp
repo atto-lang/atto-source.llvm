@@ -56,4 +56,8 @@ int main() {
             ActorErrorCode::ActorTransport, std::string("\xe2\x81\xa7", 3),
             "a", "b");
     if (replacement.diagnostic() != "?") return 12;
+    const auto separator = ActorErrorEnvelope::make(
+            ActorErrorCode::ActorTransport, std::string("\x09\xe2\x80\xa8\xe2\x81\xa0", 7),
+            "a", "b");
+    if (separator.diagnostic() != "???") return 13;
 }
