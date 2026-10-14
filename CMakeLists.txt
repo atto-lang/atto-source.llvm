@@ -29,6 +29,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only native std/error nominal value substrate. No guest lowering.
+    add_executable(oreslang-native-core-error-test
+        tests/native_core_error_test.cpp)
+    target_include_directories(oreslang-native-core-error-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-core-error-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_core_error_catalog_and_ancestry_host_only
+        COMMAND oreslang-native-core-error-test)
+    set_tests_properties(native_core_error_catalog_and_ancestry_host_only
+        PROPERTIES TIMEOUT 20)
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
@@ -95,6 +106,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_core_error_catalog_manifest_sync
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_core_error_catalog_sync.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/error-catalog.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeCoreError.hpp")
+    set_tests_properties(native_core_error_catalog_manifest_sync
+        PROPERTIES TIMEOUT 20)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_NATIVE_ARRAY_CLANG)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
