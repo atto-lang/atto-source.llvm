@@ -1,0 +1,4 @@
+private pub class Hidden as
+  pub int value: 7
+end
+pub fnc main(): int { return 0; }
