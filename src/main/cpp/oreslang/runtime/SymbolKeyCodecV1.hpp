@@ -136,7 +136,12 @@ inline Key decodeForUntrusted(const std::vector<std::uint8_t>& bytes) {
     return key;
 }
 
-inline std::vector<Key> decodeDistinct(const std::vector<std::vector<std::uint8_t>>& frames) {
+// Enforce the untrusted policy before inserting keys into the detached
+// collection. Trusted and untrusted entry points share exactly the same
+// cardinality, wire-byte and logical-equality invariants.
+inline std::vector<Key> decodeDistinctChecked(
+        const std::vector<std::vector<std::uint8_t>>& frames,
+        bool untrusted) {
     if (frames.size() > kMaxKeys)
         throw std::invalid_argument("too many property keys");
     std::size_t total = 0;
@@ -147,7 +152,7 @@ inline std::vector<Key> decodeDistinct(const std::vector<std::vector<std::uint8_
         if (frame.size() > kAggregateWireBytes - total)
             throw std::invalid_argument("aggregate property-key wire bytes exceeded");
         total += frame.size();
-        auto key = decode(frame);
+        Key key = untrusted ? decodeForUntrusted(frame) : decode(frame);
         if (!seen.insert(key).second)
             throw std::invalid_argument("duplicate logical property key");
         keys.push_back(std::move(key));
@@ -155,17 +160,14 @@ inline std::vector<Key> decodeDistinct(const std::vector<std::vector<std::uint8_
     return keys;
 }
 
-// Use the same aggregate wire budget and nominal duplicate rules for trusted
-// and untrusted callers; the only difference is the additional admission gate.
+inline std::vector<Key> decodeDistinct(
+        const std::vector<std::vector<std::uint8_t>>& frames) {
+    return decodeDistinctChecked(frames, false);
+}
+
 inline std::vector<Key> decodeDistinctForUntrusted(
         const std::vector<std::vector<std::uint8_t>>& frames) {
-    auto keys = decodeDistinct(frames);
-    for (const auto& key : keys) {
-        if (key.kind != Kind::Text && !publicToUntrustedCore(key))
-            throw std::invalid_argument(
-                "Symbol key is not visible to untrusted actor");
-    }
-    return keys;
+    return decodeDistinctChecked(frames, true);
 }
 
 } // namespace oreslang::runtime::symbol_key_v1
