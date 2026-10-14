@@ -12,9 +12,9 @@ import sys
 import tempfile
 
 SOURCE = """
-pub fnc success(): Result<void, ArrayError> { return Ok(); }
-pub fnc limited(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
-pub fnc no_memory(): Result<void, ArrayError> { return Err(ArrayError.NoMemory); }
+fnc success(): Result<void, ArrayError> { return Ok(); }
+fnc limited(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
+fnc no_memory(): Result<void, ArrayError> { return Err(ArrayError.NoMemory); }
 """
 
 LLVM_CALLER = """
@@ -61,8 +61,32 @@ NEGATIVE = {
         fnc wrong(): Result<void, ArrayError> { return Err(1); }
     """,
     "result-as-main": """
-        pub fnc main(): Result<void, ArrayError> { return Ok(); }
+        fnc main(): Result<void, ArrayError> { return Ok(); }
     """,
+    "unverified-public-export": """
+        pub fnc exposed(): Result<void, ArrayError> { return Ok(); }
+    """,
+    "nominal-error-class-spoof": """
+        define class ArrayError as
+          int value: 1
+        end
+        fnc wrong(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
+    """,
+    "result-module-shadow": """
+        define module Result as
+          fnc wrong(): Result<void, ArrayError> { return Ok(); }
+        end
+    """,
+    "error-module-shadow": """
+        define module ArrayError as
+          fnc wrong(): Result<void, ArrayError> { return Err(ArrayError.Limit); }
+        end
+    """,
+    "constructor-count-exceeds-limit": (
+        "fnc f0(): Result<void, ArrayError> { return Ok(); }\n"
+        + "".join(f"fnc f{i}(): Result<void, ArrayError> "
+                  "{ return Ok(); }\n" for i in range(1, 65))
+    ),
     "result-local-unhandled": """
         fnc wrong(): int { val pending: Result<void,ArrayError> = Ok(); return 0; }
     """,
@@ -103,7 +127,9 @@ def main():
         ir = compiled.stdout.decode("utf8")
         for fragment in (
                 "ores.result.void.array_error = type { i8, i8 }",
-                "@success()", "@limited()", "@no_memory()",
+                "define internal %ores.result.void.array_error @success()",
+                "define internal %ores.result.void.array_error @limited()",
+                "define internal %ores.result.void.array_error @no_memory()",
                 "ret %ores.result.void.array_error"):
             if fragment not in ir:
                 raise AssertionError(f"missing typed LLVM IR fragment: {fragment}")
