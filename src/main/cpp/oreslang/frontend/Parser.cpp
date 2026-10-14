@@ -178,41 +178,55 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (accept("define")) {
+        // The native subset preserves its closed-world wrapper constraints.
+        // A source modifier before or after 'define' is equivalent, but
+        // conflicting/duplicate visibility is always an error.
+        while (token_.kind != Kind::End &&
+                !(wrapped_module && token_.text == "end")) {
+            const bool before_pub = accept("pub");
+            const bool before_private = accept("private");
+            const bool defined = accept("define");
+            const bool after_pub = defined && accept("pub");
+            const bool after_private = defined && accept("private");
+            const int vis_count = int(before_pub) + int(before_private)
+                + int(after_pub) + int(after_private);
+            if (vis_count > 1)
+                fail("duplicate/conflicting visibility modifier");
+            const bool exported = before_pub || after_pub;
+
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
+                if (!defined || wrapped_module || !program.module.empty() ||
+                        !program.classes.empty() || !program.actors.empty() ||
+                        !program.functions.empty() || !program.cooperative_loops.empty())
+                    fail("native module must be the sole outer source declaration with 'define'");
+                if (exported)
+                    fail("native public module export requires checked module-level ABI lowering");
+                // Explicit private and omitted visibility are identical here.
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
-            } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
-                    require("actor");
-                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'module', 'class' or 'actor'");
-            }
-        }
-        while (token_.kind != Kind::End
-                && !(wrapped_module && token_.text == "end")) {
-            if (accept("define")) {
-                if (accept("serial")) {
-                    require("actor");
-                    fail("native serial actor requires shared HTTP/message lane lowering");
-                }
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
-                    require("actor");
-                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'class' or 'actor'");
-            } else if (token_.text == "suspend") {
+            } else if (accept("class")) {
+                if (token_.text == "pub" || token_.text == "private")
+                    fail("class visibility must appear before 'class'");
+                ClassDecl klass = class_declaration();
+                klass.exported = exported;
+                program.classes.push_back(std::move(klass));
+            } else if (accept("actor")) {
+                if (exported)
+                    fail("native public actor export requires checked actor ABI lowering");
+                program.actors.push_back(actor_declaration());
+            } else if (accept_transform_pipe_modifier()) {
+                require("actor");
+                fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+            } else if (token_.text == "suspend" && !defined && !before_private && !exported) {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
-                program.functions.push_back(function());
+                if (defined) fail("expected module, class or actor after 'define'");
+                program.functions.push_back(function(exported));
             }
         }
         if (wrapped_module) require("end");
@@ -321,9 +335,13 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
-            accept("pub");
-            const bool legacy_let = accept("let");
             ClassField field;
+            const bool public_modifier = accept("pub");
+            const bool private_modifier = accept("private");
+            if (public_modifier && private_modifier)
+                fail("duplicate/conflicting visibility modifier on class field");
+            field.exported = public_modifier;
+            const bool legacy_let = accept("let");
             if (!legacy_let) field.final_field = accept("final");
             if (legacy_let && accept("mut")) {
                 require("Array");
@@ -425,10 +443,12 @@ private:
         return loop;
     }
 
-    Function function() {
+    Function function(bool preexported = false) {
         Function value;
         value.offset = token_.offset;
-        value.exported = accept("pub");
+        if (preexported && token_.text == "pub")
+            fail("duplicate visibility modifier on native function");
+        value.exported = preexported || accept("pub");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
