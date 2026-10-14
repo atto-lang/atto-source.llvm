@@ -1756,3 +1756,15 @@ if(BUILD_TESTING)
     set_tests_properties(native_nominal_enum_overload_static_policy
         PROPERTIES TIMEOUT 10)
 endif()
+
+
+# Freestanding Cortex-M target: actual Oreslang source -> LLVM IR -> ARM object.
+# This is not Zephyr/QEMU firmware evidence; the embedded platform owns that.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME cortexm_freestanding_source_object
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_freestanding_source_object.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(cortexm_freestanding_source_object PROPERTIES TIMEOUT 90)
+endif()
