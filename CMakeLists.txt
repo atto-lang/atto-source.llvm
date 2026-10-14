@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only Symbol tagged-key wire v1 foundation. This does not yet
+    # establish LLVM guest lowering or Unicode NFC/full Java parity.
+    add_executable(oreslang-symbol-key-codec-v1-test
+        tests/symbol_key_codec_v1_test.cpp)
+    target_include_directories(oreslang-symbol-key-codec-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-symbol-key-codec-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_symbol_key_codec_v1_host_only
+        COMMAND oreslang-symbol-key-codec-v1-test)
+    set_tests_properties(native_symbol_key_codec_v1_host_only
+        PROPERTIES TIMEOUT 30)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
