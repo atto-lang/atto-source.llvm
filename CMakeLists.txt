@@ -95,6 +95,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Self-test for a measurement-only compile benchmark. No performance
+    # threshold is asserted in CI: runner timing is not reproducible.
+    add_test(NAME native_compile_benchmark_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_compile_benchmark_harness.py")
+    set_tests_properties(native_compile_benchmark_harness_selftest
+        PROPERTIES TIMEOUT 30)
     find_program(ORE_NATIVE_ARRAY_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_NATIVE_ARRAY_CLANG)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
