@@ -489,6 +489,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
     for (const auto& fn : source.functions) {
+        // Parser validation is the primary gate; protect this compiler API
+        // against synthetic/prevalidated Program ASTs as well. An unqualified
+        // guest export must not impersonate a linker-owned assertion ABI.
+        if (source.module.empty() && fn.name.rfind("oreslang_assert_", 0) == 0)
+            throw std::runtime_error(
+                "reserved native runtime ABI symbol '" + fn.name + "'");
         const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name);
