@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <stdexcept>
 
 #include "oreslang/runtime/ExceptionPolicy.hpp"
