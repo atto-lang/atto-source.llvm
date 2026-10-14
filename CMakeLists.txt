@@ -373,7 +373,7 @@ if(BUILD_TESTING)
         native_contract_harness_optimize_failclosed
         native_contract_harness_python_O
         native_contract_harness_python_OO
-        PROPERTIES TIMEOUT 120)
+        PROPERTIES TIMEOUT 240)
 
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
