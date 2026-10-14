@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -27,6 +28,11 @@ struct LocalOwnership {
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
+    // A count alone cannot detect replay of one loan while another stays live.
+    // Ticket identity is compiler-local and never escapes into generated code.
+    std::size_t next_loan_ticket = 1;  // zero is an invalid loan identity
+    std::unordered_set<std::size_t> live_shared_tickets;
+    std::size_t live_exclusive_ticket = 0;
     std::string class_name;
     std::unordered_set<std::string> class_fields;
     std::unordered_set<std::string> class_array_fields;
@@ -99,6 +105,7 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
 struct Loan {
     std::string name;
     bool exclusive = false;
+    std::size_t ticket = 0;
 };
 
 // Only named, OWNED int parameter storage is currently addressable. A loan
@@ -136,22 +143,40 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
             expr.left->name + "'");
     if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
         reject(expr, "conflicting active native borrow of '" + expr.left->name + "'");
-    if (exclusive) source.exclusive_loan = true;
-    else ++source.shared_loans;
-    return {expr.left->name, exclusive};
+    // Reserve identity *before* mutating loan counters. Insertion can
+    // allocate; failure must leave the source state unchanged.
+    if (source.next_loan_ticket == std::numeric_limits<std::size_t>::max())
+        reject(expr, "internal ownership error: loan identity space exhausted");
+    const std::size_t ticket = source.next_loan_ticket;
+    if (!exclusive) {
+        if (source.shared_loans == std::numeric_limits<std::size_t>::max())
+            reject(expr, "internal ownership error: shared loan count overflow");
+        if (!source.live_shared_tickets.insert(ticket).second)
+            reject(expr, "internal ownership error: duplicate loan identity");
+        ++source.shared_loans;
+    } else {
+        if (source.live_exclusive_ticket != 0)
+            reject(expr, "internal ownership error: duplicate exclusive loan");
+        source.live_exclusive_ticket = ticket;
+        source.exclusive_loan = true;
+    }
+    ++source.next_loan_ticket;
+    return {expr.left->name, exclusive, ticket};
 }
 
 void release(const Loan& loan, Locals& locals) {
     auto& source = locals.at(loan.name);
-    // Fail closed if compiler control flow ever attempts to release a loan
-    // that is not active. In particular, decrementing a size_t at zero would
-    // silently wrap into an apparently enormous number of shared loans.
+    // Validate a specific live ticket, not merely the total loan count.
+    // This detects duplicate/forged releases even when other loans exist.
     if (loan.exclusive) {
-        if (!source.exclusive_loan)
+        if (loan.ticket == 0 || !source.exclusive_loan ||
+                source.live_exclusive_ticket != loan.ticket)
             throw std::logic_error("internal ownership error: releasing inactive exclusive loan");
+        source.live_exclusive_ticket = 0;
         source.exclusive_loan = false;
     } else {
-        if (source.shared_loans == 0)
+        if (loan.ticket == 0 || source.shared_loans == 0 ||
+                source.live_shared_tickets.erase(loan.ticket) != 1)
             throw std::logic_error("internal ownership error: releasing inactive shared loan");
         --source.shared_loans;
     }
