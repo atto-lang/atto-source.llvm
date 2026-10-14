@@ -87,7 +87,7 @@ int main() {
     // count is well below 4,096.
     std::vector<std::vector<std::uint8_t>> boundary;
     for (int i = 0; i < 64; ++i) {
-        std::string name(16'380, 'x');
+        std::string name(16'384, 'x');
         const std::string serial = std::to_string(i);
         name.replace(name.size() - serial.size(), serial.size(), serial);
         boundary.push_back(encode({Kind::Text, name}));
