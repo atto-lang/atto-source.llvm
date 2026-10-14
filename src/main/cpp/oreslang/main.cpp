@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
             // Never lower native actors, heap regions or unverified host calls
             // merely because they happen to compile into some LLVM IR.
             if (experimental_owned_int || experimental_rt_scalar_loop ||
-                !ast.module.empty() || !ast.classes.empty() || !ast.actors.empty() ||
+                !ast.module.empty() || !ast.classes.empty() ||
                 !ast.cooperative_loops.empty() || ast.functions.empty())
                 throw std::runtime_error("cortex-m target supports only freestanding scalar functions");
             constexpr std::size_t max_functions = 64;
@@ -122,12 +122,60 @@ int main(int argc, char** argv) {
                     default: return false;
                 }
             };
+            if (!ast.actors.empty()) {
+                if (ast.actors.size() > 8 || ast.functions.size() != 1 ||
+                    ast.functions.front().name != "main")
+                    throw std::runtime_error("cortex-m actors require 1..8 actor types and only main");
+                const auto& start = ast.functions.front();
+                if (start.returns_void || !start.result ||
+                    start.result->kind != oreslang::Expression::Kind::Integer ||
+                    !start.locals.empty() || !start.statements.empty() ||
+                    !start.early_returns.empty() || start.has_declared_effects ||
+                    start.actor_spawns.empty() || start.actor_spawns.size() > 8 ||
+                    start.actor_sends.size() > 32 ||
+                    start.actor_stops.size() != start.actor_spawns.size() ||
+                    !start.parameters.empty())
+                    throw std::runtime_error("cortex-m actor bootstrap requires bounded source main");
+                if (start.actor_actions.size() !=
+                        start.actor_sends.size() + start.actor_stops.size())
+                    throw std::runtime_error("cortex-m actor action plan inconsistent");
+                for (const auto& actor : ast.actors) {
+                    if (actor.fields.empty() || actor.fields.size() > 8 ||
+                        actor.on_message.actor_field_writes.size() > 16 ||
+                        !actor.on_message.result)
+                        throw std::runtime_error("cortex-m actor field or handler budget exceeded");
+                    for (const auto& field : actor.fields) {
+                        if (!field.initializer ||
+                            field.initializer->kind != oreslang::Expression::Kind::Integer)
+                            throw std::runtime_error("cortex-m actors need literal i64 field initialization");
+                    }
+                    std::vector<std::string> calls;
+                    if (!scalar(*actor.on_message.result, 0, calls) || !calls.empty())
+                        throw std::runtime_error("cortex-m actor return must be scalar without guest calls");
+                    for (const auto& write : actor.on_message.actor_field_writes) {
+                        calls.clear();
+                        if (!write.expression || !scalar(*write.expression, 0, calls) ||
+                            !calls.empty())
+                            throw std::runtime_error("cortex-m actor writes must be scalar without guest calls");
+                    }
+                }
+                for (const auto& send : start.actor_sends) {
+                    if (!send.payload ||
+                        send.payload->kind != oreslang::Expression::Kind::Integer)
+                        throw std::runtime_error("cortex-m actor send must be a literal i64");
+                }
+                // The trusted C runtime owns static actors, mailboxes, and
+                // orderly stop/drain; this does not admit guest awaits.
+            }
             for (const auto& fn : ast.functions) {
-                if (fn.name == "main" || fn.returns_void || !fn.result ||
+                if ((!ast.actors.empty() && fn.name != "main") ||
+                    (ast.actors.empty() && fn.name == "main") ||
+                    fn.returns_void || !fn.result ||
                     !fn.locals.empty() || !fn.statements.empty() ||
-                    !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
-                    !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
-                    !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                    !fn.early_returns.empty() ||
+                    (ast.actors.empty() && (!fn.actor_spawns.empty() ||
+                        !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                        !fn.actor_actions.empty() || !fn.actor_field_writes.empty())) ||
                     fn.scalar_while || fn.caught_throw_value ||
                     !fn.caught_throw_defers.empty() || fn.has_declared_effects)
                     throw std::runtime_error("cortex-m target rejects main, effects or non-scalar functions");
