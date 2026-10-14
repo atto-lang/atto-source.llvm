@@ -10,6 +10,7 @@ These checks use explicit exceptions, not Python 'assert': PYTHONOPTIMIZE
 must never disable a CI safety gate. This is not certification of general
 record lowering, native heaps or full-application zero-GC execution.
 """
+import os
 import pathlib
 import re
 import subprocess
@@ -22,9 +23,9 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def run(args, *, timeout=30):
+def run(args, *, timeout=30, cwd=None, env=None):
     return subprocess.run(args, text=True, capture_output=True,
-                          check=False, timeout=timeout)
+                          check=False, timeout=timeout, cwd=cwd, env=env)
 
 
 def validate_no_guest_gc(ir, label):
@@ -55,13 +56,22 @@ def check_aot(compiler, clang, root, title, program, exit_code):
     validate_no_guest_gc(ir, title)
     ir_path = root / (title + ".ll")
     ir_path.write_text(ir, encoding="utf-8")
+    # The executable must not need the original guest source after AOT.
+    # Delete it before linking or running either optimization variant.
+    source_path.unlink()
+    runtime_dir = root / "standalone-runtime"
+    runtime_dir.mkdir(exist_ok=True)
+    runtime_env = dict(os.environ)
+    runtime_env["PATH"] = ""  # No source compiler, Java, or build tool discovery.
     for optimization in ("0", "2"):
         binary = root / (title + "-O" + optimization)
         compiled = run([clang, "-x", "ir", "-O" + optimization,
                         str(ir_path), "-o", str(binary)])
         require(compiled.returncode == 0,
                 f"{title} O{optimization}: native link failed: {compiled.stderr}")
-        guest = run([str(binary)])
+        # Run away from the build directory without .ores source or PATH
+        # resolution. Absolute executable paths preserve portable invocation.
+        guest = run([str(binary.resolve())], cwd=runtime_dir, env=runtime_env)
         require(guest.returncode == exit_code,
                 f"{title} O{optimization}: wrong native exit code "
                 f"{guest.returncode}, expected {exit_code}: {guest.stderr}")
@@ -214,6 +224,7 @@ pub fnc main(): int { return wrapper(41); }
                                    "source-order-inline-record", effectful_inline)
     print(f"LLVM product admission: {len(rejected)} no-IR rejects; "
           "nine real native guest programs at -O0/-O2, exit 42; "
+          "source-free, PATH-isolated guest runs; "
           "no guest GC or allocator calls in emitted IR")
 
 
