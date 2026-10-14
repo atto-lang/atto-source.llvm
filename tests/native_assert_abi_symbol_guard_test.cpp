@@ -65,4 +65,65 @@ int main() {
         source.functions.front().result->integer = 2;
         rejected(source, "unverified typed bool native result lowering");
     }
+
+    // Parser and emitter must agree on the *whole* native linker namespace.
+    // Construct these Programs directly: no parser validation was called.
+    rejected(program("abort"), "reserved native runtime ABI symbol");
+    rejected(program("__oreslang_guest_main"),
+             "reserved native runtime ABI symbol");
+    rejected(program("oreslang_owned_i64_region_open"),
+             "reserved native runtime ABI symbol");
+    rejected(program("ores_actor_i64_heap_field_read"),
+             "reserved native runtime ABI symbol");
+    rejected(program("oreslang_source_actor_spawn"),
+             "reserved native runtime ABI symbol");
+    rejected(program("oreslang_actor_Worker_init"),
+             "reserved native runtime ABI symbol");
+    rejected(program("oreslang_wasm_actor_init"),
+             "reserved native runtime ABI symbol");
+    rejected(program("oreslang_int_array_try_region_open"),
+             "reserved native Array<int> ABI symbol");
+
+    // The Boolean slice is not a path to malformed void/i1 signatures or
+    // nonconforming process-entry wrappers.
+    {
+        auto source = program("bool_void_conflict", true);
+        source.functions.front().returns_void = true;
+        rejected(source, "native bool/void return flags conflict");
+    }
+    rejected(program("main", true),
+             "native bool main violates process exit ABI");
+
+    // Duplicate source overload slots otherwise result in LLVM-renamed
+    // exports and two bodies targeting one declaration.
+    {
+        auto source = program("duplicate_slot");
+        Function other;
+        other.name = "duplicate_slot";
+        other.result = std::make_unique<Expression>();
+        other.result->kind = Expression::Kind::Integer;
+        other.result->integer = 8;
+        source.functions.push_back(std::move(other));
+        rejected(source, "duplicate native function slot");
+    }
+    {
+        auto source = program("main");
+        Function other;
+        other.name = "main";
+        oreslang::Parameter input;
+        input.name = "x";
+        other.parameters.push_back(std::move(input));
+        other.result = std::make_unique<Expression>();
+        other.result->kind = Expression::Kind::Integer;
+        other.result->integer = 8;
+        source.functions.push_back(std::move(other));
+        rejected(source, "duplicate native entrypoint");
+    }
+
+    // Positive compiler control: the direct emitter still exposes an i1,
+    // without needing a source-level import or host-side bool stub.
+    const auto native_ir = oreslang::emit_verified_llvm_ir(program("bool_control", true));
+    if (native_ir.find("define i1 @bool_control()") == std::string::npos ||
+        native_ir.find("ret i1 true") == std::string::npos)
+        throw std::runtime_error("valid forged bool control did not emit native i1");
 }
