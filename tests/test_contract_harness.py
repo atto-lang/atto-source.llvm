@@ -179,6 +179,29 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("LLVM IR failed object compilation", p.stderr)
 
+    def test_linker_flag_containing_main_is_not_entrypoint_evidence(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\n")
+        clang = self.linker(link_status=1, link_error="ld: cannot find -lmain")
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+
+    def test_unrelated_libc_start_main_symbol_is_not_evidence(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\n")
+        clang = self.linker(
+            link_status=1, link_error="ld: undefined reference to __libc_start_main"
+        )
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+
+    def test_macos_missing_entrypoint_diagnostic_is_accepted(self):
+        compiler = self.compiler(stdout="; ModuleID = 'library'\n")
+        clang = self.linker(
+            link_status=1,
+            link_error='Undefined symbols for architecture arm64:\n  "_main", referenced from:\n',
+        )
+        p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
     def test_unrelated_link_failure_cannot_pass_missing_main_gate(self):
         compiler = self.compiler(stdout="; ModuleID = 'library'\n")
         clang = self.linker(link_status=1, link_error="unrelated library missing")
