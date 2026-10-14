@@ -49,6 +49,15 @@ The compiler enforces these invariants before emitting any LLVM IR:
    alias a recoverable `Err` or `Ok`.
 7. The experimental scalar/AOT fast path and wasm32 backend reject these
    consumers rather than emitting incomplete/unsound modules.
+8. The parser records a proof certificate on the typed AST:
+   `consumed_once && proved_ok_arm && proved_err_arm`. The native
+   validator and LLVM emitter **both** reject absent/incomplete proof bits;
+   the generic scalar emitter also rejects accidental nominal Result AST
+   nodes that were not moved into the checked Result tables.
+9. In this first lexical consumer slice, `Err(error)` bindings must not
+   shadow the sole Result owner, producer or built-in nominal names. The
+   Result producer/consumer function names also cannot reuse the nominal
+   `Result`, `Option`, `ArrayError`, `Ok`, or `Err` identifiers.
 
 The stage-2 invariant is a simple finite-state proof:
 
@@ -71,6 +80,20 @@ symbol collisions, wrong local, and nonterminal control flow.
 
 The same LLVM module is required because constructors and consumers use
 `internal` linkage. This does **not** certify C/FFI or public ABI.
+
+### Runtime fault injection
+
+The CTest also changes the trusted `Err(ArrayError.Limit)` producer's LLVM
+constant into `{variant=7,error=1}` and `{variant=1,error=7}`, separately.
+Each corrupted module must compile but terminate with SIGILL/SIGTRAP when the
+consumer validates the aggregate, at both `-O0` and `-O2`. An ordinary
+nonzero program exit is **not** accepted as a successful trap. The harness
+disables core dumps. This tests the emitted check even when the original
+constructor never produces an invalid value.
+
+An independent, manually assembled equivalent LLVM IR probe has already
+terminated via SIGILL at Clang 17 `-O0`/`-O2`; this does **not** count as
+running or compiling `oreslang-llvmc`.
 
 Before merge, run exact-head `oreslang-llvmc` build, native CTest suite,
 ASan/UBSan, negative diagnostic matrix, Java/GraalVM conformance.
