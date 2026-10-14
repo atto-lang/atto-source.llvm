@@ -272,8 +272,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         throw std::runtime_error(
             "wasm32 nominal tagged Result ABI awaits verified target lowering");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
-        if (wasm32_target || !source.classes.empty() || !source.actors.empty())
-            throw std::runtime_error("experimental scalar loop unsupported target/owners");
+        // This fast path emits a standalone module. Never silently elide
+        // nominal tagged constructors or unrelated declarations.
+        if (wasm32_target || !source.classes.empty() || !source.actors.empty()
+                || !source.closed_array_results.empty()
+                || !source.cooperative_loops.empty() || !source.module.empty())
+            throw std::runtime_error(
+                "experimental scalar loop unsupported target/owners or tagged Result declarations");
         return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
     }
     llvm::LLVMContext context;
