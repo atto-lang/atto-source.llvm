@@ -1585,11 +1585,15 @@ private:
                         fn.result->kind == Expression::Kind::ModuleCall)))
                     throw std::runtime_error("native bool result requires typed bool expression");
                 if (fn.result->kind == Expression::Kind::Boolean &&
+                    fn.result->integer != 0 && fn.result->integer != 1)
+                    throw std::runtime_error("native bool literal must be canonical 0 or 1");
+                if (fn.result->kind == Expression::Kind::Boolean &&
                     (!fn.parameters.empty() || !fn.locals.empty() ||
                      !fn.statements.empty() || !fn.early_returns.empty() ||
                      !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
                      !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                      !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                     !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
                      fn.scalar_while || fn.has_declared_effects))
                     throw std::runtime_error("native bool literal AOT requires pure zero-argument function");
             } else if (fn.result && fn.result->kind == Expression::Kind::Boolean) {
@@ -1612,7 +1616,11 @@ private:
                     fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
-                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
+                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                    // These exact exported symbols are reserved for the
+                    // compiler-owned typed native Assert/Option ABI. No
+                    // source function may hijack a later stdlib linker slot.
+                    fn.name.rfind("oreslang_assert_", 0) == 0;
                 if (runtime_symbol)
                     throw std::runtime_error("reserved native runtime ABI symbol '" +
                         fn.name + "'");
