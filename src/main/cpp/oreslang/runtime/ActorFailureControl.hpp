@@ -19,6 +19,11 @@ public:
             ActorExceptionalEffect effect,
             std::string_view actor_id,
             std::string_view supervisor_id) {
+        // Generic catalog envelopes also represent process errors and permit
+        // an empty identity. A terminal actor CONTROL notice must not.
+        if (actor_id.empty()) {
+            throw std::invalid_argument("actor CONTROL notice requires actor identity");
+        }
         switch (effect) {
             case ActorExceptionalEffect::Raise:
                 return ActorFailureControlNotice(effect,
