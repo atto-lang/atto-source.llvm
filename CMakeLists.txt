@@ -56,7 +56,11 @@ if(BUILD_TESTING)
         "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-assert-abi-symbol-guard-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(oreslang-assert-abi-symbol-guard-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
+        -Wall -Wextra -Wpedantic -Werror
+        # GCC may flag LLVM's required GlobalVariable(module, ...) ownership
+        # constructor as mismatched-new-delete at O2. Treat that specific LLVM
+        # API diagnostic as nonfatal, not arbitrary native warnings.
+        $<$<CXX_COMPILER_ID:GNU>:-Wno-error=mismatched-new-delete>)
     add_test(NAME native_assert_linker_owned_abi_and_bool_ast_guard
         COMMAND oreslang-assert-abi-symbol-guard-test)
 
