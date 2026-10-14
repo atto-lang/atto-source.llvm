@@ -12,8 +12,13 @@ not** establish executable guest exception lowering on LLVM.
   bounded UTF-8 diagnostic, bounded opaque actor/supervisor identifiers).
 - Never carry a live guest Error object, stack object, Java Throwable, C++
   exception_ptr, function, callback, actor heap pointer or mutable collection.
-- By default, diagnostics are bounded and sanitized; no stack trace, source
-  path, capabilities, or secret host cause crosses actor boundaries.
+- Envelope diagnostics are bounded to 1024 UTF-8 bytes, malformed bytes
+  are repaired, and terminal/bidi/zero-width controls are scrubbed. **This is
+  not secret redaction**: the host constructor still accepts arbitrary text.
+  Runtime callers must use a fixed, public-safe diagnostic (for example the
+  frozen error key) instead of passing host exception messages, file paths,
+  capability values, payloads, tokens or stack traces. A future trusted trace
+  channel must enforce disclosure authority independently.
 - Full traces require a trusted, explicitly requested diagnostic channel and
   must be generated on the originating actor before teardown. A guest-supplied
   `include_trace` request alone does not grant trace authority.
@@ -37,3 +42,24 @@ not** establish executable guest exception lowering on LLVM.
    LLVM end-to-end evidence.
 
 Do not infer stages 2–3 are complete from existence of these files.
+
+## Current hard blockers (October 14, 2026)
+
+- The Java typechecker resolves class parents from the linked class registry.
+  The canonical guest `Error` base is **not yet registered** here. As a result,
+  the new inherited guest declarations are *staged API source*, not executable
+  `Error` subclasses. Parsing `.ores` text is insufficient evidence.
+- Java's `TypedExceptionalEffectAdmissionTest` currently requires
+  `throw`, `raise`, `panic` and `recover` to be rejected as unsupported
+  typed effects. This needs a deliberate compiler/runtime migration.
+- The LLVM compiler supports only a source subset, and `src/core` is not an
+  executable native core loader. Its sources do not establish LLVM guest
+  inheritance, constructors, typed effects or catchability.
+- The host `recoverable` value is **classification metadata**, not a proof
+  that the runtime correctly catches, escalates, retries or supervises it.
+- The cross-backend static verifier `scripts/verify_actor_error_abi.py`
+  freezes source/host names, codes and declared policy; it does not exercise
+  actor execution or the wire serializer. Do not mark the PR production-ready
+  until executable guest inheritance + Error-only throw/raise/panic + transport
+  and supervisor tests pass on both backends.
+
