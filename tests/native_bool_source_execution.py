@@ -32,8 +32,18 @@ def main():
     emitted = invoke(a.compiler, source).stdout
     if "ret i1 true" not in emitted or "ret i1 false" not in emitted:
         raise AssertionError("native bool result must use LLVM i1, not i64")
-    if "malloc(" in emitted or "GC_malloc(" in emitted:
-        raise AssertionError("pure Boolean guest unexpectedly allocates")
+    # This fixture must be two closed, no-call i1 exports. Searching only
+    # for malloc names misses indirect allocation, runtime helpers, and GC
+    # calls with other symbol names. A later typed Boolean feature must
+    # explicitly revise this contract rather than silently broaden it.
+    if ("define i1 @BoolProbe.yes()" not in emitted or
+            "define i1 @BoolProbe.no()" not in emitted):
+        raise AssertionError("missing native Boolean guest exports")
+    if re.search(r"(?m)^\\s*declare\\b", emitted):
+        raise AssertionError("pure Boolean guest declares an external dependency")
+    if re.search(r"(?m)^\\s*(?:[%@][^=\\n]*=\\s*)?"
+                 r"(?:(?:tail|musttail|notail)\\s+)?(?:call|invoke|callbr)\\b", emitted):
+        raise AssertionError("pure Boolean guest contains an unexpected call")
 
     with tempfile.TemporaryDirectory(prefix="oreslang-bool-aot-") as d:
         ir = Path(d) / "guest.ll"
