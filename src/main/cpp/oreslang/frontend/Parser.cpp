@@ -117,7 +117,8 @@ public:
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
+        if (source_.substr(at_, 2) == "=="
+                || source_.substr(at_, 2) == "->") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
@@ -221,6 +222,11 @@ public:
                         parsed.name, parsed.exported, parsed.closed_result_ok,
                         parsed.closed_result_error, parsed.offset
                     });
+                } else if (parsed.closed_result_match) {
+                    if (program.closed_result_matches.size() >= 64)
+                        fail("native Result match function limit exceeded (64)");
+                    program.closed_result_matches.push_back(
+                        std::move(*parsed.closed_result_match));
                 } else {
                     program.functions.push_back(std::move(parsed));
                 }
@@ -228,17 +234,19 @@ public:
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (!program.closed_array_results.empty()
+        if ((!program.closed_array_results.empty() || !program.closed_result_matches.empty())
                 && (program.module == "Result" || program.module == "Option"
                     || program.module == "ArrayError")) {
             fail("native builtin Result/Option/ArrayError cannot be shadowed by module namespace");
         }
         if (program.functions.empty() && program.closed_array_results.empty()
+                && program.closed_result_matches.empty()
                 && program.actors.empty() && program.cooperative_loops.empty())
             fail("expected at least one function or actor");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.closed_array_results.empty() || !program.actors.empty()
+                 !program.closed_array_results.empty() || !program.closed_result_matches.empty()
+                 || !program.actors.empty()
                  || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
@@ -576,6 +584,62 @@ private:
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
         require("{");
+        // Only intercept a typed, immutable local of the built-in closed
+        // Result specialization. Every other local follows the old parser.
+        // One producer call, one explicit two-arm match, no alias/copy/escape.
+        if (token_.text == "const" && lexer_.next().text == "Result") {
+            if (value.returns_void || !value.parameters.empty() || value.exported
+                    || value.name == "main" || value.has_declared_effects)
+                fail("native Result match requires private, unqualified zero-argument int function");
+            auto consumer = std::make_unique<ClosedArrayResultMatchFunction>();
+            consumer->name = value.name;
+            consumer->offset = value.offset;
+            require("const");
+            require("Result");
+            require("<"); require("void"); require(",");
+            require("ArrayError"); require(">");
+            consumer->local = identifier();
+            require("=");
+            consumer->producer = identifier();
+            require("("); require(")"); require(";");
+            require("do"); require("match");
+            if (identifier() != consumer->local)
+                fail("native Result match must consume its exact named local");
+            require("over");
+            bool seen_ok = false, seen_err = false;
+            for (int n = 0; n < 2; ++n) {
+                require("on");
+                const bool is_ok = accept("Ok");
+                if (!is_ok && !accept("Err"))
+                    fail("native Result match requires nominal Ok()/Err(error) arms");
+                if ((is_ok && seen_ok) || (!is_ok && seen_err))
+                    fail("duplicate nominal Result match arm");
+                require("(");
+                if (!is_ok) {
+                    // A typed Err binding is local to this arm, and cannot be
+                    // referenced or transferred in this restricted slice.
+                    (void)identifier();
+                }
+                require(")");
+                require("->");
+                require("{");
+                require("return");
+                const std::int64_t outcome = integer_literal();
+                require(";"); require("}");
+                if (is_ok) {
+                    seen_ok = true;
+                    consumer->ok_return = outcome;
+                } else {
+                    seen_err = true;
+                    consumer->err_return = outcome;
+                }
+            }
+            if (!seen_ok || !seen_err)
+                fail("non-exhaustive native Result match: requires Ok and Err arms");
+            require("end"); require("}");
+            value.closed_result_match = std::move(consumer);
+            return value;
+        }
         while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
             LocalBinding binding;
             binding.offset = token_.offset;
