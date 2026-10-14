@@ -1506,6 +1506,28 @@ private:
                 }
             }
         }
+        // The constructor-only tagged functions are a separate nominal
+        // ABI, not zero-arity i64 overloads. Refuse collisions with any
+        // existing function family, actor, class, or reserved host symbol.
+        std::unordered_set<std::string> closed_names;
+        for (const auto& tagged : program.closed_array_results) {
+            if (!closed_names.insert(tagged.name).second
+                    || functions.count(tagged.name) || classes.count(tagged.name)
+                    || tagged.name == "main" || tagged.name == "__oreslang_guest_main"
+                    || tagged.name == "abort"
+                    || tagged.name.rfind("oreslang_", 0) == 0
+                    || std::any_of(program.actors.begin(), program.actors.end(),
+                        [&](const ActorDecl& actor) { return actor.name == tagged.name; })) {
+                throw std::runtime_error(
+                    "native tagged Result name collides with an existing source or reserved ABI symbol '"
+                    + tagged.name + "'");
+            }
+            if (tagged.ok ? tagged.error != 0
+                          : (tagged.error != 1 && tagged.error != 2)) {
+                throw std::runtime_error("invalid nominal Result<void,ArrayError> constructor");
+            }
+        }
+
         std::unordered_map<std::string, const ActorDecl*> actor_types;
         for (const auto& actor : program.actors) {
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
