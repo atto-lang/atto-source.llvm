@@ -250,6 +250,15 @@ int main() {
             "pub fnc main(): int { return 0; }",
             "native sealed Assert identity requires reference-identity ABI lowering");
 
+        expect_rejected(
+            "pub fnc oreslang_assert_equal_scalar_v0(): int { return 7; } "
+            "pub fnc main(): int { return 0; }",
+            "reserved native runtime ABI symbol 'oreslang_assert_equal_scalar_v0'");
+        expect_rejected(
+            "pub fnc oreslang_assert_trap_bool_v0(): int { return 7; } "
+            "pub fnc main(): int { return 0; }",
+            "reserved native runtime ABI symbol 'oreslang_assert_trap_bool_v0'");
+
         std::cout << "NATIVE_ASSERT_IMPORT_PARSER_CONTRACT_PASS\n";
         return 0;
     } catch (const std::exception& failure) {

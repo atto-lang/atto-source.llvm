@@ -1582,7 +1582,8 @@ private:
                     fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
-                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
+                    fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_assert_", 0) == 0;
                 if (runtime_symbol)
                     throw std::runtime_error("reserved native runtime ABI symbol '" +
                         fn.name + "'");
