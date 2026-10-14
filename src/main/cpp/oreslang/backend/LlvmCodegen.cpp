@@ -283,6 +283,29 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     if (!source.imports.empty())
         throw std::runtime_error(
             "native module imports are unsupported until linked stdlib and typed assertion/trap lowering are implemented");
+    // Public AST entrypoint: validate reserved linker ABI names before the
+    // scalar-loop fast path can return without emitting ordinary functions.
+    // Do not permit LLVM's collision renaming to change guest symbol identity.
+    for (const auto& fn : source.functions) {
+        if (fn.name.rfind("oreslang_int_array_", 0) == 0)
+            throw std::runtime_error("reserved native Array<int> ABI symbol");
+        if (source.module.empty()) {
+            const bool reserved =
+                fn.name == "abort" ||
+                fn.name == "__oreslang_guest_main" ||
+                fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_assert_", 0) == 0;
+            if (reserved)
+                throw std::runtime_error(
+                    "reserved native runtime ABI symbol '" + fn.name + "'");
+        }
+        if (fn.returns_bool && fn.scalar_while)
+            throw std::runtime_error("unverified typed bool native result lowering");
+    }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -490,26 +513,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
     std::unordered_set<std::string> emitted_slots;
     for (const auto& fn : source.functions) {
-        // The backend is public to other compiler passes. Its Program input
-        // may be constructed without passing through the parser or ownership
-        // checker. Mirror all source ABI reservations here, *before* creating
-        // a symbol: LLVM silently renames colliding exports with ".1".
-        if (fn.name.rfind("oreslang_int_array_", 0) == 0)
-            throw std::runtime_error("reserved native Array<int> ABI symbol");
-        if (source.module.empty()) {
-            const bool reserved =
-                fn.name == "abort" ||
-                fn.name == "__oreslang_guest_main" ||
-                fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
-                fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
-                fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
-                fn.name.rfind("oreslang_actor_", 0) == 0 ||
-                fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
-                fn.name.rfind("oreslang_assert_", 0) == 0;
-            if (reserved)
-                throw std::runtime_error(
-                    "reserved native runtime ABI symbol '" + fn.name + "'");
-        }
+        // Linker-owned names were already checked before all lowering paths.
         if (fn.returns_bool && fn.returns_void)
             throw std::runtime_error("native bool/void return flags conflict");
         if (fn.returns_bool && fn.name == "main")
@@ -564,6 +568,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     !fn.actor_field_writes.empty() || fn.caught_throw_value ||
                     !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
                     fn.scalar_while || fn.has_declared_effects ||
+                    fn.declared_effects.bits != 0 ||
+                    !fn.result->name.empty() || fn.result->left || fn.result->right ||
+                    !fn.result->arguments.empty() ||
+                    !fn.result->argument_names.empty() ||
                     (fn.result->integer != 0 && fn.result->integer != 1))
                 throw std::runtime_error("unverified typed bool native result lowering");
             builder.CreateRet(builder.getInt1(fn.result->integer == 1));
