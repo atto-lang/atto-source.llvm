@@ -1,0 +1,21 @@
+symbol,code,key,description,guest_boundary
+ActorStoppedError,1001,stopped,Actor already stopped or retired,recoverable
+ActorMailboxFullError,1002,mailbox_full,Mailbox admission capacity exhausted,recoverable
+ActorMailboxClosedError,1003,mailbox_closed,Mailbox closed before send,recoverable
+ActorSendRejectedError,1004,send_rejected,Actor send contract rejected,recoverable
+ActorTransportError,1005,transport,Actor message transport failed,recoverable
+ActorIsolationError,1006,isolation,Cross-actor ownership boundary violation,terminal
+ActorCapabilityRevokedError,1007,capability_revoked,Actor capability no longer valid,terminal
+ActorSpawnError,1008,spawn,Actor spawn denied or failed,recoverable
+ActorSupervisionError,1009,supervision,Supervisor routing or admission failed,terminal
+ActorRestartLimitError,1010,restart_limit,Supervisor restart limit reached,terminal
+ActorDeadlineExceededError,1011,deadline_exceeded,Actor deadline exceeded,terminal
+ActorCancelledError,1012,cancelled,Actor cancelled by control plane,terminal
+ActorLeaseExpiredError,1013,lease_expired,Actor lease expired,terminal
+ActorFencingError,1014,fencing,Actor fencing token rejected,terminal
+ActorGroupClosedError,1015,group_closed,Actor group is closed,recoverable
+ActorGroupPermitError,1016,group_permit,Actor group membership permit rejected,terminal
+ActorRemoteUnavailableError,1017,remote_unavailable,Remote actor endpoint unavailable,recoverable
+ActorSerializationError,1018,serialization,Actor payload cannot be transported,recoverable
+ActorHeapExhaustedError,1019,heap_exhausted,Actor heap allocation limit exceeded,terminal
+ActorRuntimeInvariantError,1020,runtime_invariant,Actor runtime invariant violated,terminal
