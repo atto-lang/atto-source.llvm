@@ -1173,21 +1173,52 @@ private:
             expr->kind = Expression::Kind::Call;
             bool named_seen = false;
             std::unordered_set<std::string> labels;
+            auto append_slot = [&](std::unique_ptr<Expression> value, std::string label) {
+                if (expr->arguments.size() == 16)
+                    fail("native fixed-product call exceeds 16 scalar arguments");
+                if (label.empty()) {
+                    if (named_seen) fail("positional argument cannot follow named argument");
+                } else {
+                    named_seen = true;
+                    if (!labels.insert(label).second)
+                        fail("duplicate named argument '" + label + "'");
+                }
+                expr->argument_names.push_back(std::move(label));
+                expr->arguments.push_back(std::move(value));
+            };
             if (!accept(")")) {
                 do {
-                    if (named_argument_ahead()) {
+                    if (accept("...")) {
+                        auto product = expression();
+                        if (product->kind == Expression::Kind::Record ||
+                                product->kind == Expression::Kind::Tuple) {
+                            for (std::size_t i = 0; i < product->arguments.size(); ++i) {
+                                std::string label = product->kind == Expression::Kind::Record
+                                    ? product->argument_names.at(i) : std::string{};
+                                append_slot(std::move(product->arguments[i]), std::move(label));
+                            }
+                        } else if (product->kind == Expression::Kind::Variable) {
+                            const auto found = record_locals_.find(product->name);
+                            if (found == record_locals_.end()) {
+                                fail("native spread requires a statically known closed i64 record");
+                            }
+                            for (const std::string& label : found->second) {
+                                auto field = make_expression(Expression::Kind::Field, product->offset);
+                                field->left = make_expression(Expression::Kind::Variable, product->offset);
+                                field->left->name = product->name;
+                                field->name = label;
+                                append_slot(std::move(field), label);
+                            }
+                        } else {
+                            fail("native spread requires a statically known closed record or tuple");
+                        }
+                    } else if (named_argument_ahead()) {
                         std::string label = identifier();
                         require(":");
-                        if (!labels.insert(label).second) {
-                            fail("duplicate named argument '" + label + "'");
-                        }
-                        named_seen = true;
-                        expr->argument_names.push_back(std::move(label));
+                        append_slot(expression(), std::move(label));
                     } else {
-                        if (named_seen) fail("positional argument cannot follow named argument");
-                        expr->argument_names.emplace_back();
+                        append_slot(expression(), {});
                     }
-                    expr->arguments.push_back(expression());
                 } while (accept(","));
                 require(")");
             }
@@ -1287,6 +1318,9 @@ private:
                                     const std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>>& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
+            case Expression::Kind::Record:
+            case Expression::Kind::Tuple:
+                throw std::runtime_error("native aggregate value requires a statically checked local or explicit call spread");
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
@@ -1527,6 +1561,14 @@ private:
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
                     if (binding.move_class && !params.count(binding.move_source))
                         throw std::runtime_error("unknown class move source '" + binding.move_source + "'");
+                } else if (binding.record_scalar) {
+                    const Expression& record = *binding.initializer;
+                    if (record.kind != Expression::Kind::Record ||
+                            record.arguments.size() != record.argument_names.size() ||
+                            record.arguments.empty())
+                        throw std::runtime_error("malformed fixed native i64 record declaration");
+                    for (const auto& field : record.arguments)
+                        validate_expression(*field, params, functions);
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }
@@ -1651,6 +1693,9 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // Per-function compile-time-only shape table: no runtime reflection,
+    // hash lookup or dynamic argument binding survives into emitted IR.
+    std::unordered_map<std::string, std::vector<std::string>> record_locals_;
 };
 
 } // namespace
