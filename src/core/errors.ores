@@ -1,0 +1,63 @@
+// Portable core runtime Error subclasses (declarations only in this stage).
+// Guest methods, tracing and native serialization lowering are tracked by ABI
+// and must not be silently replaced with Java/C++ exception instances.
+define module errors as
+
+  pub define class RuntimeError extends Error as
+    pub val int code;
+    pub val String message;
+  end
+
+  // Invalid argument or precondition.
+  pub define class ArgumentError extends RuntimeError as
+  end
+
+  // Expected runtime type was not satisfied.
+  pub define class TypeMismatchError extends RuntimeError as
+  end
+
+  // Index outside validated bounds.
+  pub define class IndexOutOfBoundsError extends RuntimeError as
+  end
+
+  // Capability or resource permission denied.
+  pub define class PermissionDeniedError extends RuntimeError as
+  end
+
+  // Non-actor operation exceeded deadline.
+  pub define class TimeoutError extends RuntimeError as
+  end
+
+  // Control-plane cancellation, never ordinary trap.
+  pub define class CancellationError extends RuntimeError as
+  end
+
+  // Network operation failed.
+  pub define class NetworkError extends RuntimeError as
+  end
+
+  // File operation failed.
+  pub define class FileSystemError extends RuntimeError as
+  end
+
+  // Invalid text or binary encoding.
+  pub define class EncodingError extends RuntimeError as
+  end
+
+  // Value cannot be serialized under requested codec.
+  pub define class SerializationError extends RuntimeError as
+  end
+
+  // Source or data parse failed.
+  pub define class ParseError extends RuntimeError as
+  end
+
+  // Memory, quota or resource budget exhausted.
+  pub define class ResourceLimitError extends RuntimeError as
+  end
+
+  // Internal verified contract was violated.
+  pub define class InvariantError extends RuntimeError as
+  end
+
+end
