@@ -186,7 +186,7 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
                                  stdout="; ModuleID = 'bad'\n")
         p = self.run_contract(compiler, "--diagnostic", "private class field")
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("emitted IR after rejection", p.stderr)
+        self.assertIn("compiler emitted stdout after rejection", p.stderr)
 
     def test_valid_positive_still_passes_under_optimization(self):
         compiler = self.compiler(stdout="; ModuleID = 'good'\n")
