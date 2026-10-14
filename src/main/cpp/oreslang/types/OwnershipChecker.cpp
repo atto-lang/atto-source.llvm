@@ -445,6 +445,34 @@ void validate_i64_ownership(const Program& program) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.new_class) {
+                // Pure syntax alone is insufficient: experimental owned-int
+                // operands carry fallible region reads. Do not let one unwind
+                // an incompletely constructed object before drop glue exists.
+                std::function<void(const Expression&)> validate_scalar;
+                validate_scalar = [&](const Expression& expr) {
+                    using K = Expression::Kind;
+                    if (expr.kind == K::Integer) return;
+                    if (expr.kind == K::Variable) {
+                        const auto it = locals.find(expr.name);
+                        if (it == locals.end() || it->second.heap_owned ||
+                                it->second.int_array || !it->second.class_name.empty())
+                            reject(expr, "native scalar constructor arguments require plain stack i64 values");
+                        check_value(expr, locals, functions);
+                        return;
+                    }
+                    if (expr.kind == K::Negate && expr.left) {
+                        validate_scalar(*expr.left); return;
+                    }
+                    if ((expr.kind == K::Add || expr.kind == K::Subtract ||
+                            expr.kind == K::Multiply) && expr.left && expr.right) {
+                        validate_scalar(*expr.left);
+                        validate_scalar(*expr.right);
+                        return;
+                    }
+                    reject(expr, "native scalar constructor argument requires pure integer expression");
+                };
+                for (const auto& arg : binding.constructor_arguments)
+                    validate_scalar(*arg);
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
