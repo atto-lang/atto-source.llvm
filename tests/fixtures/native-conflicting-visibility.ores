@@ -1,0 +1,6 @@
+define pub private class Vault as
+  pub int count: 5
+end
+pub fnc main(): int {
+  return 1;
+}
