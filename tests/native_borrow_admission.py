@@ -29,11 +29,11 @@ CASES = {
 ACCEPT = {
     "two-shared-loans": (
         "fnc add(borrow int a, borrow int b): int { return a + b; }\n"
-        "pub fnc main(): int { val int x = 21; return add(rt borrow x, rt borrow x); }\n"
+        "pub fnc main(): int { const x: int = 21; return add(rt borrow x, rt borrow x); }\n"
     ),
     "sequential-call-loans": (
         "fnc read(borrow int a): int { return a; }\n"
-        "pub fnc main(): int { val int x = 21; return read(rt borrow x) + read(rt borrow x); }\n"
+        "pub fnc main(): int { const x: int = 21; return read(rt borrow x) + read(rt borrow x); }\n"
     ),
 }
 
