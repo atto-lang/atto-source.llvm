@@ -1200,6 +1200,13 @@ private:
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
             }
+            // Reserve pointer intrinsics until checked provenance, lifetime,
+            // deterministic drop and Java/LLVM parity are implemented.
+            if (operation == "ref" || operation == "unref" || operation == "deref") {
+                fail("native rt " + operation
+                     + " is reserved for Pointer<T> but is not enabled; "
+                       "see docs/POINTER_BORROW_ZERO_COPY_PARITY.md");
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
