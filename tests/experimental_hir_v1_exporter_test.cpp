@@ -65,6 +65,21 @@ int main() {
     assert(json.find("\"name\":\"counter_response\"") < json.find("\"name\":\"main\""));
     assert(json == emit_experimental_hir_v1(program));
 
+    // A syntactically valid identifier is not sufficient. It must be a
+    // parameter of the function being serialized, including nested args.
+    program.functions[1].result = variable("unbound");
+    rejects([&] { (void) emit_experimental_hir_v1(program); });
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[1].result = variable("count");
+
+    program.functions[0].result = call("counter_response", variable("count"));
+    rejects([&] { (void) emit_experimental_hir_v1(program); });
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[0].result = call(
+        "counter_response", multiply(integer(1), variable("ghost")));
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[0].result = call("counter_response", integer(43));
+
     // Force fail-closed admission for unsupported native source features.
     program.functions[0].returns_void = true;
     rejects([&] { (void) emit_experimental_hir_v1(program); });
