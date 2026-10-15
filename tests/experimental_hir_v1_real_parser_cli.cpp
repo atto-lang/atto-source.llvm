@@ -22,7 +22,9 @@ int main(int argc, char** argv) {
                                  std::istreambuf_iterator<char>{});
         if (in.bad()) throw std::runtime_error("source read failed");
         if (source.size() > 1'048'576) throw std::runtime_error("source exceeds 1 MiB");
-        std::cout << oreslang::emit_experimental_hir_v1(oreslang::parse_program(source));
+        const bool checked = source.rfind("// oreslang:checked-i64-v1\n", 0) == 0;
+        std::cout << oreslang::emit_experimental_hir_v1(
+            oreslang::parse_program(source), checked);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "experimental HIR v1 real-parser CLI: " << error.what() << '\n';
