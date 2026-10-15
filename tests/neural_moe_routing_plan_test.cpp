@@ -73,7 +73,7 @@ int main() {
         Plan::plan({{0, {{0, std::numeric_limits<double>::quiet_NaN()},
                           {1, 2}, {2, 3}}}}, 3, 2, 2, Overflow::reject);
     });
-    must_fail<std::invalid_argument>([] {
+    must_fail<std::invalid_argument>([&] {
         Plan::plan(one, 3, 4, 1, Overflow::reject);
     });
     must_fail<std::invalid_argument>([] {
