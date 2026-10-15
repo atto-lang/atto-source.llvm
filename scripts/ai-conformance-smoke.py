@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run two REAL Oreslang compiler smoke fixtures. No mocks, shell, or network.
+"""Run two REAL Oreslang compiler smoke fixtures. No mocks or shell.
 
 The report attests observations of this CI job, not reproducible binary provenance,
-cross-backend parity, or general language support.
+cross-backend parity, or general language support. Compiler processes run with\nnormal runner privileges: sandbox/network isolation is the CI runner's duty.
 """
 import argparse
 import hashlib
@@ -134,7 +134,7 @@ def rejected(result):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["java", "llvm"], required=True)
-    parser.add_argument("--compiler", required=True, help="Absolute Java probe executable (Python), or LLVM compiler executable")
+    parser.add_argument("--compiler", required=True, help="Absolute Python process invoker for Java, or native LLVM compiler executable")
     parser.add_argument("--java-probe", help="Absolute path to reviewed java_probe.py, required for Java")
     parser.add_argument("--clang", help="Absolute clang path, required for LLVM native execution")
     parser.add_argument("--source-sha", required=True)
