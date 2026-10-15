@@ -35,6 +35,16 @@ def main() -> int:
     compiler = pathlib.Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix="oreslang-source-budget-") as tmp:
         base = pathlib.Path(tmp)
+        good = base / "valid.ores"
+        good.write_text("pub fnc main(): int { return 42; }\n")
+        control = invoke(compiler, good)
+        if control.returncode != 0 or "define i64 @__oreslang_guest_main(" not in control.stdout:
+            raise SystemExit("FAIL: valid LLVM output control failed")
+        with good.open("rb") as readonly_stdout:
+            failed = subprocess.run([str(compiler), str(good)], stdout=readonly_stdout,
+                                    stderr=subprocess.PIPE, text=True, timeout=20)
+        if failed.returncode == 0:
+            raise SystemExit("FAIL: compiler reported success for unwritable IR output")
         # Exercise the exact limit before testing overflow: whitespace can be
         # syntactically rejected, but must not trip the byte-size budget.
         exact = base / "exact-limit.ores"
