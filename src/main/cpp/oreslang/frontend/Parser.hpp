@@ -11,6 +11,16 @@
 namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
+struct GenericTypeArgument {
+    std::string name; // empty for positional arguments
+    std::string type; // native stage 1 admits only int
+    bool infer = false;
+};
+struct GenericParameter {
+    std::string name;
+    std::string default_type; // empty when required, int or earlier slot otherwise
+};
+
 struct Expression {
     enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
@@ -21,12 +31,15 @@ struct Expression {
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
     std::vector<std::string> argument_names; // indexed in lexical source order
+    std::vector<GenericTypeArgument> type_arguments;
+    bool type_arguments_present = false;
 };
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
     std::string class_name; // empty means primitive i64
+    std::string generic_type; // stage-one i64 generic slot
     Mode mode = Mode::Value;
 };
 
@@ -137,6 +150,7 @@ struct ScalarWhileLoop {
 
 struct Function {
     std::string name;
+    std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;

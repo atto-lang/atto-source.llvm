@@ -22,6 +22,9 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
+#if LLVM_VERSION_MAJOR >= 21
+#include "llvm/TargetParser/Triple.h"
+#endif
 
 namespace oreslang {
 
@@ -267,7 +270,8 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+    if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -316,7 +320,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     constexpr const char* guest_main_symbol = "__oreslang_guest_main";
     const auto main_it = std::find_if(source.functions.begin(), source.functions.end(),
         [](const Function& fn) { return fn.name == "main"; });
-    const bool native_main = !wasm32_target && main_it != source.functions.end();
+    const bool native_main = !wasm32_target && !cortex_m_target &&
+        main_it != source.functions.end();
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
@@ -328,11 +333,30 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.
+    if (cortex_m_target) {
+        // Experimental Cortex-M3 native ABI: scalar i64 functions, no OS wrapper.
+        const auto profile = TargetAbi::parse("thumbv7m-none-eabi");
+        if (!profile.experimental_cortexm_ir())
+            throw std::runtime_error("Cortex-M IR emission is not admitted");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
+        module.setTargetTriple(std::string(profile.triple()));
+#endif
+        module.setDataLayout("e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64");
+        if (module.getDataLayout().getPointerSizeInBits(0) != 32 ||
+            !module.getDataLayout().isLittleEndian())
+            throw std::runtime_error("Cortex-M ABI/data layout mismatch");
+    }
     if (wasm32_target) {
         const auto profile = TargetAbi::parse("wasm32-unknown-unknown");
         if (!profile.experimental_wasm32_ir())
             throw std::runtime_error("wasm32 target profile is not enabled");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
         module.setTargetTriple(std::string(profile.triple()));
+#endif
         module.setDataLayout("e-m:e-p:32:32-i64:64-n32:64-S128");
         const auto& actual = module.getDataLayout();
         if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
@@ -474,9 +498,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
     for (const auto& fn : source.functions) {
-        const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
+        const std::string base_symbol = cortex_m_target && fn.name == "main"
+            ? "oreslang_cortexm_bootstrap"
+            : (native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
-            : (source.module.empty() ? fn.name : source.module + "." + fn.name);
+            : (source.module.empty() ? fn.name : source.module + "." + fn.name));
         const std::string symbol = family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, fn.parameters.size())
             : base_symbol;
