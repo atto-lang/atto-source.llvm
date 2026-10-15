@@ -68,6 +68,7 @@ struct ClassField {
     bool public_member = false;
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
+    bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
 };
 
 struct ClassDecl {
