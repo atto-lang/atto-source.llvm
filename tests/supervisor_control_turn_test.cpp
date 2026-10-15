@@ -249,12 +249,21 @@ int main() {
             std::this_thread::yield();
         }
     });
-    for (std::size_t i = 0; i < kConcurrentRestarts; ++i) {
-        Key child{"monitored-restart-" + std::to_string(i), 1};
-        observed_restarts.reserve_child(child);
-        CHECK(observed_restarts.publish_child(child, Kind::Panic, "panic"));
-        CHECK(observed_restarts.admit_turn(monitor_hooks, false)
-              == SupervisorControlTurn::Admitted::Control);
+    // Never leave a joinable monitor alive if an assertion or host
+    // allocation fails: std::thread's destructor would terminate the test
+    // process and obscure the actual failing invariant.
+    try {
+        for (std::size_t i = 0; i < kConcurrentRestarts; ++i) {
+            Key child{"monitored-restart-" + std::to_string(i), 1};
+            observed_restarts.reserve_child(child);
+            CHECK(observed_restarts.publish_child(child, Kind::Panic, "panic"));
+            CHECK(observed_restarts.admit_turn(monitor_hooks, false)
+                  == SupervisorControlTurn::Admitted::Control);
+        }
+    } catch (...) {
+        reader_stop.store(true, std::memory_order_release);
+        monitor.join();
+        throw;
     }
     reader_stop.store(true, std::memory_order_release);
     monitor.join();
