@@ -202,5 +202,28 @@ int main() {
     } catch (const std::invalid_argument&) { mismatched = true; }
     CHECK(mismatched && normalized.pending_count() == 0);
     normalized.retire_gracefully(key(103));
+
+    // Longer at-most-once FIFO stress: injected exceptions after a host
+    // handler side effect must not replay the failed child, strand capacity,
+    // or prevent later distinct child notifications from being delivered.
+    Lane stress(4);
+    Recorder stress_handler;
+    constexpr int kFailures = 4096;
+    for (int i = 0; i < kFailures; ++i) {
+        const Lane::ActorKey actor{"stress-" + std::to_string(i), 1};
+        stress.reserve(actor);
+        CHECK(stress.publish_preallocated(
+                actor, Lane::Kind::Panic, "stress terminal", "supervisor"));
+        const bool throw_after = (i % 3 == 0);
+        stress_handler.fail_after_side_effect_once = throw_after;
+        bool escaped = false;
+        try { CHECK(stress.dispatch_one(stress_handler)); }
+        catch (const std::runtime_error&) { escaped = true; }
+        CHECK(escaped == throw_after);
+        CHECK(stress_handler.events.size() == static_cast<std::size_t>(i + 1));
+        CHECK(stress.pending_count() == 0 && stress.reserved_count() == 0);
+        CHECK(!stress.dispatch_one(stress_handler));
+    }
+    CHECK(stress_handler.events.size() == kFailures);
     return 0;
 }
