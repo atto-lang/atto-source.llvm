@@ -37,8 +37,10 @@ public:
                                    const std::map<std::string, Field>& schema,
                                    bool verified_serial_actor = false)
             : actor_id_(actor_id), verified_serial_actor_(verified_serial_actor) {
-        if (actor_id == 0 || schema.empty() || schema.size() > kMaxFields) {
-            throw std::invalid_argument("actor state requires owner and typed fields");
+        // state {} is a valid stateless/empty-schema actor. A closed empty
+        // map still enforces key rejection through Access::read/write.
+        if (actor_id == 0 || schema.size() > kMaxFields) {
+            throw std::invalid_argument("actor state requires a nonzero owner and bounded typed fields");
         }
         scope_.owner_actor_id = actor_id;
         for (const auto& [name, field] : schema) {
