@@ -389,6 +389,15 @@ if(BUILD_TESTING)
         native_contract_harness_python_OO
         PROPERTIES TIMEOUT 240)
 
+    # Validate the CTest inventory itself, including non-skippable admission,
+    # optimized Python harness registration and native executable gates.
+    add_test(NAME native_ctest_manifest_harness_adversarial
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -p "test_ctest_manifest_gate.py" -v)
+    set_tests_properties(native_ctest_manifest_harness_adversarial
+        PROPERTIES TIMEOUT 30)
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
