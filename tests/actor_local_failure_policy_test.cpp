@@ -39,6 +39,10 @@ static ActorLocalHookReply exit_in_hook(void*, EffectStatus) noexcept {
     return {ActorLocalResolution::Handled, {EffectKind::ProcessExit, 0}};
 }
 
+static ActorLocalHookReply forged_decision_in_hook(void*, EffectStatus) noexcept {
+    return {static_cast<ActorLocalResolution>(255), {EffectKind::Return, 0}};
+}
+
 int main() {
     Counts counts;
     auto a = dispatch_actor_local_unhandled(
@@ -87,5 +91,12 @@ int main() {
     auto exit = dispatch_actor_local_unhandled(
             {EffectKind::Throw, 18}, nullptr, exit_in_hook, nullptr);
     CHECK(!exit.handled && exit.outgoing.kind == EffectKind::Throw && exit.outgoing.code == 18);
+    // An untrusted invalid resolution must not become a successful return,
+    // even when it was paired with an otherwise valid callback effect.
+    const auto forged_decision = dispatch_actor_local_unhandled(
+            {EffectKind::Throw, 19}, nullptr, forged_decision_in_hook, nullptr);
+    CHECK(forged_decision.hook_invoked && !forged_decision.handled);
+    CHECK(forged_decision.outgoing.kind == EffectKind::Fatal);
+    CHECK(forged_decision.outgoing.code == 0xFFFFFFFDu);
     return 0;
 }
