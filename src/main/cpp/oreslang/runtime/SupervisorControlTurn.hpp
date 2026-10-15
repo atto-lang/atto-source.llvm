@@ -102,9 +102,14 @@ public:
 
         const auto next = child_failures_.poll();
         if (next) {
+            bool decision_invoked = false;
             bool restart_invoked = false;
             bool escalation_invoked = false;
             try {
+                // A decision hook can itself perform a side effect before
+                // throwing. Invocation, not successful return, is the point
+                // after which the same terminal notice must not be replayed.
+                decision_invoked = true;
                 const auto decision = dispatch(hooks, *next);
                 switch (decision) {
                     case Decision::Acknowledge:
@@ -138,22 +143,21 @@ public:
                 }
                 child_failures_.ack(next->actor);
             } catch (...) {
-                if (restart_invoked || escalation_invoked) {
-                    // Callback side effects cannot be rolled back. Retrying
-                    // might start a second incarnation or duplicate fatal
-                    // escalation. Attempt host escalation at most once, then
-                    // retire the notice and propagate the original exception.
-                    if (restart_invoked && !escalation_invoked) {
+                if (decision_invoked || restart_invoked || escalation_invoked) {
+                    // ANY entered host callback can have already performed an
+                    // irreversible action, including the decision callback.
+                    // Retiring rather than requeuing avoids duplicate effects
+                    // or repeated supervisor invocation for one child.
+                    if (!escalation_invoked) {
                         try { hooks.on_escalate(*next); }
                         catch (...) {
-                            // Original callback failure still reaches host;
-                            // no replay of ambiguous side effects is allowed.
+                            // Preserve the original error and do not replay
+                            // this notice even when escalation fails too.
                         }
                     }
                     child_failures_.ack(next->actor);
                 } else {
-                    // A decision hook failed before selecting any action.
-                    // This remains retryable under the existing lane policy.
+                    // Failure before the first user callback is retryable.
                     child_failures_.retry(next->actor);
                 }
                 throw;
