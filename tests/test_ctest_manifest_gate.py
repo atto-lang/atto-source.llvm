@@ -4,36 +4,57 @@ import copy
 import sys
 import unittest
 
-from ctest_manifest_gate import CRITICAL_TESTS, ManifestFailure, check_manifest, TIMED_TESTS
+from ctest_manifest_gate import (
+    CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
+    SOURCE_ACTOR_TESTS, TIMED_TESTS, check_manifest,
+)
 
 
 def fixture():
+    # Model the exact *shape* of real CMake-generated commands. The release
+    # gate must reject synthetic no-op programs under mandatory test names.
     entries = []
     for name in CRITICAL_TESTS:
         props = [{"name": "TIMEOUT", "value": 90.0}] if name in TIMED_TESTS else []
-        command = ["/usr/bin/python3"]
-        if name == "native_contract_harness_python_O":
-            command.append("-O")
-        if name == "native_contract_harness_python_OO":
-            command.append("-OO")
-        if name.startswith("native_contract_harness_"):
-            command.append("tests/test_contract_harness.py")
+        if name in NATIVE_EXECUTABLES:
+            command = ["/work/build/" + NATIVE_EXECUTABLES[name]]
+            if name == "portable_target_abi_v1":
+                command.append("/work/src/contracts/architecture/v1/targets.tsv")
+        elif name in GUEST_FIXTURES:
+            source, evidence = GUEST_FIXTURES[name]
+            command = [sys.executable, "/work/src/tests/contract.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--fixture", "/work/src/tests/fixtures/" + source,
+                       evidence, "ret i64 42" if evidence == "--ir" else "expected diagnostic"]
+        elif name in SOURCE_ACTOR_TESTS:
+            command = [sys.executable, "/work/src/tests/source_actor_e2e.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--clang", "/usr/bin/clang", "--root", "/work/src"]
+            if name == "source_actor_compiled_native_asan_ubsan":
+                command.append("--sanitize")
+        elif name == "native_ctest_manifest_harness_adversarial":
+            command = [sys.executable, "-m", "unittest", "discover",
+                       "-s", "/work/src/tests", "-p", "test_ctest_manifest_gate.py", "-v"]
+        elif name.startswith("native_contract_harness_"):
+            command = [sys.executable]
+            if name == "native_contract_harness_python_O":
+                command.append("-O")
+            elif name == "native_contract_harness_python_OO":
+                command.append("-OO")
+            command.append("/work/src/tests/test_contract_harness.py")
         elif name == "native_contract_positive_object_verifies":
-            command.extend(["tests/contract.py", "--compiler", "build/oreslang-llvmc",
-                            "--fixture", "tests/fixtures/constant-main.ores",
-                            "--verify-object", "--clang", "clang"])
+            command = [sys.executable, "/work/src/tests/contract.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--fixture", "/work/src/tests/fixtures/constant-main.ores",
+                       "--verify-object", "--clang", "/usr/bin/clang"]
         else:
-            command.extend(["-c", "pass"])
-        if name == "source_actor_compiled_native_asan_ubsan":
-            command.append("--sanitize")
-        entries.append({"name": name, "command": command,
-                        "properties": props})
+            raise ValueError("unclassified critical fixture: " + name)
+        entries.append({"name": name, "command": command, "properties": props})
     for index in range(260):
         entries.append({"name": f"native_extra_{index}",
                         "command": [sys.executable, "-c", "pass"]})
     return {"kind": "ctestInfo", "version": {"major": 1, "minor": 0},
             "tests": entries}
-
 
 class ManifestAuditTests(unittest.TestCase):
     def setUp(self):
@@ -101,6 +122,69 @@ class ManifestAuditTests(unittest.TestCase):
         idx = entry["command"].index("tests/fixtures/constant-main.ores")
         entry["command"][idx] = "tests/fixtures/empty.ores"
         self.fail_on("does not compile positive guest source")
+
+    def test_wrong_ctest_schema_version_rejected(self):
+        self.manifest["version"]["major"] = 2
+        self.fail_on("version/kind")
+
+    def test_wrong_ctest_schema_kind_rejected(self):
+        self.manifest["kind"] = "fakeCtTestInfo"
+        self.fail_on("version/kind")
+
+    def test_native_heap_name_cannot_run_noop_python(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_actor_owned_heap_contract")
+        target["command"] = [sys.executable, "-c", "pass"]
+        self.fail_on("wrong executable")
+
+    def test_supervisor_name_cannot_run_another_native_binary(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_supervisor_priority_control")
+        target["command"] = ["/work/build/oreslang-supervisor-hierarchy-test"]
+        self.fail_on("wrong executable")
+
+    def test_negative_guest_fixture_cannot_be_stubbed(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "reject_throw_effect")
+        target["command"] = [sys.executable, "-c", "pass"]
+        self.fail_on("wrong compiler/fixture")
+
+    def test_native_rt_rejection_requires_exact_fixture(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_rt_while_loop_failclosed")
+        idx = target["command"].index("--fixture")
+        target["command"][idx + 1] = "/work/src/tests/fixtures/constant-main.ores"
+        self.fail_on("wrong compiler/fixture")
+
+    def test_native_actor_source_gate_cannot_run_fake_program(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "source_actor_compiled_native_lifecycle")
+        target["command"] = [sys.executable, "-c", "pass"]
+        self.fail_on("source harness")
+
+    def test_manifest_selftest_cannot_run_noop_python(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_ctest_manifest_harness_adversarial")
+        target["command"] = [sys.executable, "-c", "pass"]
+        self.fail_on("does not run its test suite")
+
+    def test_target_abi_cannot_use_unrelated_contract_file(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "portable_target_abi_v1")
+        target["command"][-1] = "/work/other/targets.tsv"
+        self.fail_on("wrong contract file")
+
+    def test_python_interpreter_cannot_be_replaced_by_shell(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_contract_harness_python_O")
+        target["command"][0] = "/bin/bash"
+        self.fail_on("wrong interpreter/arguments")
+
+    def test_optimized_harness_cannot_run_python_code_instead_of_script(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_contract_harness_python_O")
+        target["command"][1:1] = ["-c", "print('pass')"]
+        self.fail_on("wrong interpreter/arguments")
 
     def test_noncritical_skipped_test_is_never_silent(self):
         self.manifest["tests"][-1]["properties"] = [
