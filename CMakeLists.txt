@@ -1262,7 +1262,11 @@ if(BUILD_TESTING)
              COMMAND oreslang-epoch-arena-test)
     set_tests_properties(native_actor_epoch_deterministic_drop PROPERTIES TIMEOUT 20)
 
+    oreslang_contract_test(reject_native_private_array_mutation class-private-array-mutation-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_filled_commit class-private-filled-array-commit-reject.ores --diagnostic "private class field")
+
     if(ORE_CLANG)
+        oreslang_contract_test(native_public_class_field_read class-public-field-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(class_exec_mutable_borrow class-mutable-borrow-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_shared_read class-shared-read-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_mut_to_shared_reborrow class-reborrow-native.ores --run 42 --clang "${ORE_CLANG}")
