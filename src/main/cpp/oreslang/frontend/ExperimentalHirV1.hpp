@@ -103,7 +103,8 @@ inline HirV1Range hir_v1_prove_checked_i64(const Expression& expr,
 }
 
 inline std::string hir_v1_expr_json(const Expression& expr,
-                                    std::size_t depth, std::size_t& nodes) {
+                                    std::size_t depth, std::size_t& nodes,
+                                    const std::unordered_set<std::string>& parameters) {
     if (depth > 48 || ++nodes > 2048)
         throw unsupported_hir_v1("expression depth or size limit");
     using Kind = Expression::Kind;
@@ -111,8 +112,8 @@ inline std::string hir_v1_expr_json(const Expression& expr,
         case Kind::Integer:
             return "{\"kind\":\"int\",\"value\":\"" + std::to_string(expr.integer) + "\"}";
         case Kind::Variable:
-            if (!hir_v1_identifier(expr.name))
-                throw unsupported_hir_v1("invalid variable identifier");
+            if (!hir_v1_identifier(expr.name) || !parameters.count(expr.name))
+                throw unsupported_hir_v1("unbound or invalid scalar parameter reference");
             return "{\"kind\":\"var\",\"name\":\"" + expr.name + "\"}";
         case Kind::Add: case Kind::Subtract: case Kind::Multiply: {
             if (!expr.left || !expr.right)
@@ -120,8 +121,8 @@ inline std::string hir_v1_expr_json(const Expression& expr,
             const char* op = expr.kind == Kind::Add ? "add" :
                              expr.kind == Kind::Subtract ? "sub" : "mul";
             return std::string("{\"kind\":\"bin\",\"op\":\"") + op
-                + "\",\"lhs\":" + hir_v1_expr_json(*expr.left, depth + 1, nodes)
-                + ",\"rhs\":" + hir_v1_expr_json(*expr.right, depth + 1, nodes) + "}";
+                + "\",\"lhs\":" + hir_v1_expr_json(*expr.left, depth + 1, nodes, parameters)
+                + ",\"rhs\":" + hir_v1_expr_json(*expr.right, depth + 1, nodes, parameters) + "}";
         }
         case Kind::Call: {
             if (!hir_v1_identifier(expr.name) || expr.arguments.size() > 32 ||
@@ -137,7 +138,7 @@ inline std::string hir_v1_expr_json(const Expression& expr,
             for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
                 if (!expr.arguments[i]) throw unsupported_hir_v1("null call argument");
                 if (i) json += ',';
-                json += hir_v1_expr_json(*expr.arguments[i], depth + 1, nodes);
+                json += hir_v1_expr_json(*expr.arguments[i], depth + 1, nodes, parameters);
             }
             return json + "]}";
         }
@@ -196,7 +197,7 @@ inline std::string emit_experimental_hir_v1(const Program& program,
         // not across all functions in the module.
         std::size_t nodes = 0;
         out += "],\"result_type\":\"i64\",\"body\":"
-            + hir_v1_expr_json(*fn.result, 0, nodes) + "}";
+            + hir_v1_expr_json(*fn.result, 0, nodes, params) + "}";
     }
     out += "]}";
     // HIR v1 requires a closed, acyclic, arity-correct call graph.
