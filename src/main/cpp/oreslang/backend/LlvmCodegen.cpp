@@ -108,6 +108,28 @@ llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
     return builder.CreateExtractValue(pair, {0}, "checked.value");
 }
 
+// Fail immediately after evaluating a checked child expression. A nested
+// overflow must stop the surrounding arithmetic/call before its next operand
+// is evaluated. In the admitted scalar profile all functions return i64 and
+// have no live owners, defers or actor state to unwind.
+void propagate_pending_checked_i64(llvm::IRBuilder<>& builder,
+                                   const RegionMoveLowering* moves,
+                                   const char* phase) {
+    if (!moves || !moves->checked_i64_status) return;
+    llvm::Value* status = builder.CreateLoad(builder.getInt32Ty(),
+        moves->checked_i64_status, "checked.pending.effect");
+    llvm::Function* containing = builder.GetInsertBlock()->getParent();
+    auto* failed = llvm::BasicBlock::Create(
+        builder.getContext(), std::string("checked.") + phase + ".propagate", containing);
+    auto* normal = llvm::BasicBlock::Create(
+        builder.getContext(), std::string("checked.") + phase + ".normal", containing);
+    builder.CreateCondBr(builder.CreateICmpNE(status,
+        llvm::ConstantInt::get(status->getType(), 0)), failed, normal);
+    builder.SetInsertPoint(failed);
+    builder.CreateRet(llvm::ConstantInt::get(builder.getInt64Ty(), 0));
+    builder.SetInsertPoint(normal);
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -205,6 +227,7 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Negate: {
             llvm::Value* value = lower(*expr.left, builder, i64, storage,
                                       field_storage, functions, moves);
+            propagate_pending_checked_i64(builder, moves, "operand");
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64")) {
                 return lower_checked_i64_binary(builder, i64,
                         llvm::ConstantInt::getSigned(i64, 0), value,
@@ -244,7 +267,9 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            propagate_pending_checked_i64(builder, moves, "operand");
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            propagate_pending_checked_i64(builder, moves, "operand");
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
                         llvm::Intrinsic::sadd_with_overflow, "checked.add",
@@ -253,7 +278,9 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            propagate_pending_checked_i64(builder, moves, "operand");
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            propagate_pending_checked_i64(builder, moves, "operand");
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
                         llvm::Intrinsic::ssub_with_overflow, "checked.sub",
@@ -262,7 +289,9 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            propagate_pending_checked_i64(builder, moves, "operand");
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            propagate_pending_checked_i64(builder, moves, "operand");
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
                         llvm::Intrinsic::smul_with_overflow, "checked.mul",
@@ -314,6 +343,9 @@ llvm::Value* lower(const Expression& expr,
                 // Emit instructions in source order, not in formal-slot order.
                 ordered[target] = lower(*expr.arguments[i], builder, i64,
                                         storage, field_storage, functions, moves);
+                // A preceding argument failure must not evaluate the next
+                // argument or invoke a callee with a poisoned value.
+                propagate_pending_checked_i64(builder, moves, "argument");
             }
             if (checked) ordered.push_back(moves->checked_i64_status);
             llvm::Value* result = builder.CreateCall(callee, ordered,
