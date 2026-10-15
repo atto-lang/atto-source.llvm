@@ -25,7 +25,10 @@ def fixture():
             command = [sys.executable, "/work/src/tests/contract.py",
                        "--compiler", "/work/build/oreslang-llvmc",
                        "--fixture", "/work/src/tests/fixtures/" + source,
-                       evidence, "ret i64 42" if evidence == "--ir" else "expected diagnostic"]
+                       evidence, ("ret i64 42" if evidence == "--ir" else
+                                  "native realtime source loop requires verified LLVM continuation lowering"
+                                  if name == "native_rt_while_loop_failclosed" else
+                                  "native exceptional-control boundary unsupported")]
         elif name in SOURCE_ACTOR_TESTS:
             command = [sys.executable, "/work/src/tests/source_actor_e2e.py",
                        "--compiler", "/work/build/oreslang-llvmc",
@@ -148,6 +151,18 @@ class ManifestAuditTests(unittest.TestCase):
                       if x["name"] == "reject_throw_effect")
         target["command"] = [sys.executable, "-c", "pass"]
         self.fail_on("wrong compiler/fixture")
+
+    def test_negative_rejection_cannot_accept_unrelated_diagnostic(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "reject_throw_effect")
+        target["command"][-1] = "unrelated error"
+        self.fail_on("requires exact evidence")
+
+    def test_positive_constant_cannot_accept_unrelated_ir_evidence(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "constant_main")
+        target["command"][-1] = "define i32 @spoof"
+        self.fail_on("requires exact evidence")
 
     def test_native_rt_rejection_requires_exact_fixture(self):
         target = next(x for x in self.manifest["tests"]
