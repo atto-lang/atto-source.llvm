@@ -48,6 +48,40 @@ cases = {
           return 0;
         }
     """,
+    "postfix_result_return": """
+        fnc read_value(): Result<int, string> {
+          val Result<int, string> x = Err("bad");
+          val int n = x?;
+          return Ok(n);
+        }
+        pub fnc main(): int { return 42; }
+    """,
+    "postfix_option_return": """
+        fnc read_value(): Option<int> {
+          val Option<int> x = None;
+          val int n = x?;
+          return Some(n);
+        }
+        pub fnc main(): int { return 42; }
+    """,
+    "postfix_try_catch_throw": """
+        fnc read_value(): int throws Error {
+          try {
+            val Result<int, Error> x = Err(Error("bad"));
+            return x?;
+          } catch (err) { return 42; }
+        }
+        pub fnc main(): int { return read_value(); }
+    """,
+    "raise_bypasses_catch": """
+        pub fnc main(): int {
+          try { raise Error("raised"); } catch (err) { return 42; }
+          return 0;
+        }
+    """,
+    "panic_supervisor": """
+        pub fnc main(): int { panic Error("fatal"); return 42; }
+    """,
 }
 with tempfile.TemporaryDirectory(prefix="ores-elm-admission-") as td:
     path = Path(td) / "main.ores"
