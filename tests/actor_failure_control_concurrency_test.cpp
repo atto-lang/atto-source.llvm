@@ -20,7 +20,7 @@ static int check_concurrent_fifo() {
                     "actor-" + std::to_string(i), "parent");
             bool accepted = false;
             for (int retry = 0; retry < 200000; ++retry) {
-                if (inbox.offer(notice)) {
+                if (inbox.offer(notice, notice.envelope().actor_id())) {
                     accepted = true;
                     break;
                 }
@@ -67,7 +67,7 @@ static int check_retirement_race() {
         const auto notice = ActorFailureControlNotice::from_guest_effect(
                 ActorExceptionalEffect::Panic, "child", "parent");
         for (int i = 0; i < kAttempts; ++i) {
-            (void)inbox.offer(notice);
+            (void)inbox.offer(notice, notice.envelope().actor_id());
             attempted.fetch_add(1);
         }
     });
@@ -81,7 +81,7 @@ static int check_retirement_race() {
     if (inbox.dropped() != static_cast<std::size_t>(kAttempts)) return 4;
     const auto notice = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "later-child", "parent");
-    if (inbox.offer(notice)) return 5;
+    if (inbox.offer(notice, notice.envelope().actor_id())) return 5;
     if (inbox.dropped() != static_cast<std::size_t>(kAttempts + 1)) return 6;
     return 0;
 }
