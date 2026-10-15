@@ -53,14 +53,26 @@ public:
 
     ActorExceptionalEffect effect() const noexcept { return effect_; }
     const ActorErrorEnvelope& envelope() const noexcept { return envelope_; }
+    // Zero means not admitted to a trusted supervisor CONTROL inbox.
+    // These read-only values tag a delivered event; neither value confers
+    // permission to publish a new event or revoke a child registration.
+    std::uint64_t admitted_inbox_incarnation() const noexcept {
+        return admitted_inbox_incarnation_;
+    }
+    std::uint64_t admitted_child_generation() const noexcept {
+        return admitted_child_generation_;
+    }
 
 private:
+    friend class ActorFailureControlInbox;
     ActorFailureControlNotice(ActorExceptionalEffect effect,
                               ActorErrorEnvelope envelope)
             : effect_(effect), envelope_(std::move(envelope)) {}
 
     ActorExceptionalEffect effect_;
     ActorErrorEnvelope envelope_;
+    std::uint64_t admitted_inbox_incarnation_ = 0;
+    std::uint64_t admitted_child_generation_ = 0;
 };
 
 /**
@@ -152,6 +164,13 @@ public:
     // only std::string moves and optional emplacement into fixed slots occur:
     // no queue growth, reallocations, guest callbacks or unbounded waits.
     bool offer(ActorFailureControlNotice notice, const DirectChildPermit& permit) {
+        // A prior delivery cannot be recycled into a new authoritative
+        // publication. The actor/runtime must construct fresh, unadmitted
+        // value metadata for each terminal effect.
+        if (notice.admitted_inbox_incarnation_ != 0
+                || notice.admitted_child_generation_ != 0) {
+            throw std::invalid_argument("CONTROL notice already admitted by an inbox");
+        }
         if (notice.envelope().supervisor_id() != supervisor_id_
                 || permit.inbox_nonce_ != inbox_nonce_) {
             throw std::invalid_argument("CONTROL notice is not owned by this supervisor");
@@ -186,10 +205,36 @@ public:
             dropped_ = saturated_control_count(dropped_, 1);
             return false;
         }
+        // Stamp the accepted generation only after all validation and quota
+        // decisions. These two scalar fields are host-owned data, never a
+        // capability and never a borrowed actor/guest object.
+        notice.admitted_inbox_incarnation_ = inbox_nonce_;
+        notice.admitted_child_generation_ = child->generation;
         slots_[(head_ + count_) % capacity_].emplace(std::move(notice));
         child->terminal_admitted = true;
         ++count_;
         return true;
+    }
+
+    // A supervisor deciding whether to restart a *current* child must not
+    // mistake a queued terminal notice from a retired registration for a
+    // replacement actor with the same opaque string ID.
+    // This is an observational check, not authority to offer new CONTROL.
+    bool belongs_to_current_child(
+            const ActorFailureControlNotice& notice,
+            const DirectChildPermit& permit) const {
+        if (permit.inbox_nonce_ != inbox_nonce_
+                || notice.admitted_inbox_incarnation_ != inbox_nonce_
+                || notice.admitted_child_generation_ != permit.generation_
+                || notice.envelope().supervisor_id() != supervisor_id_
+                || notice.envelope().actor_id() != permit.child_id_) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (retired_) return false;
+        return std::any_of(direct_children_.begin(), direct_children_.end(),
+                [&](const DirectChild& entry) {
+                    return entry.id == permit.child_id_
+                            && entry.generation == permit.generation_;
+                });
     }
 
     std::optional<ActorFailureControlNotice> try_pop() {
