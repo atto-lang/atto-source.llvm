@@ -46,7 +46,13 @@ static int check_concurrent_fifo() {
             auto notice = ActorFailureControlNotice::from_guest_effect(
                     ActorExceptionalEffect::Raise,
                     "actor-" + std::to_string(i), "parent");
-            if (!inbox.offer(notice, notice.envelope().actor_id())) {
+            // Registration models the trusted native actor spawn path.
+            // Revoke only after admission, never by echoing a notice ID as
+            // sufficient authorization for the queue.
+            const auto& child_id = notice.envelope().actor_id();
+            if (!inbox.register_direct_child(child_id)
+                    || !inbox.offer(notice, child_id)
+                    || !inbox.unregister_direct_child(child_id)) {
                 fail();
                 return;
             }
@@ -95,6 +101,7 @@ static int check_concurrent_fifo() {
 
 static int check_retirement_race() {
     ActorFailureControlInbox inbox("parent", 16);
+    if (!inbox.register_direct_child("child")) return 13;
     constexpr int kAttempts = 512;
     std::atomic<int> attempted{0};
     std::thread producer([&] {
@@ -129,6 +136,8 @@ static int check_supervisor_retirement_isolation() {
             ActorExceptionalEffect::Raise, "left-child", "left");
     const auto right_notice = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Panic, "right-child", "right");
+    if (!left.register_direct_child("left-child")
+            || !right.register_direct_child("right-child")) return 14;
     if (!left.offer(left_notice, "left-child")) return 7;
     if (!right.offer(right_notice, "right-child")) return 8;
     left.retire();
