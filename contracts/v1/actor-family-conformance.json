@@ -1277,6 +1277,62 @@
       "description": "untyped supervisor cannot replace successful Outcome returned by child; exact identity forwarding and explicit 4xx/5xx rejection remain allowed",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-181",
+      "expected": "runtime_target",
+      "description": "already-completed host CompletionStage cannot execute actor callback inline in registering receive turn",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-182",
+      "expected": "runtime_target",
+      "description": "host CompletionStage fulfilled by producer thread queues guest continuation to actor carrier, not producer thread",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-183",
+      "expected": "reject",
+      "description": "continuation target minted by actor runtime A cannot be registered through actor runtime B",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-184",
+      "expected": "runtime_target",
+      "description": "actor stop cancels pending CompletionStage adapter and suppresses late guest callback",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-185",
+      "expected": "runtime_target",
+      "description": "actor-owned unary reply handoff settles only from serialized actor mailbox continuation, never producer thread",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-186",
+      "expected": "runtime_target",
+      "description": "actor-owned unary request reply ticket is revoked by actor done barrier even if producer never settles",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-187",
+      "expected": "reject",
+      "description": "actor-owned unary bridge invoked off actor execution turn fails before claiming ticket",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-188",
+      "expected": "runtime_target",
+      "description": "future compiled unary reply transport waits for actor carrier and code-image exit before externally publishing response",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
