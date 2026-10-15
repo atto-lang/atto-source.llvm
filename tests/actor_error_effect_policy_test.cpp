@@ -176,9 +176,9 @@ int main() {
     // supervisor's CONTROL inbox, even when the actor identity matches.
     ActorFailureControlInbox inbox("parent-1", 1);
     if (inbox.pending() != 0 || inbox.dropped() != 0) return 18;
-    if (!inbox.offer(raised)) return 19;
+    if (!inbox.offer(raised, "actor-1")) return 19;
     if (inbox.pending() != 1) return 20;
-    if (inbox.offer(panicked)) return 21;
+    if (inbox.offer(panicked, "actor-1")) return 21;
     if (inbox.dropped() != 1) return 22;
     const auto received = inbox.try_pop();
     if (!received || received->effect() != ActorExceptionalEffect::Raise) return 23;
@@ -188,7 +188,7 @@ int main() {
     const auto foreign_child = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "actor-2", "parent-2");
     try {
-        (void)inbox.offer(foreign_child);
+        (void)inbox.offer(foreign_child, "actor-2");
         return 26;
     } catch (const std::invalid_argument&) {
         // An inbox is structurally owned; no arbitrary parent ID routing.
@@ -212,15 +212,15 @@ int main() {
     ActorFailureControlInbox ring("parent-1", 2);
     const auto third = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "actor-3", "parent-1");
-    if (!ring.offer(raised) || !ring.offer(panicked)) return 31;
-    if (ring.offer(third) || ring.dropped() != 1) return 32;
+    if (!ring.offer(raised, "actor-1") || !ring.offer(panicked, "actor-1")) return 31;
+    if (ring.offer(third, "actor-3") || ring.dropped() != 1) return 32;
     if (ring.try_pop()->effect() != ActorExceptionalEffect::Raise) return 33;
-    if (!ring.offer(third)) return 34;
+    if (!ring.offer(third, "actor-3")) return 34;
     if (ring.try_pop()->effect() != ActorExceptionalEffect::Panic) return 35;
     if (ring.try_pop()->envelope().actor_id() != "actor-3") return 36;
     if (ring.try_pop() || ring.pending() != 0 || ring.dropped() != 1) return 37;
     for (int i = 0; i < 1024; ++i) {
-        if (!ring.offer(raised)) return 38;
+        if (!ring.offer(raised, "actor-1")) return 38;
         auto item = ring.try_pop();
         if (!item || item->effect() != ActorExceptionalEffect::Raise) return 39;
     }
@@ -229,14 +229,38 @@ int main() {
     // A retired supervisor cannot receive another child CONTROL notice;
     // unread notices are counted as dropped and cannot be resurrected.
     ActorFailureControlInbox retiring("parent-1", 2);
-    if (!retiring.offer(raised) || !retiring.offer(panicked)) return 41;
+    if (!retiring.offer(raised, "actor-1") || !retiring.offer(panicked, "actor-1")) return 41;
     if (retiring.pending() != 2 || retiring.dropped() != 0) return 42;
     retiring.retire();
     if (!retiring.retired() || retiring.pending() != 0) return 43;
     if (retiring.dropped() != 2 || retiring.try_pop()) return 44;
     retiring.retire();
     if (retiring.dropped() != 2) return 45;
-    if (retiring.offer(third)) return 46;
+    if (retiring.offer(third, "actor-3")) return 46;
     if (retiring.pending() != 0 || retiring.dropped() != 3) return 47;
+
+    // An envelope's claimed parent alone is insufficient. The runtime must
+    // independently prove which direct child is being reported.
+    ActorFailureControlInbox authorized("parent-1", 2);
+    try {
+        (void)authorized.offer(raised, "actor-2");
+        return 57;
+    } catch (const std::invalid_argument&) {}
+    try {
+        (void)authorized.offer(raised, "");
+        return 58;
+    } catch (const std::invalid_argument&) {}
+    try {
+        (void)authorized.offer(raised, "parent-1");
+        return 59;
+    } catch (const std::invalid_argument&) {}
+    if (authorized.pending() || authorized.dropped()) return 60;
+    if (!authorized.offer(raised, "actor-1")) return 61;
+
+    try {
+        (void)ActorFailureControlNotice::from_guest_effect(
+                ActorExceptionalEffect::Raise, "same-id", "same-id");
+        return 62;
+    } catch (const std::invalid_argument&) {}
     return 0;
 }
