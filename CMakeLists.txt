@@ -1705,3 +1705,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_nominal_enum_overload_static_policy
         PROPERTIES TIMEOUT 10)
 endif()
+
+# Compiler/linker nominal method slot policy (host-only); NO native guest
+# methods, vtable dispatch or enum-overload execution is enabled here.
+if(BUILD_TESTING)
+    add_executable(oreslang-nominal-method-slot-policy-test
+        tests/nominal_method_slot_policy_test.cpp)
+    target_include_directories(oreslang-nominal-method-slot-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-nominal-method-slot-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nominal_method_slot_static_policy
+        COMMAND oreslang-nominal-method-slot-policy-test)
+    set_tests_properties(native_nominal_method_slot_static_policy
+        PROPERTIES TIMEOUT 10)
+endif()
