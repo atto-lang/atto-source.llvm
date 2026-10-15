@@ -600,7 +600,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_contract_unlinked_import native-contract-i64-import.ores
         --diagnostic "native contract imports require a validated cross-unit linker")
     oreslang_contract_test(native_contract_string_unimplemented native-contract-reject-string.ores
-        --diagnostic "expected 'int'")
+        --diagnostic "client contracts have no admitted LLVM runtime implementation")
 
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     add_test(NAME native_named_call_lexical_ir_order

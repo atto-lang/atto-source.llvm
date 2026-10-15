@@ -7,8 +7,8 @@ import tempfile
 
 SUCCESSES = {
     "canonical": """define class Foo as
-  int a: 13
-  final int b: 29
+  pub int a: 13
+  pub final int b: 29
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -16,8 +16,8 @@ pub fnc main(): int {
 }
 """,
     "compatibility": """define class Foo as
-  int a = 13
-  final int b = 29
+  pub int a = 13
+  pub final int b = 29
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -37,12 +37,12 @@ pub fnc main(): int {
 }
 REJECTIONS = {
     "same-line-field-without-semicolon": ("""define class Foo as
-  int a: 5 int b: 9
+  pub int a: 5 int b: 9
 end
 pub fnc main(): int { return 0; }
 """, "class field requires ';' or a line break"),
     "final-reassign": ("""define class Foo as
-  final int a: 5;
+  pub final int a: 5;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -51,7 +51,7 @@ pub fnc main(): int {
 }
 """, "cannot reassign final class field"),
     "final-take": ("""define class Foo as
-  final int a: 42;
+  pub final int a: 42;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -59,7 +59,7 @@ pub fnc main(): int {
 }
 """, "cannot take final class field"),
     "final-after-owner-move": ("""define class Foo as
-  final int a: 5;
+  pub final int a: 5;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
@@ -69,7 +69,7 @@ pub fnc main(): int {
 }
 """, "cannot reassign final class field"),
     "final-conditional-write": ("""define class Foo as
-  final int a: 5;
+  pub final int a: 5;
 end
 pub fnc main(): int {
   let mut Foo f = new Foo();
