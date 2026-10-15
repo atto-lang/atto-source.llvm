@@ -1,0 +1,9 @@
+@ActorMiddleware(Clean)
+define unary actor Worker as
+    run(int value): int { return value; }
+end
+define class Clean as
+    async next_val(MiddlewareContext req, MiddlewareResponseDraft res): MiddlewareDecision<int> {
+        return MiddlewareDecision<int>.Continue(req);
+    }
+end
