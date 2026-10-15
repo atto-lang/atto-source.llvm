@@ -254,7 +254,11 @@ jobs:
           "$CLANG" -Wno-override-module -c -x ir "$RUNNER_TEMP/checked-effect.ll" \
             -o "$RUNNER_TEMP/checked-effect.o"
           command -v objcopy
-          # The emitted guest source contains a normal OS main wrappe          cat > "$RUNNER_TEMP/checked-effect.c" <<'C'
+          # The emitted guest source contains a normal OS main wrapper.
+          # Rename it only in this disposable object to avoid two C mains.
+          objcopy --redefine-sym main=oreslang_guest_entry_unused \
+            "$RUNNER_TEMP/checked-effect.o"
+          cat > "$RUNNER_TEMP/checked-effect.c" <<'C'
           #include <stdint.h>
           #include <limits.h>
           #include <stdio.h>
@@ -362,12 +366,6 @@ jobs:
                   seed ^= seed << 17;
                   // Avoid implementation-defined out-of-range conversion of u64
                   // to i64: subtract a widened 2^63 before narrowing.
-                  check_i64_oracle((int64_t)((__int128)seed -
-                      ((__int128)1 << 63)));
-              }
-              return 0;
-          }
-widened 2^63 before narrowing.
                   check_i64_oracle((int64_t)((__int128)seed -
                       ((__int128)1 << 63)));
               }
