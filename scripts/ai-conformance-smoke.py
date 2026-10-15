@@ -48,7 +48,8 @@ def run(argv, timeout, cwd):
     """Run an argv vector with bounded capture and bounded wall time.
 
     No shell. A dedicated POSIX process group permits stopping descendants
-    if the compiler launcher (such as the Java Python probe) wedges.\n    This is not an OS sandbox and cannot kill descendants that create new sessions.
+    if the compiler launcher (such as the Java Python probe) wedges.
+    This is not an OS sandbox and cannot kill descendants that create new sessions.
     """
     start = time.monotonic()
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
