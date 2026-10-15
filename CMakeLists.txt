@@ -294,6 +294,20 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # Positive compiler-only contracts must assemble the emitted IR, not just
+    # accept an expected substring after the textual ModuleID header.
+    if(ORE_CLANG)
+        add_test(NAME native_contract_positive_object_verifies
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores"
+                --verify-object --clang "${ORE_CLANG}")
+        set_tests_properties(native_contract_positive_object_verifies
+            PROPERTIES TIMEOUT 90)
+    else()
+        message(FATAL_ERROR "Native source IR object verification requires Clang")
+    endif()
     # This isolated AOT source-to-native frame test does not relax the nine
     # default compiler-negative RT admission contracts.
     if(ORE_CLANG)
@@ -363,6 +377,33 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+
+    # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
+    # admission/IR checks into a green CTest. Uses only fake compilers;
+    # no LLVM toolchain or private-source mirror is needed.
+    add_test(NAME native_contract_harness_optimize_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_harness.py")
+    add_test(NAME native_contract_harness_python_O
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_harness.py")
+    add_test(NAME native_contract_harness_python_OO
+        COMMAND "${Python3_EXECUTABLE}" -OO
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_harness.py")
+    set_tests_properties(
+        native_contract_harness_optimize_failclosed
+        native_contract_harness_python_O
+        native_contract_harness_python_OO
+        PROPERTIES TIMEOUT 240)
+
+    # Validate the CTest inventory itself, including non-skippable admission,
+    # optimized Python harness registration and native executable gates.
+    add_test(NAME native_ctest_manifest_harness_adversarial
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -p "test_ctest_manifest_gate.py" -v)
+    set_tests_properties(native_ctest_manifest_harness_adversarial
+        PROPERTIES TIMEOUT 30)
 
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
