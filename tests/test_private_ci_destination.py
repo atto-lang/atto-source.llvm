@@ -51,6 +51,53 @@ class PrivateCIMirrorGateTests(unittest.TestCase):
         with self.assertRaisesRegex(MirrorPolicyError, "regular non-symlink"):
             read_approved_repositories(alias)
 
+    def test_symlinked_approval_directory_is_denied(self):
+        self.allow("test-org/private\n")
+        alias = Path(self.workspace.name) / "redirected-dir"
+        try:
+            alias.symlink_to(Path(self.workspace.name), target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"directory symlinks unsupported: {exc}")
+        with self.assertRaisesRegex(MirrorPolicyError, "cannot read"):
+            read_approved_repositories(alias / "approved.txt")
+
+    def test_hardlinked_manifest_is_denied(self):
+        self.allow("test-org/private\n")
+        alias = Path(self.workspace.name) / "hardlink.txt"
+        try:
+            alias.hardlink_to(self.manifest)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"hardlinks unsupported: {exc}")
+        with self.assertRaisesRegex(MirrorPolicyError, "single-link"):
+            read_approved_repositories(self.manifest)
+
+    def test_parent_directory_swap_before_open_is_denied(self):
+        import os
+        from unittest.mock import patch
+
+        parent = Path(self.workspace.name) / "reviewed"
+        parent.mkdir()
+        manifest = parent / "approved.txt"
+        manifest.write_text("test-org/private\n", encoding="utf-8")
+        alternate = Path(self.workspace.name) / "forged"
+        alternate.mkdir()
+        (alternate / "approved.txt").write_text("attacker/target\n", encoding="utf-8")
+        real_open = os.open
+        switched = False
+
+        def swap_parent(path, flags, *args, **kwargs):
+            nonlocal switched
+            if not switched and Path(path) == parent:
+                switched = True
+                parent.rename(Path(self.workspace.name) / "old-reviewed")
+                parent.symlink_to(alternate, target_is_directory=True)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("scripts.check_private_ci_destination.os.open", side_effect=swap_parent):
+            with self.assertRaisesRegex(MirrorPolicyError, "cannot read"):
+                read_approved_repositories(manifest)
+        self.assertTrue(switched)
+
     def test_symlink_swap_after_precheck_still_fails_closed(self):
         # Force a path swap precisely after the informational prechecks,
         # but before the authoritative O_NOFOLLOW open.
