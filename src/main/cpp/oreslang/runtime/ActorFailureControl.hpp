@@ -96,10 +96,10 @@ public:
         }
         std::lock_guard<std::mutex> lock(mutex_);
         if (retired_) return false;
-        if (std::find(direct_children_.begin(), direct_children_.end(), checked)
-                != direct_children_.end()) return false;
+        if (std::any_of(direct_children_.begin(), direct_children_.end(),
+                [&](const DirectChild& entry) { return entry.id == checked; })) return false;
         if (direct_children_.size() == max_direct_children) return false;
-        direct_children_.push_back(checked);
+        direct_children_.push_back({checked, false});
         return true;
     }
 
@@ -107,7 +107,8 @@ public:
     // Already-admitted notices remain value-only and can still be drained.
     bool unregister_direct_child(std::string_view child_id) {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto found = std::find(direct_children_.begin(), direct_children_.end(), child_id);
+        auto found = std::find_if(direct_children_.begin(), direct_children_.end(),
+                [&](const DirectChild& entry) { return entry.id == child_id; });
         if (found == direct_children_.end()) return false;
         // Child IDs are opaque: their order is not observable or significant.
         *found = std::move(direct_children_.back());
@@ -136,15 +137,24 @@ public:
             dropped_ = saturated_control_count(dropped_, 1);
             return false;
         }
-        if (std::find(direct_children_.begin(), direct_children_.end(),
-                direct_child_id) == direct_children_.end()) {
+        auto child = std::find_if(direct_children_.begin(), direct_children_.end(),
+                [&](const DirectChild& entry) { return entry.id == direct_child_id; });
+        if (child == direct_children_.end()) {
             throw std::invalid_argument("CONTROL notice requires registered direct child");
+        }
+        if (child->terminal_admitted) {
+            // A terminal actor outcome can never be delivered twice to its
+            // supervisor, even after its first notice has been consumed.
+            // Replay rejection is not a lost first notice.
+            duplicate_rejections_ = saturated_control_count(duplicate_rejections_, 1);
+            return false;
         }
         if (count_ == capacity_) {
             dropped_ = saturated_control_count(dropped_, 1);
             return false;
         }
         slots_[(head_ + count_) % capacity_].emplace(std::move(notice));
+        child->terminal_admitted = true;
         ++count_;
         return true;
     }
@@ -193,7 +203,16 @@ public:
         return count_;
     }
 
+    std::size_t duplicate_rejections() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return duplicate_rejections_;
+    }
+
 private:
+    struct DirectChild {
+        std::string id;
+        bool terminal_admitted = false;
+    };
     static constexpr std::size_t max_direct_children = 4096;
 
     static std::size_t checked_capacity(std::size_t capacity) {
@@ -209,7 +228,10 @@ private:
     std::vector<std::optional<ActorFailureControlNotice>> slots_;
     // Host-admitted structural membership, never inferred from a notice.
     // Registration allocates only at actor spawn, never in offer/try_pop.
-    std::vector<std::string> direct_children_;
+    std::vector<DirectChild> direct_children_;
+    // Runtime must never reuse a child actor identity across generations.
+    // An entry stays terminal-fenced until explicit child unregister.
+    std::size_t duplicate_rejections_ = 0;
     std::size_t head_ = 0;
     std::size_t count_ = 0;
     std::size_t dropped_ = 0;
