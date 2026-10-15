@@ -354,7 +354,7 @@ No guest exception lowering or actor carrier execution is implied.
 parent metadata into its pre-reserved host CONTROL storage. Strictly valid
 UTF-8 is **not** sufficient to make these fields safe for host diagnostics.
 The low-level lane now replaces ASCII C0/DEL, UTF-8 C1 controls, U+061C,
-U+200E/U+200F, U+202A–U+202E and U+2066–U+2069 with a single ASCII
+U+200B–U+200F, U+2028–U+202E, U+2060, U+2066–U+2069 and U+FEFF with a single ASCII
 `?` per scalar. Malformed bytes retain the existing one-byte-at-a-time
 replacement rule. The 512-byte summary and 128-byte parent fields still
 truncate at UTF-8 scalar boundaries, and ordinary Unicode remains intact.
