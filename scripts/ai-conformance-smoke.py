@@ -122,14 +122,22 @@ def good(result):
 
 
 def rejected(result):
-    text = result["stdout"] + "\n" + result["stderr"]
-    return (not result["timeout"] and not result["output_truncated"]
-            and isinstance(result["exit_code"], int)
-            and result["exit_code"] > 0
-            and "nonexistent_symbol" in text
-            and bool(ERROR_WORDS.search(text))
-            and not re.search(r"\b(segmentation fault|stack trace|traceback|fatal signal)\b", text, re.I))
+    """Require a real same-line compiler diagnostic naming the rejected symbol.
 
+    Unrelated host errors + a separately echoed fixture cannot qualify.
+    """
+    text = result["stdout"] + "\n" + result["stderr"]
+    diagnostic = any(
+        "nonexistent_symbol" in line and ERROR_WORDS.search(line)
+        for line in text.splitlines()
+    )
+    return (
+        not result["timeout"] and not result["output_truncated"]
+        and isinstance(result["exit_code"], int)
+        and result["exit_code"] > 0
+        and diagnostic
+        and not re.search(r"\b(segmentation fault|stack trace|traceback|fatal signal)\b", text, re.I)
+    )
 
 def main():
     parser = argparse.ArgumentParser()
