@@ -193,3 +193,39 @@ source execution. The LLVM guest compiler still rejects actual source
 has introduced a narrower source actor `on_throw(Error): bool` receive-turn
 slice; this does **not** establish cross-backend feature parity. Exact-head
 CTest, sanitizers, native AOT and scheduler integration remain unverified.
+
+
+## First-terminal-only native CONTROL admission (October 14, 2026)
+
+The host-only `ActorFailureControlInbox` now tracks a terminal-admitted bit
+for each **currently registered** direct-child identity under the same mutex
+that protects the fixed-capacity ring. The first successful `offer` sets
+that bit only after its value-only notice occupies a ring slot. A second offer
+from that registration returns false even if the first notice has already
+been drained. This prevents duplicate child supervision and replay-driven
+restart decisions at the inbox boundary.
+
+Duplicate rejections have a separately saturating
+`duplicate_rejections()` counter; they are not misclassified as missing
+first-notice delivery in `dropped()`. A full queue does **not** set the
+terminal bit; a failed first attempt may be retried after capacity returns.
+A retired supervisor still rejects late offers and counts discarded notices
+under its previous retirement contract.
+
+**Identity assumption:** the future native scheduler must issue a globally
+fresh child identity per generation and must unregister old child identity
+only after its final CONTROL handoff. Re-registering a reused identity after
+unregister would start a new registration; the container does not prove that
+a purported identity represents a new generation. The native scheduler
+integration must supply that proof.
+
+Native host tests now cover one successful terminal admission, duplicate
+rejection before and after drain, saturation followed by a first-admission
+retry, wraparound with fresh identities, and 16 simultaneous duplicate
+producers. Earlier ring tests that reused the same child for multiple
+terminal notices have been corrected.
+
+**Still unverified:** exact-head CMake/CTest and sanitizers. GitHub Actions
+reports failed jobs with zero executed steps, and job log downloads are
+unavailable. This is not native LLVM guest lowering, source `on_raise`,
+native supervisor scheduling, or production evidence.
