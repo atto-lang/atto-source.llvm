@@ -21,6 +21,18 @@ if [[ -n "${ORESLANG_EXPECTED_SOURCE_SHA:-}" ]]; then
             "$ORESLANG_EXPECTED_SOURCE_SHA" "${checkout_sha:-unavailable}" >&2
         exit 2
     fi
+    # A matching HEAD hash is not a source-integrity proof when tracked files
+    # or untracked compiler inputs were changed after checkout. Verify the
+    # entire worktree before invoking any compiler or test process.
+    checkout_status=""
+    if ! checkout_status="$(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null)"; then
+        printf 'Exact-head verification refused: unable to inspect checkout cleanliness\n' >&2
+        exit 2
+    fi
+    if [[ -n "$checkout_status" ]]; then
+        printf 'Exact-head verification refused: checkout contains modified or untracked files\n' >&2
+        exit 2
+    fi
 fi
 
 compiler="${CXX:-c++}"
