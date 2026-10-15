@@ -53,9 +53,10 @@ Marked source executes signed-64-bit addition, subtraction, multiplication
 and unary negation with overflow detection. Java/GraalVM uses
 `Math.*Exact`; LLVM uses `llvm.sadd/ssub/smul.with.overflow.i64`, with
 checked negation lowered as zero-minus-operand. LLVM's experimental host
-lowering now forwards an **invocation-scoped** `i32*` checked-effect slot
+lowering now forwards an **invocation-scoped** `i64*` checked-effect slot
 through every checked scalar function as its final, compiler-hidden argument.
-A failed operation stores the typed `Throw` code `0x494F0001` and returns
+A failed operation stores `(operation_tag << 32) | 0x494F0001` in that
+64-bit slot (tags: add=1, subtract=2, multiply=3, negate=4) and returns
 from that function; each enclosing call checks the slot and propagates the
 failure without evaluating the invalid result. The process entrypoint
 initializes the slot and alone converts the pending failure to
@@ -63,7 +64,9 @@ initializes the slot and alone converts the pending failure to
 per-arithmetic-operation `exit()` call is used in this profile.
 
 **This extra status-pointer ABI applies only to the experimental checked
-host-scalar profile**, and cannot be called using the legacy bare-i64 C
+host-scalar profile**. Foreign callers must supply an initialized
+`uint64_t*` (zero before each independent invocation), not a 32-bit status
+pointer. It cannot be called using the legacy bare-i64 C
 signature. It is not an implemented guest `Error`, catch/recover,
 actor/supervisor, cross-thread or reusable library invocation API. Java's
 experimental guest boundary carries the same diagnostic marker, but
