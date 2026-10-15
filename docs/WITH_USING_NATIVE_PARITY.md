@@ -8,6 +8,9 @@ read capability to write authority.
 The follow-up [hardening audit](WITH_USING_HARDENING_AUDIT.md) documents fixes
 for actor entry fencing, generated ABI collisions, target admission, malformed
 callback arrows, and callback parser resource exhaustion.
+The [formal verification report](WITH_USING_FORMAL_VERIFICATION.md) adds
+universal SMT checks of compiled production predicates and a bounded TLA+
+lifecycle model, with explicit assumptions and mutation controls.
 
 ```ores
 define actor Counter as

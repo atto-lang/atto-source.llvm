@@ -1876,3 +1876,41 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(cortexm_source_actor_admission PROPERTIES TIMEOUT 90)
 endif()
+
+# Formal checks are executable proof jobs, separate from native execution tests.
+# Missing optional tools mean no proof test is registered, never a green skip.
+option(ORE_ENABLE_STATE_SCOPE_SMT "Verify compiled state predicates with Z3 when available" ON)
+set(ORE_STATE_SCOPE_TLC_JAR "" CACHE FILEPATH "Pinned TLA+ 1.7.4 tla2tools.jar for state-scope verification")
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    if(ORE_ENABLE_STATE_SCOPE_SMT)
+        find_program(ORE_STATE_SCOPE_Z3 NAMES z3)
+        find_program(ORE_STATE_SCOPE_CLANG NAMES clang)
+        find_program(ORE_STATE_SCOPE_CLANGXX NAMES clang++)
+        if(ORE_STATE_SCOPE_Z3 AND ORE_STATE_SCOPE_CLANG AND ORE_STATE_SCOPE_CLANGXX)
+            add_test(NAME formal_state_scope_smt_translator
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_state_scope_smt_translator.py"
+                    "${ORE_STATE_SCOPE_Z3}")
+            add_test(NAME formal_state_scope_smt
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_state_scope_smt.py"
+                    --root "${CMAKE_CURRENT_SOURCE_DIR}"
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/formal-state-scopes/smt"
+                    --clang "${ORE_STATE_SCOPE_CLANG}" --cxx "${ORE_STATE_SCOPE_CLANGXX}"
+                    --z3 "${ORE_STATE_SCOPE_Z3}")
+            set_tests_properties(formal_state_scope_smt_translator formal_state_scope_smt
+                PROPERTIES TIMEOUT 180 LABELS formal)
+        else()
+            message(STATUS "State-scope SMT proofs not registered: require Z3, clang and clang++")
+        endif()
+    endif()
+    if(ORE_STATE_SCOPE_TLC_JAR)
+        find_program(ORE_STATE_SCOPE_JAVA NAMES java REQUIRED)
+        add_test(NAME formal_state_scope_tlc
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_state_scope_tlc.py"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/formal-state-scopes/tlc"
+                --jar "${ORE_STATE_SCOPE_TLC_JAR}" --java "${ORE_STATE_SCOPE_JAVA}")
+        set_tests_properties(formal_state_scope_tlc PROPERTIES TIMEOUT 300 LABELS formal)
+    else()
+        message(STATUS "State-scope TLC proof not registered: set ORE_STATE_SCOPE_TLC_JAR")
+    endif()
+endif()
