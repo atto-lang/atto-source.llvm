@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - "src/main/cpp/oreslang/frontend/ExperimentalHirV1.hpp"
+      - "src/main/cpp/oreslang/frontend/CheckedI64Directive.hpp"
       - "src/main/cpp/oreslang/main.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "src/main/cpp/oreslang/backend/CheckedI64Admission.hpp"
       - "tests/checked_i64_admission_test.cpp"
+      - "tests/checked_i64_directive_test.cpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
       - "tests/experimental_hir_v1_codegen_checked_rejection_test.cpp"
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
@@ -20,11 +22,13 @@ on:
   pull_request:
     paths:
       - "src/main/cpp/oreslang/frontend/ExperimentalHirV1.hpp"
+      - "src/main/cpp/oreslang/frontend/CheckedI64Directive.hpp"
       - "src/main/cpp/oreslang/main.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "src/main/cpp/oreslang/backend/CheckedI64Admission.hpp"
       - "tests/checked_i64_admission_test.cpp"
+      - "tests/checked_i64_directive_test.cpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
       - "tests/experimental_hir_v1_codegen_checked_rejection_test.cpp"
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
@@ -86,6 +90,12 @@ jobs:
               -o "$RUNNER_TEMP/checked-packed-status-${cc}"
             "$RUNNER_TEMP/checked-packed-status-${cc}"
           done
+      - name: Fail closed on malformed checked-i64 directives
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -Wall -Wextra -Werror -Isrc/main/cpp \
+            tests/checked_i64_directive_test.cpp -o "$RUNNER_TEMP/checked-i64-directive"
+          "$RUNNER_TEMP/checked-i64-directive"
       - name: Verify signed-i64 range arithmetic against widened mathematical oracle
         run: |
           c++ -std=c++20 -Wall -Wextra -Isrc/main/cpp tests/experimental_hir_v1_checked_range_property_test.cpp -o "$RUNNER_TEMP/checked-range-property"
