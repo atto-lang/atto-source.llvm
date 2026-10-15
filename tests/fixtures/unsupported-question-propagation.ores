@@ -1,0 +1,4 @@
+fnc main(): int {
+  val Result<int, int> value = Ok(3);
+  return value?;
+}
