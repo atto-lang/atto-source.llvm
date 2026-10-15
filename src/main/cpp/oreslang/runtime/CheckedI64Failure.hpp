@@ -14,6 +14,24 @@ struct CheckedI64Failure final {
     static constexpr std::string_view code = "ORES_I64_OVERFLOW";
     static constexpr std::uint32_t effect_code = 0x494F0001u;
 
+    // Stable operation discriminants; values/operands never cross this ABI.
+    enum class Operation : std::uint32_t {
+        Add = 1u, Subtract = 2u, Multiply = 3u, Negate = 4u
+    };
+    [[nodiscard]] static constexpr bool valid_operation(std::uint32_t op) noexcept {
+        return op >= static_cast<std::uint32_t>(Operation::Add) &&
+               op <= static_cast<std::uint32_t>(Operation::Negate);
+    }
+    [[nodiscard]] static constexpr std::string_view operation_name(Operation op) noexcept {
+        switch (op) {
+            case Operation::Add: return "add";
+            case Operation::Subtract: return "subtract";
+            case Operation::Multiply: return "multiply";
+            case Operation::Negate: return "negate";
+        }
+        return {};
+    }
+
     [[nodiscard]] static constexpr EffectStatus effect() noexcept {
         return {EffectKind::Throw, effect_code};
     }
