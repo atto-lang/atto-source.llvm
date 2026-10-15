@@ -133,6 +133,11 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_compiler_source_budget
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
     add_test(NAME flags2env_wrapper_no_eval
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flags2env_wrapper.py"
