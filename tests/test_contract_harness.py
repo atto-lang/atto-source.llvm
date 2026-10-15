@@ -263,6 +263,30 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
             self.run_contract(compiler, "--ir", "call i64 @bad").returncode, 0
         )
 
+    def test_runnable_inline_asm_literal_cannot_spoof_a_call(self):
+        # This IR compiles and returns 42 under real Clang, yet never calls
+        # @add. The inline asm string is just a native assembler comment.
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 "define i32 @main() {\n"
+                                 "entry:\n"
+                                 '  call void asm sideeffect "# call i64 @add", ""()\n'
+                                 "  ret i32 42\n"
+                                 "}\n")
+        clang = self.linker(exit_code=42)
+        p = self.run_contract(compiler, "--ir", "call i64 @add",
+                              "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("expected executable LLVM IR was absent", p.stderr)
+        self.assertEqual(self.run_contract(
+            compiler, "--ir", "ret i32 42", "--run", "42",
+            "--clang", str(clang)).returncode, 0)
+
+    def test_quoted_symbol_called_call_is_not_a_real_call(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 'define i32 @"call i64 @add"() { ret i32 42 }\n')
+        p = self.run_contract(compiler, "--ir", "call i64 @add")
+        self.assertNotEqual(p.returncode, 0)
+
     def test_positive_rejects_stderr_and_forbidden_abi(self):
         compiler = self.compiler(stdout="; ModuleID = 'good'\n",
                                  stderr="unexpected warning")
