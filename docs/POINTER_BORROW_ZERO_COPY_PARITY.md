@@ -23,6 +23,40 @@ It also defines `rt unref` as borrowed read access, identical to
 `rt deref`. The integration contract proposes separating explicit release
 from read-only dereference; decide semantics before enabling *either* backend.
 
+## Audited native heap substrate: borrow versus mutation
+
+This draft also hardens the **host-only** `ActorOwnedGraphHeap` substrate:
+
+- `ActorHeapBorrowGate` now reserves a writer bit atomically against every
+  shared FFI/continuation lease. New leases are rejected while an exclusive
+  mutation is active, and mutations are denied while any lease exists.
+- Allocation, construction, byte writes, graph-link changes and deletion
+  hold an exclusive stack-scoped admission ticket. Metadata/payload reads
+  hold shared tickets. Underlying storage cannot be retired during either.
+- Destruction **seals admission first**, then fails-stop if loans remain.
+  Retirement is single-start even under concurrent calls. This is not
+  a substitute for external quiescence of owners of the heap object itself.
+- Heap identity reservation is monotonic and nonwrapping **across all
+  template arena layouts**, not per-template; generation-checked slot
+  recycling remains separately required.
+- The gate is conservative **heap-wide**, not per-slot. It may reject a
+  logically independent writer while any exported read exists. This is the
+  correct fail-closed behavior until path-aware loans and object-local pins
+  can be proven end to end.
+
+### Verification provenance
+
+The exact Git-blobs of `ActorHeapIdentity.hpp`,
+`ActorHeapRetirementProof.hpp` and
+`actor_heap_borrow_mutation_gate_test.cpp` were independently compared
+with their Git SHA-1 blob hashes before compiling the **gate-only**
+test in a local sandbox. It passed Clang ASan+UBSan, GCC Release (30 runs),
+and GCC ThreadSanitizer. This validates the loan gate only. The
+`ActorOwnedGraphHeap.hpp` integration changes, Linux carrier test, full
+LLVM compiler and source guest execution have **not** yet had an executed
+CI/local full build on this commit; GitHub Actions on the source org ended
+before reporting any executed steps.
+
 ## Native lowering requirements
 
 1. `rt ref` moves unique ownership of an existing T into a typed affine
