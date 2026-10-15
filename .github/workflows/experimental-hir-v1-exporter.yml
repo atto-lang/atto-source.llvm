@@ -244,6 +244,9 @@ jobs:
           pub fnc scale(int count): int { return count * 43; }
           pub fnc outer(int count): int { return scale(count) + 1; }
           pub fnc intermediate(int count): int { return (count * 43) * 0; }
+          pub fnc plusone(int count): int { return count + 1; }
+          pub fnc minuszero(int count): int { return 0 - count; }
+          pub fnc negate(int count): int { return -count; }
           pub fnc main(): int { return outer(1); }
           ORES
           "$RUNNER_TEMP/oreslang-llvmc" "$RUNNER_TEMP/checked-effect.ores" \
@@ -251,18 +254,21 @@ jobs:
           "$CLANG" -Wno-override-module -c -x ir "$RUNNER_TEMP/checked-effect.ll" \
             -o "$RUNNER_TEMP/checked-effect.o"
           command -v objcopy
-          # The emitted guest source contains a normal OS main wrapper.
-          # Rename it only in this disposable object to avoid two C mains.
-          objcopy --redefine-sym main=oreslang_guest_entry_unused \
-            "$RUNNER_TEMP/checked-effect.o"
-          cat > "$RUNNER_TEMP/checked-effect.c" <<'C'
+          # The emitted guest source contains a normal OS main wrappe          cat > "$RUNNER_TEMP/checked-effect.c" <<'C'
           #include <stdint.h>
           #include <limits.h>
           #include <stdio.h>
           #include <stdlib.h>
-          extern int64_t scale(int64_t, uint32_t *);
-          extern int64_t outer(int64_t, uint32_t *);
-          extern int64_t intermediate(int64_t, uint32_t *);
+          #define PACKED_ADD UINT64_C(0x1494F0001)
+          #define PACKED_SUB UINT64_C(0x2494F0001)
+          #define PACKED_MUL UINT64_C(0x3494F0001)
+          #define PACKED_NEG UINT64_C(0x4494F0001)
+          extern int64_t scale(int64_t, uint64_t *);
+          extern int64_t outer(int64_t, uint64_t *);
+          extern int64_t intermediate(int64_t, uint64_t *);
+          extern int64_t plusone(int64_t, uint64_t *);
+          extern int64_t minuszero(int64_t, uint64_t *);
+          extern int64_t negate(int64_t, uint64_t *);
           static void expect(int value, const char *name) {
               if (!value) { fprintf(stderr, "effect ABI failed: %s\n", name); exit(1); }
           }
@@ -273,56 +279,74 @@ jobs:
               const __int128 next = product + 1;
               const int mul_overflow = product > INT64_MAX || product < INT64_MIN;
               const int add_overflow = mul_overflow || next > INT64_MAX || next < INT64_MIN;
-              uint32_t status = 0;
+              uint64_t status = 0;
               int64_t actual = scale(input, &status);
               expect(mul_overflow
-                  ? actual == 0 && status == 0x494F0001u
+                  ? actual == 0 && status == PACKED_MUL
                   : actual == (int64_t)product && status == 0, "scale oracle");
               status = 0;
               actual = outer(input, &status);
               expect(add_overflow
-                  ? actual == 0 && status == 0x494F0001u
+                  ? actual == 0 && status == (mul_overflow ? PACKED_MUL : PACKED_ADD)
                   : actual == (int64_t)next && status == 0, "nested oracle");
           }
           int main(void) {
-              uint32_t status = 0x494F0001u;
-              expect(scale(1, &status) == 0 && status == 0x494F0001u,
+              uint64_t status = PACKED_MUL;
+              expect(scale(1, &status) == 0 && status == PACKED_MUL,
                      "stale checked Throw prevents guest execution");
-              status = UINT32_MAX;
-              expect(outer(1, &status) == 0 && status == UINT32_MAX,
+              status = UINT64_MAX;
+              expect(outer(1, &status) == 0 && status == UINT64_MAX,
                      "unknown pending effect is not overwritten");
               status = 0;
               expect(scale(1, &status) == 43 && status == 0, "scale success");
               status = 0;
-              expect(scale(INT64_MAX, &status) == 0 && status == 0x494F0001u,
+              expect(scale(INT64_MAX, &status) == 0 && status == PACKED_MUL,
                      "scale overflow returns typed effect");
               status = 0;
-              expect(scale(INT64_MIN, &status) == 0 && status == 0x494F0001u,
+              expect(scale(INT64_MIN, &status) == 0 && status == PACKED_MUL,
                      "negative overflow returns typed effect");
               status = 0;
               expect(scale(INT64_MAX / 43, &status) == (INT64_MAX / 43) * 43 &&
                      status == 0, "positive exact boundary remains legal");
               status = 0;
               expect(scale(INT64_MAX / 43 + 1, &status) == 0 &&
-                     status == 0x494F0001u, "positive one-past boundary");
+                     status == PACKED_MUL, "positive one-past boundary");
               status = 0;
               expect(scale(INT64_MIN / 43, &status) == (INT64_MIN / 43) * 43 &&
                      status == 0, "negative exact boundary remains legal");
               status = 0;
               expect(scale(INT64_MIN / 43 - 1, &status) == 0 &&
-                     status == 0x494F0001u, "negative one-past boundary");
+                     status == PACKED_MUL, "negative one-past boundary");
               status = 0;
-              expect(outer(INT64_MAX, &status) == 0 && status == 0x494F0001u,
+              expect(outer(INT64_MAX, &status) == 0 && status == PACKED_MUL,
                      "nested call propagates typed effect");
               status = 0;
               expect(outer(1, &status) == 44 && status == 0,
                      "nested call success after error isolation");
               status = 0;
-              expect(intermediate(INT64_MAX, &status) == 0 && status == 0x494F0001u,
+              expect(intermediate(INT64_MAX, &status) == 0 && status == PACKED_MUL,
                      "intermediate overflow cannot be optimized away");
               status = 0;
               expect(intermediate(1, &status) == 0 && status == 0,
                      "in-range intermediate product");
+              status = 0;
+              expect(plusone(INT64_MAX, &status) == 0 && status == PACKED_ADD,
+                     "checked add overflow must retain add operation tag");
+              status = 0;
+              expect(minuszero(INT64_MIN, &status) == 0 && status == PACKED_SUB,
+                     "checked subtraction retains subtract operation tag");
+              status = 0;
+              expect(negate(INT64_MIN, &status) == 0 && status == PACKED_NEG,
+                     "checked unary minus retains negate tag, not subtract");
+              status = 0;
+              expect(plusone(42, &status) == 43 && status == 0,
+                     "checked add success must not publish operation");
+              status = 0;
+              expect(minuszero(-43, &status) == 43 && status == 0,
+                     "checked subtraction success remains in range");
+              status = 0;
+              expect(negate(-43, &status) == 43 && status == 0,
+                     "checked negation success remains in range");
               const int64_t edges[] = {
                   0, 1, -1, INT64_MIN, INT64_MAX,
                   INT64_MIN / 43, INT64_MAX / 43,
@@ -338,6 +362,12 @@ jobs:
                   seed ^= seed << 17;
                   // Avoid implementation-defined out-of-range conversion of u64
                   // to i64: subtract a widened 2^63 before narrowing.
+                  check_i64_oracle((int64_t)((__int128)seed -
+                      ((__int128)1 << 63)));
+              }
+              return 0;
+          }
+widened 2^63 before narrowing.
                   check_i64_oracle((int64_t)((__int128)seed -
                       ((__int128)1 << 63)));
               }
