@@ -122,7 +122,7 @@ class ManifestAuditTests(unittest.TestCase):
     def test_native_object_fixture_cannot_be_replaced_with_stub(self):
         name = "native_contract_positive_object_verifies"
         entry = next(x for x in self.manifest["tests"] if x["name"] == name)
-        idx = entry["command"].index("tests/fixtures/constant-main.ores")
+        idx = entry["command"].index("--fixture") + 1
         entry["command"][idx] = "tests/fixtures/empty.ores"
         self.fail_on("does not compile positive guest source")
 
