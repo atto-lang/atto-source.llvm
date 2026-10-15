@@ -6,6 +6,8 @@
 #include "oreslang/frontend/Parser.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <array>
+#include <limits>
 #include <functional>
 #include <unordered_map>
 #include <stdexcept>
@@ -28,6 +30,76 @@ inline bool hir_v1_identifier(std::string_view s) {
     auto rest = [&](char c) { return first(c) || (c >= '0' && c <= '9'); };
     if (!first(s.front())) return false;
     return std::all_of(s.begin() + 1, s.end(), rest);
+}
+
+// The production LLVM backend currently emits wrapping i64 add/sub/mul.
+// This domain proof is deliberately conservative: every public parameter
+// is arbitrary signed i64. It must reject before assigning checked-i64.v1.
+struct HirV1Range { std::int64_t lo, hi; };
+
+inline std::int64_t hir_v1_safe_arithmetic(std::int64_t a,
+                                          std::int64_t b, char op) {
+    const auto maximum = std::numeric_limits<std::int64_t>::max();
+    const auto minimum = std::numeric_limits<std::int64_t>::min();
+    if (op == '+') {
+        if ((b > 0 && a > maximum - b) ||
+            (b < 0 && a < minimum - b))
+            throw unsupported_hir_v1("possible signed i64 overflow");
+        return a + b;
+    }
+    if (op == '-') {
+        if ((b < 0 && a > maximum + b) ||
+            (b > 0 && a < minimum + b))
+            throw unsupported_hir_v1("possible signed i64 overflow");
+        return a - b;
+    }
+    if (op != '*') throw unsupported_hir_v1("unproved arithmetic operation");
+    if (a == 0 || b == 0) return 0;
+    if ((a == -1 && b == minimum) || (b == -1 && a == minimum) ||
+        (a > 0 && b > 0 && a > maximum / b) ||
+        (a > 0 && b < 0 && b < minimum / a) ||
+        (a < 0 && b > 0 && a < minimum / b) ||
+        (a < 0 && b < 0 && a < maximum / b))
+        throw unsupported_hir_v1("possible signed i64 overflow");
+    return a * b;
+}
+
+inline HirV1Range hir_v1_prove_checked_i64(const Expression& expr,
+                                          std::size_t depth = 0) {
+    if (depth > 48) throw unsupported_hir_v1("arithmetic proof depth");
+    using Kind = Expression::Kind;
+    switch (expr.kind) {
+        case Kind::Integer: return {expr.integer, expr.integer};
+        case Kind::Variable:
+            return {std::numeric_limits<std::int64_t>::min(),
+                    std::numeric_limits<std::int64_t>::max()};
+        case Kind::Call:
+            for (const auto& arg : expr.arguments) {
+                if (!arg) throw unsupported_hir_v1("null argument");
+                (void)hir_v1_prove_checked_i64(*arg, depth + 1);
+            }
+            // The callee is admitted independently over its full domain.
+            return {std::numeric_limits<std::int64_t>::min(),
+                    std::numeric_limits<std::int64_t>::max()};
+        case Kind::Add: case Kind::Subtract: case Kind::Multiply: {
+            if (!expr.left || !expr.right) throw unsupported_hir_v1("missing operand");
+            const auto a = hir_v1_prove_checked_i64(*expr.left, depth + 1);
+            const auto b = hir_v1_prove_checked_i64(*expr.right, depth + 1);
+            const char op = expr.kind == Kind::Add ? '+' :
+                            expr.kind == Kind::Subtract ? '-' : '*';
+            const std::array<std::int64_t,4> corners = {
+                hir_v1_safe_arithmetic(a.lo,b.lo,op),
+                hir_v1_safe_arithmetic(a.lo,b.hi,op),
+                hir_v1_safe_arithmetic(a.hi,b.lo,op),
+                hir_v1_safe_arithmetic(a.hi,b.hi,op)
+            };
+            return {*std::min_element(corners.begin(), corners.end()),
+                    *std::max_element(corners.begin(), corners.end())};
+        }
+        default:
+            // The serializer will reject all unsupported expression opcodes.
+            throw unsupported_hir_v1("no checked-i64 proof for opcode");
+    }
 }
 
 inline std::string hir_v1_expr_json(const Expression& expr,
@@ -111,6 +183,7 @@ inline std::string emit_experimental_hir_v1(const Program& program) {
             if (p) out += ',';
             out += "{\"name\":\"" + arg.name + "\",\"type\":\"i64\"}";
         }
+        (void)hir_v1_prove_checked_i64(*fn.result);
         // The shared HIR verifier applies this budget PER function,
         // not across all functions in the module.
         std::size_t nodes = 0;
