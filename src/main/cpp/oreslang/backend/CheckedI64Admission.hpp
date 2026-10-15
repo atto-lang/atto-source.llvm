@@ -13,10 +13,11 @@
 
 namespace oreslang {
 
-// This is a *codegen* gate, not just an exporter check: the scalar overflow
-// path currently exits at the host boundary and cannot unwind guest owners,
-// defer/finally, actor turns, or borrowed resource regions. Reject any source
-// that could require those semantics before emitting LLVM IR.
+// This is a *codegen* gate, not just an exporter check: checked arithmetic
+// propagates an invocation-local Throw status, but the OS entry adapter still
+// reports uncaught overflow as process status 86. Guest catch/recover, owner
+// cleanup, defer/finally, actor turns, and borrowed regions are not lowered.
+// Reject any source that requires those semantics before emitting LLVM IR.
 inline void verify_checked_i64_host_profile(const Program& program) {
     const auto reject = [](const char* reason) {
         throw std::runtime_error(std::string("checked-i64-v1: ") + reason);
