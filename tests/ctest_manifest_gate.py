@@ -26,6 +26,25 @@ CRITICAL_TESTS = (
     "constant_main",
     "native_rt_while_loop_failclosed",
     "native_actor_owned_heap_contract",
+    "native_ctest_manifest_harness_adversarial",
+    "native_ownership_cfg_dataflow_fixed_point",
+    "portable_target_abi_v1",
+    "source_actor_compiled_native_lifecycle",
+    "source_actor_compiled_native_asan_ubsan",
+    "native_supervisor_hierarchy_control",
+    "native_supervisor_priority_control",
+    "native_typed_exception_unwind",
+    "native_actor_local_unhandled_panic_bypass",
+    "native_effect_unwind_supervisor_control_bridge",
+    "native_supervisor_failure_lane",
+    "native_logical_critical_gate",
+    "native_function_effect_bitset_contract",
+    "native_critical_state_loan_runtime_bridge",
+    "native_actor_owned_typed_scalar_state",
+    "native_actor_state_scope_nested_loan_fencing",
+    "reject_throw_effect",
+    "reject_raise_effect",
+    "reject_panic_effect",
 )
 
 TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
@@ -34,7 +53,7 @@ UNSAFE_PROPERTIES = frozenset((
 ))
 
 
-def check_manifest(manifest: object, *, min_tests: int = 120,
+def check_manifest(manifest: object, *, min_tests: int = 250,
                    required: tuple[str, ...] = CRITICAL_TESTS) -> int:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("tests"), list):
         raise ManifestFailure("CTest JSON must have a tests array")
@@ -51,6 +70,28 @@ def check_manifest(manifest: object, *, min_tests: int = 120,
         if not name or name in by_name:
             raise ManifestFailure(f"empty or duplicate CTest name: {name!r}")
         by_name[name] = entry
+    # A nominally green CTest run must not hide unresolved executables or
+    # disabled/skipped tests outside the mandatory contract set.
+    for name, entry in by_name.items():
+        command = entry.get("command")
+        if (not isinstance(command, list) or not command
+                or not all(isinstance(x, str) and x for x in command)
+                or any("NOTFOUND" in x or "$<" in x for x in command)):
+            raise ManifestFailure(f"CTest has unresolved/empty command: {name}")
+        properties = entry.get("properties", [])
+        if not isinstance(properties, list):
+            raise ManifestFailure(f"CTest has invalid properties: {name}")
+        for prop in properties:
+            if not isinstance(prop, dict) or not isinstance(prop.get("name"), str):
+                raise ManifestFailure(f"CTest has malformed property: {name}")
+            key = prop["name"]
+            value = prop.get("value")
+            if key in ("SKIP_RETURN_CODE", "SKIP_REGULAR_EXPRESSION"):
+                raise ManifestFailure(f"CTest has skip policy {key}: {name}")
+            if key in ("DISABLED", "WILL_FAIL") and str(value).lower() in (
+                    "true", "on", "yes", "1"):
+                raise ManifestFailure(f"CTest is disabled/inverted: {name}, {key}")
+
     for name in required:
         if name not in by_name:
             raise ManifestFailure(f"required CTest was not registered: {name}")
@@ -65,18 +106,29 @@ def check_manifest(manifest: object, *, min_tests: int = 120,
         if name.startswith("native_contract_harness_"):
             if not any(arg.endswith("test_contract_harness.py") for arg in command):
                 raise ManifestFailure(f"optimized harness command targets wrong script: {name}")
-        if name == "native_contract_harness_python_O" and "-O" not in command:
-            raise ManifestFailure("optimized harness is not invoked with Python -O")
-        if name == "native_contract_harness_python_OO" and "-OO" not in command:
-            raise ManifestFailure("optimized harness is not invoked with Python -OO")
+        for mode_name, flag in (
+                ("native_contract_harness_python_O", "-O"),
+                ("native_contract_harness_python_OO", "-OO")):
+            if name == mode_name:
+                script_index = next((i for i, arg in enumerate(command)
+                                     if arg.endswith("test_contract_harness.py")), -1)
+                if script_index <= 0 or flag not in command[1:script_index]:
+                    raise ManifestFailure(
+                        f"optimized harness is not invoked with Python {flag}")
         if name == "native_contract_positive_object_verifies":
             for flag in ("--verify-object", "--clang", "--compiler", "--fixture"):
                 if flag not in command:
                     raise ManifestFailure(f"source object CTest is missing {flag}")
+                if flag != "--verify-object":
+                    index = command.index(flag)
+                    if index + 1 >= len(command) or command[index + 1].startswith("--"):
+                        raise ManifestFailure(f"source object CTest has no value for {flag}")
             if not any(arg.endswith("contract.py") for arg in command):
                 raise ManifestFailure("source object CTest does not invoke contract.py")
             if not any(arg.endswith("constant-main.ores") for arg in command):
                 raise ManifestFailure("source object CTest does not compile positive guest source")
+        if name == "source_actor_compiled_native_asan_ubsan" and "--sanitize" not in command:
+            raise ManifestFailure("source actor sanitizer CTest is missing --sanitize")
         properties = entry.get("properties", [])
         if not isinstance(properties, list):
             raise ManifestFailure(f"CTest has invalid properties: {name}")
@@ -109,7 +161,7 @@ def check_manifest(manifest: object, *, min_tests: int = 120,
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-dir", type=Path, required=True)
-    parser.add_argument("--min-tests", type=int, default=120)
+    parser.add_argument("--min-tests", type=int, default=250)
     args = parser.parse_args()
     if args.min_tests < len(CRITICAL_TESTS):
         raise ManifestFailure("minimum test count is below the critical corpus")
