@@ -78,5 +78,47 @@ class CorpusAuditTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), b"invalid source\n")
 
 
+    def test_json_report_never_overwrites_source_or_existing_targets(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            source = root / "original.ores"
+            source.write_bytes(b"important original bytes\n")
+            formatter = root / "passthrough"
+            formatter.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, sys\n"
+                "sys.stdout.buffer.write(pathlib.Path(sys.argv[-1]).read_bytes())\n"
+            )
+            formatter.chmod(0o755)
+
+            report = root / "results.json"
+            report.write_bytes(b"existing report bytes")
+            symlink_report = root / "alias.json"
+            symlink_report.symlink_to(source)
+            hardlink_report = root / "hardlink.json"
+            hardlink_report.hardlink_to(source)
+
+            for dest in [source, report, symlink_report, hardlink_report]:
+                with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    audit_tool.main([
+                        "--formatter", str(formatter),
+                        "--json", str(dest),
+                        str(source),
+                    ])
+                self.assertNotEqual(error.exception.code, 0)
+                self.assertEqual(source.read_bytes(), b"important original bytes\n")
+                self.assertEqual(report.read_bytes(), b"existing report bytes")
+
+            fresh_report = root / "fresh.json"
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(audit_tool.main([
+                    "--formatter", str(formatter),
+                    "--json", str(fresh_report),
+                    str(source),
+                ]), 0)
+            self.assertEqual(json.loads(fresh_report.read_text())["files"], 1)
+            self.assertEqual(source.read_bytes(), b"important original bytes\n")
+
+
 if __name__ == "__main__":
     unittest.main()
