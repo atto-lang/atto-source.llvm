@@ -50,10 +50,11 @@ def main() -> None:
                 [compiler, str(path)],
                 capture_output=True, text=True, check=False, timeout=30,
             )
-            if result.returncode == 0 or result.stdout.strip():
+            if (result.returncode != 1 or result.stdout.strip()
+                    or "native sealed/final/permits hierarchy unsupported" not in result.stderr):
                 raise AssertionError(
                     f"{name}: compiler must reject unimplemented sealed "
-                    f"hierarchy semantics before emitting IR: rc={result.returncode}; "
+                    f"hierarchy semantics with its own diagnostic before emitting IR: rc={result.returncode}; "
                     f"stdout={result.stdout!r}; stderr={result.stderr!r}"
                 )
     print(f"PASS: {len(CASES)} sealed/final/permits source forms fail closed")
