@@ -102,6 +102,15 @@ def main():
     # compile-only positive fixtures, assemble with real Clang and reject
     # invalid IR even when --ir or --no-native-abi otherwise matches.
     if args.verify_object:
+        # Clang happily assembles a comment-only or declare-only module into
+        # an object. A positive source fixture must emit at least one actual
+        # function body; comments and forward declarations are not proof.
+        executable_def = re.search(
+            r"(?m)^[ \t]*define[ \t]+[^\n]*@",
+            ir_without_comments(compile_result.stdout),
+        )
+        require(executable_def is not None,
+                "positive LLVM IR contained no function definitions")
         with tempfile.TemporaryDirectory(prefix="oreslang-verify-object-") as directory:
             object_file = pathlib.Path(directory) / "guest.o"
             assembled = subprocess.run(
