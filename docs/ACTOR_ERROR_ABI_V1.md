@@ -329,3 +329,21 @@ notice, and refusal to associate the retired generation with the new child.
 not proof that the LLVM guest compiler emits typed Error effects or that a
 production native scheduler calls this hook. Exact-head native CTest,
 ASan/UBSan and end-to-end actor execution remain blocked on executable CI.
+
+## Native supervisor reservation identity bounds (2026-10-15)
+
+The native host-only `SupervisorFailureLane::reserve()` now rejects empty,
+oversized (more than 128 bytes), control/whitespace and non-ASCII actor-key
+identities **before** allocating its `std::map` reservation node. A fixed
+child-count capacity alone does not bound the allocation required for an
+attacker-supplied `std::string` ID. Generation zero remains legal, preserving
+the existing initial-incarnation fixtures. The accepted maximum is 128
+printable ASCII bytes, including the runtime's canonical UUID-shaped IDs.
+
+`supervisor_control_turn_test.cpp` now checks empty, 129-byte, newline,
+DEL and non-ASCII key rejection with no consumed quota or pending notice, plus
+a valid 128-byte boundary key followed by graceful retirement. These tests
+are committed but **not verified passing in the exact-head native CTest**
+because source-org Actions continues to fail before runner admission.
+No guest exception lowering or actor carrier execution is implied.
+
