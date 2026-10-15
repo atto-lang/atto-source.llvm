@@ -53,7 +53,7 @@ class PrivateCIMirrorGateTests(unittest.TestCase):
         import io
         from scripts.check_private_ci_destination import main
 
-        self.allow("test-org/private\\n")
+        self.allow("test-org/private\n")
         with contextlib.redirect_stderr(io.StringIO()) as diagnostics:
             with self.assertRaises(SystemExit) as exited:
                 main([
