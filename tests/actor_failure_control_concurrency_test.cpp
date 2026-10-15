@@ -151,8 +151,63 @@ static int check_supervisor_retirement_isolation() {
     return 0;
 }
 
+// Both a reader and the retirement path remove notices, but never twice.
+// Every attempted admission must be either consumed or counted as dropped.
+static int check_consumer_retirement_accounting() {
+    ActorFailureControlInbox inbox("parent", 8);
+    constexpr int kAttempts = 2048;
+    std::atomic<int> attempted{0};
+    std::atomic<int> consumed{0};
+    std::atomic<bool> producer_done{false};
+    std::atomic<bool> unexpected{false};
+
+    std::thread producer([&] {
+        for (int i = 0; i < kAttempts; ++i) {
+            auto notice = ActorFailureControlNotice::from_guest_effect(
+                    ActorExceptionalEffect::Raise,
+                    "child-" + std::to_string(i), "parent");
+            (void)inbox.offer(notice, notice.envelope().actor_id());
+            attempted.fetch_add(1);
+            if ((i & 15) == 0) std::this_thread::yield();
+        }
+        producer_done.store(true);
+    });
+    std::thread consumer([&] {
+        int previous = -1;
+        while (!producer_done.load() || !inbox.retired()) {
+            auto notice = inbox.try_pop();
+            if (!notice) {
+                std::this_thread::yield();
+                continue;
+            }
+            const auto& id = notice->envelope().actor_id();
+            if (id.rfind("child-", 0) != 0) {
+                unexpected.store(true);
+                continue;
+            }
+            const int sequence = std::stoi(id.substr(6));
+            if (sequence <= previous ||
+                    notice->effect() != ActorExceptionalEffect::Raise) {
+                unexpected.store(true);
+            }
+            previous = sequence;
+            consumed.fetch_add(1);
+        }
+    });
+    while (attempted.load() < 32) std::this_thread::yield();
+    inbox.retire();
+    producer.join();
+    consumer.join();
+    if (unexpected.load() || !inbox.retired() || inbox.pending() != 0) return 13;
+    if (static_cast<std::size_t>(consumed.load()) + inbox.dropped()
+            != static_cast<std::size_t>(kAttempts)) return 14;
+    if (inbox.try_pop().has_value()) return 15;
+    return 0;
+}
+
 int main() {
     if (int status = check_concurrent_fifo()) return status;
     if (int status = check_retirement_race()) return status;
-    return check_supervisor_retirement_isolation();
+    if (int status = check_supervisor_retirement_isolation()) return status;
+    return check_consumer_retirement_accounting();
 }
