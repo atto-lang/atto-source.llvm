@@ -77,6 +77,15 @@ jobs:
           assert doc["functions"][1]["body"]["kind"] == "call"
           assert doc["functions"][1]["body"]["function"] == "counter_response"
           PY
+      - name: Verify HIR exporter AST admission under GCC and Clang
+        run: |
+          set -euo pipefail
+          for cc in g++ clang++; do
+            "$cc" -std=c++20 -O1 -Wall -Wextra -Werror -Isrc/main/cpp \
+              tests/experimental_hir_v1_exporter_test.cpp \
+              -o "$RUNNER_TEMP/hir-v1-exporter-$cc"
+            "$RUNNER_TEMP/hir-v1-exporter-$cc" >/dev/null
+          done
       - name: Real-parser HIR CLI verifies checked source directive before emission
         run: |
           set -euo pipefail
@@ -114,12 +123,14 @@ jobs:
                   assert proc.returncode != 0 and not proc.stdout, (name, proc.stdout, proc.stderr)
                   assert "checked-i64-v1" in proc.stderr, (name, proc.stderr)
           PY
-      - name: Verify checked-i64 source admission without LLVM libraries
+      - name: Verify checked-i64 source admission under GCC and Clang
         run: |
           set -euo pipefail
-          c++ -std=c++20 -Wall -Wextra -Werror -Isrc/main/cpp \
-            tests/checked_i64_admission_test.cpp -o "$RUNNER_TEMP/checked-i64-admission"
-          "$RUNNER_TEMP/checked-i64-admission"
+          for cc in g++ clang++; do
+            "$cc" -std=c++20 -O1 -Wall -Wextra -Werror -Isrc/main/cpp \
+              tests/checked_i64_admission_test.cpp -o "$RUNNER_TEMP/checked-i64-admission-$cc"
+            "$RUNNER_TEMP/checked-i64-admission-$cc"
+          done
       - name: Verify packed checked-i64 status under both native compilers
         run: |
           set -euo pipefail
