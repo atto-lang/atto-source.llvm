@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Adversarial validation for the source-owned full-CTest manifest gate."""
 import copy
+import sys
 import unittest
 
 from ctest_manifest_gate import CRITICAL_TESTS, ManifestFailure, check_manifest, TIMED_TESTS
@@ -28,7 +29,8 @@ def fixture():
         entries.append({"name": name, "command": command,
                         "properties": props})
     for index in range(260):
-        entries.append({"name": f"native_extra_{index}", "command": ["/tmp/test"]})
+        entries.append({"name": f"native_extra_{index}",
+                        "command": [sys.executable, "-c", "pass"]})
     return {"kind": "ctestInfo", "version": {"major": 1, "minor": 0},
             "tests": entries}
 
