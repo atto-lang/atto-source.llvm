@@ -48,7 +48,7 @@ int main() {
     Function main;
     main.name = "main";
     main.exported = true;
-    main.result = call("counter_response", integer(1));
+    main.result = call("counter_response", integer(43));
     program.functions.push_back(std::move(main));
     Function response;
     response.name = "counter_response";
@@ -56,7 +56,7 @@ int main() {
     Parameter count;
     count.name = "count";
     response.parameters.push_back(count);
-    response.result = multiply(variable("count"), integer(43));
+    response.result = variable("count");
     program.functions.push_back(std::move(response));
     const std::string json = emit_experimental_hir_v1(program);
     assert(json.find("\"schema_version\":\"1.0.0-experimental\"") != std::string::npos);
@@ -72,7 +72,7 @@ int main() {
 
     program.functions[0].result->kind = Expression::Kind::ArrayCall;
     rejects([&] { (void) emit_experimental_hir_v1(program); });
-    program.functions[0].result = call("counter_response", integer(1));
+    program.functions[0].result = call("counter_response", integer(43));
 
     program.functions[1].parameters[0].mode = Parameter::Mode::BorrowMut;
     rejects([&] { (void) emit_experimental_hir_v1(program); });
@@ -82,13 +82,22 @@ int main() {
     rejects([&] { (void) emit_experimental_hir_v1(program); });
     program.functions[1].parameters[0].name = "count";
 
+    // Checked-i64 HIR must not claim safety for wrapping guest operations.
+    program.functions[1].result = multiply(variable("count"), integer(43));
+    rejects([&] { (void) emit_experimental_hir_v1(program); });
+    program.functions[1].result = multiply(integer(INT64_MAX), integer(2));
+    rejects([&] { (void) emit_experimental_hir_v1(program); });
+    program.functions[1].result = multiply(variable("count"), integer(1));
+    (void) emit_experimental_hir_v1(program); // all i64 inputs are safe
+    program.functions[1].result = variable("count");
+
     // Contract admission is CLOSED under function references and call arity.
     program.functions[0].result = call("missing", integer(1));
     rejects([&] { (void) emit_experimental_hir_v1(program); });
-    program.functions[0].result = call("counter_response", integer(1));
+    program.functions[0].result = call("counter_response", integer(43));
     program.functions[0].result->arguments.clear();
     rejects([&] { (void) emit_experimental_hir_v1(program); });
-    program.functions[0].result = call("counter_response", integer(1));
+    program.functions[0].result = call("counter_response", integer(43));
 
     program.functions[1].result = call("counter_response", variable("count"));
     rejects([&] { (void) emit_experimental_hir_v1(program); }); // self recursion
@@ -97,7 +106,7 @@ int main() {
     cycle->name = "main";
     program.functions[1].result = std::move(cycle);
     rejects([&] { (void) emit_experimental_hir_v1(program); }); // mutual recursion
-    program.functions[1].result = multiply(variable("count"), integer(43));
+    program.functions[1].result = variable("count");
 
     // A per-function 2048-node cap must NOT become a module-global limit.
     // Four balanced 1023-node functions are each individually admissible.
