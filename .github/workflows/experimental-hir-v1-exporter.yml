@@ -285,7 +285,13 @@ jobs:
                   : actual == (int64_t)next && status == 0, "nested oracle");
           }
           int main(void) {
-              uint32_t status = 0;
+              uint32_t status = 0x494F0001u;
+              expect(scale(1, &status) == 0 && status == 0x494F0001u,
+                     "stale checked Throw prevents guest execution");
+              status = UINT32_MAX;
+              expect(outer(1, &status) == 0 && status == UINT32_MAX,
+                     "unknown pending effect is not overwritten");
+              status = 0;
               expect(scale(1, &status) == 43 && status == 0, "scale success");
               status = 0;
               expect(scale(INT64_MAX, &status) == 0 && status == 0x494F0001u,
