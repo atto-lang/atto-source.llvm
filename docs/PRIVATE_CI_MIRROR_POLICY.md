@@ -94,10 +94,16 @@ The latter suite uses temporary Git repositories and deliberately mocked
 
 The cross-org approval parser uses bounded 16 KiB reads from an opened
 regular-file descriptor with `O_NOFOLLOW` (fail closed when unsupported)
-and `O_NONBLOCK` where available. This guards against symbolic-link swaps,
-special file stalls and oversized manifests. The policy *must still* come
-from independently trusted protected-default-branch authorization; being a
-well-formed checked-out file does not by itself establish approval.
+and `O_NONBLOCK` where available. It now opens the immediate approval-policy
+parent directory using a separate `O_DIRECTORY | O_NOFOLLOW` descriptor,
+then opens the manifest relative to that directory with `dir_fd`; hardlinked
+manifests (`st_nlink != 1`) are rejected. This guards against the tested
+file and parent symlink substitutions, special-file stalls and oversized
+manifests. These filesystem controls do **not** prove that the directory
+contents are a code-owner-reviewed Git policy or prevent all hostile normal
+directory replacements; the authorization must still be independently
+authenticated from **protected source main** before any private source copy.
+An unreviewed PR manifest or a passed local parser test is not authorization.
 
 ## Status on October 14, 2026
 
