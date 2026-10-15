@@ -18,7 +18,9 @@ python3 scripts/audit-oresfmt-corpus.py --formatter oresfmt --strict tests/fixtu
 The audit calls `oresfmt --stdout <file>` and byte-compares the result.
 It never edits inputs, never follows symlinks, and reports formatter errors
 separately from files that would change. Fixtures with `reject` suffixes
-can be intentionally invalid. Use `--json <report-file>` to capture inventory.
+can be intentionally invalid. Use `--json <new-report-file>` to capture inventory.
+JSON reports use exclusive creation: existing files, `.ores` sources,
+symlinks, and hardlink aliases cannot be overwritten.
 `--strict` is deliberately not a default CI check.
 
 ## Open compiler parity work
