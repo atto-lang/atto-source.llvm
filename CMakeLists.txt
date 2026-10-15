@@ -1051,6 +1051,10 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_sealed_permits_fail_closed.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_sealed_permits_fail_closed PROPERTIES TIMEOUT 60)
+    add_test(NAME native_sealed_permits_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_sealed_permits_harness.py")
+    set_tests_properties(native_sealed_permits_harness_selftest PROPERTIES TIMEOUT 60)
     oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
     # Until typed descriptor ownership and atomic selection land, source
