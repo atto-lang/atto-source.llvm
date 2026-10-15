@@ -376,8 +376,12 @@ private:
             const bool legacy_let = accept("let");
             ClassField field;
             field.public_member = publicly_visible;
+            bool literal_const = false;
             if (!legacy_let) {
-                field.final_field = accept("final") || accept("const") || accept("val");
+                field.final_field = accept("final");
+                if (field.final_field) literal_const = accept("const");
+                else if (accept("const")) literal_const = field.final_field = true;
+                else field.final_field = accept("val");
             }
             const bool mutable_referent = accept("mut");
             if (mutable_referent && accept("Array")) {
@@ -408,7 +412,11 @@ private:
                         : "class field requires declaration-site initializer");
                 const std::size_t initializer_begin = token_.offset;
                 const std::size_t literal_end = token_.offset + token_.text.size();
+                if (literal_const && token_.kind != Kind::Integer)
+                    fail("class field requires i64 literal initializer");
                 auto initializer = expression();
+                if (literal_const && initializer->kind != Expression::Kind::Integer)
+                    fail("class field requires i64 literal initializer");
                 if (initializer->kind == Expression::Kind::Integer) {
                     field.initial = initializer->integer;
                     class_field_terminator(literal_end);
