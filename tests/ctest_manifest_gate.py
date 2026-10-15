@@ -48,6 +48,118 @@ CRITICAL_TESTS = (
 )
 
 TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
+# Bind critical CTest *names* to the real commands in CMakeLists.txt. A
+# fabricated suite containing 'python -c pass' under a critical name is not
+# evidence that the native compiler/actor/supervisor tests were registered.
+NATIVE_EXECUTABLES = {
+    "native_actor_owned_heap_contract": "oreslang-actor-owned-heap-test",
+    "native_ownership_cfg_dataflow_fixed_point": "oreslang-ownership-cfg-dataflow-test",
+    "portable_target_abi_v1": "oreslang-target-abi-test",
+    "native_supervisor_hierarchy_control": "oreslang-supervisor-hierarchy-test",
+    "native_supervisor_priority_control": "oreslang-supervisor-control-turn-test",
+    "native_typed_exception_unwind": "oreslang-effect-unwind-test",
+    "native_actor_local_unhandled_panic_bypass": "oreslang-actor-local-failure-test",
+    "native_effect_unwind_supervisor_control_bridge": "oreslang-effect-supervision-bridge-test",
+    "native_supervisor_failure_lane": "oreslang-supervisor-failure-lane-test",
+    "native_logical_critical_gate": "oreslang-critical-gate-test",
+    "native_function_effect_bitset_contract": "oreslang-function-effects-test",
+    "native_critical_state_loan_runtime_bridge": "oreslang-critical-state-loan-bridge-test",
+    "native_actor_owned_typed_scalar_state": "oreslang-owned-scalar-state-test",
+    "native_actor_state_scope_nested_loan_fencing": "oreslang-actor-state-scope-test",
+}
+GUEST_FIXTURES = {
+    "constant_main": ("constant-main.ores", "--ir"),
+    "native_rt_while_loop_failclosed": ("native-rt-while-reject.ores", "--diagnostic"),
+    "reject_throw_effect": ("unsupported-throw-effect.ores", "--diagnostic"),
+    "reject_raise_effect": ("unsupported-raise-effect.ores", "--diagnostic"),
+    "reject_panic_effect": ("unsupported-panic-effect.ores", "--diagnostic"),
+}
+SOURCE_ACTOR_TESTS = frozenset({
+    "source_actor_compiled_native_lifecycle",
+    "source_actor_compiled_native_asan_ubsan",
+})
+
+
+def python_program(program: str) -> bool:
+    # CTest exposes an absolute interpreter path on the Ubuntu build runner.
+    return __import__("re").fullmatch(r"python(?:3(?:\\.\\d+)?)?", Path(program).name) is not None
+
+
+def option_value(command: list[str], flag: str, test: str) -> str:
+    if command.count(flag) != 1:
+        raise ManifestFailure(f"critical CTest must have exactly one {flag}: {test}")
+    index = command.index(flag)
+    if index + 1 == len(command) or not command[index + 1] or command[index + 1].startswith("-"):
+        raise ManifestFailure(f"critical CTest has no value for {flag}: {test}")
+    return command[index + 1]
+
+
+def require_real_critical_command(name: str, command: list[str]) -> None:
+    """Check CTest registration targets the intended executable/fixture.
+
+    This is deliberately a manifest check, not binary provenance or evidence
+    that the command executed. Full CTest and independent CI remain mandatory.
+    """
+    if name in NATIVE_EXECUTABLES:
+        if (Path(command[0]).name != NATIVE_EXECUTABLES[name]
+                or (len(command) != 2 if name == "portable_target_abi_v1"
+                    else len(command) != 1)):
+            raise ManifestFailure(f"critical native test targets wrong executable: {name}")
+        if name == "portable_target_abi_v1" and not command[1].endswith(
+                "/contracts/architecture/v1/targets.tsv"):
+            raise ManifestFailure("target ABI test targets wrong contract file")
+    elif name in GUEST_FIXTURES:
+        fixture, evidence = GUEST_FIXTURES[name]
+        if (len(command) < 7 or not python_program(command[0])
+                or not command[1].endswith("/tests/contract.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--fixture", name).endswith(
+                    "/tests/fixtures/" + fixture)):
+            raise ManifestFailure(f"critical guest contract targets wrong compiler/fixture: {name}")
+        option_value(command, evidence, name)
+        if evidence == "--diagnostic" and "--verify-object" in command:
+            raise ManifestFailure(f"negative guest fixture also requests a positive object: {name}")
+    elif name in SOURCE_ACTOR_TESTS:
+        if (len(command) < 8 or not python_program(command[0])
+                or not command[1].endswith("/tests/source_actor_e2e.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--clang", name)
+                or not option_value(command, "--root", name)):
+            raise ManifestFailure(f"compiled actor test does not invoke source harness: {name}")
+        if (("--sanitize" in command)
+                != (name == "source_actor_compiled_native_asan_ubsan")):
+            raise ManifestFailure(f"source actor sanitizer mode differs from test name: {name}")
+    elif name.startswith("native_contract_harness_"):
+        optimization = {
+            "native_contract_harness_optimize_failclosed": [],
+            "native_contract_harness_python_O": ["-O"],
+            "native_contract_harness_python_OO": ["-OO"],
+        }[name]
+        if (not python_program(command[0])
+                or command[1:] != optimization + [command[-1]]
+                or not command[-1].endswith("/tests/test_contract_harness.py")):
+            raise ManifestFailure(f"optimized harness has wrong interpreter/arguments: {name}")
+    elif name == "native_ctest_manifest_harness_adversarial":
+        if (not python_program(command[0])
+                or command[1:4] != ["-m", "unittest", "discover"]
+                or option_value(command, "-p", name) != "test_ctest_manifest_gate.py"
+                or not option_value(command, "-s", name).endswith("/tests")
+                or "-v" not in command):
+            raise ManifestFailure("manifest adversarial test does not run its test suite")
+    elif name == "native_contract_positive_object_verifies":
+        if (not python_program(command[0])
+                or not command[1].endswith("/tests/contract.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--fixture", name).endswith(
+                    "/tests/fixtures/constant-main.ores")
+                or not option_value(command, "--clang", name)
+                or "--verify-object" not in command
+                or "--diagnostic" in command):
+            raise ManifestFailure("positive source object gate does not compile its guest fixture")
+    else:
+        raise ManifestFailure(f"unclassified critical CTest: {name}")
+
+
 UNSAFE_PROPERTIES = frozenset((
     "DISABLED", "WILL_FAIL", "SKIP_RETURN_CODE", "SKIP_REGULAR_EXPRESSION",
 ))
@@ -57,6 +169,11 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                    required: tuple[str, ...] = CRITICAL_TESTS) -> int:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("tests"), list):
         raise ManifestFailure("CTest JSON must have a tests array")
+    version = manifest.get("version")
+    if (manifest.get("kind") != "ctestInfo" or not isinstance(version, dict)
+            or type(version.get("major")) is not int or version["major"] != 1
+            or type(version.get("minor")) is not int or version["minor"] < 0):
+        raise ManifestFailure("CTest JSON version/kind is not the supported schema")
     tests = manifest["tests"]
     if len(tests) < min_tests:
         raise ManifestFailure(
@@ -97,6 +214,8 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
             raise ManifestFailure(f"required CTest was not registered: {name}")
         entry = by_name[name]
         command = entry.get("command")
+        # Check the program itself, not just a test's human-readable name.
+        require_real_critical_command(name, command)
         if (not isinstance(command, list) or not command
                 or not all(isinstance(x, str) and x for x in command)
                 or any("NOTFOUND" in x or "$<" in x for x in command)):
