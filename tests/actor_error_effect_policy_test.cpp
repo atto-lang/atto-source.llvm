@@ -154,5 +154,18 @@ int main() {
         if (!item || item->effect() != ActorExceptionalEffect::Raise) return 39;
     }
     if (ring.pending() != 0 || ring.dropped() != 1) return 40;
+
+    // A retired supervisor cannot receive another child CONTROL notice;
+    // unread notices are counted as dropped and cannot be resurrected.
+    ActorFailureControlInbox retiring("parent-1", 2);
+    if (!retiring.offer(raised) || !retiring.offer(panicked)) return 41;
+    if (retiring.pending() != 2 || retiring.dropped() != 0) return 42;
+    retiring.retire();
+    if (!retiring.retired() || retiring.pending() != 0) return 43;
+    if (retiring.dropped() != 2 || retiring.try_pop()) return 44;
+    retiring.retire();
+    if (retiring.dropped() != 2) return 45;
+    if (retiring.offer(third)) return 46;
+    if (retiring.pending() != 0 || retiring.dropped() != 3) return 47;
     return 0;
 }
