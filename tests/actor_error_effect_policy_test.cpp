@@ -135,5 +135,24 @@ int main() {
         (void)ActorFailureControlInbox("parent-1", 257);
         return 30;
     } catch (const std::invalid_argument&) {}
+
+    // Fixed-size ring reuses slots after pop without duplicating or
+    // reordering child notices, even after multiple wraparounds.
+    ActorFailureControlInbox ring("parent-1", 2);
+    const auto third = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "actor-3", "parent-1");
+    if (!ring.offer(raised) || !ring.offer(panicked)) return 31;
+    if (ring.offer(third) || ring.dropped() != 1) return 32;
+    if (ring.try_pop()->effect() != ActorExceptionalEffect::Raise) return 33;
+    if (!ring.offer(third)) return 34;
+    if (ring.try_pop()->effect() != ActorExceptionalEffect::Panic) return 35;
+    if (ring.try_pop()->envelope().actor_id() != "actor-3") return 36;
+    if (ring.try_pop() || ring.pending() != 0 || ring.dropped() != 1) return 37;
+    for (int i = 0; i < 1024; ++i) {
+        if (!ring.offer(raised)) return 38;
+        auto item = ring.try_pop();
+        if (!item || item->effect() != ActorExceptionalEffect::Raise) return 39;
+    }
+    if (ring.pending() != 0 || ring.dropped() != 1) return 40;
     return 0;
 }
