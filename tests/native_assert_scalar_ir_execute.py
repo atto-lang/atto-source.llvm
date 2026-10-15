@@ -62,8 +62,8 @@ def main() -> None:
         signatures = {}
         for symbol in ("oreslang_assert_equal_scalar_v0",
                        "oreslang_assert_trap_bool_v0"):
-            match = re.search(r"(?m)^define\\s+void\\s+@" + symbol +
-                              r"\\s*\\(\\s*([^,\\n]+)", source)
+            match = re.search(r"(?m)^define\s+void\s+@" + symbol +
+                              r"\s*\(\s*([^,\n]+)", source)
             require(match is not None, "missing exported ABI signature: " + symbol)
             signatures[symbol] = match.group(1)
         if args.pointer_mode == "typed":
