@@ -78,3 +78,15 @@ The newly introduced Java ActorCodeExecutor.prepareActorMail hook is a *synchron
 ## Release gates
 
 Compiler typing of family interfaces and envelope schema; native tensor lease ownership; 3-actor real compiled forward/backward; bounded ingress/egress, cancellation, stale GPU completion and generation fencing; optimizer consistency and checkpoint crash tests; batched expert routing; async GPU execution; cross-backend numeric parity; authorized private CI. Each gate requires observed executable tests rather than design-only declarations.
+
+## Host-side audited planning primitives (2026-10-14 hardening)
+
+Java now provides three **non-guest, non-GPU** building blocks for the future model runtime:
+
+- **NeuralMoERoutingPlan**: deterministic batched top-k expert planning for up to 4096 token descriptors, 256 experts and k<=8. Each token provides one finite nonnegative score per expert; stable ties favor the smaller expert index. Its selected top-k set is admitted atomically within the configured per-expert capacity, or the entire token is dropped/rejected using an explicit overflow policy. Routing weights are normalized after scale division to avoid floating-point overflow. The immutable plan contains a model/version ticket, assignments, drop indexes and expert loads. This is **not** differentiable routing, a token activation buffer, expert execution or cross-device all-to-all.
+- **NeuralTensorAdmissionBudget**: a synchronized host metadata budget reserves tensor shape byte totals plus descriptor slots atomically and releases them once through a generation-bearing Reservation. Tensor shape overflow, batch quota, concurrent overbooking and stale ticket reuse are rejected. This is **not** GPU allocation, an authenticated native TensorLease or a substitute for actor memory policy enforcement.
+- **NeuralOptimizerStepLedger**: per-step in-process barrier validates distinct, expected microbatch tickets before permitting one commit transition or an abort. It fences wrong model/checkpoint/topology/request/step and duplicate gradient notifications. A training ticket is **not proof a gradient was computed**: caller must authenticate the completed gradient and native optimizer must update weights, slots, RNG and checkpoint atomically. This ledger alone cannot guarantee exactly-once behavior across process restart.
+
+The first Java pre-dispatch ActorMailboxMiddlewareBridge is narrowed to **bounded string-to-string cleanup**, checking delegate output and every intermediate stage's original sender/recipient/sequence and value type/length before forwarding. The lower-level trusted prepareActorMail hook additionally supports bounded immutable primitive replacement with runtime validation, but no async guest continuation or untrusted host callback registration.
+
+Do not mark MoE training, native tensor execution, the 3-actor Transformer or GPU performance as verified because these host primitives exist. Use ACT-145 through ACT-160 as future cross-backend conformance targets, still UNVERIFIED.
