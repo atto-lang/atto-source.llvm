@@ -117,7 +117,13 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
                 or not option_value(command, "--fixture", name).endswith(
                     "/tests/fixtures/" + fixture)):
             raise ManifestFailure(f"critical guest contract targets wrong compiler/fixture: {name}")
-        option_value(command, evidence, name)
+        actual_evidence = option_value(command, evidence, name)
+        expected_evidence = ("ret i64 42" if name == "constant_main" else
+            "native realtime source loop requires verified LLVM continuation lowering"
+            if name == "native_rt_while_loop_failclosed" else
+            "native exceptional-control boundary unsupported")
+        if actual_evidence != expected_evidence:
+            raise ManifestFailure(f"critical guest fixture requires exact evidence: {name}")
         if evidence == "--diagnostic" and "--verify-object" in command:
             raise ManifestFailure(f"negative guest fixture also requests a positive object: {name}")
     elif name in SOURCE_ACTOR_TESTS:
