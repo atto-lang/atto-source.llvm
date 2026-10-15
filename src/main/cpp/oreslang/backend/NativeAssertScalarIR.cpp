@@ -45,9 +45,19 @@ void generate_equal(llvm::Module& module, llvm::StructType* scalar,
     auto& c = module.getContext();
     auto* i64 = llvm::Type::getInt64Ty(c);
     auto* i8 = llvm::Type::getInt8Ty(c);
-    auto* ptr = llvm::PointerType::getUnqual(c);
+    // LLVM 14 defaults to typed-pointer IR. LLVM 15+ uses opaque pointers.
+    // Emit a signature Clang of the matched LLVM major can actually parse,
+    // rather than relying on an undocumented -opaque-pointers test flag.
+#if LLVM_VERSION_MAJOR < 15
+    auto* scalar_ptr = llvm::PointerType::getUnqual(scalar);
+    auto* result_ptr = llvm::PointerType::getUnqual(result);
+#else
+    auto* scalar_ptr = llvm::PointerType::getUnqual(c);
+    auto* result_ptr = scalar_ptr;
+#endif
     auto* signature = llvm::FunctionType::get(
-        llvm::Type::getVoidTy(c), {ptr, ptr, i8, ptr}, false);
+        llvm::Type::getVoidTy(c),
+        {scalar_ptr, scalar_ptr, i8, result_ptr}, false);
     auto* fn = llvm::Function::Create(signature,
         llvm::Function::ExternalLinkage, "oreslang_assert_equal_scalar_v0", module);
     auto iter = fn->arg_begin();
@@ -102,9 +112,13 @@ void generate_trap(llvm::Module& module, llvm::StructType* result) {
     auto& c = module.getContext();
     auto* i8 = llvm::Type::getInt8Ty(c);
     auto* i32 = llvm::Type::getInt32Ty(c);
-    auto* ptr = llvm::PointerType::getUnqual(c);
+#if LLVM_VERSION_MAJOR < 15
+    auto* result_ptr = llvm::PointerType::getUnqual(result);
+#else
+    auto* result_ptr = llvm::PointerType::getUnqual(c);
+#endif
     auto* signature = llvm::FunctionType::get(llvm::Type::getVoidTy(c),
-                                              {ptr, ptr}, false);
+                                              {result_ptr, result_ptr}, false);
     auto* fn = llvm::Function::Create(signature,
         llvm::Function::ExternalLinkage, "oreslang_assert_trap_bool_v0", module);
     auto iter = fn->arg_begin();
