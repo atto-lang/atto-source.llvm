@@ -75,6 +75,12 @@ int main(int argc, char** argv) {
         const std::string text((std::istreambuf_iterator<char>(source)),
                                std::istreambuf_iterator<char>());
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
+        const bool experimental_checked_i64 =
+            text.rfind("// oreslang:checked-i64-v1\n", 0) == 0;
+        if (experimental_checked_i64 && (wasm32_target || cortex_m_target
+                || experimental_owned_int || experimental_rt_scalar_loop)) {
+            throw std::runtime_error("checked-i64-v1 is currently host scalar only");
+        }
         if (experimental_emit_hir_v1 && text.size() > 1'048'576)
             throw std::runtime_error("experimental HIR v1 source exceeds 1 MiB");
         // Target/capability directives are lexical comments in the native
@@ -94,7 +100,7 @@ int main(int argc, char** argv) {
         if (experimental_emit_hir_v1) {
             // Emit only after the REAL native parser has admitted source grammar.
             // The exporter rejects any unsupported semantics, without LLVM fallback.
-            std::cout << oreslang::emit_experimental_hir_v1(ast);
+            std::cout << oreslang::emit_experimental_hir_v1(ast, experimental_checked_i64);
             return 0;
         }
         if (cortex_m_target) {
@@ -234,7 +240,7 @@ int main(int argc, char** argv) {
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target, experimental_checked_i64);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';
