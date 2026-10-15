@@ -383,8 +383,11 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
     def test_verify_object_rejects_missing_output_object(self):
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
                                         "define i32 @main() { ret i32 42 }\n")
-        # Tool returns success but omits the requested -o artifact.
-        clang = self.compiler(stdout="")
+        # Separate fake Clang path: writing over the fake compiler would
+        # fail the ModuleID preflight rather than exercising this object gate.
+        clang = self.linker()
+        clang.write_text("#!" + sys.executable + "\nimport sys\nsys.exit(0)\n",
+                         encoding="utf-8")
         p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("nonempty native object", p.stderr)
