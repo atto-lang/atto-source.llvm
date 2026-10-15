@@ -36,3 +36,11 @@ This smoke does not change the public machine-readable feature matrix, which sti
 The current smoke runner reads compiler output incrementally with a 32 KiB cap per stream, fails closed on truncation and timeout, and uses a dedicated POSIX process group to terminate a stalled launcher together with its descendants. Its admission unit tests cover output floods, child-process timeout, missing executables and invalid diagnostics. These controls do not create a security sandbox or disallow outbound network access; they require a trusted isolated CI runner.
 
 The shared evidence adapter checks that compiler, fixture, linker and guest execution argv fields agree; LLVM one-argument executable launches are valid. These checks protect report *consistency* but cannot prove source-to-binary provenance or prevent a forged report.
+
+## Source-identity audit
+
+The smoke runner now independently reads the checked-out Git HEAD with git rev-parse --verify HEAD and refuses a caller-supplied --source-sha that differs from the actual checkout. It records the independently read hash as actual_git_checkout_sha; shared conformance evidence validation rejects missing or mismatched values. Regression tests exercise a real temporary Git repo and a deliberately forged source SHA that must fail before compilation.
+
+For pull_request workflows, GITHUB_SHA may be a synthetic merge commit: treat it as the checked-out tree under test, not necessarily the PR branch head. SHA matching here still does not attest that the compiler artifact was reproducibly built from those sources.
+
+The shared Actions diagnostic counts steps only when execution is evidenced; skipped, queued or missing step entries do not imply executed tests. A green diagnostic unit test is not a compiler conformance result.
