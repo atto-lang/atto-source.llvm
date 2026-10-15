@@ -3,6 +3,7 @@
 // Used by private exact-source HIR parity tests with the Java frontend.
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/ExperimentalHirV1.hpp"
+#include "oreslang/frontend/CheckedI64Directive.hpp"
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -22,7 +23,7 @@ int main(int argc, char** argv) {
                                  std::istreambuf_iterator<char>{});
         if (in.bad()) throw std::runtime_error("source read failed");
         if (source.size() > 1'048'576) throw std::runtime_error("source exceeds 1 MiB");
-        const bool checked = source.rfind("// oreslang:checked-i64-v1\n", 0) == 0;
+        const bool checked = oreslang::checked_i64_source_opt_in(source);
         std::cout << oreslang::emit_experimental_hir_v1(
             oreslang::parse_program(source), checked);
         return 0;
