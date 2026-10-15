@@ -165,7 +165,8 @@ int main() {
         p.functions.front().name = "9scale";
     });
     expect_reject("embedded NUL identifier", [](Program& p) {
-        p.functions.front().name = std::string("a\\0b", 3);
+        p.functions.front().name = std::string("ab", 2);
+        p.functions.front().name.insert(1, 1, char(0));
     });
     expect_reject("duplicate overload", [](Program& p) {
         Function duplicate;
