@@ -58,6 +58,21 @@ class SmokeAdmission(unittest.TestCase):
             self.assertEqual(smoke.git_checkout_sha(Path(tmp)), actual)
             self.assertRegex(actual, r"^[0-9a-f]{40}$")
 
+    def test_fake_claimed_source_sha_is_rejected_before_compiler_use(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as temp:
+            result = subprocess.run([
+                sys.executable, str(script), "--backend=llvm",
+                "--compiler=" + sys.executable, "--clang=" + sys.executable,
+                "--source-sha=" + ("0" * 40),
+                "--report=" + str(Path(temp) / "report.json"),
+            ], capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("declared source revision does not match Git checkout HEAD",
+                          result.stderr)
+            self.assertFalse((Path(temp) / "report.json").exists())
+
     def test_compiler_digest_reads_actual_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "program"
