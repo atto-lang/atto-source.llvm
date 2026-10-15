@@ -76,9 +76,16 @@ inline void verify_checked_i64_host_profile(const Program& program) {
                         return;
                     case Kind::Call: {
                         const auto callee = functions.find(expr.name);
+                        // The real native parser stores one empty label per
+                        // positional argument. Reject only named/reordered
+                        // arguments or a malformed label-vector length.
+                        bool invalid_labels = !expr.argument_names.empty() &&
+                            expr.argument_names.size() != expr.arguments.size();
+                        for (const auto& label : expr.argument_names)
+                            invalid_labels = invalid_labels || !label.empty();
                         if (callee == functions.end() ||
                             callee->second->parameters.size() != expr.arguments.size() ||
-                            !expr.argument_names.empty())
+                            invalid_labels)
                             reject("unresolved, wrong-arity or named scalar call");
                         calls[fn.name].push_back(expr.name);
                         for (const auto& arg : expr.arguments) {
