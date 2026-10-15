@@ -116,6 +116,12 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Canonical return-type arrows are a single token. A spaced "- >"
+        // must not accidentally become a valid declaration separator.
+        if (source_.substr(at_, 2) == "->") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -311,7 +317,7 @@ private:
         param.name = identifier();
         method.parameters.push_back(std::move(param));
         require(")");
-        require(":");
+        require_return_type_separator();
         require("int");
         require("{");
         while (token_.text != "return") {
@@ -489,7 +495,7 @@ private:
         require("fnc");
         loop.name = identifier();
         require("("); require(")");
-        require(":"); require("void");
+        require_return_type_separator(); require("void");
         require("{");
         require("val");
         loop.variable = identifier();
@@ -592,7 +598,7 @@ private:
             } while (accept(","));
             require(")");
         }
-        require(":");
+        require_return_type_separator();
         value.returns_void = accept("void");
         if (!value.returns_void && !accept("int")) {
             const std::string type = identifier();
@@ -1370,6 +1376,14 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    // Preserve legacy ': int' while admitting the canonical '-> int'.
+    // Only return-type positions use this helper; class fields and named
+    // parameter syntax retain their existing ':' grammar.
+    void require_return_type_separator() {
+        if (!accept(":") && !accept("->"))
+            fail("expected return type separator ':' or '->'");
     }
 
     std::string identifier() {
