@@ -95,7 +95,7 @@ llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
     builder.CreateCondBr(overflow, failed, success);
     builder.SetInsertPoint(failed);
     llvm::Type* i32 = llvm::Type::getInt32Ty(context);
-    llvm::Type* i8ptr = llvm::Type::getInt8PtrTy(context);
+    llvm::Type* i8ptr = llvm::PointerType::getUnqual(context);
     auto print = module->getOrInsertFunction("puts",
         llvm::FunctionType::get(i32, {i8ptr}, false));
     builder.CreateCall(print, {builder.CreateGlobalStringPtr("ORES_I64_OVERFLOW")});
