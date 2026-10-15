@@ -210,6 +210,21 @@ jobs:
               expect(scale(INT64_MAX, &status) == 0 && status == 0x494F0001u,
                      "scale overflow returns typed effect");
               status = 0;
+              expect(scale(INT64_MIN, &status) == 0 && status == 0x494F0001u,
+                     "negative overflow returns typed effect");
+              status = 0;
+              expect(scale(INT64_MAX / 43, &status) == (INT64_MAX / 43) * 43 &&
+                     status == 0, "positive exact boundary remains legal");
+              status = 0;
+              expect(scale(INT64_MAX / 43 + 1, &status) == 0 &&
+                     status == 0x494F0001u, "positive one-past boundary");
+              status = 0;
+              expect(scale(INT64_MIN / 43, &status) == (INT64_MIN / 43) * 43 &&
+                     status == 0, "negative exact boundary remains legal");
+              status = 0;
+              expect(scale(INT64_MIN / 43 - 1, &status) == 0 &&
+                     status == 0x494F0001u, "negative one-past boundary");
+              status = 0;
               expect(outer(INT64_MAX, &status) == 0 && status == 0x494F0001u,
                      "nested call propagates typed effect");
               status = 0;
