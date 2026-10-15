@@ -60,6 +60,18 @@ blanket permission to transfer code to another organization.
 approval, or a target with unknown budget/access.** If approval, privacy,
 capacity or permission checks fail, stop without transferring private source.
 
+**Preflight hardening:** the operational Python CLI intentionally does
+not accept `--allowlist`; the only allowed manifest path is the checked-out
+repository's `.github/private-ci-approved-repositories.txt`. This prevents
+casual caller-supplied manifest substitution but **does not prove the checkout
+came from protected `main`**. A trusted workflow, committed and reviewed on
+the default branch, must independently load and verify the protected-branch
+policy. Never allow an unreviewed PR to authorize its own target by altering
+a source branch's manifest or test workflow. The preflight also rejects
+same-owner repositories: this tool is specifically for cross-organization
+mirrors, not same-organization runner selection.
+
+
 ## Status on October 14, 2026
 
 The Java source allowlist has **no approved repositories**. Current GitHub
