@@ -69,6 +69,12 @@ static void expect_reject(const char* label,
 int main() {
     verify_checked_i64_host_profile(good());
     {
+        // Real Parser.cpp records a blank label per positional argument.
+        auto p = good();
+        p.functions.back().result->argument_names = {""};
+        verify_checked_i64_host_profile(p);
+    }
+    {
         auto p = good();
         p.functions.back().result = binary(
             Expression::Kind::Add, integer(40), integer(3));
