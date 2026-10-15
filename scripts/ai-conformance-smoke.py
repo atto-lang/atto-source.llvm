@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import signal
 import subprocess
 import sys
 import tempfile
@@ -30,33 +32,89 @@ def sha256(path):
     return hasher.hexdigest()
 
 
-def run(argv, timeout, cwd):
-    start = time.monotonic()
+def _kill_process_group(proc):
+    """Terminate a timed-out compiler and any descendants holding its pipes."""
     try:
-        # Temporary files bound in-process memory even if a faulty compiler
-        # floods stdout/stderr. Truncation is still a hard test failure.
-        with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
-            completed = subprocess.run(
-                argv, cwd=cwd, stdout=out_file, stderr=err_file,
-                timeout=timeout, check=False,
-            )
-            overflow = (out_file.tell() > MAX_OUTPUT or err_file.tell() > MAX_OUTPUT)
-            out_file.seek(0)
-            err_file.seek(0)
-            return {
-                "argv": argv, "exit_code": completed.returncode,
-                "stdout": out_file.read(MAX_OUTPUT).decode("utf-8", errors="replace"),
-                "stderr": err_file.read(MAX_OUTPUT).decode("utf-8", errors="replace"),
-                "output_truncated": overflow, "timeout": False,
-                "duration_ms": int((time.monotonic() - start) * 1000),
-            }
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {
-            "argv": argv, "exit_code": None, "stdout": "", "stderr": str(exc)[:MAX_OUTPUT],
-            "output_truncated": False,
-            "timeout": isinstance(exc, subprocess.TimeoutExpired),
-            "duration_ms": int((time.monotonic() - start) * 1000),
-        }
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        pass
+
+
+def run(argv, timeout, cwd):
+    """Run an argv vector with bounded capture and bounded wall time.
+
+    No shell. A dedicated POSIX process group permits stopping descendants
+    if the compiler launcher (such as the Java Python probe) wedges.
+    """
+    start = time.monotonic()
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    expired, truncated = False, False
+    proc = None
+    code = None
+    error_text = ""
+    try:
+        proc = subprocess.Popen(
+            argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, start_new_session=(os.name == "posix"),
+        )
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdout, selectors.EVENT_READ, "stdout")
+            selector.register(proc.stderr, selectors.EVENT_READ, "stderr")
+            while selector.get_map():
+                remaining = timeout - (time.monotonic() - start)
+                if remaining <= 0:
+                    expired = True
+                    break
+                for key, _ in selector.select(timeout=min(remaining, 0.25)):
+                    chunk = os.read(key.fileobj.fileno(), 8192)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+                    target = buffers[key.data]
+                    room = MAX_OUTPUT - len(target)
+                    target.extend(chunk[:max(0, room)])
+                    if len(chunk) > room:
+                        truncated = True
+                        break
+                if truncated:
+                    break
+        if not expired and not truncated:
+            try:
+                proc.wait(timeout=max(0.001, timeout - (time.monotonic() - start)))
+            except subprocess.TimeoutExpired:
+                expired = True
+        if expired or truncated:
+            _kill_process_group(proc)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(proc)
+            proc.wait(timeout=3)
+        code = proc.returncode
+    except OSError as exc:
+        error_text = str(exc)[:MAX_OUTPUT]
+    finally:
+        if proc is not None:
+            for pipe in (proc.stdout, proc.stderr):
+                if pipe and not pipe.closed:
+                    pipe.close()
+            if proc.poll() is None:
+                _kill_process_group(proc)
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+    return {
+        "argv": argv, "exit_code": code,
+        "stdout": buffers["stdout"].decode("utf-8", errors="replace"),
+        "stderr": (buffers["stderr"].decode("utf-8", errors="replace") + error_text)[:MAX_OUTPUT],
+        "output_truncated": truncated, "timeout": expired,
+        "duration_ms": int((time.monotonic() - start) * 1000),
+    }
 
 
 def good(result):
