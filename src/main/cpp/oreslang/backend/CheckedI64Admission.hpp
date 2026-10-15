@@ -51,7 +51,7 @@ inline void verify_checked_i64_host_profile(const Program& program) {
         // could collide with the host declaration at LLVM link time.
         if (fn.name == "puts")
             reject("reserved host diagnostic function identity");
-        if (fn.returns_void || !fn.result || fn.scalar_while ||
+        if (!fn.generic_parameters.empty() || fn.returns_void || !fn.result || fn.scalar_while ||
             !fn.locals.empty() || !fn.statements.empty() ||
             !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
             !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
@@ -65,7 +65,8 @@ inline void verify_checked_i64_host_profile(const Program& program) {
         std::unordered_set<std::string> names;
         for (const auto& param : fn.parameters)
             if (!checked_i64_host_identifier(param.name) || !names.insert(param.name).second ||
-                !param.class_name.empty() || param.mode != Parameter::Mode::Value)
+                !param.class_name.empty() || !param.generic_type.empty() ||
+                param.mode != Parameter::Mode::Value)
                 reject("parameters must be distinct primitive i64 values");
     }
 
@@ -102,6 +103,8 @@ inline void verify_checked_i64_host_profile(const Program& program) {
                         validate(*expr.right, depth + 1);
                         return;
                     case Kind::Call: {
+                        if (expr.type_arguments_present || !expr.type_arguments.empty())
+                            reject("generic call instantiation unsupported in checked scalar profile");
                         const auto callee = functions.find(expr.name);
                         // The real native parser stores one empty label per
                         // positional argument. Reject only named/reordered
