@@ -136,6 +136,39 @@ jobs:
           set -e
           test "$status" -eq 86
           grep -Fxq ORES_I64_OVERFLOW "$RUNNER_TEMP/checked-overflow.log"
+      - name: Validate nested checked effects at O0 and O2
+        run: |
+          set -euo pipefail
+          printf '%s\n' '// oreslang:checked-i64-v1' \
+            'pub fnc explode(int x): int { return x * 2; }' \
+            'pub fnc forward(int x): int { return explode(x); }' \
+            'pub fnc main(): int { return forward(9223372036854775807) * 0; }' \
+            > "$RUNNER_TEMP/checked-nested-overflow.ores"
+          "$RUNNER_TEMP/oreslang-llvmc" "$RUNNER_TEMP/checked-nested-overflow.ores" \
+            > "$RUNNER_TEMP/checked-nested-overflow.ll"
+          printf '%s\n' '// oreslang:checked-i64-v1' \
+            'pub fnc explode(int x): int { return x * 2; }' \
+            'pub fnc forward(int x): int { return explode(x); }' \
+            'pub fnc main(): int { return forward(0) * 0 + 43; }' \
+            > "$RUNNER_TEMP/checked-nested-safe.ores"
+          "$RUNNER_TEMP/oreslang-llvmc" "$RUNNER_TEMP/checked-nested-safe.ores" \
+            > "$RUNNER_TEMP/checked-nested-safe.ll"
+          for opt in 0 2; do
+            for name in checked-nested-overflow checked-nested-safe; do
+              "$CLANG" -O"$opt" -Wno-override-module -x ir \
+                "$RUNNER_TEMP/$name.ll" -o "$RUNNER_TEMP/$name-O$opt"
+            done
+            set +e
+            "$RUNNER_TEMP/checked-nested-overflow-O$opt" > "$RUNNER_TEMP/overflow-O$opt.log" 2>&1
+            bad=$?
+            "$RUNNER_TEMP/checked-nested-safe-O$opt" > "$RUNNER_TEMP/safe-O$opt.log" 2>&1
+            good=$?
+            set -e
+            test "$bad" -eq 86
+            test "$good" -eq 43
+            grep -Fxq ORES_I64_OVERFLOW "$RUNNER_TEMP/overflow-O$opt.log"
+            test ! -s "$RUNNER_TEMP/safe-O$opt.log"
+          done
       - name: Compile and execute typed checked-i64 error ABI
         run: |
           c++ -std=c++20 -Wall -Wextra -Werror -Isrc/main/cpp tests/checked_i64_failure_status_test.cpp -o "$RUNNER_TEMP/checked-i64-abi"
