@@ -30,3 +30,9 @@ The actual compiler smoke is part of [.github/workflows/llvm-conformance.yml](.g
 - Do not copy the private compiler source to public CI repos or alternate organizations simply to obtain GitHub Actions minutes.
 
 This smoke does not change the public machine-readable feature matrix, which still reports **no verified examples** until real evidence is available and reviewed.
+
+## Additional audit controls
+
+The current smoke runner reads compiler output incrementally with a 32 KiB cap per stream, fails closed on truncation and timeout, and uses a dedicated POSIX process group to terminate a stalled launcher together with its descendants. Its admission unit tests cover output floods, child-process timeout, missing executables and invalid diagnostics. These controls do not create a security sandbox or disallow outbound network access; they require a trusted isolated CI runner.
+
+The shared evidence adapter checks that compiler, fixture, linker and guest execution argv fields agree; LLVM one-argument executable launches are valid. These checks protect report *consistency* but cannot prove source-to-binary provenance or prevent a forged report.
