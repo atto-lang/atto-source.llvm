@@ -166,7 +166,13 @@ static int check_consumer_retirement_accounting() {
             auto notice = ActorFailureControlNotice::from_guest_effect(
                     ActorExceptionalEffect::Raise,
                     "child-" + std::to_string(i), "parent");
-            (void)inbox.offer(notice, notice.envelope().actor_id());
+            const std::string child_id = notice.envelope().actor_id();
+            // Registration may race retirement. Either this child is
+            // registered before offer, or retirement makes offer count a
+            // discarded terminal notice; no unregistered live offer is legal.
+            (void)inbox.register_direct_child(child_id);
+            (void)inbox.offer(notice, child_id);
+            (void)inbox.unregister_direct_child(child_id);
             attempted.fetch_add(1);
             if ((i & 15) == 0) std::this_thread::yield();
         }
