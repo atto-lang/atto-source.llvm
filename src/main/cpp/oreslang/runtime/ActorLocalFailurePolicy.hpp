@@ -63,6 +63,13 @@ inline ActorLocalDispatch dispatch_actor_local_unhandled(
     if (hook == nullptr) return {false, false, failure};
 
     const ActorLocalHookReply reply = hook(state, failure);
+    // Host/FFI hook results are untrusted discriminants. An unknown
+    // resolution cannot silently degrade to an ordinary actor failure or
+    // be treated as recovery, regardless of callback effect.
+    if (reply.resolution != ActorLocalResolution::Handled
+            && reply.resolution != ActorLocalResolution::Escalate) {
+        return {true, false, {EffectKind::Fatal, 0xFFFFFFFDu}};
+    }
     if (reply.callback_effect.kind == EffectKind::Return
             && reply.resolution == ActorLocalResolution::Handled) {
         return {true, true, {EffectKind::Return, 0}};
