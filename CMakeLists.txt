@@ -1892,3 +1892,15 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Cross-family composition is not source-supported on native LLVM yet.
+# Keep unsupported syntax fail-closed until each case has real guest execution.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME elm_composition_unsupported_source_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/elm_composition_admission.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(elm_composition_unsupported_source_admission
+        PROPERTIES TIMEOUT 90)
+endif()
