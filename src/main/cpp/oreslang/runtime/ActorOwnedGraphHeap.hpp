@@ -41,8 +41,10 @@ inline std::uint64_t reserve_actor_graph_heap_id() {
 // reference counting, recursion, or per-node malloc.
 //
 // IMPORTANT: This is a C++ runtime substrate, not yet lowered from Oreslang
-// source objects. It does not implement guest destructors, borrow checking,
-// FFI leases, CPU isolation, concurrent handlers or automatic quiescence.
+// source objects. Scoped host borrow tickets now prevent reclamation while
+// pinned, but this does NOT implement guest-language borrow checking,
+// per-node loan provenance, arbitrary FFI safety, CPU isolation, concurrent
+// actor-handler execution or automatic supervisor quiescence.
 template <std::size_t NodeCapacity, std::size_t NodeBytes, std::size_t LinksPerNode>
 class ActorOwnedGraphHeap final {
     static_assert(NodeCapacity > 0 && NodeCapacity <= std::numeric_limits<std::uint32_t>::max(),
