@@ -200,6 +200,11 @@ int main(int argc, char** argv) {
                         start.actor_sends.size() + start.actor_stops.size())
                     throw std::runtime_error("cortex-m actor action plan inconsistent");
                 for (const auto& actor : ast.actors) {
+                    // The native synchronous state profile has additional
+                    // methods and an entry-fence ABI absent from this target.
+                    // Never validate only on_message and emit unchecked code.
+                    if (actor.scoped_state || !actor.methods.empty())
+                        throw std::runtime_error("cortex-m scoped state methods require verified target admission");
                     if (actor.fields.empty() || actor.fields.size() > 8 ||
                         actor.on_message.actor_field_writes.size() > 16 ||
                         !actor.on_message.result)

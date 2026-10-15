@@ -508,6 +508,17 @@ if(BUILD_TESTING)
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(native_with_using_state_capability_parity PROPERTIES TIMEOUT 120)
+        foreach(mode IN ITEMS normal sanitized)
+            set(hardening_flags)
+            if(mode STREQUAL "sanitized")
+                list(APPEND hardening_flags --sanitize)
+            endif()
+            add_test(NAME native_with_using_hardening_${mode}
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/with_using_hardening.py"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
+                    --cxx "${CMAKE_CXX_COMPILER}" --root "${CMAKE_CURRENT_SOURCE_DIR}" ${hardening_flags})
+            set_tests_properties(native_with_using_hardening_${mode} PROPERTIES TIMEOUT 120)
+        endforeach()
     endif()
 
     # Native OS ABI is i32 even though Oreslang int is represented as i64.

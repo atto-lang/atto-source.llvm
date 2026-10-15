@@ -310,5 +310,23 @@
     "source": "define actor Counter as state { x: int = 0; x: int = 1; } end",
     "accepted": false,
     "result": null
+  },
+  {
+    "name": "arrow-space",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| - > s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "arrow-newline",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -\n> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "arrow-comment",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -/*split*/> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
   }
 ]

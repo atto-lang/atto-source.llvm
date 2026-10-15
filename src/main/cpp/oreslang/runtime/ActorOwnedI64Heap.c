@@ -115,6 +115,13 @@ void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn) {
     heap->turn_active = 0;
     unlock_heap(heap);
 }
+void ores_actor_i64_heap_validate_turn(OresActorI64Heap* heap,
+                                      uint64_t domain, uint64_t epoch) {
+    lock_heap(heap);
+    const OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    unlock_heap(heap);
+}
 OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
                                         OresActorTurn turn, int64_t value) {
     lock_heap(heap);

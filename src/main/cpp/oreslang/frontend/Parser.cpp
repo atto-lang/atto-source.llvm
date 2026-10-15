@@ -254,6 +254,22 @@ public:
     }
 
 private:
+    // Enforce before descending or constructing an unbounded callback AST.
+    // The outer file-size budget alone does not prevent stack exhaustion.
+    struct StateParseFrame {
+        Parser& parser;
+        bool active;
+        explicit StateParseFrame(Parser& owner)
+            : parser(owner), active(!owner.state_parameter_.empty()) {
+            if (active) {
+                if (parser.state_parse_depth_ >= 128)
+                    parser.fail("state callback parser nesting limit exceeded (128)");
+                ++parser.state_parse_depth_;
+            }
+        }
+        ~StateParseFrame() { if (active) --parser.state_parse_depth_; }
+    };
+
     void effect_clause(Function& method) {
         if (token_.text == "using")
             fail("using acquires scoped capabilities; use with for effect declarations");
@@ -281,7 +297,9 @@ private:
     // callback profile. Unknown/transitive calls cannot bypass the effect row.
     static void state_expression_effects(const Expression& expr,
             FunctionEffects& effects, const std::unordered_set<std::string>& written,
-            std::vector<std::string>& initial_reads) {
+            std::vector<std::string>& initial_reads, std::size_t depth = 0) {
+        if (depth > 64)
+            throw std::runtime_error("state callback expression depth limit exceeded (64)");
         if (expr.kind == Expression::Kind::Variable) {
             if (expr.name.rfind("@state.", 0) == 0) {
                 effects.bits |= static_cast<std::uint32_t>(FunctionEffect::StateRead);
@@ -296,8 +314,8 @@ private:
         if (expr.kind != Expression::Kind::Negate && expr.kind != Expression::Kind::Add
                 && expr.kind != Expression::Kind::Subtract && expr.kind != Expression::Kind::Multiply)
             throw std::runtime_error("state callback requires pure scalar expressions; calls and escaping loans are unsupported");
-        if (expr.left) state_expression_effects(*expr.left, effects, written, initial_reads);
-        if (expr.right) state_expression_effects(*expr.right, effects, written, initial_reads);
+        if (expr.left) state_expression_effects(*expr.left, effects, written, initial_reads, depth + 1);
+        if (expr.right) state_expression_effects(*expr.right, effects, written, initial_reads, depth + 1);
     }
 
     void state_callback(Function& method) {
@@ -324,10 +342,16 @@ private:
         if (!method.declared_effects.has(acquisition))
             fail("state capability acquisition exceeds with effect bound");
         require("|");
+        state_tokens_ = 0;
         state_parameter_ = identifier();
         for (const auto& param : method.parameters)
             if (param.name == state_parameter_) fail("state callback parameter shadows actor method parameter");
-        require("|"); require("-"); require(">");
+        require("|");
+        const auto arrow_offset = token_.offset;
+        require("-");
+        if (token_.offset != arrow_offset + 1)
+            fail("state callback arrow requires contiguous '->'");
+        require(">");
         const bool block = accept("{");
         FunctionEffects inferred{};
         std::unordered_set<std::string> written;
@@ -1236,7 +1260,10 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return additive(); }
+    std::unique_ptr<Expression> expression() {
+        StateParseFrame frame(*this);
+        return additive();
+    }
 
     std::unique_ptr<Expression> additive() {
         auto left = product();
@@ -1276,6 +1303,7 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        StateParseFrame frame(*this);
         if (token_.text == "trap") {
             // Reserved for Option-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase
@@ -1748,6 +1776,10 @@ private:
             }
         }
         std::unordered_map<std::string, const ActorDecl*> actor_types;
+        // Underscores in actor/member names can produce the same ABI symbol
+        // for distinct declarations. LLVM silently renames collisions; a
+        // trusted host could then resolve the wrong actor entry point.
+        std::unordered_set<std::string> actor_symbols;
         for (const auto& actor : program.actors) {
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
                     || functions.count(actor.name))
@@ -1777,11 +1809,14 @@ private:
                 }
                 validate_expression(*method.result, accessible, functions);
                 const auto symbol = "oreslang_actor_" + actor.name + "_" + method.name;
+                if (!actor_symbols.insert(symbol).second)
+                    throw std::runtime_error("conflicting generated actor symbol '" + symbol + "'");
                 if (functions.count(symbol)) throw std::runtime_error("conflicting generated actor symbol");
             };
             if (!actor.on_message.name.empty()) validate_method(actor.on_message);
             for (const auto& method : actor.methods) validate_method(method);
-            if (functions.count("oreslang_actor_" + actor.name + "_init"))
+            const auto init_symbol = "oreslang_actor_" + actor.name + "_init";
+            if (!actor_symbols.insert(init_symbol).second || functions.count(init_symbol))
                 throw std::runtime_error("conflicting generated actor symbol");
         }
         for (const auto& fn : program.functions) {
@@ -1917,7 +1952,11 @@ private:
         }
     }
 
-    void advance() { token_ = lexer_.next(); }
+    void advance() {
+        if (!state_parameter_.empty() && ++state_tokens_ > 2048)
+            fail("state callback token budget exceeded (2048)");
+        token_ = lexer_.next();
+    }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "quantum") {
             throw std::runtime_error("native gpu/quantum boundary unsupported: "
@@ -1952,6 +1991,8 @@ private:
     Lexer lexer_;
     Token token_;
     std::string state_parameter_;
+    std::size_t state_parse_depth_ = 0;
+    std::size_t state_tokens_ = 0;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
 };

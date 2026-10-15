@@ -5,6 +5,10 @@ state capability semantics. `with` declares an effect upper bound; `using`
 acquires lexical authority. A broader effect declaration never upgrades a
 read capability to write authority.
 
+The follow-up [hardening audit](WITH_USING_HARDENING_AUDIT.md) documents fixes
+for actor entry fencing, generated ABI collisions, target admission, malformed
+callback arrows, and callback parser resource exhaustion.
+
 ```ores
 define actor Counter as
   state { count: int = 0; }
@@ -46,6 +50,9 @@ feature. The old signature spelling `using state.read` is rejected; write
 - Native `ActorOwnedScalarState` additionally checks actual reads/writes against
   verified inferred effects and the loan mode. The runtime rejects all nested
   sealed loans and rejects suspension even with a fenced continuation.
+- Generated native state methods validate the current heap domain/epoch on
+  entry, including callbacks that perform no state operations. Scoped callbacks
+  have explicit parser/token/expression limits; see the hardening audit.
 - Compiler output never eagerly reads a field under write-only authority.
   Read callbacks never write private fields back as a side effect.
 
@@ -65,8 +72,8 @@ guest ActorRef arbitrary-method-call API.
 
 ## Verification and limits
 
-`tests/with_using_state_cases.json` contains 52 admission cases (15 accepted,
-37 rejected). Fourteen actor cases execute native code; the remaining positive
+`tests/with_using_state_cases.json` contains 55 admission cases (15 accepted,
+40 rejected). Fourteen actor cases execute native code; the remaining positive
 case verifies an ordinary function effect row. Its
 runner compiles native positive cases, links them to the production
 `ActorOwnedI64Heap` implementation and executes them. It also checks that
@@ -119,3 +126,6 @@ execution/sanitizers and LLVM 20 Clang for Wasm. Apple Clang lacks the Wasm
 backend here; LLVM 20's macOS sanitizer runtime hung at process startup. Neither
 failed toolchain attempt is counted as a pass. No GitHub Actions minutes or
 cross-organization source transfers were needed for this local verification.
+
+The original 52-case/401-test counts above describe the initial parity commit;
+the subsequent hardening adds three comparison cases and two adversarial CTests.

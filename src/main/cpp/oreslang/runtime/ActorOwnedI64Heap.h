@@ -21,6 +21,11 @@ OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                          uint64_t actor_id,
                                          uint64_t incarnation);
 void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn);
+/* Compiler entry fence, including callbacks that never touch a field.
+ * Validates existing scheduler admission; does not grant a turn, read state,
+ * or keep the metadata lock held while guest instructions execute. */
+void ores_actor_i64_heap_validate_turn(OresActorI64Heap* heap,
+                                      uint64_t domain, uint64_t epoch);
 OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
                                        OresActorTurn turn, int64_t value);
 int64_t ores_actor_i64_heap_read(OresActorI64Heap* heap,

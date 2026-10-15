@@ -272,6 +272,10 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    if (cortex_m_target)
+        for (const auto& actor : source.actors)
+            if (actor.scoped_state || !actor.methods.empty())
+                throw std::runtime_error("cortex-m scoped state methods require verified target admission");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -453,11 +457,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
-    llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
+    llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite, validateActorTurn;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
+        if (std::any_of(source.actors.begin(), source.actors.end(),
+                [](const ActorDecl& actor) { return actor.scoped_state; }))
+            validateActorTurn = module.getOrInsertFunction("ores_actor_i64_heap_validate_turn",
+                llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false));
         fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
         fieldInitMutable = module.getOrInsertFunction("ores_actor_i64_heap_field_init_mutable",
@@ -1349,6 +1357,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::Value* actorHeap = &*args++;
             llvm::Value* currentDomain = &*args++;
             llvm::Value* currentEpoch = &*args++;
+            // Acquisition itself requires an admitted actor turn. Do not use
+            // a field read as a fence: write-only and no-op callbacks must
+            // neither snapshot state nor skip incarnation/epoch validation.
+            if (actor.scoped_state)
+                builder.CreateCall(validateActorTurn, {actorHeap, currentDomain, currentEpoch});
             std::unordered_map<std::string, llvm::Value*> values, emptyFields;
             for (const auto& parameter : method->parameters) {
                 auto* slot = builder.CreateAlloca(i64, nullptr, parameter.name + ".slot");
