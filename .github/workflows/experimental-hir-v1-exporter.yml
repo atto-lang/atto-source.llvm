@@ -8,6 +8,7 @@ on:
       - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
+      - "tests/experimental_hir_v1_codegen_checked_rejection_test.cpp"
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
@@ -18,6 +19,7 @@ on:
       - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
+      - "tests/experimental_hir_v1_codegen_checked_rejection_test.cpp"
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
@@ -53,3 +55,70 @@ jobs:
         run: |
           c++ -std=c++20 -Wall -Wextra -Isrc/main/cpp tests/experimental_hir_v1_checked_range_property_test.cpp -o "$RUNNER_TEMP/checked-range-property"
           "$RUNNER_TEMP/checked-range-property"
+
+  checked-native-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Locate an LLVM compiler toolchain
+        run: |
+          set -euo pipefail
+          for major in 19 18 17 16; do
+            if command -v "llvm-config-$major" >/dev/null; then
+              echo "LLVM_CONFIG=$(command -v llvm-config-$major)" >> "$GITHUB_ENV"
+              echo "CLANG=$(command -v clang-$major || command -v clang)" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-19-dev clang-19
+          echo "LLVM_CONFIG=/usr/bin/llvm-config-19" >> "$GITHUB_ENV"
+          echo "CLANG=/usr/bin/clang-19" >> "$GITHUB_ENV"
+      - name: Compile and run checked-mode fail-closed regression
+        run: |
+          set -euo pipefail
+          c++ $("$LLVM_CONFIG" --cxxflags) -std=c++20 -fexceptions -O0 \
+            -Isrc/main/cpp \
+            tests/experimental_hir_v1_codegen_checked_rejection_test.cpp \
+            src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+            src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+            src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp \
+            -o "$RUNNER_TEMP/checked-codegen-guard" \
+            $("$LLVM_CONFIG" --ldflags --libs core support --system-libs)
+          "$RUNNER_TEMP/checked-codegen-guard"
+      - name: Compile real LLVM compiler and execute checked guest boundary cases
+        run: |
+          set -euo pipefail
+          c++ $("$LLVM_CONFIG" --cxxflags) -std=c++20 -fexceptions -O0 \
+            -Isrc/main/cpp \
+            src/main/cpp/oreslang/main.cpp \
+            src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+            src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+            src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp \
+            -o "$RUNNER_TEMP/oreslang-llvmc" \
+            $("$LLVM_CONFIG" --ldflags --libs core support --system-libs)
+          printf '%s\n' '// oreslang:checked-i64-v1' \
+            'pub fnc scale(int count): int { return count * 43; }' \
+            'pub fnc main(): int { return scale(1); }' > "$RUNNER_TEMP/checked-ok.ores"
+          "$RUNNER_TEMP/oreslang-llvmc" "$RUNNER_TEMP/checked-ok.ores" > "$RUNNER_TEMP/checked-ok.ll"
+          "$CLANG" -Wno-override-module -x ir "$RUNNER_TEMP/checked-ok.ll" -o "$RUNNER_TEMP/checked-ok"
+          set +e
+          "$RUNNER_TEMP/checked-ok"
+          ok=$?
+          set -e
+          test "$ok" -eq 43
+          printf '%s\n' '// oreslang:checked-i64-v1' \
+            'pub fnc main(): int { return 9223372036854775807 + 1; }' > "$RUNNER_TEMP/checked-overflow.ores"
+          "$RUNNER_TEMP/oreslang-llvmc" "$RUNNER_TEMP/checked-overflow.ores" > "$RUNNER_TEMP/checked-overflow.ll"
+          "$CLANG" -Wno-override-module -x ir "$RUNNER_TEMP/checked-overflow.ll" -o "$RUNNER_TEMP/checked-overflow"
+          set +e
+          "$RUNNER_TEMP/checked-overflow" > "$RUNNER_TEMP/checked-overflow.log" 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 86
+          grep -Fxq ORES_I64_OVERFLOW "$RUNNER_TEMP/checked-overflow.log"
