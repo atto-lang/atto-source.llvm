@@ -28,6 +28,15 @@ pub fnc main(): int { return identity<T=_>(42); }
     "default-omission": ("""fnc fixed<T=int>(): int { return 42; }
 pub fnc main(): int { return fixed(); }
 """, 42),
+    "dependent-chain": ("""fnc sum<A, B=A, C=B, D=C>(A x, B y): int { return x + y; }
+pub fnc main(): int { return sum<A=int, D=int>(19, 23); }
+""", 42),
+    "positional-plus-named": ("""fnc add<A, B=int, C=B>(A x, B y): int { return x + y; }
+pub fnc main(): int { return add<int, C=int>(19, 23); }
+""", 42),
+    "inferred-hole-with-other-default": ("""fnc identity<A, B=int>(A value): A { return value; }
+pub fnc main(): int { return identity<_, B=int>(42); }
+""", 42),
 }
 INVALID = {
     "missing-required": ("""fnc fixed<T>(): int { return 42; }
@@ -59,6 +68,18 @@ pub fnc main(): int { return invalid<int>(); }
     "bad-nested-hole": ("""fnc fixed<T=int>(): int { return 42; }
 pub fnc main(): int { return fixed<Option<_>>(); }
 """, "native scalar generic type requires int"),
+    "dependent-hole-cannot-default": ("""fnc fixed<A=int, B=A>(): int { return 42; }
+pub fnc main(): int { return fixed<A=_>(); }
+""", "cannot infer generic parameter"),
+    "unknown-named-override": ("""fnc fixed<A, B=int>(): int { return 42; }
+pub fnc main(): int { return fixed<C=int>(); }
+""", "unknown named generic argument"),
+    "duplicate-generic-declaration": ("""fnc fixed<A, A=int>(): int { return 42; }
+pub fnc main(): int { return fixed<int>(); }
+""", "duplicate generic parameter"),
+    "self-dependent-default": ("""fnc fixed<A=A>(): int { return 42; }
+pub fnc main(): int { return fixed(); }
+""", "forward or self-referential generic default"),
 }
 
 def run(argv):
