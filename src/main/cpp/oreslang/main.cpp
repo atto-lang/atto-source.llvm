@@ -65,8 +65,27 @@ int main(int argc, char** argv) {
         if (!source.is_open()) {
             throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
         }
-        const std::string text((std::istreambuf_iterator<char>(source)),
-                               std::istreambuf_iterator<char>());
+        std::string text;
+        if (cortex_m_target) {
+            // Apply admission *while reading* rather than after allocating an
+            // unbounded input buffer. A small embedded source cannot consume
+            // arbitrary compiler-host RAM before its size check runs.
+            constexpr std::size_t max_source_bytes = 128u * 1024u;
+            char chunk[4096];
+            while (source) {
+                source.read(chunk, sizeof(chunk));
+                const auto bytes = source.gcount();
+                if (bytes > 0) {
+                    if (static_cast<std::size_t>(bytes) >
+                        max_source_bytes - text.size())
+                        throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
+                    text.append(chunk, static_cast<std::size_t>(bytes));
+                }
+            }
+        } else {
+            text.assign(std::istreambuf_iterator<char>(source),
+                        std::istreambuf_iterator<char>());
+        }
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
