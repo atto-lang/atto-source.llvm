@@ -37,3 +37,21 @@ both outputs independently. The resulting comparison is HIR-equivalence
 evidence **only**, not execution or runtime parity.
 
 Any GitHub Actions run without executed steps must remain blocked.
+
+
+### Checked i64 admission (audit update)
+
+**Do not equate the experimental checked-i64 IR contract with the production
+integer runtime's wraparound behavior.** The actual Java/GraalVM and LLVM
+backends currently perform ordinary signed 64-bit addition/subtraction/
+multiplication without overflow traps. Both experimental exporters therefore
+run a conservative interval proof over each function's *entire* signed-i64
+parameter domain. A possible overflow, including `count * 43`, is rejected
+before exporting `checked-i64.v1`. Literals and genuinely safe operations
+such as `count * 1` and `40 + 3` remain admissible.
+
+The test fixture `fixtures/ir-v1/checked-safe-counter.ores` is intended for
+source-to-HIR parity. A passing guest result on this fixture is a **smoke test**
+and not evidence that production runtimes trap overflow. Remove this
+restriction only after both backends implement verified checked arithmetic,
+or introduce a separate explicitly negotiated wrapping-i64 IR contract.
