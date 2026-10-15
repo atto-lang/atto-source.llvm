@@ -55,7 +55,7 @@ def ir_function_definitions(source):
     depth = 0
     for line in ir_without_comments(source).splitlines():
         if not inside:
-            if not re.match(r"^[ \\t]*define\\b", line):
+            if not re.match(r"^[ \t]*define\b", line):
                 continue
             inside = True
         selected.append(line)
@@ -64,7 +64,7 @@ def ir_function_definitions(source):
         for char in line:
             if escaped:
                 escaped = False
-            elif quoted and char == "\\\\":
+            elif quoted and char == "\\":
                 escaped = True
             elif char == '"':
                 quoted = not quoted
@@ -76,8 +76,7 @@ def ir_function_definitions(source):
         if saw_open and depth == 0:
             inside = False
             saw_open = False
-    return "\\n".join(selected)
-
+    return "\n".join(selected)
 
 def main():
     parser = argparse.ArgumentParser()
