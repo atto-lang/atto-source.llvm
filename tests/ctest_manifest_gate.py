@@ -19,6 +19,17 @@ class ManifestFailure(RuntimeError):
     """CTest's advertised suite is not a sufficient release-test manifest."""
 
 
+VISIBILITY_NEGATIVE_FIXTURES = {
+    "reject_native_private_field_read": "class-private-read-reject.ores",
+    "reject_native_private_field_write": "class-private-write-reject.ores",
+    "reject_native_private_field_take": "class-private-take-reject.ores",
+    "reject_native_private_array_size": "class-private-array-size-reject.ores",
+    "reject_native_private_array_mutation": "class-private-array-mutation-reject.ores",
+    "reject_native_private_filled_commit": "class-private-filled-array-commit-reject.ores",
+}
+VISIBILITY_POSITIVE = "native_public_class_field_read"
+
+
 CRITICAL_TESTS = (
     "native_contract_harness_optimize_failclosed",
     "native_contract_harness_python_O",
@@ -46,6 +57,8 @@ CRITICAL_TESTS = (
     "reject_throw_effect",
     "reject_raise_effect",
     "reject_panic_effect",
+    *VISIBILITY_NEGATIVE_FIXTURES,
+    VISIBILITY_POSITIVE,
 )
 
 TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
@@ -101,6 +114,25 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
     This is deliberately a manifest check, not binary provenance or evidence
     that the command executed. Full CTest and independent CI remain mandatory.
     """
+    if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
+        positive = name == VISIBILITY_POSITIVE
+        fixture = ("class-public-field-read-native.ores" if positive
+                   else VISIBILITY_NEGATIVE_FIXTURES[name])
+        if (len(command) < 7 or not python_program(command[0])
+                or not command[1].endswith("/tests/contract.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--fixture", name).endswith("/tests/fixtures/" + fixture)):
+            raise ManifestFailure(f"visibility gate targets wrong compiler/fixture: {name}")
+        if positive:
+            if (option_value(command, "--run", name) != "42"
+                    or "--no-native-abi" not in command
+                    or not option_value(command, "--clang", name)
+                    or "--diagnostic" in command):
+                raise ManifestFailure("public-field gate must execute the source guest")
+        elif (option_value(command, "--diagnostic", name) != "private class field"
+                or any(flag in command for flag in ("--run", "--ir", "--verify-object"))):
+            raise ManifestFailure(f"private-field gate changed negative evidence: {name}")
+        return
     if name in NATIVE_EXECUTABLES:
         if (Path(command[0]).name != NATIVE_EXECUTABLES[name]
                 or (len(command) != 2 if name == "portable_target_abi_v1"
