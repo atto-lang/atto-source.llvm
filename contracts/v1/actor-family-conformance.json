@@ -647,6 +647,160 @@
       "description": "Java and LLVM execute equivalent middleware annotated stream/unary guest fixtures and failure cases",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-091",
+      "expected": "accept_target",
+      "description": "@ActorMiddleware class supports async next_val(ctx,res): MiddlewareDecision<T> for matching unary actor result",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-092",
+      "expected": "accept_target",
+      "description": "one middleware class may provide next_val and next; dispatcher selects exactly one hook per request role",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-093",
+      "expected": "reject",
+      "description": "typed next_val result spelled !void instead of MiddlewareDecision<T>",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-094",
+      "expected": "reject",
+      "description": "next_val bare MiddlewareDecision with missing typed result argument",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-095",
+      "expected": "reject",
+      "description": "next_val MiddlewareDecision<!void> complement result",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-096",
+      "expected": "reject",
+      "description": "next_val reply type differs from effective unary run response type",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-097",
+      "expected": "reject",
+      "description": "stream actor middleware class has next_val but no procedural next hook",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-098",
+      "expected": "reject",
+      "description": "middleware hook is overloaded static generic abstract or has incorrect req/res/next arity",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-099",
+      "expected": "runtime_target",
+      "description": "next_val Continue preserves validated response draft and executes following stage exactly once",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-100",
+      "expected": "runtime_target",
+      "description": "next_val Reply<T> settles one runtime-owned typed unary reply without running actor handler",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-101",
+      "expected": "runtime_target",
+      "description": "next_val Reject terminates unary request before handler and does not allocate second response",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-102",
+      "expected": "runtime_target",
+      "description": "next(req,res,next) around hook can await typed Outcome<T> and handle post-processing",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-103",
+      "expected": "runtime_target",
+      "description": "supervisor typed stage can Continue or Reject but cannot fabricate actor application Reply<T>",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-104",
+      "expected": "runtime_target",
+      "description": "immutable response draft rejects invalid no-body status with typed reply",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-105",
+      "expected": "runtime_target",
+      "description": "immutable response draft rejects HTTP framing/header injection and CRLF",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-106",
+      "expected": "runtime_target",
+      "description": "middleware skip proof checks immutable request and response draft revisions and exact stage identity",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-107",
+      "expected": "runtime_target",
+      "description": "middleware next after completion or double invocation cannot execute downstream actor twice",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-108",
+      "expected": "runtime_target",
+      "description": "middleware failure after next waits for downstream cleanup before publishing terminal outcome",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-109",
+      "expected": "runtime_target",
+      "description": "Java typed unary host reference result is ownership-checked before transport encoding",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-110",
+      "expected": "runtime_target",
+      "description": "LLVM source typed next_val and supervisor/actor middleware matching behavior executable on compiled guest",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-111",
+      "expected": "runtime_target",
+      "description": "unary HTTP middleware short-circuit returns one JSON/HttpReply<T> with validated status and header policy",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-112",
+      "expected": "runtime_target",
+      "description": "unary actor middleware cancellation/disconnect/restart prevents stale typed result completion",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
