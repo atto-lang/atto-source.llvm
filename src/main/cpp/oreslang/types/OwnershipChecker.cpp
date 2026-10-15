@@ -30,6 +30,7 @@ struct LocalOwnership {
     std::string class_name;
     std::unordered_set<std::string> class_fields;
     std::unordered_set<std::string> class_public_fields;
+    bool class_private_access = false;
     std::unordered_set<std::string> class_array_fields;
     std::unordered_set<std::string> final_fields;
     // Primitive i64 class fields can be moved and later restored by a write.
@@ -56,7 +57,7 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
     if (found == locals.end() || found->second.class_name.empty() ||
             found->second.class_fields.count(field) == 0)
         throw std::runtime_error("unknown class field or receiver at byte " + std::to_string(offset));
-    if (!found->second.class_public_fields.count(field))
+    if (!found->second.class_private_access && !found->second.class_public_fields.count(field))
         throw std::runtime_error("private native class field '" + field +
             "' cannot be accessed outside its declaring class at byte " +
             std::to_string(offset));
@@ -85,7 +86,7 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
     auto& owner = it->second;
     const bool valid = field.empty() ? owner.int_array :
         !owner.class_name.empty() && owner.class_array_fields.count(field);
-    if (!field.empty() && !owner.class_public_fields.count(field))
+    if (!field.empty() && !owner.class_private_access && !owner.class_public_fields.count(field))
         reject(receiver, "private native Array<int> class field cannot be accessed externally");
     if (!valid || (!field.empty() && owner.moved_fields.count(field))) {
         if (field.empty())
@@ -231,6 +232,8 @@ bool check_class_method_call(const Expression& expr, Locals& locals,
     if (method == functions.end() || method->second->class_method_owner != cls)
         reject(expr, "unknown native class method or wrong arity '" + cls + "." +
                      expr.name + "'");
+    if (!method->second->exported && !where->second.class_private_access)
+        reject(expr, "private native class method cannot be called externally");
     if (value_required && method->second->returns_void)
         reject(expr, "void class method cannot be used as int expression");
     const bool exclusive = method->second->class_method_mutable;
@@ -480,6 +483,7 @@ void validate_i64_ownership(const Program& program) {
             // Do not silently confer that mutability on const local bindings.
             entry.mutable_owner = param.mode == Mode::Value;
             entry.class_name = param.class_name;
+            entry.class_private_access = !function.class_method_owner.empty() && function.class_method_owner == param.class_name;
             if (!param.class_name.empty()) {
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_public_fields = class_public_fields.at(param.class_name);
@@ -494,6 +498,7 @@ void validate_i64_ownership(const Program& program) {
             entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
             entry.class_name = binding.class_name;
+            entry.class_private_access = !function.class_method_owner.empty() && function.class_method_owner == binding.class_name;
             if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");

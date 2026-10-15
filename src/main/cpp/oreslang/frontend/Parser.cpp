@@ -212,12 +212,13 @@ public:
                 klass.exported = exported;
                 program.classes.push_back(std::move(klass));
             } else if (accept("actor")) {
+                if (token_.text == "fnc" || token_.text == "routine") fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
                 program.actors.push_back(actor_declaration());
             } else if (accept_transform_pipe_modifier()) {
                 require("actor");
                 fail("native transform-pipe actor requires typed pipeline role and transport lowering");
             } else if (!defined && token_.text == "suspend") {
-                if (exported || leading_private) fail("native resumable scalar declaration visibility unsupported");
+                if (exported || leading_private) fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
                 if (defined) fail("expected module, class, actor or contract after 'define'");
@@ -358,12 +359,14 @@ private:
             if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
             LocalBinding field;
             field.offset = token_.offset;
+            const bool final_actor_field = token_.text == "final";
             field.field_mutable = token_.text == "let";
             advance();
             field.name = identifier();
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
             require(":");
             if (token_.text != "int") {
+                if (final_actor_field) fail("native final actor fields require typed field initialization and ownership lowering");
                 fail("native actor member field requires int; Map and actor-group fields need typed native lowering");
             }
             advance();
