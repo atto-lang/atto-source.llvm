@@ -241,16 +241,21 @@ native supervisor scheduling, or production evidence.
 
 ## Side-effecting supervisor callback retry fence (2026-10-14)
 
-`SupervisorControlTurn::admit_turn` distinguishes a failed decision
-callback from an exception thrown after requesting a potentially
-side-effecting restart or escalation. Decision dispatch failures **before**
-a restart/escalation action remain retryable under the existing CONTROL lane
-policy. Once `on_restart` has been invoked, a later exception must **not**
-invoke the same restart callback again: a replacement incarnation may have
-already been created. The runtime instead attempts `on_escalate` once if
-escalation was not already attempted, retires the admitted terminal event,
-and propagates the original host exception. If `on_escalate` itself throws
-after producing a terminal host effect, the same event is not replayed.
+`SupervisorControlTurn::admit_turn` treats *entry* to any native
+supervisor callback (including the decision hook) as potentially
+side-effecting. A decision hook may record an effect before returning its
+choice, or may throw instead of returning. Retrying after that exception
+could replay an irreversible host operation. The runtime therefore attempts
+`on_escalate` at most once when escalation has not already been invoked,
+retires the terminal notice, and propagates the original exception. Once
+`on_restart` has been invoked, a later exception likewise must **not**
+invoke the same restart callback again: a replacement incarnation may
+already exist. If `on_escalate` also throws, the original failure is
+preserved and the notice is still retired.
+
+Only failures *before any callback is entered* may be retried safely.
+This is **at-most-once callback dispatch**, not exactly-once execution,
+durable notification delivery or native guest exception lowering.
 
 `supervisor_control_turn_test.cpp` adds fault-injected callbacks that
 simulate restart and escalation side effects followed by exceptions. It
@@ -279,10 +284,11 @@ handle rejection/escalation explicitly in their supervisor policy and maintain
 their own durable host-side audit record. It is not an exactly-once processing
 guarantee and not evidence that a parent handled the failure.
 
-`SupervisorControlTurn` still owns its separate admission and decision policy:
-its pre-decision hook failure is retryable; once a restart or escalation
-callback has started, that path retires the notice to avoid effect replay.
-The low-level `dispatch_one` must not be used to bypass the supervisor's
+`SupervisorControlTurn` still owns admission, decision and restart
+policy. Its **decision hook is also at-most-once after entry**, since its
+side effects cannot be reliably detected from the return value. An
+exception before entering the first hook leaves the event retryable.
+The low-level `dispatch_one` must not bypass the supervisor's
 restart-intensity and generation checks.
 
 Host regressions cover exceptions before any visible side effect and exceptions
