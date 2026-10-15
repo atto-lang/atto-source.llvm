@@ -6,6 +6,8 @@
 #include "oreslang/frontend/Parser.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <unordered_map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -116,6 +118,48 @@ inline std::string emit_experimental_hir_v1(const Program& program) {
             + hir_v1_expr_json(*fn.result, 0, nodes) + "}";
     }
     out += "]}";
+    // HIR v1 requires a closed, acyclic, arity-correct call graph.
+    // Native compiler admission is not automatically the same as HIR v1
+    // admission; reject instead of exporting invalid HIR.
+    std::unordered_map<std::string, const Function*> definitions;
+    for (const auto& fn : program.functions) definitions.emplace(fn.name, &fn);
+    std::unordered_map<std::string, std::unordered_set<std::string>> edges;
+    std::function<void(const Expression&, std::unordered_set<std::string>&)> calls;
+    calls = [&](const Expression& expr, std::unordered_set<std::string>& callees) {
+        switch (expr.kind) {
+            case Expression::Kind::Call: {
+                const auto found = definitions.find(expr.name);
+                if (found == definitions.end() ||
+                    found->second->parameters.size() != expr.arguments.size()) {
+                    throw unsupported_hir_v1("unknown callee or wrong call arity");
+                }
+                callees.insert(expr.name);
+                for (const auto& arg : expr.arguments) calls(*arg, callees);
+                return;
+            }
+            case Expression::Kind::Add:
+            case Expression::Kind::Subtract:
+            case Expression::Kind::Multiply:
+                calls(*expr.left, callees);
+                calls(*expr.right, callees);
+                return;
+            default: return;
+        }
+    };
+    for (const auto& fn : program.functions) {
+        calls(*fn.result, edges[fn.name]);
+    }
+    std::unordered_set<std::string> visiting, done;
+    std::function<void(const std::string&)> check_cycle;
+    check_cycle = [&](const std::string& name) {
+        if (done.count(name)) return;
+        if (!visiting.insert(name).second)
+            throw unsupported_hir_v1("recursive function call graph");
+        for (const auto& callee : edges.at(name)) check_cycle(callee);
+        visiting.erase(name);
+        done.insert(name);
+    };
+    for (const auto& fn : program.functions) check_cycle(fn.name);
     if (out.size() > 1'048'576) throw unsupported_hir_v1("IR exceeds 1 MiB");
     return out + "\n";
 }
