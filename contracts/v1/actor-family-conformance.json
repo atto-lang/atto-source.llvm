@@ -1263,6 +1263,20 @@
       "description": "a cancelled unary ticket is checked before starting middleware, and cancellation during execution fences late replies",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-179",
+      "expected": "reject",
+      "description": "untyped supervisor procedural middleware cannot synthesize successful application Outcome without child",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-180",
+      "expected": "reject",
+      "description": "untyped supervisor cannot replace successful Outcome returned by child; exact identity forwarding and explicit 4xx/5xx rejection remain allowed",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
