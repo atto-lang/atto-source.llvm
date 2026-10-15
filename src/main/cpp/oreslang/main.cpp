@@ -2,19 +2,18 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
-#include <cstdlib>
-#include <fstream>
 #include <algorithm>
+#include <fstream>
+#include <functional>
+#include <iostream>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <functional>
-#include <string_view>
-#include <iostream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
-
+#include <array>
+#include <string_view>
 
 // Reject malformed Unicode (overlong encodings, surrogates, truncated input and
 // code points above U+10FFFF) and binary NUL before native parser admission.
@@ -53,6 +52,8 @@ static void require_valid_source_utf8(std::string_view source) {
         i += continuation_count + 1;
     }
 }
+
+
 
 // flags-2-env exports these variables using .cli-flags.toml. Read them without
 // depending on an ambient TOML parser in the compiler (the upstream wrapper
