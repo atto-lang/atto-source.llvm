@@ -289,3 +289,37 @@ Host regressions cover exceptions before any visible side effect and exceptions
 *after* recording a callback side effect. In both cases there is no second
 invocation of the terminal callback for the same child. Real native scheduler
 integration, LLVM guest lowering, and exact-head CI execution are still pending.
+
+## Queued NOTICE incarnation identity and stale restart fencing (October 15, 2026)
+
+A valid `DirectChildPermit` prevents an obsolete actor generation from
+*publishing* a new CONTROL event, but it does not by itself distinguish a
+previously **queued** event from a replacement child using the same opaque ID.
+
+`ActorFailureControlNotice` now starts with two zero-valued, host-owned
+metadata fields. On a successful CONTROL ring admission, the inbox stamps
+the immutable-to-consumers value with its unique inbox incarnation and the
+child's exact registration generation. Rejected/overflowed offers are not
+stamped; a caller cannot republish a previously delivered stamped notice.
+
+Before treating a dequeued child event as belonging to a **current** child,
+the host must pass that event and its trusted child-registration permit to
+`belongs_to_current_child(notice, permit)`. This checks the tagged inbox,
+generation, actor and supervisor identities, current registration and
+nonretirement under the same lock as publication. An event enqueued by an
+old child remains available as historical, data-only audit metadata, but
+**must not authorize a restart of a newer child** with the same ID.
+
+Neither numeric tag is a capability and neither may be copied into a guest
+error object or transported as an authorization token. Real scheduler
+integration must retain the permit in trusted actor lifecycle state and
+enforce this check at the point of making a restart decision.
+
+The host test covers enqueue-old / unregister-old / register-replacement /
+enqueue-new / drain-both, rejection of republishing an already-admitted
+notice, and refusal to associate the retired generation with the new child.
+
+**Verification limitation:** these changes are committed host-C++ semantics,
+not proof that the LLVM guest compiler emits typed Error effects or that a
+production native scheduler calls this hook. Exact-head native CTest,
+ASan/UBSan and end-to-end actor execution remain blocked on executable CI.
