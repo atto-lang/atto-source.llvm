@@ -1437,6 +1437,19 @@ if(BUILD_TESTING)
     add_test(NAME native_deterministic_graph_arena COMMAND oreslang-deterministic-graph-arena-test)
     # Independent actor-owned native heap tests are portable (no Linux syscalls).
     find_package(Threads REQUIRED)
+    # Zero-heap-allocation admission gate: shared pointer/FFI reads may never
+    # overlap mutation or retirement, even when admission races on two threads.
+    add_executable(oreslang-actor-heap-borrow-mutation-test
+        tests/actor_heap_borrow_mutation_gate_test.cpp)
+    target_include_directories(oreslang-actor-heap-borrow-mutation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-heap-borrow-mutation-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-heap-borrow-mutation-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_pointer_loan_mutation_exclusion
+        COMMAND oreslang-actor-heap-borrow-mutation-test)
+    set_tests_properties(native_actor_pointer_loan_mutation_exclusion
+        PROPERTIES TIMEOUT 20)
     add_executable(oreslang-actor-heap-test tests/actor_heap_test.cpp)
     target_include_directories(oreslang-actor-heap-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
