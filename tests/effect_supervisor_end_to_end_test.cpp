@@ -1,4 +1,5 @@
 #include "oreslang/runtime/EffectSupervisorBridge.hpp"
+#include "oreslang/runtime/ActorLocalFailurePolicy.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,22 @@ using oreslang::SupervisorFailureLane;
 
 EffectStatus return_effect(void* value) noexcept {
     return *static_cast<EffectStatus*>(value);
+}
+
+// Standalone host-policy hooks, not emitted Oreslang guest code.
+oreslang::ActorLocalHookReply acknowledge_throw(void* value, EffectStatus) noexcept {
+    ++*static_cast<int*>(value);
+    return {oreslang::ActorLocalResolution::Handled, {EffectKind::Return, 0}};
+}
+
+oreslang::ActorLocalHookReply decline_throw(void* value, EffectStatus) noexcept {
+    ++*static_cast<int*>(value);
+    return {oreslang::ActorLocalResolution::Escalate, {EffectKind::Return, 0}};
+}
+
+oreslang::ActorLocalHookReply panic_in_throw_handler(void* value, EffectStatus) noexcept {
+    ++*static_cast<int*>(value);
+    return {oreslang::ActorLocalResolution::Handled, {EffectKind::Panic, 99}};
 }
 
 struct Hooks final : SupervisorControlTurn::Hooks {
@@ -162,5 +179,62 @@ int main() {
     CHECK(parent.pending_count() == 0);
     parent.retire_child(clean);
     CHECK(parent.admit_turn(hooks, false) == Admitted::None);
+    CHECK(parent.reserved_count() == 0);
+
+    // The local hook executes on the failing actor before the supervisor
+    // terminal bridge. A handled throw produces no parent CONTROL event.
+    int local_calls = 0;
+    const Key handled{"child-locally-handled", 6};
+    parent.reserve_child(handled);
+    auto local = oreslang::dispatch_actor_local_unhandled(
+        {EffectKind::Throw, 61}, &local_calls, acknowledge_throw, nullptr);
+    CHECK(local.hook_invoked && local.handled);
+    CHECK(local.outgoing.kind == EffectKind::Return);
+    CHECK(!EffectSupervisorBridge::publish_terminal(
+        parent, handled, local.outgoing, "handled in owning actor"));
+    parent.retire_child(handled);
+    CHECK(local_calls == 1 && !parent.urgent());
+
+    // A callback that declines cannot accidentally turn the original
+    // failure into success simply because the callback returned normally.
+    const Key declined{"child-declined", 7};
+    parent.reserve_child(declined);
+    local = oreslang::dispatch_actor_local_unhandled(
+        {EffectKind::Throw, 62}, &local_calls, decline_throw, nullptr);
+    CHECK(local.hook_invoked && !local.handled);
+    CHECK(local.outgoing.kind == EffectKind::Throw && local.outgoing.code == 62);
+    CHECK(EffectSupervisorBridge::publish_terminal(
+        parent, declined, local.outgoing, "declined guest throw"));
+    CHECK(parent.admit_turn(hooks, false) == Admitted::Control);
+    CHECK(hooks.last == SupervisorFailureLane::Kind::Panic);
+    CHECK(hooks.last_origin == SupervisorFailureLane::Kind::Throw);
+    CHECK(hooks.last_code == 62);
+
+    // PANIC cannot be consumed by on_throw, including one returning Handled.
+    const Key bypass{"child-panicked", 8};
+    parent.reserve_child(bypass);
+    const int before_bypass = local_calls;
+    local = oreslang::dispatch_actor_local_unhandled(
+        {EffectKind::Panic, 63}, &local_calls, acknowledge_throw, nullptr);
+    CHECK(!local.hook_invoked && !local.handled);
+    CHECK(local_calls == before_bypass);
+    CHECK(EffectSupervisorBridge::publish_terminal(
+        parent, bypass, local.outgoing, "direct panic"));
+    CHECK(parent.admit_turn(hooks, false) == Admitted::Control);
+    CHECK(hooks.last_origin == SupervisorFailureLane::Kind::Panic);
+    CHECK(hooks.last_code == 63);
+
+    // A callback panic is terminal even when the callback claims Handled.
+    const Key callback_panic{"child-callback-panic", 9};
+    parent.reserve_child(callback_panic);
+    local = oreslang::dispatch_actor_local_unhandled(
+        {EffectKind::Throw, 64}, &local_calls, panic_in_throw_handler, nullptr);
+    CHECK(local.hook_invoked && !local.handled);
+    CHECK(local.outgoing.kind == EffectKind::Panic && local.outgoing.code == 99);
+    CHECK(EffectSupervisorBridge::publish_terminal(
+        parent, callback_panic, local.outgoing, "callback panic"));
+    CHECK(parent.admit_turn(hooks, false) == Admitted::Control);
+    CHECK(hooks.last == SupervisorFailureLane::Kind::Panic);
+    CHECK(hooks.last_code == 99);
     CHECK(parent.reserved_count() == 0);
 }
