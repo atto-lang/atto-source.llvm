@@ -703,6 +703,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
     # New unary/stream/network actor declarations may not be silently lowered
     # to the old fixed-int on_message native actor subset.
+    oreslang_contract_test(native_actor_middleware_fails_closed source-actor-middleware-unsupported.ores
+        --diagnostic "native @ActorMiddleware requires typed actor-turn middleware")
+    oreslang_contract_test(native_supervisor_middleware_fails_closed source-supervisor-middleware-unsupported.ores
+        --diagnostic "native @SupervisorMiddleware requires trusted supervisor")
     oreslang_contract_test(native_unary_role_fails_closed source-unary-role-unsupported.ores
         --diagnostic "requires typed unary/stream source dispatch")
     oreslang_contract_test(native_stream_role_fails_closed source-stream-role-unsupported.ores
