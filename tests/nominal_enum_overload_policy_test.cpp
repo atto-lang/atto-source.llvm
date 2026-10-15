@@ -46,6 +46,7 @@ int main() {
     REQUIRE(!eligibleEnum({{PayloadLayout::PrimitiveTuple, {"int", "Any"}}}));
     REQUIRE(!eligibleEnum({{PayloadLayout::Unit, {"int"}}}));
     REQUIRE(!eligibleEnum({{PayloadLayout::Primitive, {"int", "bool"}}}));
+    REQUIRE(!eligibleEnum({{static_cast<PayloadLayout>(99), {"int"}}}));
 
     Signature color = signature("go", {
         {Kind::Enum, "unit::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
@@ -88,6 +89,23 @@ int main() {
     rejects([&] { (void)signature("go", tooManyParameters, eligibleIds); });
     std::vector<Signature> tooManyCandidates(MaxSameArityCandidates + 1, color);
     rejects([&] { (void)select(tooManyCandidates, {{0, "unit::Color"}}); });
+
+    // A caller cannot bypass the signature factory's static bounds by
+    // constructing the exported aggregate directly.
+    Signature excessive{"go", std::vector<Position>(
+        MaxOverloadArity + 1, Position{Kind::Enum, "unit::Color"})};
+    rejects([&] { (void)compare(excessive, arity1); });
+    rejects([&] { (void)select({excessive}, {}); });
+    Signature invalidPrimitive{"go", {{Kind::Primitive, "Any"}}};
+    Signature unqualifiedEnum{"go", {{Kind::Enum, "Color"}}};
+    Signature missingId{"go", {{Kind::Enum, ""}}};
+    Signature unknownKind{"go", {{static_cast<Kind>(99), "unit::Color"}}};
+    rejects([&] { (void)select({invalidPrimitive}, {}); });
+    rejects([&] { (void)select({unqualifiedEnum}, {}); });
+    rejects([&] { (void)select({missingId}, {}); });
+    rejects([&] { (void)select({unknownKind}, {}); });
+    rejects([&] { (void)signature("go",
+        {{static_cast<Kind>(99), "unit::Color"}}, eligibleIds); });
 
     rejects([&] { (void)select({color, mode}, {}); });
     rejects([&] { (void)select({color, mode}, {{0, "unknown::Color"}}); });
