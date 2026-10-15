@@ -6,6 +6,7 @@ int64. This test never treats unsupported classes/actors as generic support.
 """
 import argparse
 import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -83,26 +84,51 @@ pub fnc main(): int { return fixed(); }
 """, "forward or self-referential generic default"),
 }
 
-def load_shared_conformance():
-    contract = Path(__file__).resolve().parents[1] / "contracts/v1/generics-stage1/cases.json"
+_CASE_ID = re.compile(r"generics\.scalar\.[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+
+def load_shared_conformance(contract=None):
+    if contract is None:
+        contract = Path(__file__).resolve().parents[1] / "contracts/v1/generics-stage1/cases.json"
+    contract = Path(contract)
+    if contract.stat().st_size > 1_048_576:
+        raise AssertionError("generic conformance contract exceeds 1 MiB")
     payload = json.loads(contract.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != "1.0.0":
+    if not isinstance(payload, dict) or payload.get("schema_version") != "1.0.0":
         raise AssertionError("unsupported generic conformance contract schema")
+    if payload.get("scope") != "native-scalar-i64-only":
+        raise AssertionError("unsupported generic conformance scope")
     cases = payload.get("cases")
-    if not isinstance(cases, list):
-        raise AssertionError("generic conformance cases must be a list")
-    seen = set()
+    if not isinstance(cases, list) or not 1 <= len(cases) <= 256:
+        raise AssertionError("generic conformance cases must be a nonempty bounded list")
+    seen = set(VALID) | set(INVALID)
     valid, invalid = {}, {}
     for case in cases:
-        identifier = case["id"]
+        if not isinstance(case, dict):
+            raise AssertionError("generic conformance case must be an object")
+        identifier = case.get("id")
+        if not isinstance(identifier, str) or not _CASE_ID.fullmatch(identifier):
+            raise AssertionError(f"invalid generic conformance ID: {identifier!r}")
         if identifier in seen:
-            raise AssertionError(f"duplicate generic conformance ID: {identifier}")
+            raise AssertionError(f"duplicate or colliding generic conformance ID: {identifier}")
         seen.add(identifier)
-        source = case["source"]
-        if case["kind"] == "native_exit":
-            valid[identifier] = (source, case["expected_exit"])
-        elif case["kind"] == "diagnostic":
-            invalid[identifier] = (source, case["expected_substring"])
+        source = case.get("source")
+        if not isinstance(source, str) or not source.strip() or len(source) > 65_536 or "\x00" in source:
+            raise AssertionError(f"{identifier}: invalid or oversized generic source")
+        kind = case.get("kind")
+        if kind == "native_exit":
+            if set(case) != {"id", "kind", "source", "expected_exit"}:
+                raise AssertionError(f"{identifier}: invalid native_exit fields")
+            status = case["expected_exit"]
+            if type(status) is not int or not 0 <= status <= 255:
+                raise AssertionError(f"{identifier}: exit code must be an integer in 0..255")
+            valid[identifier] = (source, status)
+        elif kind == "diagnostic":
+            if set(case) != {"id", "kind", "source", "expected_substring"}:
+                raise AssertionError(f"{identifier}: invalid diagnostic fields")
+            diagnostic = case["expected_substring"]
+            if not isinstance(diagnostic, str) or not diagnostic.strip() or len(diagnostic) > 256 or "\x00" in diagnostic:
+                raise AssertionError(f"{identifier}: diagnostic must be a nonempty bounded string")
+            invalid[identifier] = (source, diagnostic)
         else:
             raise AssertionError(f"unsupported generic conformance case {identifier}")
     return valid, invalid
