@@ -156,12 +156,16 @@ def main():
     if args.diagnostic:
         require(compile_result.returncode == 1,
                 f"invalid source must produce a compiler diagnostic (exit 1), got {compile_result.returncode}")
-        require(args.diagnostic in compile_result.stderr, compile_result.stderr)
+        require(args.diagnostic in compile_result.stderr,
+                "expected compiler diagnostic was absent")
         require(not compile_result.stdout, "compiler emitted stdout after rejection")
         return
-    require(compile_result.returncode == 0, compile_result.stderr)
-    require(compile_result.stdout.startswith("; ModuleID"), compile_result.stdout)
-    require(not compile_result.stderr, compile_result.stderr)
+    require(compile_result.returncode == 0,
+            f"compiler failed with exit code {compile_result.returncode}")
+    require(compile_result.stdout.startswith("; ModuleID"),
+            "compiler output lacks an LLVM IR module header")
+    require(not compile_result.stderr,
+            "compiler emitted unexpected stderr")
     if args.ir:
         require(args.ir in ir_evidence_text(compile_result.stdout, args.ir),
                 "expected executable LLVM IR was absent (comments do not count): " + args.ir)
@@ -189,7 +193,7 @@ def main():
                 text=True, check=False, timeout=30,
             )
             require(assembled.returncode == 0,
-                    "positive LLVM IR failed object compilation: " + assembled.stderr)
+                    "positive LLVM IR failed object compilation")
             require(object_file.is_file() and object_file.stat().st_size > 0,
                     "Clang did not produce a nonempty native object")
     # Match a real IR *definition*, not a substring inside LLVM comments.
@@ -215,7 +219,7 @@ def main():
                 text=True, check=False, timeout=30,
             )
             require(assembled.returncode == 0,
-                    "library-only LLVM IR failed object compilation: " + assembled.stderr)
+                    "library-only LLVM IR failed object compilation")
             # Supplying a valid main must make the otherwise linkable library
             # succeed. Otherwise a diagnostic about a missing main can hide
             # *additional* unresolved library dependencies and pass falsely.
@@ -228,13 +232,13 @@ def main():
                 capture_output=True, text=True, check=False, timeout=30,
             )
             require(stub.returncode == 0,
-                    "main stub failed object compilation: " + stub.stderr)
+                    "main stub failed object compilation")
             control = subprocess.run(
                 [args.clang, object_file, stub_object, "-o", executable],
                 capture_output=True, text=True, check=False, timeout=30,
             )
             require(control.returncode == 0,
-                    "library failed positive link with main stub: " + control.stderr)
+                    "library failed positive link with main stub")
             link = subprocess.run(
                 [args.clang, object_file, "-o", executable],
                 capture_output=True, text=True, check=False, timeout=30,
@@ -260,7 +264,7 @@ def main():
                 )
             )
             require(missing_main is not None,
-                    "library link failed without a missing-main diagnostic: " + link.stderr)
+                    "library link failed without a missing-main diagnostic")
         return
     if args.run is None:
         return
@@ -279,17 +283,21 @@ def main():
             clang_cmd, input=compile_result.stdout, capture_output=True,
             text=True, check=False, timeout=30
         )
-        require(native.returncode == 0, native.stderr)
+        require(native.returncode == 0,
+                f"native link failed with exit code {native.returncode}")
         result = subprocess.run(
             [executable], capture_output=True, text=True, check=False, timeout=10
         )
         require(result.returncode == args.run,
-                f"native exit {result.returncode}, expected {args.run}: {result.stderr}")
+                f"native exit {result.returncode}, expected {args.run}")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (ContractFailure, OSError, subprocess.TimeoutExpired) as error:
+    except subprocess.TimeoutExpired:
+        print("contract test failed: subprocess timed out", file=sys.stderr)
+        sys.exit(1)
+    except (ContractFailure, OSError) as error:
         print(f"contract test failed: {error}", file=sys.stderr)
         sys.exit(1)

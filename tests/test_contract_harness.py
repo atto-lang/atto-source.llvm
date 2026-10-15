@@ -35,11 +35,13 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         return path
 
     def linker(self, *, exit_code=0, link_status=0, compile_status=0,
-               link_error="undefined reference to main", stub_link_status=0):
+               link_error="undefined reference to main", stub_link_status=0,
+               guest_stderr=""):
         path = self.root / "fake-clang"
         executable_contents = (
             "#!" + sys.executable + "\n"
             + "import sys\n"
+            + f"sys.stderr.write({guest_stderr!r})\n"
             + f"sys.exit({exit_code})\n"
         )
         path.write_text(
@@ -262,6 +264,57 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         self.assertNotEqual(
             self.run_contract(compiler, "--ir", "call i64 @bad").returncode, 0
         )
+
+    def test_runnable_inline_asm_literal_cannot_spoof_a_call(self):
+        # This IR compiles and returns 42 under real Clang, yet never calls
+        # @add. The inline asm string is just a native assembler comment.
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 "define i32 @main() {\n"
+                                 "entry:\n"
+                                 '  call void asm sideeffect "# call i64 @add", ""()\n'
+                                 "  ret i32 42\n"
+                                 "}\n")
+        clang = self.linker(exit_code=42)
+        p = self.run_contract(compiler, "--ir", "call i64 @add",
+                              "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("expected executable LLVM IR was absent", p.stderr)
+        self.assertEqual(self.run_contract(
+            compiler, "--ir", "ret i32 42", "--run", "42",
+            "--clang", str(clang)).returncode, 0)
+
+    def test_quoted_symbol_called_call_is_not_a_real_call(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 'define i32 @"call i64 @add"() { ret i32 42 }\n')
+        p = self.run_contract(compiler, "--ir", "call i64 @add")
+        self.assertNotEqual(p.returncode, 0)
+
+    def test_failure_does_not_echo_private_compiler_output(self):
+        secret = "private-source-SECRET-raw-ir"
+        compiler = self.compiler(stdout=secret)
+        p = self.run_contract(compiler)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("compiler output lacks an LLVM IR module header", p.stderr)
+        self.assertNotIn(secret, p.stderr)
+
+    def test_missing_expected_diagnostic_redacts_stderr(self):
+        secret = "private-source-SECRET-compiler-stderr"
+        compiler = self.compiler(status=1, stderr=secret)
+        p = self.run_contract(compiler, "--diagnostic", "expected bounded diagnostic")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("expected compiler diagnostic was absent", p.stderr)
+        self.assertNotIn(secret, p.stderr)
+
+    def test_wrong_guest_exit_does_not_echo_private_stderr(self):
+        secret = "private-source-SECRET-guest-stderr"
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "define i32 @main() { ret i32 42 }\n")
+        clang = self.linker(exit_code=41, guest_stderr=secret)
+        # The linked fake guest prints a sensitive sentinel on stderr.
+        p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("native exit 41, expected 42", p.stderr)
+        self.assertNotIn(secret, p.stderr)
 
     def test_positive_rejects_stderr_and_forbidden_abi(self):
         compiler = self.compiler(stdout="; ModuleID = 'good'\n",
