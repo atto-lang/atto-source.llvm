@@ -300,7 +300,7 @@ private:
                              || (third >= 0xa8 && third <= 0xae))) // U+2028..E
                         || (second == 0x81
                             && (third == 0xa0 // U+2060 WORD JOINER
-                                || (third >= 0xa6 && third <= 0xa9))); // U+2066..9
+                                || (third >= 0xa6 && third <= 0xaf))); // U+2066..F
             } else if (valid && width == 3 && first == 0xef) {
                 display_control = static_cast<unsigned char>(text[i + 1]) == 0xbb
                                && static_cast<unsigned char>(text[i + 2]) == 0xbf; // U+FEFF
