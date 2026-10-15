@@ -85,6 +85,10 @@ int main() {
     // Checked-i64 HIR must not claim safety for wrapping guest operations.
     program.functions[1].result = multiply(variable("count"), integer(43));
     rejects([&] { (void) emit_experimental_hir_v1(program); });
+    // The same unsafe-for-some-inputs source is legitimate when compiled with
+    // actual checked arithmetic: admission must no longer reject it.
+    const std::string checked_mode = emit_experimental_hir_v1(program, true);
+    assert(checked_mode.find("\"op\":\"mul\"") != std::string::npos);
     program.functions[1].result = multiply(integer(INT64_MAX), integer(2));
     rejects([&] { (void) emit_experimental_hir_v1(program); });
     program.functions[1].result = multiply(variable("count"), integer(1));
