@@ -76,6 +76,37 @@ llvm::Value* array_handle_address(const Expression& receiver,
     throw std::runtime_error("native Array<int> receiver is not an owned place");
 }
 
+// Emit overflow-safe i64 arithmetic only for an explicitly opted-in host
+// source unit. A failed operation produces a stable guest-visible diagnostic
+// and terminates with status 86; no poisoned arithmetic result is observable.
+llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
+                                      llvm::Type* i64,
+                                      llvm::Value* left, llvm::Value* right,
+                                      llvm::Intrinsic::ID intrinsic_id,
+                                      const char* name) {
+    llvm::Module* module = builder.GetInsertBlock()->getModule();
+    llvm::Function* checked = llvm::Intrinsic::getDeclaration(module, intrinsic_id, {i64});
+    llvm::Value* pair = builder.CreateCall(checked, {left, right}, name);
+    llvm::Value* overflow = builder.CreateExtractValue(pair, {1}, "checked.overflow");
+    llvm::Function* containing = builder.GetInsertBlock()->getParent();
+    llvm::LLVMContext& context = module->getContext();
+    llvm::BasicBlock* failed = llvm::BasicBlock::Create(context, "checked.i64.overflow", containing);
+    llvm::BasicBlock* success = llvm::BasicBlock::Create(context, "checked.i64.ok", containing);
+    builder.CreateCondBr(overflow, failed, success);
+    builder.SetInsertPoint(failed);
+    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+    llvm::Type* i8ptr = llvm::Type::getInt8PtrTy(context);
+    auto print = module->getOrInsertFunction("puts",
+        llvm::FunctionType::get(i32, {i8ptr}, false));
+    builder.CreateCall(print, {builder.CreateGlobalStringPtr("ORES_I64_OVERFLOW")});
+    auto terminate = module->getOrInsertFunction("exit",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i32}, false));
+    builder.CreateCall(terminate, {llvm::ConstantInt::get(i32, 86)});
+    builder.CreateUnreachable();
+    builder.SetInsertPoint(success);
+    return builder.CreateExtractValue(pair, {0}, "checked.value");
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -204,16 +235,25 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
+                return lower_checked_i64_binary(builder, i64, left, right,
+                        llvm::Intrinsic::sadd_with_overflow, "checked.add");
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
+                return lower_checked_i64_binary(builder, i64, left, right,
+                        llvm::Intrinsic::ssub_with_overflow, "checked.sub");
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
+                return lower_checked_i64_binary(builder, i64, left, right,
+                        llvm::Intrinsic::smul_with_overflow, "checked.mul");
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
