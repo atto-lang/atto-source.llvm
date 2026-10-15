@@ -192,12 +192,14 @@ inline std::string emit_experimental_hir_v1(const Program& program,
             if (p) out += ',';
             out += "{\"name\":\"" + arg.name + "\",\"type\":\"i64\"}";
         }
-        if (!checked_i64_runtime) (void)hir_v1_prove_checked_i64(*fn.result);
-        // The shared HIR verifier applies this budget PER function,
-        // not across all functions in the module.
+        // Enforce the structural, lexical-scope and per-function node
+        // budget BEFORE running conservative interval analysis. Otherwise an
+        // oversized unmarked tree could consume proof work, or report a
+        // misleading arithmetic diagnostic, before reaching the size gate.
         std::size_t nodes = 0;
-        out += "],\"result_type\":\"i64\",\"body\":"
-            + hir_v1_expr_json(*fn.result, 0, nodes, params) + "}";
+        const std::string body_json = hir_v1_expr_json(*fn.result, 0, nodes, params);
+        if (!checked_i64_runtime) (void)hir_v1_prove_checked_i64(*fn.result);
+        out += "],\"result_type\":\"i64\",\"body\":" + body_json + "}";
     }
     out += "]}";
     // HIR v1 requires a closed, acyclic, arity-correct call graph.
