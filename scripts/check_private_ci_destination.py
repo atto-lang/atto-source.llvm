@@ -7,6 +7,8 @@ actual available Actions capacity. It never copies files or contacts GitHub.
 """
 
 import argparse
+import os
+import stat
 from pathlib import Path
 import re
 import sys
@@ -27,21 +29,32 @@ def normalize_repository(value: str) -> str:
 
 
 def read_approved_repositories(policy_file: Path) -> set[str]:
+    # Pre-checks supply clear diagnostics; the fd-based O_NOFOLLOW open is
+    # the actual symlink-race authority. Read a bounded number of bytes from
+    # the opened descriptor, not from a pathname that could be swapped.
+    fd = -1
     try:
-        # A caller-controlled symlink (or special file such as a FIFO) can
-        # redirect/block an otherwise pinned policy pathname. Reject both
-        # before reading, and bound the approval manifest to 16 KiB.
         if policy_file.is_symlink():
             raise MirrorPolicyError("private CI allowlist must be a regular non-symlink file")
         if not policy_file.exists():
             raise MirrorPolicyError("cannot read the reviewed private CI allowlist")
-        if not policy_file.is_file():
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise MirrorPolicyError("secure no-follow private CI allowlist opening is unavailable")
+        fd = os.open(policy_file, os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0))
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise MirrorPolicyError("private CI allowlist must be a regular non-symlink file")
-        if policy_file.stat().st_size > 16 * 1024:
+        with os.fdopen(fd, "rb") as stream:
+            fd = -1  # fdopen owns and closes the descriptor from here onward
+            data = stream.read(16 * 1024 + 1)
+        if len(data) > 16 * 1024:
             raise MirrorPolicyError("private CI allowlist exceeds 16 KiB safety limit")
-        policy = policy_file.read_text(encoding="utf-8")
+        policy = data.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         raise MirrorPolicyError("cannot read the reviewed private CI allowlist") from exc
+    finally:
+        if fd != -1:
+            os.close(fd)
 
     approved: set[str] = set()
     for line_number, line in enumerate(policy.splitlines(), 1):
