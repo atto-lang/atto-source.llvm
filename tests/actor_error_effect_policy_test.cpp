@@ -2,10 +2,18 @@
 #include "oreslang/runtime/ActorFailureControl.hpp"
 #include "oreslang/runtime/ExceptionPolicy.hpp"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 
 using namespace oreslang::runtime;
+
+static_assert(saturated_control_count(
+        std::numeric_limits<std::size_t>::max() - 1, 10)
+        == std::numeric_limits<std::size_t>::max());
+static_assert(saturated_control_count(0, 16) == 16);
+static_assert(max_control_suppressed_nodes <= 16);
+static_assert(max_control_suppressed_depth <= 8);
 
 static_assert(failure_priority(FailureKind::HostFatal) >
               failure_priority(FailureKind::Panic));
