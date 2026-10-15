@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 8
     steps:
       - name: Checkout exact workflow commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned checkout v4
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
