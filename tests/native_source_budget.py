@@ -8,9 +8,11 @@ import tempfile
 LIMIT = 8 * 1024 * 1024
 
 
-def invoke(compiler: pathlib.Path, path: pathlib.Path) -> subprocess.CompletedProcess[str]:
+def invoke(
+    compiler: pathlib.Path, path: pathlib.Path, flags: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(compiler), str(path)],
+        [str(compiler), *flags, str(path)],
         capture_output=True,
         text=True,
         timeout=20,
@@ -71,7 +73,24 @@ def main() -> int:
                 raise SystemExit(f"FAIL: {label} was accepted or emitted IR")
             if "not valid UTF-8" not in rejected.stderr:
                 raise SystemExit(f"FAIL: {label} bypassed encoding admission")
-    print("native source input budget: byte boundary, invalid UTF-8 and NUL checks passed")
+        # For Cortex-M, enforce its 128 KiB policy *during* streaming, not
+        # after the generic host reader has admitted 8 MiB into memory.
+        cortex_flags = ("--target=thumbv7m-none-eabi",)
+        cortex_limit = 128 * 1024
+        cortex_exact = base / "cortex-exact-limit.ores"
+        cortex_exact.write_bytes(b" " * cortex_limit)
+        exact_result = invoke(compiler, cortex_exact, cortex_flags)
+        if "cortex-m source exceeds 128 KiB limit" in exact_result.stderr:
+            raise SystemExit("FAIL: exact Cortex-M limit rejected during reading")
+        for suffix in (b"x", b"\\xff"):
+            cortex_over = base / ("cortex-over-" + str(suffix[0]) + ".ores")
+            cortex_over.write_bytes(b" " * cortex_limit + suffix)
+            fail = invoke(compiler, cortex_over, cortex_flags)
+            if (fail.returncode == 0 or fail.stdout
+                    or "cortex-m source exceeds 128 KiB limit" not in fail.stderr):
+                raise SystemExit("FAIL: Cortex-M byte admission did not precede parsing/encoding")
+
+    print("native source input budget: byte boundary, invalid UTF-8 and NUL and Cortex-M boundary checks passed")
     return 0
 
 
