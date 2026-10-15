@@ -176,6 +176,7 @@ int main() {
     // supervisor's CONTROL inbox, even when the actor identity matches.
     ActorFailureControlInbox inbox("parent-1", 1);
     if (inbox.pending() != 0 || inbox.dropped() != 0) return 18;
+    if (!inbox.register_direct_child("actor-1")) return 63;
     if (!inbox.offer(raised, "actor-1")) return 19;
     if (inbox.pending() != 1) return 20;
     if (inbox.offer(panicked, "actor-1")) return 21;
@@ -210,6 +211,8 @@ int main() {
     // Fixed-size ring reuses slots after pop without duplicating or
     // reordering child notices, even after multiple wraparounds.
     ActorFailureControlInbox ring("parent-1", 2);
+    if (!ring.register_direct_child("actor-1")
+            || !ring.register_direct_child("actor-3")) return 64;
     const auto third = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "actor-3", "parent-1");
     if (!ring.offer(raised, "actor-1") || !ring.offer(panicked, "actor-1")) return 31;
@@ -229,6 +232,8 @@ int main() {
     // A retired supervisor cannot receive another child CONTROL notice;
     // unread notices are counted as dropped and cannot be resurrected.
     ActorFailureControlInbox retiring("parent-1", 2);
+    if (!retiring.register_direct_child("actor-1")
+            || !retiring.register_direct_child("actor-3")) return 65;
     if (!retiring.offer(raised, "actor-1") || !retiring.offer(panicked, "actor-1")) return 41;
     if (retiring.pending() != 2 || retiring.dropped() != 0) return 42;
     retiring.retire();
@@ -255,7 +260,34 @@ int main() {
         return 59;
     } catch (const std::invalid_argument&) {}
     if (authorized.pending() || authorized.dropped()) return 60;
+    try {
+        (void)authorized.offer(raised, "actor-1");
+        return 66;
+    } catch (const std::invalid_argument&) {
+        // A matching pair of IDs is not sufficient without registration.
+    }
+    if (!authorized.register_direct_child("actor-1")) return 67;
+    if (authorized.register_direct_child("actor-1")) return 68;
     if (!authorized.offer(raised, "actor-1")) return 61;
+    if (!authorized.unregister_direct_child("actor-1")) return 69;
+    if (authorized.unregister_direct_child("actor-1")) return 70;
+    const auto admitted = authorized.try_pop();
+    if (!admitted || admitted->envelope().actor_id() != "actor-1") return 71;
+    try {
+        (void)authorized.offer(raised, "actor-1");
+        return 72;
+    } catch (const std::invalid_argument&) {}
+    try {
+        (void)authorized.register_direct_child("parent-1");
+        return 73;
+    } catch (const std::invalid_argument&) {}
+    try {
+        (void)authorized.register_direct_child("");
+        return 74;
+    } catch (const std::invalid_argument&) {}
+    authorized.retire();
+    if (authorized.register_direct_child("actor-1")) return 75;
+    if (authorized.pending() != 0 || !authorized.retired()) return 76;
 
     try {
         (void)ActorFailureControlNotice::from_guest_effect(
