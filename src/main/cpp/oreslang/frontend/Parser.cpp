@@ -1200,6 +1200,15 @@ private:
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
             }
+            // General Pointer<T> is not present in the native scalar ABI.
+            // Reject before parsing the operand or emitting any executable IR:
+            // a raw machine address would bypass provenance, loan identity,
+            // actor-domain fencing, and deterministic drop/cleanup.
+            if (operation == "ref" || operation == "unref" || operation == "deref") {
+                throw std::runtime_error("native rt " + operation +
+                    " requires provenance-checked Pointer<T> and lifetime/drop lowering at byte " +
+                    std::to_string(token_.offset));
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
