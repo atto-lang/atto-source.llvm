@@ -41,6 +41,44 @@ def ir_without_comments(source):
     return "\n".join(cleaned)
 
 
+def ir_function_definitions(source):
+    """Select real LLVM function definitions, excluding globals and metadata.
+
+    A --ir substring in @str = constant c"call i64 @foo" or a !dbg record
+    must not impersonate executable lowering. Multiline headers, single-line
+    definitions, quoted symbol names, and semicolons in IR strings are kept.
+    Clang checks syntax separately when --verify-object or --run is used.
+    """
+    selected = []
+    inside = False
+    saw_open = False
+    depth = 0
+    for line in ir_without_comments(source).splitlines():
+        if not inside:
+            if not re.match(r"^[ \\t]*define\\b", line):
+                continue
+            inside = True
+        selected.append(line)
+        quoted = False
+        escaped = False
+        for char in line:
+            if escaped:
+                escaped = False
+            elif quoted and char == "\\\\":
+                escaped = True
+            elif char == '"':
+                quoted = not quoted
+            elif not quoted and char == "{":
+                depth += 1
+                saw_open = True
+            elif not quoted and char == "}":
+                depth -= 1
+        if saw_open and depth == 0:
+            inside = False
+            saw_open = False
+    return "\\n".join(selected)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -93,7 +131,7 @@ def main():
     require(compile_result.stdout.startswith("; ModuleID"), compile_result.stdout)
     require(not compile_result.stderr, compile_result.stderr)
     if args.ir:
-        require(args.ir in ir_without_comments(compile_result.stdout),
+        require(args.ir in ir_function_definitions(compile_result.stdout),
                 "expected executable LLVM IR was absent (comments do not count): " + args.ir)
     if args.no_native_abi:
         require("oreslang_owned_i64_region_" not in compile_result.stdout,
