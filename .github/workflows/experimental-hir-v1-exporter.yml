@@ -41,6 +41,16 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Verified HIR source revision: $EXPECTED_SHA"
       - name: Compile header-only exporter (no LLVM libraries)
         run: |
           c++ -std=c++20 -Wall -Wextra -Isrc/main/cpp tests/experimental_hir_v1_exporter_test.cpp -o "$RUNNER_TEMP/experimental-hir-v1-test"
@@ -77,6 +87,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Verified LLVM source revision: $EXPECTED_SHA"
       - name: Locate an LLVM compiler toolchain
         run: |
           set -euo pipefail
