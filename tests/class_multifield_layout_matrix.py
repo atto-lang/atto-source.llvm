@@ -133,8 +133,66 @@ def main():
                         raise AssertionError((count, label, "alias must reject before any IR",
                                               rejected.returncode, rejected.stdout,
                                               rejected.stderr))
+                # Independent owners must NOT be conflated by an overbroad
+                # whole-object loan check. Include a real native write/read
+                # through two differently borrowed class instances.
+                if count in (2, 8, 16):
+                    independent = (f"define class Record as\n{fields}\nend\n"
+                                   f"fnc combine(borrow mut Record left, borrow Record right): int {{" 
+                                   f"\n  left.field0 = 40;"
+                                   f"\n  return left.field0 + right.field{count-1} + {3-count};\n}}\n"
+                                   f"pub fnc main(): int {{\n"
+                                   f"  let mut Record left = new Record();\n"
+                                   f"  let mut Record right = new Record();\n"
+                                   f"  return combine(rt borrow mut left, rt borrow right);\n}}\n")
+                    positive = directory / f"distinct-owner-{count}.ores"
+                    positive.write_text(independent)
+                    emitted = execute([args.compiler, str(positive)])
+                    if (emitted.returncode or emitted.stderr or
+                            "oreslang_owned_i64_region_" in emitted.stdout):
+                        raise AssertionError((count, "disjoint owners incorrectly conflict",
+                                              emitted.returncode, emitted.stderr))
+                    ll = directory / f"distinct-owner-{count}.ll"
+                    ll.write_text(emitted.stdout)
+                    exe = directory / f"distinct-owner-{count}"
+                    linked = execute([args.clang, "-O1", "-x", "ir", str(ll),
+                                      "-o", str(exe)], timeout=60)
+                    if linked.returncode:
+                        raise AssertionError((count, "distinct-owner link", linked.stderr))
+                    ran = execute([str(exe)], timeout=10)
+                    if ran.returncode != 42 or ran.stderr:
+                        raise AssertionError((count, "distinct-owner native outcome",
+                                              ran.returncode, ran.stderr))
+
+                    # An exclusive loan ends at the call boundary. Two
+                    # successive calls borrowing the same owner are legal.
+                    successive = source.replace(
+                        "  change(rt borrow mut record);\n",
+                        "  change(rt borrow mut record);\n"
+                        "  change(rt borrow mut record);\n")
+                    if successive == source:
+                        raise AssertionError((count, "missing call site in template"))
+                    subsequent = directory / f"successive-exclusive-{count}.ores"
+                    subsequent.write_text(successive)
+                    emitted = execute([args.compiler, str(subsequent)])
+                    if (emitted.returncode or emitted.stderr or
+                            "oreslang_owned_i64_region_" in emitted.stdout):
+                        raise AssertionError((count, "ended loan leaks into next call",
+                                              emitted.returncode, emitted.stderr))
+                    ll = directory / f"successive-exclusive-{count}.ll"
+                    ll.write_text(emitted.stdout)
+                    exe = directory / f"successive-exclusive-{count}"
+                    linked = execute([args.clang, "-O1", "-x", "ir", str(ll),
+                                      "-o", str(exe)], timeout=60)
+                    if linked.returncode:
+                        raise AssertionError((count, "successive-exclusive link", linked.stderr))
+                    ran = execute([str(exe)], timeout=10)
+                    if ran.returncode != 42 or ran.stderr:
+                        raise AssertionError((count, "successive-exclusive native outcome",
+                                              ran.returncode, ran.stderr))
+                    print(f"PASS: distinct-owner and successive-exclusive native cases for {count} fields")
                 print(f"PASS: {count}-field projections, shared/shared, 3 whole-owner overlap orders")
-    print("PASS: 16 layouts, interior projections, 15 shared/shared executions, 45 alias rejections")
+    print("PASS: 16 layouts, 29 interior projections, 15 shared/shared executions, 45 alias rejections, 6 owner-independence/lifetime executions")
 
 
 if __name__ == "__main__":
