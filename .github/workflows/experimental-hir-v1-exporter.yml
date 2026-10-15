@@ -5,6 +5,8 @@ on:
     paths:
       - "src/main/cpp/oreslang/frontend/ExperimentalHirV1.hpp"
       - "src/main/cpp/oreslang/main.cpp"
+      - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
+      - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
@@ -12,6 +14,8 @@ on:
     paths:
       - "src/main/cpp/oreslang/frontend/ExperimentalHirV1.hpp"
       - "src/main/cpp/oreslang/main.cpp"
+      - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
+      - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
@@ -39,5 +43,7 @@ jobs:
           assert doc["schema_version"] == "1.0.0-experimental"
           assert doc["module_id"] == "source"
           assert [f["name"] for f in doc["functions"]] == ["counter_response", "main"]
-          assert doc["functions"][0]["body"]["op"] == "mul"
+          assert doc["functions"][0]["body"] == {"kind": "var", "name": "count"}
+          assert doc["functions"][1]["body"]["kind"] == "call"
+          assert doc["functions"][1]["body"]["function"] == "counter_response"
           PY
