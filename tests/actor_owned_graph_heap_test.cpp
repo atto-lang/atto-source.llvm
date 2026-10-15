@@ -77,6 +77,16 @@ static void cycles_reclaim_without_gc() {
 }
 
 static void stale_generation_and_foreign_heap_rejected() {
+    // Heap identities must also differ ACROSS template instantiations.
+    // Per-template counters could previously reuse 1 for every arena shape.
+    using Small = ActorOwnedGraphHeap<3, 16, 1>;
+    using Large = ActorOwnedGraphHeap<5, 48, 2>;
+    const ActorHeapIdentity domain{1, 2, 3};
+    Small small(domain);
+    Large large(domain);
+    check(small.heap_id() != large.heap_id(),
+          "different native arena layouts reused one pointer namespace");
+
     using Heap = ActorOwnedGraphHeap<4, 16, 3>;
     ActorHeapIdentity alice{1, 11, 3};
     ActorHeapIdentity bob{1, 12, 3};
