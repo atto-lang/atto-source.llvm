@@ -1758,4 +1758,9 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_freestanding_source_object.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(cortexm_freestanding_source_object PROPERTIES TIMEOUT 90)
+    add_test(NAME cortexm_source_actor_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(cortexm_source_actor_admission PROPERTIES TIMEOUT 90)
 endif()
