@@ -120,7 +120,30 @@ static int check_retirement_race() {
     return 0;
 }
 
+// Retiring a supervisor must permanently close its CONTROL admission. A
+// different supervisor's inbox must remain independent under the same event.
+static int check_supervisor_retirement_isolation() {
+    ActorFailureControlInbox left("left", 1);
+    ActorFailureControlInbox right("right", 1);
+    const auto left_notice = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "left-child", "left");
+    const auto right_notice = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Panic, "right-child", "right");
+    if (!left.offer(left_notice, "left-child")) return 7;
+    if (!right.offer(right_notice, "right-child")) return 8;
+    left.retire();
+    left.retire();
+    if (left.pending() != 0 || left.dropped() != 1 || left.try_pop()) return 9;
+    if (left.offer(left_notice, "left-child") || left.dropped() != 2) return 10;
+    if (right.pending() != 1 || right.dropped() != 0 || right.retired()) return 11;
+    const auto received = right.try_pop();
+    if (!received || received->effect() != ActorExceptionalEffect::Panic
+            || received->envelope().actor_id() != "right-child") return 12;
+    return 0;
+}
+
 int main() {
     if (int status = check_concurrent_fifo()) return status;
-    return check_retirement_race();
+    if (int status = check_retirement_race()) return status;
+    return check_supervisor_retirement_isolation();
 }
