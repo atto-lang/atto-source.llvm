@@ -149,6 +149,7 @@ jobs:
                 extra=()
                 if [[ "$profile" == release ]]; then extra=(-DNDEBUG); fi
                 "$cxx" -std=c++20 -O"$opt" -Wall -Wextra -Werror \
+                  -fsanitize=undefined -fno-sanitize-recover=all \
                   "${extra[@]}" -Isrc/main/cpp \
                   tests/checked_i64_directive_test.cpp \
                   -o "$RUNNER_TEMP/checked-i64-$cxx-$opt-$profile"
