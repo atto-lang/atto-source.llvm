@@ -1221,6 +1221,48 @@
       "description": "unary actor request reply slot is correlated to original request and settles exactly once",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-173",
+      "expected": "reject",
+      "description": "supervisor around hook cannot fabricate typed Reply without actor child execution",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-174",
+      "expected": "reject",
+      "description": "supervisor around hook cannot replace exact downstream typed Reply after invoking next",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-175",
+      "expected": "runtime_target",
+      "description": "supervisor around hook forwards exact actor Reply by identity or returns explicit Reject",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-176",
+      "expected": "runtime_target",
+      "description": "response draft withHeader replaces an existing key case-insensitively without losing status or allowing protected headers",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-177",
+      "expected": "reject",
+      "description": "two sequential or concurrent unary bridge dispatch calls with same reply ticket execute at most one middleware chain",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-178",
+      "expected": "runtime_target",
+      "description": "a cancelled unary ticket is checked before starting middleware, and cancellation during execution fences late replies",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
