@@ -64,13 +64,24 @@ private:
     std::array<Slot, NodeCapacity> slots_{};
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
-    bool retired_ = false;
+    std::atomic<bool> retired_{false};
+    std::atomic<bool> retire_started_{false};
     bool dropping_ = false;
 
     void require_owner(ActorHeapIdentity requester) const {
         if (!(requester == owner_))
             throw std::logic_error("actor graph heap belongs to a different execution domain");
         if (retired_) throw std::logic_error("actor graph heap has retired");
+    }
+
+    // All payload reads take a shared admission lease, including metadata
+    // reads; retirement can never reclaim slots while one is in flight.
+    ActorHeapBorrowGate::Lease begin_read(ActorHeapIdentity actor) {
+        auto loan = borrow_gate_.acquire(actor);
+        if (!loan)
+            throw std::logic_error("actor graph read conflicts with mutation or retirement");
+        require_owner(actor);
+        return std::move(*loan);
     }
 
     void require_open_access(ActorHeapIdentity requester) const {
@@ -82,10 +93,13 @@ private:
     // Admission is atomic against FFI/continuation borrow acquisition.
     // The returned stack-only permission lasts through mutation and drop glue.
     ActorHeapBorrowGate::Mutation begin_mutation(ActorHeapIdentity actor) {
-        require_open_access(actor);
+        // Establish exclusive admission BEFORE inspecting retirement state.
+        // Otherwise a concurrent retire() could write retired_ during an
+        // unguarded read and reclaim memory before the mutation wins.
         auto admitted = borrow_gate_.try_mutation(actor);
         if (!admitted)
             throw std::logic_error("actor graph mutation conflicts with a live borrow or retirement");
+        require_open_access(actor);
         return std::move(*admitted);
     }
 
@@ -133,27 +147,31 @@ public:
     ActorOwnedGraphHeap(ActorOwnedGraphHeap&&) = delete;
     ActorOwnedGraphHeap& operator=(ActorOwnedGraphHeap&&) = delete;
     ~ActorOwnedGraphHeap() noexcept {
-        // The owning runtime must quiesce FFI/continuation pins before
-        // destroying the heap. Fail-stop instead of freeing pinned storage.
-        if (borrow_gate_.busy()) std::terminate();
+        // Seal atomically against new FFI/continuation pins first. Checking
+        // busy() before sealing would allow a new pin to race destruction.
+        // The runtime must already have stopped all external callers.
+        if (!borrow_gate_.seal_and_quiesced(owner_)) std::terminate();
         erase_all();
     }
 
     std::uint64_t heap_id() const noexcept { return heap_id_; }
     ActorHeapIdentity owner() const noexcept { return owner_; }
-    bool retired() const noexcept { return retired_; }
+    bool retired() const noexcept { return retired_.load(std::memory_order_acquire); }
 
     /** Supervisor/FFI must hold a lease before any reference survives a turn. */
     std::optional<ActorHeapBorrowGate::Lease> borrow(ActorHeapIdentity actor) {
-        require_owner(actor);
-        return borrow_gate_.acquire(actor);
+        // Acquire first: require_owner() previously raced retire() when the
+        // caller did not already hold an external native lifetime lease.
+        auto pin = borrow_gate_.acquire(actor);
+        if (pin) require_owner(actor);
+        return pin;
     }
-    std::size_t live_nodes(ActorHeapIdentity actor) const {
-        require_open_access(actor);
+    std::size_t live_nodes(ActorHeapIdentity actor) {
+        auto read = begin_read(actor);
         return active_nodes_;
     }
-    std::size_t live_edges(ActorHeapIdentity actor) const {
-        require_open_access(actor);
+    std::size_t live_edges(ActorHeapIdentity actor) {
+        auto read = begin_read(actor);
         return active_edges_;
     }
 
@@ -215,7 +233,7 @@ public:
 
     std::size_t copy_out(ActorHeapIdentity actor, Handle id, void* destination,
                          std::size_t capacity) {
-        require_open_access(actor);
+        auto read = begin_read(actor);
         Slot& slot = require_node(id);
         if (slot.drop) throw std::logic_error("owned objects are not raw byte payloads");
         if (capacity < slot.length || (slot.length && destination == nullptr))
@@ -249,7 +267,7 @@ public:
     }
 
     bool is_linked(ActorHeapIdentity actor, Handle source, Handle target) {
-        require_open_access(actor);
+        auto read = begin_read(actor);
         Slot& from = require_node(source);
         if (target.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
         for (std::size_t i = 0; i < from.link_count; ++i) {
@@ -298,11 +316,14 @@ public:
      * no new borrow may slip between the check and memory reclamation.
      */
     void retire(ActorHeapIdentity actor, const CarrierRetirementProof& proof) {
-        require_owner(actor);
-        if (proof.owner() != owner_)
+        if (actor != owner_ || proof.owner() != owner_)
             throw std::logic_error("retirement proof belongs to another actor generation");
         if (!borrow_gate_.seal_and_quiesced(actor))
-            throw std::logic_error("actor heap still has live borrow/FFI leases");
+            throw std::logic_error("actor heap still has live borrow/FFI/mutation leases");
+        bool expected = false;
+        if (!retire_started_.compare_exchange_strong(expected, true,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            throw std::logic_error("actor graph heap retirement already started");
         erase_all();
     }
 };
