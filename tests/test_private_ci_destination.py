@@ -41,6 +41,23 @@ class PrivateCIMirrorGateTests(unittest.TestCase):
             with self.subTest(policy=policy), self.assertRaises(MirrorPolicyError):
                 read_approved_repositories(self.manifest)
 
+    def test_symlinked_manifest_is_denied(self):
+        self.allow("test-org/private\n")
+        alias = Path(self.workspace.name) / "redirected-approvals.txt"
+        try:
+            alias.symlink_to(self.manifest)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symlinks unsupported in test environment: {exc}")
+        with self.assertRaisesRegex(MirrorPolicyError, "regular non-symlink"):
+            read_approved_repositories(alias)
+
+    def test_large_or_nonregular_manifest_is_denied(self):
+        self.allow("#" + "x" * (16 * 1024))
+        with self.assertRaisesRegex(MirrorPolicyError, "exceeds 16 KiB"):
+            read_approved_repositories(self.manifest)
+        with self.assertRaisesRegex(MirrorPolicyError, "regular non-symlink"):
+            read_approved_repositories(Path(self.workspace.name))
+
     def test_unreadable_policy_is_denied(self):
         with self.assertRaisesRegex(MirrorPolicyError, "cannot read"):
             read_approved_repositories(self.manifest)
