@@ -58,6 +58,33 @@ class SmokeAdmission(unittest.TestCase):
             self.assertEqual(smoke.git_checkout_sha(Path(tmp)), actual)
             self.assertRegex(actual, r"^[0-9a-f]{40}$")
 
+    def test_checkout_identity_refuses_modified_tracked_files(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            source = path / "compiler-source.txt"
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            source.write_text("original compiler source")
+            subprocess.run(["git", "-C", tmp, "add", "compiler-source.txt"], check=True)
+            subprocess.run(["git", "-C", tmp, "-c", "user.name=Conformance",
+                            "-c", "user.email=conformance@example.invalid",
+                            "commit", "-q", "-m", "compiler fixture"], check=True)
+            original = smoke.git_checkout_sha(path)
+            # Generated, untracked build outputs are not treated as source edits.
+            (path / "untracked-build-output").write_text("generated")
+            self.assertEqual(smoke.git_checkout_sha(path), original)
+            source.write_text("mutated compiler source")
+            with self.assertRaisesRegex(ValueError, "tracked checkout differs"):
+                smoke.git_checkout_sha(path)
+
+    def test_native_artifact_digest_detects_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "native-bin"
+            path.write_bytes(b"original")
+            before = smoke.sha256(path)
+            path.write_bytes(b"changed")
+            self.assertNotEqual(before, smoke.sha256(path))
+
     def test_fake_claimed_source_sha_is_rejected_before_compiler_use(self):
         import subprocess
         import sys
