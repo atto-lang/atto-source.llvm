@@ -82,14 +82,37 @@ inline void validateSignatureShape(const Signature& value) {
         if (position.id.empty())
             throw std::invalid_argument("empty overload position identity");
         if (position.kind == Kind::Primitive) {
-            if (!isPrimitive(position.id))
-                throw std::invalid_argument("unsupported overload primitive identity");
+            if (!isPrimitive(position.id) || position.id == "String")
+                throw std::invalid_argument("unsupported or noncanonical overload primitive identity");
         } else if (position.kind == Kind::Enum) {
-            const std::size_t separator = position.id.find("::");
+            // All aggregate-built keys must obey the same ABI identity grammar
+            // as Java Position and the native selector foundation.
+            if (position.id.size() > 1024
+                    || position.id.find("::::") != std::string::npos)
+                throw std::invalid_argument("invalid nominal enum identity");
+            const std::size_t separator = position.id.rfind("::");
             if (separator == std::string::npos || separator == 0
-                || separator + 2 == position.id.size()
-                || position.id.find("::::") != std::string::npos)
+                    || separator + 2 >= position.id.size())
                 throw std::invalid_argument("unqualified nominal enum identity");
+            const auto letter = [](unsigned char c) {
+                return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            };
+            const auto digit = [](unsigned char c) {
+                return c >= '0' && c <= '9';
+            };
+            for (unsigned char ch : position.id) {
+                if (!letter(ch) && !digit(ch) && ch != '_' && ch != '.'
+                        && ch != '/' && ch != '-' && ch != ':')
+                    throw std::invalid_argument("invalid enum identity character");
+            }
+            const auto first = static_cast<unsigned char>(position.id[separator + 2]);
+            if (!letter(first) && first != '_')
+                throw std::invalid_argument("invalid enum declaration identifier");
+            for (std::size_t k = separator + 3; k < position.id.size(); ++k) {
+                const auto ch = static_cast<unsigned char>(position.id[k]);
+                if (!letter(ch) && !digit(ch) && ch != '_')
+                    throw std::invalid_argument("invalid enum declaration identifier");
+            }
         } else {
             throw std::invalid_argument("unknown overload parameter kind");
         }
