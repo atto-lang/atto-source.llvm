@@ -69,6 +69,25 @@ int main() {
          {{Kind::Enum, "root::0Bad"}}}}); }, "forged enum identity");
     check(m::proveLocalSameArityFamilies({color, staticColor}, ids).empty(),
           "single-slot domains incorrectly treated as typed overloads");
+    denied([&] { (void)m::proveLocalSameArityFamilies(
+        std::vector<m::Slot>(m::MaxLocalMethodDeclarations + 1, color), ids); },
+        "large class must reject before candidate-family allocation");
+    const m::Slot longName{m::Domain::Instance,
+        Signature{std::string(m::MaxMethodNameBytes + 1, 'a'),
+            {{Kind::Enum, "root::Color"}}}};
+    denied([&] { (void)m::linkSymbol("root.Picker", longName); },
+        "overlong method name bypassed link ABI ceiling");
+    denied([&] { (void)m::proveLocalSameArityFamilies(
+        {longName, longName}, ids); },
+        "overlong method name bypassed proof admission");
+    denied([&] { (void)m::linkSymbol(
+        std::string(m::MaxMethodOwnerBytes + 1, 'a'), color); },
+        "overlong nominal class identity bypassed link ABI ceiling");
+    const std::string utf8Name(128, 'a');
+    check(m::linkSymbol("root.Picker", {m::Domain::Instance,
+        Signature{utf8Name, {{Kind::Enum, "root::Color"}}}}).size() > 0,
+        "valid bounded method identifier rejected");
+
     std::cout << "nominal method slot policy OK\n";
     return 0;
 }
