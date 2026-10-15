@@ -270,7 +270,8 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target,
+                                  bool experimental_checked_i64) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
@@ -330,6 +331,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error("reserved native entrypoint symbol collision");
     }
     llvm::Module module("oreslang-source", context);
+    if (experimental_checked_i64) {
+        if (wasm32_target || cortex_m_target)
+            throw std::runtime_error("checked i64 intrinsic requires host target");
+        module.addModuleFlag(llvm::Module::Warning, "ores.experimental.checked_i64", 1u);
+    }
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.
