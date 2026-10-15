@@ -87,7 +87,8 @@ llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
                                       llvm::Type* i64,
                                       llvm::Value* left, llvm::Value* right,
                                       llvm::Intrinsic::ID intrinsic_id,
-                                      const char* name, llvm::Value* status_ptr) {
+                                      const char* name, runtime::CheckedI64Failure::Operation operation,
+                                      llvm::Value* status_ptr) {
     if (!status_ptr) throw std::runtime_error("checked-i64 missing effect status pointer");
     llvm::Module* module = builder.GetInsertBlock()->getModule();
     llvm::Function* checked = llvm::Intrinsic::getDeclaration(module, intrinsic_id, {i64});
@@ -101,8 +102,8 @@ llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
     builder.SetInsertPoint(failed);
     // Signal a typed Throw; never terminate the process from a guest expression.
     builder.CreateStore(llvm::ConstantInt::get(
-        llvm::Type::getInt32Ty(context),
-        runtime::CheckedI64Failure::effect_code), status_ptr);
+        llvm::Type::getInt64Ty(context),
+        runtime::CheckedI64Failure::packed_status(operation)), status_ptr);
     builder.CreateRet(llvm::ConstantInt::get(i64, 0));
     builder.SetInsertPoint(success);
     return builder.CreateExtractValue(pair, {0}, "checked.value");
@@ -116,7 +117,7 @@ void propagate_pending_checked_i64(llvm::IRBuilder<>& builder,
                                    const RegionMoveLowering* moves,
                                    const char* phase) {
     if (!moves || !moves->checked_i64_status) return;
-    llvm::Value* status = builder.CreateLoad(builder.getInt32Ty(),
+    llvm::Value* status = builder.CreateLoad(builder.getInt64Ty(),
         moves->checked_i64_status, "checked.pending.effect");
     llvm::Function* containing = builder.GetInsertBlock()->getParent();
     auto* failed = llvm::BasicBlock::Create(
@@ -231,8 +232,8 @@ llvm::Value* lower(const Expression& expr,
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64")) {
                 return lower_checked_i64_binary(builder, i64,
                         llvm::ConstantInt::getSigned(i64, 0), value,
-                        llvm::Intrinsic::ssub_with_overflow, "checked.neg",
-                         moves ? moves->checked_i64_status : nullptr);
+                        llvm::Intrinsic::ssub_with_overflow, "checked.neg", runtime::CheckedI64Failure::Operation::Negate,
+                        moves ? moves->checked_i64_status : nullptr);
             }
             return builder.CreateNeg(value, "neg");
         }
@@ -272,8 +273,8 @@ llvm::Value* lower(const Expression& expr,
             propagate_pending_checked_i64(builder, moves, "operand");
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
-                        llvm::Intrinsic::sadd_with_overflow, "checked.add",
-                         moves ? moves->checked_i64_status : nullptr);
+                        llvm::Intrinsic::sadd_with_overflow, "checked.add", runtime::CheckedI64Failure::Operation::Add,
+                        moves ? moves->checked_i64_status : nullptr);
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
@@ -283,8 +284,8 @@ llvm::Value* lower(const Expression& expr,
             propagate_pending_checked_i64(builder, moves, "operand");
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
-                        llvm::Intrinsic::ssub_with_overflow, "checked.sub",
-                         moves ? moves->checked_i64_status : nullptr);
+                        llvm::Intrinsic::ssub_with_overflow, "checked.sub", runtime::CheckedI64Failure::Operation::Subtract,
+                        moves ? moves->checked_i64_status : nullptr);
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
@@ -294,8 +295,8 @@ llvm::Value* lower(const Expression& expr,
             propagate_pending_checked_i64(builder, moves, "operand");
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
-                        llvm::Intrinsic::smul_with_overflow, "checked.mul",
-                         moves ? moves->checked_i64_status : nullptr);
+                        llvm::Intrinsic::smul_with_overflow, "checked.mul", runtime::CheckedI64Failure::Operation::Multiply,
+                        moves ? moves->checked_i64_status : nullptr);
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
@@ -352,7 +353,7 @@ llvm::Value* lower(const Expression& expr,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
             if (checked) {
                 llvm::Value* effect = builder.CreateLoad(
-                    llvm::Type::getInt32Ty(builder.getContext()),
+                    llvm::Type::getInt64Ty(builder.getContext()),
                     moves->checked_i64_status, "checked.call.effect");
                 llvm::Function* owner = builder.GetInsertBlock()->getParent();
                 auto* failed = llvm::BasicBlock::Create(
@@ -630,7 +631,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
                 : class_types.at(param.class_name)->getPointerTo());
         if (experimental_checked_i64)
-            argument_types.push_back(llvm::Type::getInt32Ty(context)->getPointerTo());
+            argument_types.push_back(llvm::Type::getInt64Ty(context)->getPointerTo());
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
@@ -679,7 +680,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::Value* status_ptr = function->getArg(
                 static_cast<unsigned>(fn.parameters.size()));
             llvm::Value* pending = builder.CreateLoad(
-                llvm::Type::getInt32Ty(context), status_ptr, "checked.entry.effect");
+                llvm::Type::getInt64Ty(context), status_ptr, "checked.entry.effect");
             auto* failed = llvm::BasicBlock::Create(
                 context, "checked.entry.failed", function);
             auto* normal = llvm::BasicBlock::Create(
@@ -1592,17 +1593,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
         llvm::Value* checked_status = nullptr;
         if (experimental_checked_i64) {
-            checked_status = builder.CreateAlloca(i32, nullptr, "checked.effect.status");
-            builder.CreateStore(llvm::ConstantInt::get(i32, 0), checked_status);
+            checked_status = builder.CreateAlloca(i64, nullptr, "checked.effect.status");
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), checked_status);
         }
         llvm::Value* result = experimental_checked_i64
             ? builder.CreateCall(guest, {checked_status})
             : builder.CreateCall(guest);
         if (experimental_checked_i64) {
-            llvm::Value* effect = builder.CreateLoad(i32, checked_status, "checked.effect");
+            llvm::Value* effect = builder.CreateLoad(i64, checked_status, "checked.effect");
             auto* failed = llvm::BasicBlock::Create(context, "checked.effect.failed", host_main);
             auto* normal = llvm::BasicBlock::Create(context, "checked.effect.normal", host_main);
-            builder.CreateCondBr(builder.CreateICmpNE(effect, llvm::ConstantInt::get(i32, 0)),
+            builder.CreateCondBr(builder.CreateICmpNE(effect, llvm::ConstantInt::get(i64, 0)),
                                  failed, normal);
             builder.SetInsertPoint(failed);
             auto print = module.getOrInsertFunction("puts",
