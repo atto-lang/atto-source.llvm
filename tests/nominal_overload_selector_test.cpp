@@ -122,6 +122,23 @@ int main() {
     must_reject([&] { resolve_nominal_overload_static({{"root", "x", {integer}}}, {forged_discriminant}); });
     must_reject([&] { nominal_overload_link_key({"root", "x", {forged_enum}}); });
     must_reject([&] { nominal_overload_link_key({"root", "x", {forged_discriminant}}); });
+    // Aggregate-built signatures must not bypass the 64-position bound.
+    // These checks run in Release builds too (no assert-only validation).
+    const std::vector<std::optional<NominalTypeTag>> overlong(65, integer);
+    must_reject([&] {
+        validate_nominal_overload_family({{"root", "x", overlong}});
+    });
+    must_reject([&] {
+        resolve_nominal_overload_static({{"root", "x", {integer}}}, overlong);
+    });
+    must_reject([&] {
+        nominal_overload_link_key({"root", "x", overlong});
+    });
+    // Also distinguish a truly embedded NUL from a source spelling.
+    const std::string embedded_nul("x\\0y", 3);
+    check(embedded_nul.size() == 3 && embedded_nul[1] == '\\0');
+    check(nominal_overload_link_key({"root", embedded_nul, {a}})
+            != nominal_overload_link_key({"root", "x", {a}}));
     must_reject([&] {
         validate_nominal_overload_family({
             {"first", "x", {a}}, {"second", "x", {b}}
