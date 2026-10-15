@@ -52,6 +52,25 @@ def main():
              "a.send(1); stop a; return 43; }\n")
         good=compile_guest(a.compiler,source)
         verify(good.returncode==0,good.stderr)
+        # Exact runtime queue capacity: reject before emitting IR.
+        for count, admitted in ((16, True), (17, False)):
+            source.write_text(actor("Producer")+
+                "pub fnc main(): int { const a = spawn Producer(); "+
+                "a.send(1); "*count+" stop a; return 43; }\n")
+            outcome=compile_guest(a.compiler,source)
+            if admitted:
+                verify(outcome.returncode==0 and "oreslang_source_actor_send" in outcome.stdout,
+                       "16 queued messages must fit admitted mailbox: "+outcome.stderr)
+            else:
+                verify(outcome.returncode!=0 and not outcome.stdout and
+                       "mailbox capacity" in outcome.stderr.lower(),
+                       "17 queued messages must be rejected at compile-time: "+outcome.stderr)
+        # Separate static queues each admit sixteen messages, in total 32.
+        source.write_text(actor("Producer")+actor("Consumer")+
+            "pub fnc main(): int { const a = spawn Producer(); const b = spawn Consumer(); "+
+            "a.send(1); "*16+"b.send(2); "*16+"stop a; stop b; return 43; }\n")
+        balanced=compile_guest(a.compiler,source)
+        verify(balanced.returncode==0,balanced.stderr)
         source.write_text(actor("Producer").replace(
             "return total;", "return total + unsupported(1);")+
              "pub fnc main(): int { const a = spawn Producer(); "
