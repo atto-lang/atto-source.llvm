@@ -84,3 +84,18 @@ PR heads. Do not merge either PR on static headers or source admission alone.
   until executable guest inheritance + Error-only throw/raise/panic + transport
   and supervisor tests pass on both backends.
 
+
+## Host CONTROL allocation audit — October 14, 2026
+
+- Replaced the supervisor inbox's dynamically growing `std::deque` with a
+  fixed-capacity ring (`vector<optional<notice>>`) allocated in the constructor
+  *after* validating that capacity is within 1–256.
+- `offer(notice)` accepts a value copy before acquiring the mutex and moves
+  the owned value into an existing slot. It never grows a queue while the
+  CONTROL lock is held. `try_pop` moves a complete notice out before releasing
+  the lock. No guest object/callback enters either path.
+- Added native C++ test coverage for FIFO ordering, ring wraparound,
+  repeated reuse, full-capacity overflow and supervisor identity rejection.
+- **Unverified:** These additions have not passed an exact-head CTest build;
+  LLVM guest exception lowering and scheduler integration remain unimplemented.
+
