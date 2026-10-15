@@ -180,7 +180,13 @@ int main() {
     if (!inbox.offer(raised, "actor-1")) return 19;
     if (inbox.pending() != 1) return 20;
     if (inbox.offer(panicked, "actor-1")) return 21;
-    if (inbox.dropped() != 1) return 22;
+    // The first accepted terminal effect fences all later attempts from the
+    // same child, even if its parent has not consumed the original notice.
+    if (inbox.duplicate_rejections() != 1 || inbox.dropped() != 0) return 22;
+    if (!inbox.register_direct_child("actor-3")) return 82;
+    if (inbox.offer(ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "actor-3", "parent-1"), "actor-3")) return 83;
+    if (inbox.dropped() != 1) return 84;
     const auto received = inbox.try_pop();
     if (!received || received->effect() != ActorExceptionalEffect::Raise) return 23;
     if (received->envelope().actor_id() != "actor-1") return 24;
@@ -212,29 +218,40 @@ int main() {
     // reordering child notices, even after multiple wraparounds.
     ActorFailureControlInbox ring("parent-1", 2);
     if (!ring.register_direct_child("actor-1")
-            || !ring.register_direct_child("actor-3")) return 64;
+            || !ring.register_direct_child("actor-3")
+            || !ring.register_direct_child("actor-4")) return 64;
     const auto third = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "actor-3", "parent-1");
-    if (!ring.offer(raised, "actor-1") || !ring.offer(panicked, "actor-1")) return 31;
+    const auto fourth = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Panic, "actor-4", "parent-1");
+    if (!ring.offer(raised, "actor-1") || !ring.offer(fourth, "actor-4")) return 31;
     if (ring.offer(third, "actor-3") || ring.dropped() != 1) return 32;
     if (ring.try_pop()->effect() != ActorExceptionalEffect::Raise) return 33;
     if (!ring.offer(third, "actor-3")) return 34;
     if (ring.try_pop()->effect() != ActorExceptionalEffect::Panic) return 35;
     if (ring.try_pop()->envelope().actor_id() != "actor-3") return 36;
     if (ring.try_pop() || ring.pending() != 0 || ring.dropped() != 1) return 37;
+    // Recycle ring slots with fresh actor identities (not duplicate terminal
+    // notifications from the same child generation).
     for (int i = 0; i < 1024; ++i) {
-        if (!ring.offer(raised, "actor-1")) return 38;
+        const std::string child = "cycle-" + std::to_string(i);
+        const auto next = ActorFailureControlNotice::from_guest_effect(
+                ActorExceptionalEffect::Raise, child, "parent-1");
+        if (!ring.register_direct_child(child) || !ring.offer(next, child)) return 38;
         auto item = ring.try_pop();
-        if (!item || item->effect() != ActorExceptionalEffect::Raise) return 39;
+        if (!item || item->effect() != ActorExceptionalEffect::Raise
+                || item->envelope().actor_id() != child) return 39;
+        if (!ring.unregister_direct_child(child)) return 85;
     }
-    if (ring.pending() != 0 || ring.dropped() != 1) return 40;
+    if (ring.pending() != 0 || ring.dropped() != 1
+            || ring.duplicate_rejections() != 0) return 40;
 
     // A retired supervisor cannot receive another child CONTROL notice;
     // unread notices are counted as dropped and cannot be resurrected.
     ActorFailureControlInbox retiring("parent-1", 2);
     if (!retiring.register_direct_child("actor-1")
             || !retiring.register_direct_child("actor-3")) return 65;
-    if (!retiring.offer(raised, "actor-1") || !retiring.offer(panicked, "actor-1")) return 41;
+    if (!retiring.offer(raised, "actor-1") || !retiring.offer(third, "actor-3")) return 41;
     if (retiring.pending() != 2 || retiring.dropped() != 0) return 42;
     retiring.retire();
     if (!retiring.retired() || retiring.pending() != 0) return 43;
@@ -269,10 +286,14 @@ int main() {
     if (!authorized.register_direct_child("actor-1")) return 67;
     if (authorized.register_direct_child("actor-1")) return 68;
     if (!authorized.offer(raised, "actor-1")) return 61;
+    if (authorized.offer(panicked, "actor-1")) return 86;
+    if (authorized.duplicate_rejections() != 1 || authorized.dropped() != 0) return 87;
+    if (authorized.try_pop()->effect() != ActorExceptionalEffect::Raise) return 88;
+    if (authorized.offer(raised, "actor-1")) return 89; // replay after drain
+    if (authorized.duplicate_rejections() != 2) return 90;
     if (!authorized.unregister_direct_child("actor-1")) return 69;
     if (authorized.unregister_direct_child("actor-1")) return 70;
-    const auto admitted = authorized.try_pop();
-    if (!admitted || admitted->envelope().actor_id() != "actor-1") return 71;
+    if (authorized.try_pop()) return 71;
     try {
         (void)authorized.offer(raised, "actor-1");
         return 72;
