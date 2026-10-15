@@ -82,6 +82,31 @@ int main() {
     rejects([&] { (void) emit_experimental_hir_v1(program); });
     program.functions[1].parameters[0].name = "count";
 
+    // New parser metadata must not disappear when serializing HIR v1.
+    program.functions[0].generic_parameters.push_back({"T", ""});
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[0].generic_parameters.clear();
+
+    program.functions[1].parameters[0].generic_type = "T";
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[1].parameters[0].generic_type.clear();
+
+    program.functions[0].catch_binding = "e";
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[0].catch_binding.clear();
+
+    program.functions[0].result->type_arguments_present = true;
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[0].result->type_arguments_present = false;
+
+    program.functions[0].result->type_arguments.push_back({"", "int", false});
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[0].result->type_arguments.clear();
+
+    program.functions[0].result->argument_names = {"", ""};
+    rejects([&] { (void) emit_experimental_hir_v1(program, true); });
+    program.functions[0].result->argument_names.clear();
+
     // Checked-i64 HIR must not claim safety for wrapping guest operations.
     program.functions[1].result = multiply(variable("count"), integer(43));
     rejects([&] { (void) emit_experimental_hir_v1(program); });
