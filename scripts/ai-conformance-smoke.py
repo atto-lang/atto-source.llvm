@@ -253,16 +253,25 @@ def main():
                         if "define " not in ir_text or "main" not in ir_text:
                             case["passed"] = False
                         else:
-                            ir_file.write_text(ir_text)
+                            # Fingerprint the exact UTF-8 IR handed to Clang,
+                            # not an unverified reconstruction of compiler output.
+                            ir_file.write_bytes(ir_text.encode("utf-8"))
+                            case["llvm_ir_sha256"] = sha256(ir_file)
                             binary = temp / "app"
                             linked = run([str(clang), "-x", "ir", str(ir_file), "-o", str(binary)], 90, root)
                             case["link"] = linked
-                            if good(linked):
+                            if good(linked) and binary.is_file():
+                                case["linked_native_sha256"] = sha256(binary)
                                 executed = run([str(binary)], 10, root)
                                 case["execution"] = executed
+                                case["post_execution_native_sha256"] = (
+                                    sha256(binary) if binary.is_file() else None
+                                )
                                 case["passed"] = (
                                     not executed["timeout"] and not executed["output_truncated"]
                                     and executed["exit_code"] == 42
+                                    and case["linked_native_sha256"]
+                                        == case["post_execution_native_sha256"]
                                 )
                             else:
                                 case["passed"] = False
