@@ -84,6 +84,24 @@ int main() {
     identity_lane.retire_child(largest_allowed);
     CHECK(identity_lane.reserved_count() == 0);
 
+    // Deprecated bidi controls U+206A..U+206F must never survive in
+    // supervisor-visible text, just like U+2066..U+2069 isolates.
+    // These are formatting scalars, not printable failure diagnostics.
+    SupervisorFailureLane clean_control(1);
+    Key bidi_actor{"bidi-child", 0};
+    clean_control.reserve(bidi_actor);
+    const std::string injected = std::string("before")
+            + "\\xE2\\x81\\xAA" + "\\xE2\\x81\\xAF"
+            + "\\xE2\\x81\\xA9" + "after";
+    CHECK(clean_control.publish_preallocated(
+            bidi_actor, Kind::Panic, injected));
+    const auto scrubbed = clean_control.poll();
+    CHECK(scrubbed.has_value());
+    CHECK(scrubbed->summary == "before???after");
+    clean_control.ack(bidi_actor);
+    CHECK(clean_control.reserved_count() == 0);
+    CHECK(clean_control.pending_count() == 0);
+
     SupervisorControlTurn lane(3, 1);
     Hooks hooks;
     Key first{"child-one", 0}, second{"child-two", 0}, third{"child-three", 0};
