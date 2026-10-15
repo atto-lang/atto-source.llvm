@@ -149,6 +149,24 @@ int main() {
     expect_reject("mutual recursion", [](Program& p) {
         p.functions.front().result = call("main");
     });
+    expect_reject("invalid function identifier", [](Program& p) {
+        p.functions.front().name = "scale-invalid";
+    });
+    expect_reject("oversized function identifier", [](Program& p) {
+        p.functions.front().name = std::string(129, 'x');
+    });
+    expect_reject("invalid parameter identifier", [](Program& p) {
+        p.functions.front().parameters.front().name = "bad-param";
+    });
+    expect_reject("oversized parameter identifier", [](Program& p) {
+        p.functions.front().parameters.front().name = std::string(129, 'x');
+    });
+    expect_reject("numeric-first identifier", [](Program& p) {
+        p.functions.front().name = "9scale";
+    });
+    expect_reject("embedded NUL identifier", [](Program& p) {
+        p.functions.front().name = std::string("a\\0b", 3);
+    });
     expect_reject("duplicate overload", [](Program& p) {
         Function duplicate;
         duplicate.name = "scale";
