@@ -1,0 +1,8 @@
+define class Pair as
+  final int a: start;
+  constructor(int start, int start) { return; }
+end
+pub fnc main(): int {
+  let Pair p = new Pair(42, 42);
+  return p.a;
+}

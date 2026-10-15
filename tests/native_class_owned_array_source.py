@@ -13,16 +13,16 @@ import tempfile
 
 CLASS = """define class Shelf as
   pub let int number = 7;
-  let mut Array<int> first = new Array<int>();
-  let mut Array<int> second = new Array<int>();
+  pub let mut Array<int> first = new Array<int>();
+  pub let mut Array<int> second = new Array<int>();
 end
 """
 FOUR = """define class Four as
-  let mut Array<int> previous = new Array<int>();
-  let mut Array<int> following = new Array<int>();
-  let mut Array<int> values = new Array<int>();
-  let mut Array<int> occupied = new Array<int>();
-  let int ready = 0;
+  pub let mut Array<int> previous = new Array<int>();
+  pub let mut Array<int> following = new Array<int>();
+  pub let mut Array<int> values = new Array<int>();
+  pub let mut Array<int> occupied = new Array<int>();
+  pub let int ready = 0;
 end
 """
 POSITIVES = {
@@ -136,7 +136,7 @@ POSITIVES = {
     # The per-function source owner bound remains 64, not the number of
     # class variable names or transfer operations.
     "exact-64-owned-array-move": ("""define class Slot16 as
-""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+""" + "".join(f"  pub let mut Array<int> f{i} = new Array<int>();\n"
              for i in range(16)) + """end
 pub fnc main(): int {
   let mut Slot16 a = new Slot16();
@@ -152,7 +152,7 @@ pub fnc main(): int {
 }
 """, 42, 64),
     "exact-64-owned-array-limit": ("""define class Slot16 as
-""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+""" + "".join(f"  pub let mut Array<int> f{i} = new Array<int>();\n"
              for i in range(16)) + """end
 pub fnc main(): int {
   let mut Slot16 a = new Slot16();
@@ -339,7 +339,7 @@ pub fnc main(): int {
     # Before this guard, nested writes could silently target an unrelated
     # local object sharing the nested receiver's final field name.
     "nested-write-colliding-local": ("""define class Bucket as
-  let mut Array<int> items = new Array<int>();
+  pub let mut Array<int> items = new Array<int>();
 end
 define class Counter as
   pub let int size = 1;
@@ -476,12 +476,12 @@ pub fnc main(): int {
 }
 """, "Array<int> field is non-Copy and cannot escape"),
     "forbid-false-constructor": ("""define class Shelf as
-  let mut Array<int> items = new Array<int>(5);
+  pub let mut Array<int> items = new Array<int>(5);
 end
 pub fnc main(): int { return 42; }
 """, "expected ')'"),
     "forbid-untyped-array": ("""define class Shelf as
-  let Array<int> items = new Array<int>();
+  pub let Array<int> items = new Array<int>();
 end
 pub fnc main(): int { return 42; }
 """, "expected 'int'"),

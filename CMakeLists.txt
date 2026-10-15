@@ -1290,6 +1290,44 @@ if(BUILD_TESTING)
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}")
         set_tests_properties(class_native_1_to_16_field_layout_matrix PROPERTIES TIMEOUT 240)
+        # Free functions must never project private class state, whether
+        # by read, write, take or a nested Array<int> member operation.
+        oreslang_contract_test(reject_native_private_field_read
+            class-private-read-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(reject_native_private_field_write
+            class-private-write-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(reject_native_private_field_take
+            class-private-take-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(reject_native_private_array_size
+            class-private-array-size-reject.ores --diagnostic "private class field")
+        oreslang_contract_test(reject_native_final_field_write
+            class-final-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_final_field_take
+            class-final-take-reject.ores --diagnostic "cannot take final class field")
+        # Source-identical Java/GraalVM constructor parity and fail-closed
+        # malformed/effectful/owned-input negative controls.
+        oreslang_contract_test(native_scalar_constructor_arithmetic
+            class-scalar-constructor-arithmetic-native.ores --run 40 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_scalar_constructor_simple
+            class-constructor-init-unsupported.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_scalar_constructor_public
+            class-public-constructor-init-unsupported.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_scalar_constructor_arity
+            class-scalar-constructor-arity-reject.ores --diagnostic "native class constructor argument arity mismatch")
+        oreslang_contract_test(reject_scalar_constructor_effect_call
+            class-scalar-constructor-call-reject.ores --diagnostic "native class field initializer requires pure scalar")
+        oreslang_contract_test(reject_scalar_constructor_unknown
+            class-scalar-constructor-unknown-reject.ores --diagnostic "unknown parameter 'other'")
+        oreslang_contract_test(reject_scalar_constructor_duplicate
+            class-scalar-constructor-duplicate-reject.ores --diagnostic "duplicate native constructor parameter")
+        oreslang_contract_test(reject_scalar_constructor_owned_array
+            class-scalar-constructor-owned-reject.ores --diagnostic "native owned Array<int> constructor requires checked failure cleanup")
+        oreslang_contract_test(reject_scalar_constructor_effect_arg
+            class-scalar-constructor-args-effect-reject.ores --diagnostic "native scalar constructor argument requires pure integer expression")
+        oreslang_contract_test(reject_scalar_constructor_owned_int_arg
+            class-scalar-constructor-owned-arg-reject.ores --experimental-owned-int --diagnostic "native scalar constructor arguments require plain stack i64 values")
+        oreslang_contract_test(reject_scalar_constructor_effect_body
+            class-scalar-constructor-effectful-body-reject.ores --diagnostic "native scalar constructor body must be empty or contain only")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")

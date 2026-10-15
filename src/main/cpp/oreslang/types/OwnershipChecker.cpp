@@ -31,6 +31,7 @@ struct LocalOwnership {
     std::unordered_set<std::string> class_fields;
     std::unordered_set<std::string> class_array_fields;
     std::unordered_set<std::string> final_fields;
+    std::unordered_set<std::string> public_fields;
     // Primitive i64 class fields can be moved and later restored by a write.
     std::unordered_set<std::string> moved_fields;
 };
@@ -55,6 +56,12 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
     if (found == locals.end() || found->second.class_name.empty() ||
             found->second.class_fields.count(field) == 0)
         throw std::runtime_error("unknown class field or receiver at byte " + std::to_string(offset));
+    // The native subset has no instance methods. All member projections
+    // therefore originate outside the declaring class.
+    if (!found->second.public_fields.count(field))
+        throw std::runtime_error("ownership violation: private class field '" +
+                                 found->second.class_name + "." + field +
+                                 "' is not accessible at byte " + std::to_string(offset));
     if (found->second.moved)
         throw std::runtime_error("ownership violation: use-after-move class field at byte " +
                                  std::to_string(offset));
@@ -80,6 +87,8 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
     auto& owner = it->second;
     const bool valid = field.empty() ? owner.int_array :
         !owner.class_name.empty() && owner.class_array_fields.count(field);
+    if (!field.empty() && valid && !owner.public_fields.count(field))
+        reject(receiver, "ownership violation: private class field is not accessible");
     if (!valid || (!field.empty() && owner.moved_fields.count(field))) {
         if (field.empty())
             reject(receiver, write
@@ -398,16 +407,19 @@ void validate_i64_ownership(const Program& program) {
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_public;
     for (const auto& cls : program.classes) {
-        std::unordered_set<std::string> fields, arrays, finals;
+        std::unordered_set<std::string> fields, arrays, finals, published;
         for (const auto& field : cls.fields) {
             fields.insert(field.name);
             if (field.int_array) arrays.insert(field.name);
             if (field.final_field) finals.insert(field.name);
+            if (field.public_member) published.insert(field.name);
         }
         class_fields.emplace(cls.name, std::move(fields));
         class_arrays.emplace(cls.name, std::move(arrays));
         class_finals.emplace(cls.name, std::move(finals));
+        class_public.emplace(cls.name, std::move(published));
     }
     for (const auto& function : program.functions) {
         Locals locals;
@@ -432,6 +444,7 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
                 entry.final_fields = class_finals.at(param.class_name);
+                entry.public_fields = class_public.at(param.class_name);
             }
             locals.emplace(param.name, std::move(entry));
         }
@@ -445,9 +458,38 @@ void validate_i64_ownership(const Program& program) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.new_class) {
+                // Pure syntax alone is insufficient: experimental owned-int
+                // operands carry fallible region reads. Do not let one unwind
+                // an incompletely constructed object before drop glue exists.
+                std::function<void(const Expression&)> validate_scalar;
+                validate_scalar = [&](const Expression& expr) {
+                    using K = Expression::Kind;
+                    if (expr.kind == K::Integer) return;
+                    if (expr.kind == K::Variable) {
+                        const auto it = locals.find(expr.name);
+                        if (it == locals.end() || it->second.heap_owned ||
+                                it->second.int_array || !it->second.class_name.empty())
+                            reject(expr, "native scalar constructor arguments require plain stack i64 values");
+                        check_value(expr, locals, functions);
+                        return;
+                    }
+                    if (expr.kind == K::Negate && expr.left) {
+                        validate_scalar(*expr.left); return;
+                    }
+                    if ((expr.kind == K::Add || expr.kind == K::Subtract ||
+                            expr.kind == K::Multiply) && expr.left && expr.right) {
+                        validate_scalar(*expr.left);
+                        validate_scalar(*expr.right);
+                        return;
+                    }
+                    reject(expr, "native scalar constructor argument requires pure integer expression");
+                };
+                for (const auto& arg : binding.constructor_arguments)
+                    validate_scalar(*arg);
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
+                entry.public_fields = class_public.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
@@ -470,6 +512,7 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = source.class_fields;
                 entry.class_array_fields = source.class_array_fields;
                 entry.final_fields = source.final_fields;
+                entry.public_fields = source.public_fields;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
