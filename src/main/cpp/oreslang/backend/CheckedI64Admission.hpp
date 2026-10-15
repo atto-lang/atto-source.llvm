@@ -6,6 +6,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -18,6 +19,20 @@ namespace oreslang {
 // reports uncaught overflow as process status 86. Guest catch/recover, owner
 // cleanup, defer/finally, actor turns, and borrowed regions are not lowered.
 // Reject any source that requires those semantics before emitting LLVM IR.
+inline bool checked_i64_host_identifier(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 128) return false;
+    auto initial = [](char ch) noexcept {
+        return (ch >= 'a' && ch <= 'z') ||
+               (ch >= 'A' && ch <= 'Z') || ch == '_';
+    };
+    auto subsequent = [&](char ch) noexcept {
+        return initial(ch) || (ch >= '0' && ch <= '9');
+    };
+    if (!initial(name.front())) return false;
+    for (char ch : name.substr(1)) if (!subsequent(ch)) return false;
+    return true;
+}
+
 inline void verify_checked_i64_host_profile(const Program& program) {
     const auto reject = [](const char* reason) {
         throw std::runtime_error(std::string("checked-i64-v1: ") + reason);
@@ -29,7 +44,7 @@ inline void verify_checked_i64_host_profile(const Program& program) {
 
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& fn : program.functions) {
-        if (fn.name.empty() || !functions.emplace(fn.name, &fn).second)
+        if (!checked_i64_host_identifier(fn.name) || !functions.emplace(fn.name, &fn).second)
             reject("duplicate/empty function identity");
         // The standalone checked profile owns a single OS boundary, which
         // emits an authenticated libc diagnostic. Reject a guest symbol that
@@ -49,7 +64,7 @@ inline void verify_checked_i64_host_profile(const Program& program) {
             reject("main requires zero parameters");
         std::unordered_set<std::string> names;
         for (const auto& param : fn.parameters)
-            if (param.name.empty() || !names.insert(param.name).second ||
+            if (!checked_i64_host_identifier(param.name) || !names.insert(param.name).second ||
                 !param.class_name.empty() || param.mode != Parameter::Mode::Value)
                 reject("parameters must be distinct primitive i64 values");
     }
