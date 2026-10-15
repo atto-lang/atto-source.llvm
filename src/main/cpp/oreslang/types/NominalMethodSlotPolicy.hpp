@@ -20,6 +20,12 @@ namespace oreslang::types::overloads::methods {
 // are separately staged and MUST fail closed until completely implemented.
 enum class Domain { Instance, Static };
 
+// Hard resource ceilings for compiler-owned ASTs and exported symbols.
+// The Java proof uses the same UTF-8 byte limits.
+inline constexpr std::size_t MaxLocalMethodDeclarations = 4096;
+inline constexpr std::size_t MaxMethodNameBytes = 256;
+inline constexpr std::size_t MaxMethodOwnerBytes = 1024;
+
 struct Slot {
     Domain domain;
     Signature signature;
@@ -92,6 +98,10 @@ inline std::string linkSymbol(const std::string& ownerId, const Slot& slot) {
     if (ownerId.empty() || slot.signature.name.empty()) {
         throw std::invalid_argument("empty nominal method owner/name");
     }
+    if (ownerId.size() > MaxMethodOwnerBytes ||
+            slot.signature.name.size() > MaxMethodNameBytes) {
+        throw std::invalid_argument("nominal method link identity size bound exceeded");
+    }
     requireValidUtf8(ownerId);
     requireValidUtf8(slot.signature.name);
     validateSignatureShape(slot.signature);
@@ -113,15 +123,27 @@ inline std::string linkSymbol(const std::string& ownerId, const Slot& slot) {
 inline std::vector<Slot> proveLocalSameArityFamilies(
         const std::vector<Slot>& localMethods,
         const std::unordered_set<std::string>& certifiedEligibleEnumIds) {
+    if (localMethods.size() > MaxLocalMethodDeclarations) {
+        throw std::invalid_argument("nominal class method declaration limit exceeded");
+    }
     using Key = std::tuple<Domain, std::string, std::size_t>;
     std::map<Key, std::vector<Slot>> families;
     for (const auto& slot : localMethods) {
         // Public aggregates can bypass the signature factory.
         validateSignatureShape(slot.signature);
         (void) domainName(slot.domain);
+        if (slot.signature.name.size() > MaxMethodNameBytes) {
+            throw std::invalid_argument("nominal method name size bound exceeded");
+        }
         requireValidUtf8(slot.signature.name);
-        families[Key{slot.domain, slot.signature.name, slot.signature.arity()}]
-                .push_back(slot);
+        auto& family = families[Key{slot.domain, slot.signature.name,
+                                     slot.signature.arity()}];
+        // Reject as soon as the family exceeds the proof budget, rather
+        // than retaining an unbounded vector and checking only afterwards.
+        if (family.size() >= MaxSameArityCandidates) {
+            throw std::invalid_argument("nominal method family candidate bound exceeded");
+        }
+        family.push_back(slot);
     }
 
     std::vector<Slot> result;
