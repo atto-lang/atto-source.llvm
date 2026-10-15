@@ -14,8 +14,8 @@ namespace oreslang {
 
 /**
  * Per-actor owned finite typed scalar state, backed by the existing native
- * generation-fenced loan scope. This is a concrete native runtime substrate,
- * not yet LLVM source AST/codegen for state {} and handle_state.
+ * generation-fenced loan scope. The synchronous scalar LLVM state {} /
+ * handle_state profile uses the same permission contract.
  *
  * The caller supplies scheduler-verified actor/continuation IDs. No mutex or
  * actor carrier is held by this class across await; only synchronous callbacks
@@ -65,10 +65,19 @@ public:
         Access& operator=(const Access&) = delete;
         Value read(const std::string& name) const {
             verify();
+            if (!inferred_effects_.has(FunctionEffect::StateRead)) {
+                throw std::runtime_error("actor state read exceeds verified callback effects");
+            }
             return store_->at(name).initial;
         }
         void write(const std::string& name, Value value) {
             verify();
+            if (mode_ != CriticalStateMode::Write) {
+                throw std::runtime_error("read-only actor state loan cannot write");
+            }
+            if (!inferred_effects_.has(FunctionEffect::StateWrite)) {
+                throw std::runtime_error("actor state write exceeds verified callback effects");
+            }
             auto& slot = store_->at(name);
             if (!fits(slot.type, value)) {
                 throw std::invalid_argument("actor state field type mismatch");
@@ -85,8 +94,10 @@ public:
         }
     private:
         friend class ActorOwnedScalarState;
-        Access(ActorOwnedScalarState& owner, CriticalStateLoan& loan)
-            : owner_(&owner), loan_(&loan), store_(&owner.fields_) {}
+        Access(ActorOwnedScalarState& owner, CriticalStateLoan& loan,
+               CriticalStateMode mode, FunctionEffects inferred_effects)
+            : owner_(&owner), loan_(&loan), store_(&owner.fields_),
+              mode_(mode), inferred_effects_(inferred_effects) {}
         static bool fits(Type type, const Value& value) {
             switch (type) {
                 case Type::Int: return std::holds_alternative<std::int64_t>(value);
@@ -104,22 +115,24 @@ public:
         ActorOwnedScalarState* owner_;
         CriticalStateLoan* loan_;
         std::map<std::string, Field>* store_;
+        CriticalStateMode mode_;
+        FunctionEffects inferred_effects_;
     };
 
     template <class Callback>
     Value critical(std::uint64_t actor_id, std::uint64_t continuation_id,
-                   CriticalStateCallback metadata, FunctionEffects using_effects,
+                   CriticalStateCallback metadata, FunctionEffects with_effects,
                    Callback&& callback) {
         if (retired_ || actor_id != actor_id_) {
             throw std::runtime_error("stale or foreign actor state owner");
         }
         CriticalStateLoan loan;
         if (loan.begin(scope_, actor_id, continuation_id, metadata,
-                using_effects, verified_serial_actor_)
+                with_effects, verified_serial_actor_)
                 != CriticalStateAdmission::Accept) {
             throw std::runtime_error("critical actor state/effect admission denied");
         }
-        Access access(*this, loan);
+        Access access(*this, loan, metadata.state_mode, metadata.inferred);
         // Only a scalar Value is returnable: no borrowed loan can escape in
         // the result. Destruction of loan unwinds on all exceptional exits.
         Value result = callback(access);

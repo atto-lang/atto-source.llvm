@@ -1,4 +1,4 @@
-pub fnc main(): int using io {
+pub fnc main(): int with io {
   try {
     throw 7;
   } catch (err) {

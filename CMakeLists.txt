@@ -495,12 +495,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
         --diagnostic "native integer remainder unsupported")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
-    oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
-    oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
-    oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
-    oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_with_typed_effects using-pure-constant.ores --ir "ret i64 42")
+    oreslang_contract_test(native_with_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
+    oreslang_contract_test(native_with_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
+    oreslang_contract_test(native_legacy_using_state_signature_rejected critical-handle-state-using.ores --diagnostic "using acquires scoped capabilities")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
-    oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
+    oreslang_contract_test(native_actor_state_schema state-sealed-unsupported.ores --ir "oreslang_actor_Counter_init")
+
+    if(ORE_CLANG)
+        add_test(NAME native_with_using_state_capability_parity
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/with_using_state_parity.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_with_using_state_capability_parity PROPERTIES TIMEOUT 120)
+    endif()
 
     # Native OS ABI is i32 even though Oreslang int is represented as i64.
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores

@@ -10,6 +10,7 @@ int main() {
     FunctionEffects declared{static_cast<std::uint32_t>(FunctionEffect::StateRead)
             | static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
     CriticalStateCallback callback{};
+    callback.state_mode = CriticalStateMode::Write;
     callback.callback_critical = true;
     callback.one_state_parameter = true;
     callback.inferred = declared;
@@ -24,23 +25,42 @@ int main() {
     CHECK(ores_actor_state_ready_to_suspend(&state, 123)
             == ORES_ACTOR_STATE_BUSY_LOAN);
 
+    // Java forbids every nested sealed state loan. Native admission must
+    // reject them independently of the frontend, including same-turn calls.
     CriticalStateLoan nested;
     CHECK(nested.begin(state, 123, 900, callback, declared)
-            == CriticalStateAdmission::Accept);
-    CHECK(nested.token() != outer_token);
-    CHECK(outer.check() == ORES_ACTOR_STATE_OUT_OF_ORDER);
-    CHECK(nested.check() == ORES_ACTOR_STATE_OK);
-    CHECK(outer.end() == ORES_ACTOR_STATE_OUT_OF_ORDER);
-    CHECK(nested.end() == ORES_ACTOR_STATE_OK);
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(nested.last_scope_result() == ORES_ACTOR_STATE_BUSY_LOAN);
+    CHECK(!nested.active() && nested.token() == 0);
+    CHECK(state.generation == outer_token);
     CHECK(outer.check() == ORES_ACTOR_STATE_OK);
 
     CriticalStateLoan other_continuation;
     CHECK(other_continuation.begin(state, 123, 901, callback, declared)
-            == CriticalStateAdmission::ScopeDenied);
-    CHECK(other_continuation.last_scope_result() == ORES_ACTOR_STATE_REENTRANT);
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(other_continuation.last_scope_result() == ORES_ACTOR_STATE_BUSY_LOAN);
     CHECK(!other_continuation.active());
 
+    // Even a valid immutable READ outer scope cannot be escalated to WRITE
+    // via a nested native call on the same logical continuation.
+    auto read = callback;
+    read.callback_critical = false;
+    read.state_mode = CriticalStateMode::Read;
+    read.inferred = {static_cast<std::uint32_t>(FunctionEffect::StateRead)};
+    CHECK(outer.check() == ORES_ACTOR_STATE_OK);
     CHECK(outer.end() == ORES_ACTOR_STATE_OK);
+    CHECK(ores_actor_state_ready_to_suspend(&state, 123)
+            == ORES_ACTOR_STATE_OK);
+    CriticalStateLoan outer_read;
+    CHECK(outer_read.begin(state, 123, 900, read, declared)
+            == CriticalStateAdmission::Accept);
+    CriticalStateLoan upgraded;
+    CHECK(upgraded.begin(state, 123, 900, callback, declared)
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(!upgraded.active());
+    CHECK(outer_read.check() == ORES_ACTOR_STATE_OK);
+    CHECK(outer_read.end() == ORES_ACTOR_STATE_OK);
+
     CHECK(outer.check() == ORES_ACTOR_STATE_STALE);
     CHECK(ores_actor_state_ready_to_suspend(&state, 123)
             == ORES_ACTOR_STATE_OK);
@@ -53,8 +73,15 @@ int main() {
     CHECK(resumed.end() == ORES_ACTOR_STATE_OK);
 
     // Fail closed on invalid source contracts, before state-loan allocation.
+    auto forged_write = callback;
+    forged_write.callback_critical = false;
+    CriticalStateLoan forged;
+    CHECK(forged.begin(state, 123, 901, forged_write, declared)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    CHECK(!forged.active());
+
     auto missing = callback;
-    missing.callback_critical = false;
+    missing.state_mode = CriticalStateMode::None;
     CriticalStateLoan invalid;
     CHECK(invalid.begin(state, 123, 901, missing, declared)
             == CriticalStateAdmission::MissingCallbackCritical);

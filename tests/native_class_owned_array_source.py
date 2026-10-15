@@ -184,7 +184,7 @@ pub fnc main(): int {
   return d.f15.get(0);
 }
 """, 42, 64),
-    "class-constructor-effect-alloc": (CLASS + """pub fnc main(): int using alloc {
+    "class-constructor-effect-alloc": (CLASS + """pub fnc main(): int with alloc {
   let mut Shelf shelf = new Shelf();
   return shelf.number + 35;
 }
@@ -367,11 +367,11 @@ pub fnc main(): int {
             "oreslang_wasm_actor_init",
         )
     },
-    "class-allocation-must-declare-alloc": (CLASS + """pub fnc main(): int using state.read {
+    "class-allocation-must-declare-alloc": (CLASS + """pub fnc main(): int with state.read {
   let mut Shelf shelf = new Shelf();
   return shelf.number;
 }
-""", "owned allocation violates using signature without alloc"),
+""", "owned allocation violates with signature without alloc"),
     # Before this guard, nested writes could silently target an unrelated
     # local object sharing the nested receiver's final field name.
     "nested-write-colliding-local": ("""define class Bucket as

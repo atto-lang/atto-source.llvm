@@ -1,0 +1,23 @@
+define actor Counter as
+  state { count: int = 0; mirror: int = 0; }
+
+  set(int value): int with state.write {
+    return using state.write(critical |s| -> {
+      s.count = value;
+      s.mirror = value * 2;
+      return value;
+    });
+  }
+
+  increment(int value): int with state.read, state.write {
+    return self.handle_state(critical |s| -> {
+      s.count = s.count + value;
+      s.mirror = s.count * 2;
+      return s.mirror;
+    });
+  }
+
+  read(): int with state.read {
+    return using state.read(|s| -> s.count + s.mirror);
+  }
+end

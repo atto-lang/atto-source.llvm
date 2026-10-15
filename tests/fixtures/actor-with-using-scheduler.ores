@@ -1,0 +1,19 @@
+define actor Counter as
+  state { count: int = 0; mirror: int = 0; }
+
+  pub on_message(int amount): int with state.read, state.write {
+    return using state.write(critical |s| -> {
+      s.count = s.count + amount;
+      s.mirror = s.count * 2;
+      return s.mirror;
+    });
+  }
+end
+
+pub fnc main(): int {
+  const worker = spawn Counter();
+  worker.send(1);
+  worker.send(2);
+  stop worker;
+  return 43;
+}

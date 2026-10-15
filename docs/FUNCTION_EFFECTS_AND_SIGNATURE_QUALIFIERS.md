@@ -1,5 +1,7 @@
 # Function effects, `using`, `requires`, and signature qualifiers
 
+> Current native implementation: see [WITH_USING_NATIVE_PARITY.md](WITH_USING_NATIVE_PARITY.md). Signature effects use `with`; `using` is reserved for lexical capabilities. Historical prototype syntax below is superseded.
+
 **Status (2026-10-11): design / cross-backend contract, NOT a parser or typechecker implementation.**
 
 ## Grounded implementation audit

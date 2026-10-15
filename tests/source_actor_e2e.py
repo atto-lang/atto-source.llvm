@@ -20,6 +20,7 @@ def main():
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
+        ("actor-with-using-scheduler.ores", 1, 2, 6),
         ("source-actor-spawn-stop.ores", 1, 0, None),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.

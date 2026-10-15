@@ -1,1 +1,1 @@
-pub fnc main(): int using io, io { return 42; }
+pub fnc main(): int with io, io { return 42; }

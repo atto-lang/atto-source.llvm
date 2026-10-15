@@ -178,12 +178,18 @@ struct Function {
     bool exported = false;
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
+    // Canonical actor state callbacks are synchronous, nonescaping and sealed.
+    bool state_loan = false;
+    bool state_write_loan = false;
+    std::vector<std::string> state_initial_reads;
 };
 
 struct ActorDecl {
     std::string name;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
-    Function on_message; // exactly one synchronous pub on_message(int): int
+    Function on_message; // optional synchronous on_message(int): int for native spawn
+    bool scoped_state = false;
+    std::vector<Function> methods; // synchronous scalar state methods
     std::size_t offset = 0;
 };
 

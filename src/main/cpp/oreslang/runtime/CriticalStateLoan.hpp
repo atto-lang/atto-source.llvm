@@ -28,12 +28,21 @@ public:
                                  std::uint64_t actor_id,
                                  std::uint64_t continuation_id,
                                  const CriticalStateCallback& callback,
-                                 FunctionEffects declared_using,
+                                 FunctionEffects declared_with,
                                  bool verified_serial_actor = false) noexcept {
         if (active_) return CriticalStateAdmission::InvalidStateCallback;
         const auto approved = admit_critical_handle_state(
-                callback, declared_using, verified_serial_actor);
+                callback, declared_with, verified_serial_actor);
         if (approved != CriticalStateAdmission::Accept) return approved;
+        // Unlike the generic token-stack primitive, sealed actor state
+        // callbacks are never reentrant. Reject same-continuation nesting
+        // before minting another capability (including read -> write).
+        // This matches Java ActorStateContract and prevents authority
+        // upgrades through native runtime entrypoints.
+        if (state.active || state.depth != 0) {
+            last_scope_result_ = ORES_ACTOR_STATE_BUSY_LOAN;
+            return CriticalStateAdmission::NestedStateLoan;
+        }
         const auto entered = ores_actor_state_enter_continuation(
                 &state, actor_id, continuation_id, &token_);
         last_scope_result_ = entered;

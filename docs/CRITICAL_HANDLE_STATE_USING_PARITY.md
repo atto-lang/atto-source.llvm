@@ -1,5 +1,7 @@
 # Critical handle_state and using — shared Java/Graal and LLVM language contract
 
+> Current native implementation: see [WITH_USING_NATIVE_PARITY.md](WITH_USING_NATIVE_PARITY.md). Signature effects use `with`; `using` is reserved for lexical capabilities. Historical prototype syntax below is superseded.
+
 Status: **static/lower-level parity in progress; NOT executable guest actor-source
 parity**. Both compilers must eventually accept the same source programs, infer
 the same callback effects and enforce the same scheduler/borrow rules.

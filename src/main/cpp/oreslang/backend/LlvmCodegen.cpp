@@ -285,6 +285,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         if (source.actors.size() > 1)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
+            if (!actor.methods.empty() || actor.on_message.name.empty())
+                throw std::runtime_error("wasm32 actor guest requires one on_message method");
             if (actor.fields.empty() || actor.fields.size() > 16)
                 throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
             if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
@@ -475,9 +477,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             actorInits.emplace(actor.name, llvm::Function::Create(
                 llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false),
                 llvm::Function::ExternalLinkage, prefix + "init", module));
-            actorHandlers.emplace(actor.name, llvm::Function::Create(
-                llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "on_message", module));
+            if (!actor.on_message.name.empty())
+                actorHandlers.emplace(actor.name + ".on_message", llvm::Function::Create(
+                    llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
+                    llvm::Function::ExternalLinkage, prefix + "on_message", module));
+            for (const auto& method : actor.methods) {
+                std::vector<llvm::Type*> parameters{native_ptr, i64, i64};
+                parameters.insert(parameters.end(), method.parameters.size(), i64);
+                actorHandlers.emplace(actor.name + "." + method.name, llvm::Function::Create(
+                    llvm::FunctionType::get(i64, parameters, false),
+                    llvm::Function::ExternalLinkage, prefix + method.name, module));
+            }
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
@@ -554,7 +564,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& spawn : fn.actor_spawns) {
             llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
                 native_ptr);
-            llvm::Value* handler = builder.CreatePointerCast(actorHandlers.at(spawn.actor_type),
+            llvm::Value* handler = builder.CreatePointerCast(actorHandlers.at(spawn.actor_type + ".on_message"),
                 native_ptr);
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
@@ -1329,42 +1339,48 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         init.CreateRetVoid();
 
-        auto* handler = actorHandlers.at(actor.name);
-        llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", handler);
-        llvm::IRBuilder<> builder(entry);
-        auto args = handler->arg_begin();
-        llvm::Value* actorHeap = &*args++;
-        llvm::Value* currentDomain = &*args++;
-        llvm::Value* currentEpoch = &*args++;
-        llvm::Value* incoming = &*args++;
-        std::unordered_map<std::string, llvm::Value*> values, emptyFields;
-        const std::string param = actor.on_message.parameters[0].name;
-        llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
-        builder.CreateStore(incoming, pslot);
-        values.emplace(param, pslot);
-        for (std::size_t i=0; i<actor.fields.size(); ++i) {
-            const auto& field = actor.fields[i];
-            llvm::Value* value = builder.CreateCall(fieldRead, {
-                actorHeap, currentDomain, currentEpoch, llvm::ConstantInt::get(i64,i)},
-                field.name + ".read");
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
-            builder.CreateStore(value, slot);
-            values.emplace(field.name, slot);
+        std::vector<const Function*> methods;
+        if (!actor.on_message.name.empty()) methods.push_back(&actor.on_message);
+        for (const auto& method : actor.methods) methods.push_back(&method);
+        for (const auto* method : methods) {
+            auto* handler = actorHandlers.at(actor.name + "." + method->name);
+            llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", handler));
+            auto args = handler->arg_begin();
+            llvm::Value* actorHeap = &*args++;
+            llvm::Value* currentDomain = &*args++;
+            llvm::Value* currentEpoch = &*args++;
+            std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+            for (const auto& parameter : method->parameters) {
+                auto* slot = builder.CreateAlloca(i64, nullptr, parameter.name + ".slot");
+                builder.CreateStore(&*args++, slot);
+                values.emplace(parameter.name, slot);
+            }
+            for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                const auto& field = actor.fields[i];
+                const auto name = actor.scoped_state ? "@state." + field.name : field.name;
+                auto* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
+                // A write-only callback must not implicitly snapshot the state.
+                // Only reads before the first write require a heap fetch.
+                if (!actor.scoped_state || std::find(method->state_initial_reads.begin(),
+                        method->state_initial_reads.end(), field.name) != method->state_initial_reads.end()) {
+                    auto* value = builder.CreateCall(fieldRead, {actorHeap, currentDomain,
+                        currentEpoch, llvm::ConstantInt::get(i64, i)}, field.name + ".read");
+                    builder.CreateStore(value, slot);
+                }
+                values.emplace(name, slot);
+            }
+            for (const auto& write : method->actor_field_writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end() || !field->field_mutable)
+                    throw std::runtime_error("invalid actor field write lowering");
+                auto* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
+                builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, std::distance(actor.fields.begin(), field)), value});
+                builder.CreateStore(value, values.at(actor.scoped_state ? "@state." + write.field : write.field));
+            }
+            builder.CreateRet(lower(*method->result, builder, i64, values, emptyFields, declarations));
         }
-        for (const auto& write : actor.on_message.actor_field_writes) {
-            auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                [&](const LocalBinding& f) { return f.name == write.field; });
-            if (field == actor.fields.end() || !field->field_mutable)
-                throw std::runtime_error("invalid actor field write lowering");
-            llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
-            const std::size_t index = std::distance(actor.fields.begin(), field);
-            builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
-                llvm::ConstantInt::get(i64, index), value});
-            builder.CreateStore(value, values.at(write.field));
-        }
-        llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
-            emptyFields, declarations);
-        builder.CreateRet(result);
     }
 
     // Compiler-generated Wasm guest actor v0. One module instance belongs
@@ -1427,8 +1443,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         values.emplace(actor.on_message.parameters[0].name, paramSlot);
         for (std::size_t i = 0; i < actor.fields.size(); ++i) {
             auto* slot = b.CreateAlloca(i64, nullptr, actor.fields[i].name + ".slot");
-            b.CreateStore(b.CreateLoad(i64, globals[i]), slot);
-            values.emplace(actor.fields[i].name, slot);
+            if (!actor.scoped_state || std::find(actor.on_message.state_initial_reads.begin(),
+                    actor.on_message.state_initial_reads.end(), actor.fields[i].name)
+                    != actor.on_message.state_initial_reads.end())
+                b.CreateStore(b.CreateLoad(i64, globals[i]), slot);
+            values.emplace(actor.scoped_state ? "@state." + actor.fields[i].name : actor.fields[i].name, slot);
         }
         for (const auto& write : actor.on_message.actor_field_writes) {
             auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
@@ -1436,14 +1455,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             if (field == actor.fields.end() || !field->field_mutable)
                 throw std::runtime_error("invalid wasm32 actor field write");
             auto* value = lower(*write.expression, b, i64, values, emptyFields, noFunctions);
-            b.CreateStore(value, values.at(write.field));
+            b.CreateStore(value, values.at(actor.scoped_state ? "@state." + write.field : write.field));
+            const auto index = std::distance(actor.fields.begin(), field);
+            b.CreateStore(value, globals[index]);
         }
         auto* value = lower(*actor.on_message.result, b, i64, values,
             emptyFields, noFunctions);
-        // Commit all private state only after evaluating the handler; no
-        // host callback or suspension may interleave during this transition.
-        for (std::size_t i = 0; i < actor.fields.size(); ++i)
-            b.CreateStore(b.CreateLoad(i64, values.at(actor.fields[i].name)), globals[i]);
+        // Each verified synchronous assignment commits above. No host
+        // callback or suspension can interleave; read scopes never write globals.
         b.CreateRet(value);
 
         auto* teardown = llvm::Function::Create(

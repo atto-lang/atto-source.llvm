@@ -1,0 +1,314 @@
+[
+  {
+    "name": "read-expression",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": true,
+    "result": 3
+  },
+  {
+    "name": "read-block",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> { return s.x + s.y; }); }\nend\n",
+    "accepted": true,
+    "result": 8
+  },
+  {
+    "name": "read-broad-bound",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": true,
+    "result": 3
+  },
+  {
+    "name": "write-rmw",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.write(critical |s| -> { s.x = s.x + 1; return s.x; }); }\nend\n",
+    "accepted": true,
+    "result": 4
+  },
+  {
+    "name": "write-only",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write { return using state.write(critical |s| -> { s.x = 7; return 7; }); }\nend\n",
+    "accepted": true,
+    "result": 7
+  },
+  {
+    "name": "write-sequential",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.write(critical |s| -> { s.x = 7; s.y = s.x + 2; s.x = s.y + 1; return s.x + s.y; }); }\nend\n",
+    "accepted": true,
+    "result": 19
+  },
+  {
+    "name": "write-first-use",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.write(critical |s| -> { s.x = s.y + 1; s.y = s.x + 2; return s.x + s.y; }); }\nend\n",
+    "accepted": true,
+    "result": 14
+  },
+  {
+    "name": "handle-read",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return self.handle_state(|s| -> s.x); }\nend\n",
+    "accepted": true,
+    "result": 3
+  },
+  {
+    "name": "handle-write",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return self.handle_state(critical |s| -> { s.x = s.x + 1; return s.x; }); }\nend\n",
+    "accepted": true,
+    "result": 4
+  },
+  {
+    "name": "explicit-read",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(critical read |s| -> s.x); }\nend\n",
+    "accepted": true,
+    "result": 3
+  },
+  {
+    "name": "explicit-write",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write { return using state.write(critical write |s| -> { s.x = 9; return 9; }); }\nend\n",
+    "accepted": true,
+    "result": 9
+  },
+  {
+    "name": "noop-read",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> 6); }\nend\n",
+    "accepted": true,
+    "result": 6
+  },
+  {
+    "name": "noop-write",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write { return using state.write(critical |s| -> 6); }\nend\n",
+    "accepted": true,
+    "result": 6
+  },
+  {
+    "name": "unused-effects",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write, io, suspend, alloc, block, ffi, throw, raise, panic { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": true,
+    "result": 3
+  },
+  {
+    "name": "missing-with",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int  { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "noop-read-outside-bound",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write { return using state.read(|s| -> 0); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "noop-write-outside-bound",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.write(critical |s| -> 0); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "read-outside-bound",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "write-outside-bound",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.write(critical |s| -> { s.x = s.x + 1; return s.x; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "write-missing-read",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write { return using state.write(critical |s| -> { s.x = s.x + 1; return s.x; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "read-mutation",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.read(|s| -> { s.x = 1; return s.x; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "handle-read-mutation",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return self.handle_state(|s| -> { s.x = 1; return s.x; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "write-missing-critical",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.write(|s| -> { s.x = 1; return s.x; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "read-with-critical",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.read(critical |s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "unknown-capability",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.take(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "unknown-effect",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.missing { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "duplicate-effect",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.read { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "duplicate-with",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read with state.read { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "legacy-using-signature",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int using state.read { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "mixed-signature",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read using state.write { return using state.read(|s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "loan-escape",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> s); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "state-outside-scope",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return self.state.x; }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "unknown-field",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> s.missing); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "unknown-write",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write { return using state.write(critical |s| -> { s.missing = 1; return 1; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "nested-read",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> using state.read(|t| -> t.x)); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "nested-upgrade",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.read(|s| -> using state.write(critical |t| -> { t.x = 1; return 1; })); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "read-await",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, suspend { return using state.read(|s| -> await pending()); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "write-await",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write, suspend { return using state.write(critical |s| -> { s.x = await pending(); return s.x; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "read-cooperate",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, suspend { return using state.read(|s| -> { rt cooperate; return s.x; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "write-cooperate",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.write, suspend { return using state.write(critical |s| -> { rt cooperate; s.x = 1; return 1; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "unknown-call",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> unknown(s.x)); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "loan-call-escape",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> unknown(s)); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "nested-closure",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(|s| -> (|x| -> s.x)); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "forged-read-upgrade",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read, state.write { return using state.write(critical read |s| -> { s.x = 1; return 1; }); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "parenthesized-read",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read((s) -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "hyphenated-read-callback",
+    "source": "define actor Counter as\n state { x: int = 3; y: int = 5; }\n pub run(): int with state.read { return using state.read(critical-read |s| -> s.x); }\nend\n",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "global-with-effects",
+    "source": "pub fnc main(): int with io, suspend, block, alloc, ffi, throw, raise, panic { return 0; }",
+    "accepted": true,
+    "result": null
+  },
+  {
+    "name": "global-using-signature",
+    "source": "pub fnc main(): int using io { return 0; }",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "global-state-acquisition",
+    "source": "pub fnc main(): int with state.read { return using state.read(|s| -> 0); }",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "static-state-acquisition",
+    "source": "define actor Counter as state { x: int = 0; } pub static fnc run(): int with state.read { return using state.read(|s| -> s.x); } end",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "mixed-actor-storage",
+    "source": "define actor Counter as state { x: int = 0; } let y: int = 0; end",
+    "accepted": false,
+    "result": null
+  },
+  {
+    "name": "duplicate-state-key",
+    "source": "define actor Counter as state { x: int = 0; x: int = 1; } end",
+    "accepted": false,
+    "result": null
+  }
+]

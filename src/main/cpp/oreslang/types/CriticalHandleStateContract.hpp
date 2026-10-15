@@ -8,24 +8,34 @@ namespace oreslang {
 
 /**
  * Native admission ABI for the sealed critical handle_state intrinsic.
- * LLVM has no full guest actor-state codegen yet. This is a shared semantic
- * contract, not a claim that actor-state guest source compiles to LLVM.
+ * The synchronous scalar frontend checks the same capability/effect contract.
+ * General reference state and suspension remain outside that source profile.
  */
+enum class CriticalStateMode : std::uint8_t { None, Read, Write };
+
 enum class CriticalStateAdmission : std::uint8_t {
     Accept,
     MissingIntrinsicCritical,
     MissingCallbackCritical,
+    ReadModeCannotWrite,
     InvalidStateCallback,
     CallbackEscape,
-    EffectExceedsUsing,
+    EffectExceedsWith,
     LoanAcrossSuspension,
     MissingContinuationFence,
-    ScopeDenied
+    InvalidEffectMetadata,
+    ScopeDenied,
+    // A sealed actor state loan cannot nest, including read/read and
+    // read/write, even when the scheduler continuation is identical.
+    NestedStateLoan
 };
 
 struct CriticalStateCallback {
     bool intrinsic_critical = true;  // sealed runtime intrinsic
+    // Source spelling, independently checked against lowered state_mode:
+    // an unmarked callback can never acquire WRITE admission.
     bool callback_critical = false;
+    CriticalStateMode state_mode = CriticalStateMode::None;
     bool lexical = true;
     bool one_state_parameter = false;
     bool escapes = false;
@@ -36,30 +46,52 @@ struct CriticalStateCallback {
 
 inline CriticalStateAdmission admit_critical_handle_state(
         const CriticalStateCallback& callback,
-        FunctionEffects using_effects,
+        FunctionEffects with_effects,
         bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    // The serial privilege comes from a trusted actor declaration + scheduler,
-    // never from callback metadata supplied by guest code.
-    if (!callback.callback_critical && !verified_serial_actor)
+    // Canonical contract: the absence of 'critical' is an immutable read
+    // loan. 'critical' (Write) grants exclusive write authority. A verified
+    // serial actor never upgrades an unmarked callback to mutable.
+    (void)verified_serial_actor;
+    if (!with_effects.valid() || !callback.inferred.valid()) {
+        return CriticalStateAdmission::InvalidEffectMetadata;
+    }
+    const auto mode = callback.state_mode;
+    // None is missing lowering metadata, NOT a synonym for READ. Invalid
+    // discriminants must fail closed too, not bypass the Read/Write guard.
+    if (mode == CriticalStateMode::None
+            || (mode == CriticalStateMode::Write && !callback.callback_critical)) {
         return CriticalStateAdmission::MissingCallbackCritical;
+    }
+    if (mode != CriticalStateMode::Read && mode != CriticalStateMode::Write) {
+        return CriticalStateAdmission::InvalidStateCallback;
+    }
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
     if (callback.escapes) return CriticalStateAdmission::CallbackEscape;
-    if (!using_effects.permits(callback.inferred)) {
-        return CriticalStateAdmission::EffectExceedsUsing;
+    // A broad with row never upgrades a read-only state capability.
+    if (mode == CriticalStateMode::Read
+            && callback.inferred.has(FunctionEffect::StateWrite)) {
+        return CriticalStateAdmission::ReadModeCannotWrite;
     }
-    if (callback.inferred.has(FunctionEffect::Suspend)) {
-        // A state-backed loan may not cross a yielding reduction boundary.
-        // The callback resumes only on a generation-fenced re-admitted turn.
-        if (callback.state_loan_live_across_suspend) {
-            return CriticalStateAdmission::LoanAcrossSuspension;
-        }
-        if (!callback.continuation_generation_fenced) {
-            return CriticalStateAdmission::MissingContinuationFence;
-        }
+    // Acquiring a scoped state capability requires a corresponding
+    // declaration even if the callback performs no state field access.
+    if ((mode == CriticalStateMode::Read
+                && !with_effects.has(FunctionEffect::StateRead))
+            || (mode == CriticalStateMode::Write
+                && !with_effects.has(FunctionEffect::StateWrite))) {
+        return CriticalStateAdmission::EffectExceedsWith;
     }
+    if (!with_effects.permits(callback.inferred)) {
+        return CriticalStateAdmission::EffectExceedsWith;
+    }
+    // A callback still holds its lexical state loan. It cannot suspend
+    // even if some outer continuation generation is fenced; there is no
+    // legal handoff of a live state reference to another actor turn.
+    if (callback.inferred.has(FunctionEffect::Suspend)
+            || callback.state_loan_live_across_suspend)
+        return CriticalStateAdmission::LoanAcrossSuspension;
     return CriticalStateAdmission::Accept;
 }
 

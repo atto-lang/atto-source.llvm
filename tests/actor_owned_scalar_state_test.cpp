@@ -7,7 +7,11 @@
 #include <type_traits>
 
 using namespace oreslang;
-static void check(bool ok) { if (!ok) throw std::runtime_error("scalar state check failed"); }
+static void check_impl(bool ok, const char* expression, int line) {
+    if (!ok) throw std::runtime_error(std::string("scalar state check failed at ")
+            + std::to_string(line) + ": " + expression);
+}
+#define check(condition) check_impl((condition), #condition, __LINE__)
 
 template <class Fn> static void rejects(Fn&& fn) {
     bool failed = false;
@@ -25,6 +29,7 @@ int main() {
     });
     CriticalStateCallback checked{};
     checked.callback_critical = true;
+    checked.state_mode = CriticalStateMode::Write;
     checked.one_state_parameter = true;
     checked.inferred = {static_cast<std::uint32_t>(FunctionEffect::StateRead)
             | static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
@@ -32,28 +37,40 @@ int main() {
     const FunctionEffects readonly{static_cast<std::uint32_t>(FunctionEffect::StateRead)};
 
     check(state.ready_to_suspend(actor));
-    // The serial guarantee is stored on the actor's runtime instance, not
-    // supplied by a guest callback. It admits the optional critical marker.
+    // Serial admission never silently upgrades a plain read callback to
+    // mutable authority. The runtime Access.write guard is independent of
+    // the declared effect row.
     State serial_actor(actor + 1, {
         {"count", {State::Type::Int, std::int64_t{0}}}
     }, true);
     auto plain = checked;
     plain.callback_critical = false;
-    auto incremented = serial_actor.critical(actor + 1, 300, plain, allowed,
-            [&](State::Access& access) -> State::Value {
-        const auto count = std::get<std::int64_t>(access.read("count"));
-        access.write("count", count + 1);
-        return access.read("count");
-    });
-    check(std::get<std::int64_t>(incremented) == 1);
-    // Explicit critical continues to be legal on serial actors.
+    plain.state_mode = CriticalStateMode::Read;
+    plain.inferred = readonly;
     check(std::get<std::int64_t>(serial_actor.critical(
-            actor + 1, 301, checked, allowed,
+            actor + 1, 300, plain, readonly,
             [](State::Access& access) -> State::Value {
         return access.read("count");
-    })) == 1);
+    })) == 0);
     rejects([&] {
-        (void) state.critical(actor, 300, plain, allowed,
+        (void) serial_actor.critical(actor + 1, 301, plain, allowed,
+                [](State::Access& access) -> State::Value {
+            access.write("count", std::int64_t{99});
+            return std::int64_t{99};
+        });
+    });
+    check(serial_actor.ready_to_suspend(actor + 1));
+    // Explicit critical write remains legal on serial actors.
+    check(std::get<std::int64_t>(serial_actor.critical(
+            actor + 1, 302, checked, allowed,
+            [](State::Access& access) -> State::Value {
+        access.write("count", std::int64_t{1});
+        return access.read("count");
+    })) == 1);
+    auto forged_write = checked;
+    forged_write.callback_critical = false;
+    rejects([&] {
+        (void) state.critical(actor, 300, forged_write, allowed,
                 [](State::Access&) -> State::Value { return std::int64_t{0}; });
     });
     for (int i = 0; i < 100; ++i) {
@@ -69,14 +86,23 @@ int main() {
                                 return std::int64_t{999};
                             });
                 });
-                const auto nested = state.critical(actor, 100, checked, allowed,
-                        [&](State::Access& inner) -> State::Value {
-                    rejects([&] { (void) access.read("count"); });
-                    check(std::get<std::int64_t>(inner.read("count")) == 1);
-                    return inner.read("count");
+                // No nested read/write callback is legal, even when its
+                // continuation is the same one already running this actor.
+                rejects([&] {
+                    (void) state.critical(actor, 100, checked, allowed,
+                            [&](State::Access& inner) -> State::Value {
+                        inner.write("count", std::int64_t{999});
+                        return inner.read("count");
+                    });
                 });
-                check(std::get<std::int64_t>(nested) == 1);
+                rejects([&] {
+                    (void) state.critical(actor, 100, plain, readonly,
+                            [&](State::Access& inner) -> State::Value {
+                        return inner.read("count");
+                    });
+                });
                 check(std::get<std::int64_t>(access.read("count")) == 1);
+                check(!state.ready_to_suspend(actor));
             }
             return access.read("count");
         });
@@ -85,6 +111,28 @@ int main() {
     check(state.ready_to_suspend(actor));
     check(std::get<std::int64_t>(state.critical(actor, 201, checked, allowed,
             [&](State::Access& a) -> State::Value { return a.read("count"); })) == 100);
+
+    // The runtime also checks each real operation against the compiler's
+    // inferred effects, not just against the enclosing with declaration.
+    auto inferred_write_only = checked;
+    inferred_write_only.inferred = {
+            static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
+    rejects([&] {
+        (void) state.critical(actor, 208, inferred_write_only, allowed,
+                [](State::Access& access) -> State::Value {
+            return access.read("count");
+        });
+    });
+    auto inferred_read_only = checked;
+    inferred_read_only.inferred = readonly;
+    rejects([&] {
+        (void) state.critical(actor, 209, inferred_read_only, allowed,
+                [](State::Access& access) -> State::Value {
+            access.write("count", std::int64_t{999});
+            return std::int64_t{999};
+        });
+    });
+    check(state.ready_to_suspend(actor));
 
     auto underdeclared = checked;
     rejects([&] {
