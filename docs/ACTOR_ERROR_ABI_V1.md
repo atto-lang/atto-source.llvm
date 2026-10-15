@@ -43,6 +43,21 @@ not** establish executable guest exception lowering on LLVM.
 
 Do not infer stages 2–3 are complete from existence of these files.
 
+## Bounded supervisor inbox contract (October 14, 2026)
+
+The native host CONTROL boundary now includes an `ActorFailureControlInbox`
+whose immutable owner is the runtime-chosen direct-parent identity. It holds
+at most 256 value-only notices, rejects foreign-parent notices and anonymous
+inbox owners, and exposes explicit overflow accounting. The C++ effect-policy
+test covers ordering, capacity, draining, invalid identities and overflow.
+
+**This is not native guest exception handling.** No LLVM actor scheduler yet
+wires this host-only inbox into actor turns or source-language `on_raise`
+handlers. The corresponding Java draft has a live runtime-owned parent inbox
+and a restricted synchronous actor `throw`-to-`raise` boundary. No native
+CMake/CTest, Java JUnit, or AOT runs have been verified successful at these
+PR heads. Do not merge either PR on static headers or source admission alone.
+
 ## Current hard blockers (October 14, 2026)
 
 - The Java/GraalVM draft branch now has a compiler-owned nominal `Error`
