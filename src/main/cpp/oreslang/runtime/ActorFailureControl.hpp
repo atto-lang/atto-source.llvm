@@ -88,7 +88,9 @@ public:
             throw std::invalid_argument("CONTROL notice is not owned by this supervisor");
         }
         std::lock_guard<std::mutex> lock(mutex_);
-        if (count_ == capacity_) {
+        if (retired_ || count_ == capacity_) {
+            // Late notifications and full-ring overflow are equally visible
+            // in the durable supervisor loss counter.
             ++dropped_;
             return false;
         }
@@ -108,6 +110,26 @@ public:
         head_ = (head_ + 1) % capacity_;
         --count_;
         return result;
+    }
+
+    /**
+     * Irrevocably close CONTROL admission. Retirement and offer serialize on
+     * the same mutex: no late producer can revive a cleared supervisor inbox.
+     * Count unread notices as dropped rather than destroying them silently.
+     */
+    void retire() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (retired_) return;
+        retired_ = true;
+        dropped_ += count_;
+        for (auto& slot : slots_) slot.reset();
+        head_ = 0;
+        count_ = 0;
+    }
+
+    bool retired() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return retired_;
     }
 
     std::size_t dropped() const {
@@ -135,6 +157,7 @@ private:
     std::size_t head_ = 0;
     std::size_t count_ = 0;
     std::size_t dropped_ = 0;
+    bool retired_ = false;
 };
 
 }  // namespace oreslang::runtime
