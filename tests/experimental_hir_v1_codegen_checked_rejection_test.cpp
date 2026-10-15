@@ -1,6 +1,7 @@
 // Full-LLVM backend regression: checked-i64 may never bypass overflow checks
 // through special-case native code generation paths.
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/runtime/CheckedI64Failure.hpp"
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -108,14 +109,22 @@ int main() {
         "pub fnc forward(int x): int { return explode(x); } "
         "pub fnc main(): int { return forward(9223372036854775807); }");
     const std::string checked_ir = emit_verified_llvm_ir(nested, false, false, true);
+    const std::string packed_multiply =
+        "store i64 " + std::to_string(
+            runtime::CheckedI64Failure::packed_status(
+                runtime::CheckedI64Failure::Operation::Multiply));
     for (const char* required : {
             "checked.effect.status", "checked.call.propagate",
-            "checked.i64.overflow", "store i32 1229914113",
+            "checked.i64.overflow",
             "checked.effect.failed", "checked.entry.failed",
             "checked.entry.normal", "checked.entry.effect"}) {
         if (checked_ir.find(required) == std::string::npos)
             throw std::runtime_error(std::string("checked effect IR missing: ") + required);
     }
+    if (checked_ir.find(packed_multiply) == std::string::npos)
+        throw std::runtime_error("checked multiply packed Throw operation tag missing");
+    if (checked_ir.find("store i32 1229914113") != std::string::npos)
+        throw std::runtime_error("old 32-bit effect ABI unexpectedly emitted");
     if (checked_ir.find("call void @exit") != std::string::npos ||
         checked_ir.find("declare void @exit") != std::string::npos)
         throw std::runtime_error("checked arithmetic must not call process exit");
