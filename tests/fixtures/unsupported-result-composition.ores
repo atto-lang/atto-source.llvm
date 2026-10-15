@@ -1,0 +1,6 @@
+fnc main(): int {
+  val Result<int, int> value = Ok(3);
+  return value.and_then<int>(|int x| -> {
+    return Ok(x + 1);
+  }).unwrap();
+}
