@@ -671,6 +671,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 storage.emplace(param.name, &arg);
             }
         }
+        if (experimental_checked_i64) {
+            // This is an invocation-owned effect slot, never an implicit
+            // clear-on-entry global. Fail closed when a caller reuses a slot
+            // while a prior Throw remains pending. In particular, do not
+            // execute the first arithmetic operation or overwrite that code.
+            llvm::Value* status_ptr = function->getArg(
+                static_cast<unsigned>(fn.parameters.size()));
+            llvm::Value* pending = builder.CreateLoad(
+                llvm::Type::getInt32Ty(context), status_ptr, "checked.entry.effect");
+            auto* failed = llvm::BasicBlock::Create(
+                context, "checked.entry.failed", function);
+            auto* normal = llvm::BasicBlock::Create(
+                context, "checked.entry.normal", function);
+            builder.CreateCondBr(builder.CreateICmpNE(pending,
+                llvm::ConstantInt::get(pending->getType(), 0)), failed, normal);
+            builder.SetInsertPoint(failed);
+            builder.CreateRet(llvm::ConstantInt::get(i64, 0));
+            builder.SetInsertPoint(normal);
+        }
 
         // Every source actor ref is an opaque, unique capability owned by
         // trusted top-level main; it cannot enter scalar values or calls.
