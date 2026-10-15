@@ -98,6 +98,18 @@ int main() {
         {m::Domain::Instance,
          Signature{multibyteName, {{Kind::Enum, "root::Color"}}}}); },
          "258-byte UTF-8 method name bypassed ceiling");
+    denied([&] { (void)m::linkSymbol("root.Picker", {
+        m::Domain::Instance,
+        Signature{std::string("choose\nevil"), {{Kind::Enum, "root::Color"}}}}); },
+        "control newline in method symbol accepted");
+    denied([&] { (void)m::linkSymbol(std::string("root\0Pick", 9), color); },
+        "NUL control byte in owner symbol accepted");
+    denied([&] { (void)m::proveLocalSameArityFamilies({
+        {m::Domain::Instance,
+         Signature{std::string("get\0evil", 8), {{Kind::Enum, "root::Color"}}}},
+        {m::Domain::Instance,
+         Signature{std::string("get\0evil", 8), {{Kind::Enum, "root::Mode"}}}}
+    }, ids); }, "embedded NUL method name admitted by compiler proof");
     std::cout << "nominal method slot policy OK\n";
     return 0;
 }
