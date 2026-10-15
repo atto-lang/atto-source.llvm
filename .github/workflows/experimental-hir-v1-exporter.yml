@@ -203,6 +203,24 @@ jobs:
           static void expect(int value, const char *name) {
               if (!value) { fprintf(stderr, "effect ABI failed: %s\n", name); exit(1); }
           }
+          // Arithmetic oracle independent of LLVM lowering. Return only a
+          // scalar and a caller-owned status code; never share status across calls.
+          static void check_i64_oracle(int64_t input) {
+              const __int128 product = (__int128)input * 43;
+              const __int128 next = product + 1;
+              const int mul_overflow = product > INT64_MAX || product < INT64_MIN;
+              const int add_overflow = mul_overflow || next > INT64_MAX || next < INT64_MIN;
+              uint32_t status = 0;
+              int64_t actual = scale(input, &status);
+              expect(mul_overflow
+                  ? actual == 0 && status == 0x494F0001u
+                  : actual == (int64_t)product && status == 0, "scale oracle");
+              status = 0;
+              actual = outer(input, &status);
+              expect(add_overflow
+                  ? actual == 0 && status == 0x494F0001u
+                  : actual == (int64_t)next && status == 0, "nested oracle");
+          }
           int main(void) {
               uint32_t status = 0;
               expect(scale(1, &status) == 43 && status == 0, "scale success");
@@ -236,6 +254,21 @@ jobs:
               status = 0;
               expect(intermediate(1, &status) == 0 && status == 0,
                      "in-range intermediate product");
+              const int64_t edges[] = {
+                  0, 1, -1, INT64_MIN, INT64_MAX,
+                  INT64_MIN / 43, INT64_MAX / 43,
+                  INT64_MIN / 43 - 1, INT64_MAX / 43 + 1,
+                  INT64_MIN / 43 + 1, INT64_MAX / 43 - 1
+              };
+              for (size_t i = 0; i < sizeof edges / sizeof *edges; ++i)
+                  check_i64_oracle(edges[i]);
+              uint64_t seed = UINT64_C(0x9e3779b97f4a7c15);
+              for (int i = 0; i < 8192; ++i) {
+                  seed ^= seed << 13;
+                  seed ^= seed >> 7;
+                  seed ^= seed << 17;
+                  check_i64_oracle((int64_t)seed);
+              }
               return 0;
           }
           C
