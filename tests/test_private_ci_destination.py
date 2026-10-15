@@ -64,6 +64,12 @@ class PrivateCIMirrorGateTests(unittest.TestCase):
         self.assertEqual(2, exited.exception.code)
         self.assertIn("unrecognized arguments", diagnostics.getvalue())
 
+    def test_same_organization_target_is_not_a_cross_org_mirror(self):
+        self.allow("source-org/private-test\n")
+        with self.assertRaisesRegex(MirrorPolicyError, "different organization"):
+            assert_destination_approved(
+                "source-org/source", "source-org/private-test", self.manifest)
+
     def test_self_destination_is_denied(self):
         self.allow("owner/source\n")
         with self.assertRaisesRegex(MirrorPolicyError, "different repository"):
