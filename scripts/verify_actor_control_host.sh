@@ -16,7 +16,12 @@ trap 'rm -rf -- "$work"' EXIT
 for fixture in \
     actor_error_catalog_test \
     actor_error_effect_policy_test \
-    actor_failure_control_concurrency_test
+    actor_failure_control_concurrency_test \
+    actor_local_failure_policy_test \
+    supervisor_failure_lane_test \
+    supervisor_control_turn_test \
+    effect_supervision_bridge_test \
+    effect_supervisor_end_to_end_test
 do
     printf 'Building host-only %s\n' "$fixture"
     "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
@@ -26,4 +31,4 @@ do
     "$work/$fixture"
 done
 
-printf 'PASS: 3 native host CONTROL fixtures (not guest/compiler parity).\n'
+printf 'PASS: 8 native host CONTROL fixtures (not guest/compiler parity).\n'
