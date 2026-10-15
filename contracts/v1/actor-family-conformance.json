@@ -1333,6 +1333,13 @@
       "description": "future compiled unary reply transport waits for actor carrier and code-image exit before externally publishing response",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-189",
+      "expected": "runtime_target",
+      "description": "completed unary requests detach actor-done cancellation observers; one long-lived actor does not accumulate stale request tickets",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
