@@ -13,6 +13,8 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     SupervisorControlTurn::Decision next = SupervisorControlTurn::Decision::Acknowledge;
     bool restart_ok = true;
     bool fail_once = false;
+    bool throw_after_restart = false;
+    bool throw_after_escalation = false;
     SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
         CHECK(false && "actor terminal Throw may never reach supervisor on_throw");
         return next;
@@ -43,9 +45,18 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     }
     void on_escalate(const SupervisorFailureLane::Failure&) override {
         order.push_back("escalate");
+        if (throw_after_escalation) {
+            throw_after_escalation = false;
+            throw std::logic_error("escalation side effect then failure");
+        }
     }
     bool on_restart(const SupervisorFailureLane::Failure&) override {
-        order.push_back("restart"); return restart_ok;
+        order.push_back("restart");
+        if (throw_after_restart) {
+            throw_after_restart = false;
+            throw std::logic_error("restart spawned child before failure");
+        }
+        return restart_ok;
     }
     void on_user_turn() override { order.push_back("user"); }
 };
@@ -133,5 +144,44 @@ int main() {
     CHECK(hooks.order.back() == "escalate");
     CHECK(!lane.urgent());
     CHECK(lane.reserved_count() == 0);
+
+    // A restart callback may create a replacement, then fail before returning.
+    // The failed attempt must escalate and must never replay this generation.
+    SupervisorControlTurn uncertain_restart(1, 1);
+    Key failed_restart{"uncertain-restart", 17};
+    uncertain_restart.reserve_child(failed_restart);
+    CHECK(uncertain_restart.publish_child(failed_restart, Kind::Panic, "panic"));
+    Hooks restarted;
+    restarted.next = SupervisorControlTurn::Decision::Restart;
+    restarted.throw_after_restart = true;
+    bool restart_threw = false;
+    try { (void) uncertain_restart.admit_turn(restarted, false); }
+    catch (const std::logic_error&) { restart_threw = true; }
+    CHECK(restart_threw);
+    CHECK(restarted.order == std::vector<std::string>({"panic", "restart", "escalate"}));
+    CHECK(uncertain_restart.restarts_used() == 1);
+    CHECK(!uncertain_restart.urgent() && uncertain_restart.reserved_count() == 0);
+    CHECK(uncertain_restart.admit_turn(restarted, false)
+          == SupervisorControlTurn::Admitted::None);
+
+    // Escalation may also emit a terminal host event and then throw; retrying
+    // would duplicate that irreversible action, so the notice is consumed.
+    SupervisorControlTurn uncertain_escalation(1, 0);
+    Key failed_escalation{"uncertain-escalation", 18};
+    uncertain_escalation.reserve_child(failed_escalation);
+    CHECK(uncertain_escalation.publish_child(failed_escalation, Kind::Panic, "panic"));
+    Hooks escalated;
+    escalated.next = SupervisorControlTurn::Decision::Escalate;
+    escalated.throw_after_escalation = true;
+    bool escalation_threw = false;
+    try { (void) uncertain_escalation.admit_turn(escalated, false); }
+    catch (const std::logic_error&) { escalation_threw = true; }
+    CHECK(escalation_threw);
+    CHECK(escalated.order == std::vector<std::string>({"panic", "escalate"}));
+    CHECK(!uncertain_escalation.urgent()
+          && uncertain_escalation.reserved_count() == 0);
+    CHECK(uncertain_escalation.admit_turn(escalated, false)
+          == SupervisorControlTurn::Admitted::None);
+
     return 0;
 }
