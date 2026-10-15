@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/cli/Flags2Env.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -54,19 +55,6 @@ static void require_valid_source_utf8(std::string_view source) {
 }
 
 
-
-// flags-2-env exports these variables using .cli-flags.toml. Read them without
-// depending on an ambient TOML parser in the compiler (the upstream wrapper
-// owns TOML/argv validation). Invalid inherited values always fail closed.
-static bool read_env_flag(const char* key, bool& output) {
-    const char* raw = std::getenv(key);
-    if (raw == nullptr || *raw == '\0') return true;
-    const std::string_view value(raw);
-    if (value == "true" || value == "1" || value == "yes") { output = true; return true; }
-    if (value == "false" || value == "0" || value == "no") { output = false; return true; }
-    std::cerr << "invalid boolean environment value for " << key << '\n';
-    return false;
-}
 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
