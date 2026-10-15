@@ -46,6 +46,15 @@ cases = {
     "do nb writech": ("pub fnc main(): int { do nb writech messages, 1; return 42; }", "native async/channel/select boundary unsupported"),
     "generator yield": ("generator fnc main(): int { yield 42; return 0; }", "native actor/async declaration"),
     "cooperate": ("pub fnc main(): int { return rt cooperate; }", "native rt cooperate requires verified heap-owned continuation lowering"),
+    "pointer ref is gated": (
+        "pub fnc main(int x): int { return rt ref x; }",
+        "native rt ref is reserved for Pointer<T> but is not enabled"),
+    "pointer unref is gated": (
+        "pub fnc main(int x): int { return rt unref x; }",
+        "native rt unref is reserved for Pointer<T> but is not enabled"),
+    "pointer deref is gated": (
+        "pub fnc main(int x): int { return rt deref x; }",
+        "native rt deref is reserved for Pointer<T> but is not enabled"),
     "borrow": ("pub fnc main(int x): int { return rt borrow x; }", "borrowed reference may only be passed"),
     "borrow mut": ("pub fnc main(int x): int { return rt borrow mut x; }", "borrowed reference may only be passed"),
     "take from borrowed parameter": ("fnc view(borrow int x): int { return rt take x; }", "cannot rt take through a borrowed parameter"),
