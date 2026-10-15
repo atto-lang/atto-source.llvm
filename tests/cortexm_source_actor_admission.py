@@ -71,6 +71,25 @@ def main():
             "a.send(1); "*16+"b.send(2); "*16+"stop a; stop b; return 43; }\n")
         balanced=compile_guest(a.compiler,source)
         verify(balanced.returncode==0,balanced.stderr)
+        # All actor actions must fail closed before native IR is emitted.
+        # Reordered effects, missing cleanup, and unknown/stale references
+        # must not silently compile to an unsafe runtime call.
+        unsafe_actions = {
+            "send-after-stop": "stop a; a.send(1);",
+            "double-stop": "stop a; stop a;",
+            "missing-stop": "a.send(1);",
+            "unknown-ref": "unknown.send(1); stop a;",
+            "nonliteral-payload": "a.send(1+1); stop a;",
+        }
+        for scenario, actions in unsafe_actions.items():
+            source.write_text(
+                actor("Producer") +
+                "pub fnc main(): int { const a = spawn Producer(); " +
+                actions + " return 43; }\n")
+            denied = compile_guest(a.compiler, source)
+            verify(denied.returncode != 0 and not denied.stdout,
+                   scenario + " incorrectly emitted Cortex-M IR: " +
+                   denied.stdout[:120] + " " + denied.stderr)
         source.write_text(actor("Producer").replace(
             "return total;", "return total + unsupported(1);")+
              "pub fnc main(): int { const a = spawn Producer(); "
