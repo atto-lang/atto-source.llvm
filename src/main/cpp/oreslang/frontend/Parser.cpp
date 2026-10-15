@@ -1205,7 +1205,7 @@ private:
             // a raw machine address would bypass provenance, loan identity,
             // actor-domain fencing, and deterministic drop/cleanup.
             if (operation == "ref" || operation == "unref" || operation == "deref") {
-                throw std::runtime_error("native rt " + operation +
+                throw std::runtime_error(std::string("native rt ") + std::string(operation) +
                     " requires provenance-checked Pointer<T> and lifetime/drop lowering at byte " +
                     std::to_string(token_.offset));
             }
