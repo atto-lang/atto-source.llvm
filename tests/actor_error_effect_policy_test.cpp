@@ -76,6 +76,35 @@ int main() {
     if (bounded.suppressed().size() != 1
             || bounded.suppressed().front().kind() != FailureKind::Throw) return 54;
 
+    // Exhaustive finite transition oracle: four failures drawn from every
+    // host priority class. Ties keep their first occurrence; later higher
+    // priority failures must dominate without dropping boundedness invariants.
+    constexpr FailureKind allKinds[] = {
+        FailureKind::Throw, FailureKind::Raise, FailureKind::Panic,
+        FailureKind::Cancelled, FailureKind::ProcessExit,
+        FailureKind::HostFatal
+    };
+    for (auto k0 : allKinds) {
+        for (auto k1 : allKinds) {
+            for (auto k2 : allKinds) {
+                for (auto k3 : allKinds) {
+                    auto observed = Failure::make(k0, "first");
+                    FailureKind winner = k0;
+                    for (auto next : {k1, k2, k3}) {
+                        if (failure_priority(next) > failure_priority(winner)) {
+                            winner = next;
+                        }
+                        observed = combine_failure(
+                                std::move(observed), Failure::make(next, "cleanup"));
+                    }
+                    if (observed.kind() != winner) return 55;
+                    if (retained_suppressed(observed)
+                            > max_control_suppressed_nodes) return 56;
+                }
+            }
+        }
+    }
+
     // Higher-priority supervisor failures must win over ordinary throw.
     const auto ordinary = Failure::make(FailureKind::Throw, "guest throw");
     const auto terminal = Failure::make(FailureKind::Panic, "supervisor escalation");
