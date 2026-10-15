@@ -82,12 +82,12 @@ def main():
 
                 # Positive aliasing: multiple shared whole-object loans
                 # are allowed, even when each reads a different field.
-                shared = (f"define class Record as\\n{fields}\\nend\\n"
-                          f"fnc inspect(borrow Record left, borrow Record right): int {{\\n"
-                          f"  return left.field0 + right.field{count-1} + {43-count};\\n}}\\n"
-                          f"pub fnc main(): int {{\\n"
-                          f"  let mut Record record = new Record();\\n"
-                          f"  return inspect(rt borrow record, rt borrow record);\\n}}\\n")
+                shared = (f"define class Record as\n{fields}\nend\n"
+                          f"fnc inspect(borrow Record left, borrow Record right): int {{\n"
+                          f"  return left.field0 + right.field{count-1} + {43-count};\n}}\n"
+                          f"pub fnc main(): int {{\n"
+                          f"  let mut Record record = new Record();\n"
+                          f"  return inspect(rt borrow record, rt borrow record);\n}}\n")
                 shared_file = directory / f"shared-shared-{count}.ores"
                 shared_file.write_text(shared)
                 shared_ir = execute([args.compiler, str(shared_file)])
@@ -119,12 +119,12 @@ def main():
                      "rt borrow mut", "rt borrow mut"),
                 )
                 for label, left_mode, right_mode, left_arg, right_arg in overlap_shapes:
-                    invalid = (f"define class Record as\\n{fields}\\nend\\n"
-                               f"fnc conflict({left_mode} Record left, {right_mode} Record right): int {{\\n"
-                               f"  return left.field0 + right.field{count-1};\\n}}\\n"
-                               f"pub fnc main(): int {{\\n"
-                               f"  let mut Record record = new Record();\\n"
-                               f"  return conflict({left_arg} record, {right_arg} record);\\n}}\\n")
+                    invalid = (f"define class Record as\n{fields}\nend\n"
+                               f"fnc conflict({left_mode} Record left, {right_mode} Record right): int {{\n"
+                               f"  return left.field0 + right.field{count-1};\n}}\n"
+                               f"pub fnc main(): int {{\n"
+                               f"  let mut Record record = new Record();\n"
+                               f"  return conflict({left_arg} record, {right_arg} record);\n}}\n")
                     negative_file = directory / f"reject-{label}-{count}.ores"
                     negative_file.write_text(invalid)
                     rejected = execute([args.compiler, str(negative_file)])
