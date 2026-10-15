@@ -1282,7 +1282,7 @@ if(BUILD_TESTING)
 
     # Host-only deterministic actor arena; no source actor lowering implied.
     add_executable(oreslang-native-actor-arena-test
-        tests/native_actor_arena_test.c
+        tests/native_actor_arena_test.cpp
         src/main/cpp/oreslang/runtime/ActorArena.c)
     target_include_directories(oreslang-native-actor-arena-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -1297,7 +1297,7 @@ if(BUILD_TESTING)
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
     add_executable(oreslang-actor-owned-i64-heap-test
-        tests/actor_owned_heap_lifecycle_test.c
+        tests/actor_owned_heap_lifecycle_test.cpp
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
     target_include_directories(oreslang-actor-owned-i64-heap-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -1371,13 +1371,15 @@ if(BUILD_TESTING)
 
         # Actual compiled Oreslang scalar frame is driven by a real one-actor
         # HungryCarrier OS thread. CPU cooperation is NOT IO or logical DONE.
-        if(ORE_CLANG)
+        # The build compiler may be GCC, which cannot compile LLVM IR.
+        find_program(ORE_CLANGXX NAMES clang++)
+        if(ORE_CLANG AND ORE_CLANGXX)
             add_test(NAME native_rt_compiled_scalar_carrier_cooperate
                 COMMAND "${Python3_EXECUTABLE}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_carrier_aot.py"
                     --compiler "$<TARGET_FILE:oreslang-llvmc>"
                     --clang "${ORE_CLANG}"
-                    --clangxx "${CMAKE_CXX_COMPILER}"
+                    --clangxx "${ORE_CLANGXX}"
                     --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
                     --test "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_carrier_aot_test.cpp"
                     --source-root "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -1388,12 +1390,12 @@ if(BUILD_TESTING)
         # Experimental multiple actors on ONE OS worker, using two
         # independently compiled scalar .ores continuations. Not production
         # source actor lowering and not a hard realtime guarantee.
-        if(ORE_CLANG)
+        if(ORE_CLANG AND ORE_CLANGXX)
             add_test(NAME native_multi_actor_compiled_round_robin_fairness
                 COMMAND "${Python3_EXECUTABLE}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_multi_actor_carrier_aot.py"
                     --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                    --clangxx "${CMAKE_CXX_COMPILER}"
+                    --clangxx "${ORE_CLANGXX}"
                     --fast "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
                     --slow "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-multi-actor-slow.ores"
                     --test "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_multi_actor_carrier_aot_test.cpp"
