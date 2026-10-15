@@ -3,7 +3,10 @@
 import copy
 import unittest
 
-from ctest_manifest_gate import CRITICAL_TESTS, ManifestFailure, check_manifest, TIMED_TESTS
+from ctest_manifest_gate import (
+    CRITICAL_TESTS, ManifestFailure, check_manifest, TIMED_TESTS,
+    VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE_FIXTURE,
+)
 
 
 def fixture():
@@ -21,6 +24,18 @@ def fixture():
             command.extend(["tests/contract.py", "--compiler", "build/oreslang-llvmc",
                             "--fixture", "tests/fixtures/constant-main.ores",
                             "--verify-object", "--clang", "clang"])
+        elif name in VISIBILITY_NEGATIVE_FIXTURES:
+            command.extend([
+                "tests/contract.py", "--compiler", "build/oreslang-llvmc",
+                "--fixture", "tests/fixtures/" + VISIBILITY_NEGATIVE_FIXTURES[name],
+                "--diagnostic", "private class field",
+            ])
+        elif name == "native_public_class_field_read":
+            command.extend([
+                "tests/contract.py", "--compiler", "build/oreslang-llvmc",
+                "--fixture", "tests/fixtures/" + VISIBILITY_POSITIVE_FIXTURE,
+                "--run", "42", "--clang", "clang", "--no-native-abi",
+            ])
         else:
             command.extend(["-c", "pass"])
         entries.append({"name": name, "command": command,
@@ -97,6 +112,44 @@ class ManifestAuditTests(unittest.TestCase):
         idx = entry["command"].index("tests/fixtures/constant-main.ores")
         entry["command"][idx] = "tests/fixtures/empty.ores"
         self.fail_on("does not compile positive guest source")
+
+    def test_private_field_negative_gates_are_all_required(self):
+        for critical in VISIBILITY_NEGATIVE_FIXTURES:
+            corpus = fixture()
+            corpus["tests"] = [item for item in corpus["tests"]
+                               if item["name"] != critical]
+            with self.subTest(critical=critical), self.assertRaisesRegex(
+                    ManifestFailure, "required CTest was not registered"):
+                check_manifest(corpus)
+
+    def test_private_negative_cannot_use_another_fixture(self):
+        critical = next(iter(VISIBILITY_NEGATIVE_FIXTURES))
+        entry = next(item for item in self.manifest["tests"]
+                     if item["name"] == critical)
+        i = entry["command"].index("--fixture")
+        entry["command"][i + 1] = "tests/fixtures/constant-main.ores"
+        self.fail_on("private-field negative gate changed")
+
+    def test_private_negative_must_preserve_diagnostic(self):
+        critical = next(iter(VISIBILITY_NEGATIVE_FIXTURES))
+        entry = next(item for item in self.manifest["tests"]
+                     if item["name"] == critical)
+        i = entry["command"].index("--diagnostic")
+        entry["command"][i + 1] = "other error"
+        self.fail_on("private-field negative gate changed")
+
+    def test_public_field_positive_must_execute(self):
+        entry = next(item for item in self.manifest["tests"]
+                     if item["name"] == "native_public_class_field_read")
+        entry["command"].remove("--no-native-abi")
+        self.fail_on("public-field positive execution gate changed")
+
+    def test_public_field_positive_wrong_fixture_rejected(self):
+        entry = next(item for item in self.manifest["tests"]
+                     if item["name"] == "native_public_class_field_read")
+        i = entry["command"].index("--fixture")
+        entry["command"][i + 1] = "tests/fixtures/constant-main.ores"
+        self.fail_on("public-field positive execution gate changed")
 
     def test_duplicate_test_names_rejected(self):
         self.manifest["tests"].append(copy.deepcopy(self.manifest["tests"][0]))
