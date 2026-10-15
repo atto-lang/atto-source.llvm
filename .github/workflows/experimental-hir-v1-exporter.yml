@@ -10,6 +10,8 @@ on:
       - "tests/experimental_hir_v1_exporter_test.cpp"
       - "tests/experimental_hir_v1_codegen_checked_rejection_test.cpp"
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
+      - "tests/checked_i64_failure_status_test.cpp"
+      - "src/main/cpp/oreslang/runtime/CheckedI64Failure.hpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
   pull_request:
@@ -21,6 +23,8 @@ on:
       - "tests/experimental_hir_v1_exporter_test.cpp"
       - "tests/experimental_hir_v1_codegen_checked_rejection_test.cpp"
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
+      - "tests/checked_i64_failure_status_test.cpp"
+      - "src/main/cpp/oreslang/runtime/CheckedI64Failure.hpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
 
@@ -122,3 +126,7 @@ jobs:
           set -e
           test "$status" -eq 86
           grep -Fxq ORES_I64_OVERFLOW "$RUNNER_TEMP/checked-overflow.log"
+      - name: Compile and execute typed checked-i64 error ABI
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Werror -Isrc/main/cpp tests/checked_i64_failure_status_test.cpp -o "$RUNNER_TEMP/checked-i64-abi"
+          "$RUNNER_TEMP/checked-i64-abi"
