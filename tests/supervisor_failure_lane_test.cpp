@@ -19,11 +19,16 @@ struct Recorder final : Lane::Handler {
     std::vector<Lane::Kind> origins;
     std::vector<std::uint32_t> origin_codes;
     bool fail_once = false;
+    bool fail_after_side_effect_once = false;
     void add(const Lane::Failure& event) {
-        if (fail_once) { fail_once = false; throw std::runtime_error("retry"); }
+        if (fail_once) { fail_once = false; throw std::runtime_error("handler refused"); }
         events.push_back(event.kind);
         origins.push_back(event.origin_kind);
         origin_codes.push_back(event.origin_code);
+        if (fail_after_side_effect_once) {
+            fail_after_side_effect_once = false;
+            throw std::runtime_error("handler side effect already occurred");
+        }
     }
     void on_throw(const Lane::Failure& event) override { add(event); }
     void on_raise(const Lane::Failure& event) override { add(event); }
@@ -59,21 +64,39 @@ int main() {
     try { lane.dispatch_one(handler); }
     catch (const std::runtime_error&) { caught = true; }
     CHECK(caught);
-    CHECK(lane.pending_count() == 5);
-    // Failure was requeued behind the remaining CONTROL events.
+    CHECK(lane.pending_count() == 4);
+    // The callback may have acted before throwing. Fail closed with
+    // at-most-once delivery rather than replaying an ambiguous effect.
     for (int i = 1; i < 5; ++i) CHECK(lane.dispatch_one(handler));
-    CHECK(lane.dispatch_one(handler));
     CHECK(!lane.dispatch_one(handler));
     CHECK(lane.reserved_count() == 0);
-    CHECK(handler.events.size() == 5);
+    CHECK(handler.events.size() == 4);
     CHECK(handler.events[0] == Lane::Kind::Panic);
     CHECK(handler.events[1] == Lane::Kind::Panic);
-    CHECK(handler.events[4] == Lane::Kind::Panic);
+    CHECK(handler.events[3] == Lane::Kind::HostFailure);
     CHECK(handler.origins == std::vector<Lane::Kind>({
         Lane::Kind::Raise, Lane::Kind::Panic, Lane::Kind::Cancel,
-        Lane::Kind::HostFailure, Lane::Kind::Throw
+        Lane::Kind::HostFailure
     }));
-    CHECK(handler.origin_codes == std::vector<std::uint32_t>(5, 0u));
+    CHECK(handler.origin_codes == std::vector<std::uint32_t>(4, 0u));
+
+    // Deliberately throw *after* mutating host-visible handler state.
+    // The failure must be observed exactly once, even if the caller retries
+    // dispatch_one on the next carrier admission.
+    const auto prior = handler.events.size();
+    const auto already_applied = key(65);
+    lane.reserve(already_applied);
+    CHECK(lane.publish_preallocated(
+            already_applied, Lane::Kind::Panic, "effect-before-throw"));
+    handler.fail_after_side_effect_once = true;
+    bool side_effect_threw = false;
+    try { (void)lane.dispatch_one(handler); }
+    catch (const std::runtime_error&) { side_effect_threw = true; }
+    CHECK(side_effect_threw);
+    CHECK(handler.events.size() == prior + 1);
+    CHECK(handler.events.back() == Lane::Kind::Panic);
+    CHECK(!lane.dispatch_one(handler));
+    CHECK(lane.pending_count() == 0 && lane.reserved_count() == 0);
     CHECK(normal_mail.size() == 100000);
 
     lane.reserve(key(1, 2));
