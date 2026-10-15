@@ -53,6 +53,11 @@ if(BUILD_TESTING)
         clang++-${LLVM_VERSION_MAJOR} clang++-21 clang++-20 clang++-19
         clang++-18 clang++-17 clang++-16 clang++)
     if(ORE_ASSERT_IR_CLANG)
+        if(LLVM_VERSION_MAJOR LESS 15)
+            set(ORE_ASSERT_PTR_MODE typed)
+        else()
+            set(ORE_ASSERT_PTR_MODE opaque)
+        endif()
         foreach(ORE_ASSERT_OPT IN ITEMS 0 2)
             add_test(NAME native_assert_scalar_ir_execute_O${ORE_ASSERT_OPT}
                 COMMAND "${Python3_EXECUTABLE}"
@@ -60,7 +65,8 @@ if(BUILD_TESTING)
                     --driver "$<TARGET_FILE:oreslang-assert-scalar-ir-driver>"
                     --clang "${ORE_ASSERT_IR_CLANG}"
                     --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
-                    --opt "${ORE_ASSERT_OPT}")
+                    --opt "${ORE_ASSERT_OPT}"
+                    --pointer-mode "${ORE_ASSERT_PTR_MODE}")
             set_tests_properties(native_assert_scalar_ir_execute_O${ORE_ASSERT_OPT}
                 PROPERTIES TIMEOUT 240)
         endforeach()
