@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -82,7 +83,7 @@ SOURCE_ACTOR_TESTS = frozenset({
 
 def python_program(program: str) -> bool:
     # CTest exposes an absolute interpreter path on the Ubuntu build runner.
-    return __import__("re").fullmatch(r"python(?:3(?:\\.\\d+)?)?", Path(program).name) is not None
+    return re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(program).name) is not None
 
 
 def option_value(command: list[str], flag: str, test: str) -> str:
@@ -214,8 +215,6 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
             raise ManifestFailure(f"required CTest was not registered: {name}")
         entry = by_name[name]
         command = entry.get("command")
-        # Check the program itself, not just a test's human-readable name.
-        require_real_critical_command(name, command)
         if (not isinstance(command, list) or not command
                 or not all(isinstance(x, str) and x for x in command)
                 or any("NOTFOUND" in x or "$<" in x for x in command)):
@@ -274,6 +273,8 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                 raise ManifestFailure(f"critical CTest lacks numeric timeout: {name}")
             if not math.isfinite(timeout) or timeout <= 0 or timeout > 300:
                 raise ManifestFailure(f"critical CTest timeout is unsafe: {name}")
+        # Validate actual CMake test executables and fixtures, not names alone.
+        require_real_critical_command(name, command)
     return len(tests)
 
 
