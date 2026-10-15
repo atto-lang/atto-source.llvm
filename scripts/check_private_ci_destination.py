@@ -59,11 +59,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="Source owner/repo")
     parser.add_argument("--destination", required=True, help="Destination owner/repo")
-    parser.add_argument("--allowlist", type=Path, default=Path(__file__).resolve().parents[1]
-                        / ".github/private-ci-approved-repositories.txt")
+    # Deliberately no --allowlist option: allowing an alternate unreviewed
+    # path would defeat protected-branch review of the source repository's
+    # single security-controlled destination manifest.
     args = parser.parse_args(argv)
+    reviewed_allowlist = (
+        Path(__file__).resolve().parents[1]
+        / ".github/private-ci-approved-repositories.txt"
+    )
     try:
-        assert_destination_approved(args.source, args.destination, args.allowlist)
+        assert_destination_approved(args.source, args.destination, reviewed_allowlist)
     except MirrorPolicyError as exc:
         print(f"PRIVATE CI MIRROR DENIED: {exc}", file=sys.stderr)
         return 1
