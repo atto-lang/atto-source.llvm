@@ -126,6 +126,27 @@ int main() {
     CHECK(lane.reserved_count() == 0);
     CHECK(lane.admit_turn(hooks, false) == SupervisorControlTurn::Admitted::None);
 
+    // If escalation also fails after recording its effect, the decision
+    // error remains the propagated cause, and neither callback is replayed.
+    SupervisorControlTurn dual_failure(1, 1);
+    Key decision_escalation_failure{"decision-escalation-failure", 9};
+    dual_failure.reserve_child(decision_escalation_failure);
+    CHECK(dual_failure.publish_child(
+            decision_escalation_failure, Kind::Panic, "panic"));
+    Hooks twice_failing;
+    twice_failing.fail_once = true;
+    twice_failing.throw_after_escalation = true;
+    bool original_retained = false;
+    try { (void)dual_failure.admit_turn(twice_failing, false); }
+    catch (const std::logic_error& error) {
+        original_retained = std::string(error.what()) == "handler failure";
+    }
+    CHECK(original_retained);
+    CHECK(twice_failing.order == std::vector<std::string>({"panic", "escalate"}));
+    CHECK(!dual_failure.urgent() && dual_failure.reserved_count() == 0);
+    CHECK(dual_failure.admit_turn(twice_failing, false)
+          == SupervisorControlTurn::Admitted::None);
+
     // After an actor turn, a new producer must make CONTROL ready.
     Key handoff{"handoff", 4};
     lane.reserve_child(handoff);
