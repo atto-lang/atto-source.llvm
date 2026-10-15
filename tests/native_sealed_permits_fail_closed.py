@@ -41,21 +41,30 @@ CASES = {
 def main() -> None:
     if len(sys.argv) != 2:
         raise ValueError("expected compiler executable path")
-    compiler = sys.argv[1]
+    compiler = Path(sys.argv[1]).resolve(strict=True)
+    if not compiler.is_file():
+        raise ValueError("compiler must be a regular executable file")
     with tempfile.TemporaryDirectory(prefix="ores-sealed-native-") as temp:
         for name, source in CASES.items():
-            path = Path(temp) / f"{name}.ores"
+            # Run in a clean, per-case working directory. A failing compiler
+            # must not leave .ll/.bc/object artifacts that stdout checks miss.
+            case_dir = Path(temp) / name
+            case_dir.mkdir()
+            path = case_dir / "input.ores"
             path.write_text(source.strip() + "\n", encoding="utf-8")
             result = subprocess.run(
-                [compiler, str(path)],
+                [str(compiler), str(path)], cwd=case_dir,
                 capture_output=True, text=True, check=False, timeout=30,
             )
-            if (result.returncode != 1 or result.stdout.strip()
+            unexpected_files = sorted(str(item.relative_to(case_dir))
+                for item in case_dir.rglob("*") if item.is_file() and item != path)
+            if (result.returncode != 1 or result.stdout.strip() or unexpected_files
                     or "native sealed/final/permits hierarchy unsupported" not in result.stderr):
                 raise AssertionError(
                     f"{name}: compiler must reject unimplemented sealed "
-                    f"hierarchy semantics with its own diagnostic before emitting IR: rc={result.returncode}; "
-                    f"stdout={result.stdout!r}; stderr={result.stderr!r}"
+                    f"hierarchy semantics without emitting IR or files: rc={result.returncode}; "
+                    f"stdout={result.stdout!r}; stderr={result.stderr!r}; "
+                    f"unexpected_files={unexpected_files!r}"
                 )
     print(f"PASS: {len(CASES)} sealed/final/permits source forms fail closed")
 
