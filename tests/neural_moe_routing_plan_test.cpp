@@ -24,7 +24,6 @@ void must_fail(Fn&& action) {
 
 int main() {
     using Token = Plan::TokenScores;
-    using Score = Plan::ExpertScore;
     const std::vector<Token> one{{5, {{0, 3}, {1, 2}, {2, 1}}}};
     auto basic = Plan::plan(one, 3, 2, 3, Overflow::reject);
     assert(basic.assignments.size() == 2);
