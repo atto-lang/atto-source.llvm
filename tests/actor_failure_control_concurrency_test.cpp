@@ -1,7 +1,10 @@
 #include "oreslang/runtime/ActorFailureControl.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -10,51 +13,82 @@ using namespace oreslang::runtime;
 static int check_concurrent_fifo() {
     ActorFailureControlInbox inbox("parent", 16);
     constexpr int kMessages = 2048;
-    std::atomic<bool> producer_failed{false};
-    std::atomic<bool> consumer_failed{false};
+    constexpr int kWindow = 8; // Always below ring capacity: no expected drops.
+    std::mutex progress_mutex;
+    std::condition_variable progress_cv;
+    int sent = 0;
+    int received = 0;
+    bool failed = false;
 
+    const auto fail = [&] {
+        {
+            std::lock_guard<std::mutex> lock(progress_mutex);
+            failed = true;
+        }
+        progress_cv.notify_all();
+    };
+
+    // Exercise producer/consumer overlap with bounded credit, not 200,000
+    // yield retries whose duration depends on the CI runner's scheduling.
+    // A rejected offer is a real dropped notice and must fail this fixture.
     std::thread producer([&] {
         for (int i = 0; i < kMessages; ++i) {
+            {
+                std::unique_lock<std::mutex> lock(progress_mutex);
+                if (!progress_cv.wait_for(lock, std::chrono::seconds(10),
+                        [&] { return failed || sent - received < kWindow; })) {
+                    lock.unlock();
+                    fail();
+                    return;
+                }
+                if (failed) return;
+            }
             auto notice = ActorFailureControlNotice::from_guest_effect(
                     ActorExceptionalEffect::Raise,
                     "actor-" + std::to_string(i), "parent");
-            bool accepted = false;
-            for (int retry = 0; retry < 200000; ++retry) {
-                if (inbox.offer(notice, notice.envelope().actor_id())) {
-                    accepted = true;
-                    break;
-                }
-                std::this_thread::yield();
-            }
-            if (!accepted) {
-                producer_failed.store(true);
+            if (!inbox.offer(notice, notice.envelope().actor_id())) {
+                fail();
                 return;
             }
+            {
+                std::lock_guard<std::mutex> lock(progress_mutex);
+                sent = i + 1;
+            }
+            progress_cv.notify_all();
         }
     });
 
     std::thread consumer([&] {
         for (int i = 0; i < kMessages; ++i) {
-            bool received = false;
-            for (int retry = 0; retry < 200000; ++retry) {
-                auto next = inbox.try_pop();
-                if (next) {
-                    received = next->envelope().actor_id()
-                            == "actor-" + std::to_string(i)
-                            && next->effect() == ActorExceptionalEffect::Raise;
-                    break;
+            {
+                std::unique_lock<std::mutex> lock(progress_mutex);
+                if (!progress_cv.wait_for(lock, std::chrono::seconds(10),
+                        [&] { return failed || sent > i; })) {
+                    lock.unlock();
+                    fail();
+                    return;
                 }
-                std::this_thread::yield();
+                if (failed) return;
             }
-            if (!received) {
-                consumer_failed.store(true);
+            const auto next = inbox.try_pop();
+            if (!next || next->envelope().actor_id()
+                    != "actor-" + std::to_string(i)
+                    || next->effect() != ActorExceptionalEffect::Raise) {
+                fail();
                 return;
             }
+            {
+                std::lock_guard<std::mutex> lock(progress_mutex);
+                received = i + 1;
+            }
+            progress_cv.notify_all();
         }
     });
+
     producer.join();
     consumer.join();
-    if (producer_failed || consumer_failed) return 1;
+    if (failed || inbox.dropped() != 0 || sent != kMessages
+            || received != kMessages) return 1;
     if (inbox.pending() != 0 || inbox.retired()) return 2;
     return 0;
 }
