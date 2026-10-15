@@ -3,6 +3,7 @@
 #include "oreslang/frontend/ExperimentalHirV1.hpp"
 #include <cassert>
 #include <memory>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -82,5 +83,6 @@ int main() {
 
     program.functions[0].name = "counter_response";
     rejects([&] { (void) emit_experimental_hir_v1(program); });
+    std::cout << json;
     return 0;
 }
