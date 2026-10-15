@@ -51,6 +51,14 @@ REJECTIONS = {
 end
 pub fnc main(): int { let Foo f = new Foo(42); return f.a; }
 """, "class field requires i64 literal initializer"),
+    "private-default-field": ("""define class Foo as
+  int a: 5
+end
+pub fnc main(): int {
+  let Foo f = new Foo();
+  return f.a;
+}
+""", "private class field"),
     "same-line-field-without-semicolon": ("""define class Foo as
   pub int a: 5 int b: 9
 end
@@ -165,7 +173,7 @@ def main():
             src = root / f"{name}.ores"
             src.write_text(source, encoding="utf-8")
             result = subprocess.run([opts.compiler, str(src)], capture_output=True, text=True, timeout=60)
-            if result.returncode == 0 or result.stdout:
+            if result.returncode != 1 or result.stdout:
                 raise AssertionError((name, result.returncode, result.stdout))
             if diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.stderr))
