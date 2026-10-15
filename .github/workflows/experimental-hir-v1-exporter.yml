@@ -14,6 +14,7 @@ on:
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
       - "tests/checked_i64_failure_status_test.cpp"
       - "src/main/cpp/oreslang/runtime/CheckedI64Failure.hpp"
+      - "src/main/cpp/oreslang/runtime/EffectUnwind.hpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
   pull_request:
@@ -29,6 +30,7 @@ on:
       - "tests/experimental_hir_v1_checked_range_property_test.cpp"
       - "tests/checked_i64_failure_status_test.cpp"
       - "src/main/cpp/oreslang/runtime/CheckedI64Failure.hpp"
+      - "src/main/cpp/oreslang/runtime/EffectUnwind.hpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
 
@@ -75,6 +77,15 @@ jobs:
           c++ -std=c++20 -Wall -Wextra -Werror -Isrc/main/cpp \
             tests/checked_i64_admission_test.cpp -o "$RUNNER_TEMP/checked-i64-admission"
           "$RUNNER_TEMP/checked-i64-admission"
+      - name: Verify packed checked-i64 status under both native compilers
+        run: |
+          set -euo pipefail
+          for cc in g++ clang++; do
+            "$cc" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic \
+              -Isrc/main/cpp tests/checked_i64_failure_status_test.cpp \
+              -o "$RUNNER_TEMP/checked-packed-status-${cc}"
+            "$RUNNER_TEMP/checked-packed-status-${cc}"
+          done
       - name: Verify signed-i64 range arithmetic against widened mathematical oracle
         run: |
           c++ -std=c++20 -Wall -Wextra -Isrc/main/cpp tests/experimental_hir_v1_checked_range_property_test.cpp -o "$RUNNER_TEMP/checked-range-property"
