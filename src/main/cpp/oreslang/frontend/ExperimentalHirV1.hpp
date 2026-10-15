@@ -124,9 +124,13 @@ inline std::string hir_v1_expr_json(const Expression& expr,
                 + ",\"rhs\":" + hir_v1_expr_json(*expr.right, depth + 1, nodes) + "}";
         }
         case Kind::Call: {
-            if (!hir_v1_identifier(expr.name) || expr.arguments.size() > 32)
+            if (!hir_v1_identifier(expr.name) || expr.arguments.size() > 32 ||
+                expr.type_arguments_present || !expr.type_arguments.empty())
                 throw unsupported_hir_v1("call identity/arity");
-            // The experimental contract does not support named argument reordering.
+            // The experimental contract does not support generic or named calls.
+            if (!expr.argument_names.empty() &&
+                expr.argument_names.size() != expr.arguments.size())
+                throw unsupported_hir_v1("malformed positional label vector");
             for (const auto& name : expr.argument_names)
                 if (!name.empty()) throw unsupported_hir_v1("named call arguments");
             std::string json = "{\"kind\":\"call\",\"function\":\"" + expr.name + "\",\"args\":[";
@@ -164,11 +168,13 @@ inline std::string emit_experimental_hir_v1(const Program& program,
         const Function& fn = *functions[i];
         if (!hir_v1_identifier(fn.name) || !declared.insert(fn.name).second)
             throw unsupported_hir_v1("duplicate/invalid function identity");
-        if (fn.returns_void || !fn.result || fn.scalar_while || !fn.locals.empty() ||
+        if (!fn.generic_parameters.empty() || fn.returns_void || !fn.result ||
+            fn.scalar_while || !fn.locals.empty() ||
             !fn.statements.empty() || !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
             !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
             !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
-            fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
+            fn.caught_throw_value || !fn.catch_binding.empty() ||
+            !fn.caught_throw_defers.empty() ||
             fn.has_declared_effects || fn.parameters.size() > 32) {
             throw unsupported_hir_v1("function body/effects/ownership outside subset");
         }
@@ -177,7 +183,8 @@ inline std::string emit_experimental_hir_v1(const Program& program,
         std::unordered_set<std::string> params;
         for (std::size_t p = 0; p < fn.parameters.size(); ++p) {
             const Parameter& arg = fn.parameters[p];
-            if (!arg.class_name.empty() || arg.mode != Parameter::Mode::Value ||
+            if (!arg.class_name.empty() || !arg.generic_type.empty() ||
+                arg.mode != Parameter::Mode::Value ||
                 !hir_v1_identifier(arg.name) || !params.insert(arg.name).second) {
                 throw unsupported_hir_v1("parameter name/type/borrow mode");
             }
