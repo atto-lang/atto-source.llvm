@@ -141,3 +141,31 @@ negative parser test now demands a successful LLVM IR positive control and
 specific effect-rejection diagnostics, preventing an invalid executable or
 broken parser from reporting a false pass. **Neither test has yet completed
 in available CI.**
+
+## Registered native direct-child authority (October 14, 2026)
+
+The native host-only `ActorFailureControlInbox` now checks **three** independent
+conditions before accepting a terminal child notice:
+
+1. The envelope's supervisor matches the owning inbox.
+2. The scheduler-supplied direct-child identity matches the notice's actor ID.
+3. That child identity is currently registered with this supervisor by the
+   trusted native actor spawn/finalization machinery.
+
+`register_direct_child(id)` is for the host actor-spawn boundary only; guest
+mailboxes, source code, a notice's claimed IDs, and untrusted `ActorRef` values
+must **never** register membership. `unregister_direct_child(id)` runs only
+after the final CONTROL handoff. Revocation prevents new admissions, but
+already queued immutable notices remain readable. A supervisor's retirement
+clears the membership registry and ring atomically under the same mutex.
+
+Registration cardinality is capped at 4,096 child identities per supervisor;
+excess registrations fail closed. Registration may allocate at spawn, but
+`offer` and `try_pop` do not grow queues or registries. Tests now require
+explicit registration and cover forged, duplicate, withdrawn, and retired
+child authority as well as producer/consumer/retirement races.
+
+**Scope:** This adds an enforceable ownership contract to the native host
+container. It is not wired into LLVM's actor scheduler and it does not
+implement guest `throw`, `raise`, `panic`, unwinding, `recover`, or native
+supervisor callbacks. No exact-head LLVM CTest/AOT results have been obtained.
