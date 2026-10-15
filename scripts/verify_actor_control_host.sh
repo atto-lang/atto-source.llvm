@@ -61,7 +61,8 @@ for fixture in \
     supervisor_failure_lane_test \
     supervisor_control_turn_test \
     effect_supervision_bridge_test \
-    effect_supervisor_end_to_end_test
+    effect_supervisor_end_to_end_test \
+    native_flags2env_header_test
 do
     printf 'Building host-only %s\n' "$fixture"
     "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
@@ -71,4 +72,4 @@ do
     "$work/$fixture"
 done
 
-printf 'PASS: 8 native host CONTROL fixtures (not guest/compiler parity).\n'
+printf 'PASS: 9 native host CONTROL/CLI fixtures (not guest/compiler parity).\n'
