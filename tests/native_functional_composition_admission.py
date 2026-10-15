@@ -32,7 +32,8 @@ def main():
     args = parser.parse_args()
     check(args.compiler, args.fixtures / "forward-call-main.ores", True)
     for name in ("unsupported-option-composition.ores",
-                 "unsupported-result-composition.ores"):
+                 "unsupported-result-composition.ores",
+                 "unsupported-question-propagation.ores"):
         check(args.compiler, args.fixtures / name, False)
     print("native functional composition: positive control + 2 fail-closed gates")
 
