@@ -1,0 +1,2 @@
+@ActorMiddleware(Normalize)
+define stream actor Worker as end
