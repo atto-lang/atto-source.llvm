@@ -10,7 +10,20 @@ def fixture():
     entries = []
     for name in CRITICAL_TESTS:
         props = [{"name": "TIMEOUT", "value": 90.0}] if name in TIMED_TESTS else []
-        entries.append({"name": name, "command": ["/usr/bin/python3", "-c", "pass"],
+        command = ["/usr/bin/python3"]
+        if name == "native_contract_harness_python_O":
+            command.append("-O")
+        if name == "native_contract_harness_python_OO":
+            command.append("-OO")
+        if name.startswith("native_contract_harness_"):
+            command.append("tests/test_contract_harness.py")
+        elif name == "native_contract_positive_object_verifies":
+            command.extend(["tests/contract.py", "--compiler", "build/oreslang-llvmc",
+                            "--fixture", "tests/fixtures/constant-main.ores",
+                            "--verify-object", "--clang", "clang"])
+        else:
+            command.extend(["-c", "pass"])
+        entries.append({"name": name, "command": command,
                         "properties": props})
     for index in range(125):
         entries.append({"name": f"native_extra_{index}", "command": ["/tmp/test"]})
@@ -54,6 +67,36 @@ class ManifestAuditTests(unittest.TestCase):
             corpus["tests"] = [x for x in corpus["tests"] if x["name"] != critical]
             with self.assertRaisesRegex(ManifestFailure, "required CTest"):
                 check_manifest(corpus)
+
+    def test_optimized_python_flags_are_not_optional(self):
+        for name, flag in (
+                ("native_contract_harness_python_O", "-O"),
+                ("native_contract_harness_python_OO", "-OO")):
+            document = fixture()
+            entry = next(x for x in document["tests"] if x["name"] == name)
+            entry["command"].remove(flag)
+            with self.assertRaisesRegex(ManifestFailure, "not invoked with Python"):
+                check_manifest(document)
+
+    def test_optimized_harness_must_execute_correct_script(self):
+        self.manifest["tests"][0]["command"][-1] = "tests/empty.py"
+        self.fail_on("wrong script")
+
+    def test_native_object_gates_cannot_be_omitted(self):
+        for flag in ("--verify-object", "--clang", "--compiler", "--fixture"):
+            document = fixture()
+            entry = next(x for x in document["tests"]
+                         if x["name"] == "native_contract_positive_object_verifies")
+            entry["command"].remove(flag)
+            with self.assertRaisesRegex(ManifestFailure, "source object CTest is missing"):
+                check_manifest(document)
+
+    def test_native_object_fixture_cannot_be_replaced_with_stub(self):
+        name = "native_contract_positive_object_verifies"
+        entry = next(x for x in self.manifest["tests"] if x["name"] == name)
+        idx = entry["command"].index("tests/fixtures/constant-main.ores")
+        entry["command"][idx] = "tests/fixtures/empty.ores"
+        self.fail_on("does not compile positive guest source")
 
     def test_duplicate_test_names_rejected(self):
         self.manifest["tests"].append(copy.deepcopy(self.manifest["tests"][0]))
