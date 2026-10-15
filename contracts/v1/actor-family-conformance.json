@@ -1347,6 +1347,34 @@
       "description": "failed host CompletionStage delivers unwrapped failure on owning actor continuation lane, never on producer thread",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-191",
+      "expected": "runtime_target",
+      "description": "externally visible typed unary reply publishes only after serialized actor TurnExecutor and guest context have exited",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-192",
+      "expected": "runtime_target",
+      "description": "post-exit unary reply data is deeply immutable; unsupported actor guest capabilities and mutable host objects fail closed",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-193",
+      "expected": "runtime_target",
+      "description": "actor STOP prevents a late external reply and revokes its completion-stage observer without running guest continuation",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-194",
+      "expected": "reject",
+      "description": "post-carrier publisher rejects off-turn admission and is bounded per actor while preserving single physical carrier lease",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
