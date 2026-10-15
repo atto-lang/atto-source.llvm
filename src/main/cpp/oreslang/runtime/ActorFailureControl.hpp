@@ -30,6 +30,11 @@ public:
         if (actor_id.empty()) {
             throw std::invalid_argument("actor CONTROL notice requires actor identity");
         }
+        // A child can never be its own structured supervisor. Reject forged
+        // self-parenting metadata before constructing the CONTROL envelope.
+        if (actor_id == supervisor_id) {
+            throw std::invalid_argument("actor CONTROL notice cannot supervise itself");
+        }
         switch (effect) {
             case ActorExceptionalEffect::Raise:
                 return ActorFailureControlNotice(effect,
@@ -80,12 +85,20 @@ public:
     ActorFailureControlInbox(const ActorFailureControlInbox&) = delete;
     ActorFailureControlInbox& operator=(const ActorFailureControlInbox&) = delete;
 
+    // The native runtime must supply direct_child_id from its STRUCTURED
+    // child registry, never from guest input or the notice itself. Checking
+    // both identities makes the ownership proof explicit at the call site.
     // The incoming notice is copied before acquiring the lock. Once inside,
     // only std::string moves and optional emplacement into fixed slots occur:
     // no queue growth, reallocations, guest callbacks or unbounded waits.
-    bool offer(ActorFailureControlNotice notice) {
+    bool offer(ActorFailureControlNotice notice, std::string_view direct_child_id) {
         if (notice.envelope().supervisor_id() != supervisor_id_) {
             throw std::invalid_argument("CONTROL notice is not owned by this supervisor");
+        }
+        if (direct_child_id.empty()
+                || direct_child_id == supervisor_id_
+                || notice.envelope().actor_id() != direct_child_id) {
+            throw std::invalid_argument("CONTROL notice does not match direct-child authority");
         }
         std::lock_guard<std::mutex> lock(mutex_);
         if (retired_ || count_ == capacity_) {
