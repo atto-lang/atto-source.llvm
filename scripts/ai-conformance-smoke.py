@@ -34,7 +34,7 @@ def sha256(path):
 
 
 def _kill_process_group(proc):
-    """Terminate a timed-out compiler and any descendants holding its pipes."""
+    """Kill the dedicated process group; separately daemonized children may escape."""
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGKILL)
@@ -48,7 +48,7 @@ def run(argv, timeout, cwd):
     """Run an argv vector with bounded capture and bounded wall time.
 
     No shell. A dedicated POSIX process group permits stopping descendants
-    if the compiler launcher (such as the Java Python probe) wedges.
+    if the compiler launcher (such as the Java Python probe) wedges.\n    This is not an OS sandbox and cannot kill descendants that create new sessions.
     """
     start = time.monotonic()
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
