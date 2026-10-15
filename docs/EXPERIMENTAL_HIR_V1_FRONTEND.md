@@ -53,9 +53,22 @@ Marked source executes signed-64-bit addition, subtraction, multiplication
 and unary negation with overflow detection. Java/GraalVM uses
 `Math.*Exact`; LLVM uses `llvm.sadd/ssub/smul.with.overflow.i64`, with
 checked negation lowered as zero-minus-operand. LLVM's experimental host
-failure path prints `ORES_I64_OVERFLOW` and exits with status 86; the
-GraalVM guest raises a failure carrying the same diagnostic marker. This
-is **not yet a unified guest `Error`/supervisor ABI**.
+lowering now forwards an **invocation-scoped** `i32*` checked-effect slot
+through every checked scalar function as its final, compiler-hidden argument.
+A failed operation stores the typed `Throw` code `0x494F0001` and returns
+from that function; each enclosing call checks the slot and propagates the
+failure without evaluating the invalid result. The process entrypoint
+initializes the slot and alone converts the pending failure to
+`ORES_I64_OVERFLOW` and exit status 86. No process-global error state or
+per-arithmetic-operation `exit()` call is used in this profile.
+
+**This extra status-pointer ABI applies only to the experimental checked
+host-scalar profile**, and cannot be called using the legacy bare-i64 C
+signature. It is not an implemented guest `Error`, catch/recover,
+actor/supervisor, cross-thread or reusable library invocation API. Java's
+experimental guest boundary carries the same diagnostic marker, but
+typed guest exception parity and compiler-optimized runtime equivalence
+remain to be proved.
 
 Unmarked source units preserve ordinary runtime arithmetic, and their HIR
 exporters continue to reject expressions such as `count * 43` unless a
