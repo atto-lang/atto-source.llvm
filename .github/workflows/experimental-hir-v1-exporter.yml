@@ -172,18 +172,26 @@ jobs:
       - name: Execute invocation-local checked Throw across C ABI and nested calls
         run: |
           set -euo pipefail
-          # No guest main: the C harness is the OS host and must regain control.
+          # The checked source profile requires guest main. Rename ONLY the
+          # generated OS entry symbol in this test object so the independent C
+          # host can call guest functions and verify their status ABI.
           # Checked guest arithmetic must NEVER call exit() directly.
           cat > "$RUNNER_TEMP/checked-effect.ores" <<'ORES'
           // oreslang:checked-i64-v1
           pub fnc scale(int count): int { return count * 43; }
           pub fnc outer(int count): int { return scale(count) + 1; }
           pub fnc intermediate(int count): int { return (count * 43) * 0; }
+          pub fnc main(): int { return outer(1); }
           ORES
           "$RUNNER_TEMP/oreslang-llvmc" "$RUNNER_TEMP/checked-effect.ores" \
             > "$RUNNER_TEMP/checked-effect.ll"
           "$CLANG" -Wno-override-module -c -x ir "$RUNNER_TEMP/checked-effect.ll" \
             -o "$RUNNER_TEMP/checked-effect.o"
+          command -v objcopy
+          # The emitted guest source contains a normal OS main wrapper.
+          # Rename it only in this disposable object to avoid two C mains.
+          objcopy --redefine-sym main=oreslang_guest_entry_unused \
+            "$RUNNER_TEMP/checked-effect.o"
           cat > "$RUNNER_TEMP/checked-effect.c" <<'C'
           #include <stdint.h>
           #include <limits.h>
