@@ -45,6 +45,19 @@ class SmokeAdmission(unittest.TestCase):
         self.assertIn("nonexistent_symbol", smoke.NEGATIVE)
         self.assertNotIn("nonexistent_symbol", smoke.POSITIVE)
 
+    def test_checkout_identity_reads_current_git_head(self):
+        import subprocess
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            subprocess.run(["git", "-C", tmp, "-c", "user.name=Conformance",
+                            "-c", "user.email=conformance@example.invalid",
+                            "commit", "-q", "--allow-empty", "-m", "fixture"], check=True)
+            actual = subprocess.run(["git", "-C", tmp, "rev-parse", "HEAD"],
+                                    capture_output=True, text=True, check=True).stdout.strip()
+            self.assertEqual(smoke.git_checkout_sha(Path(tmp)), actual)
+            self.assertRegex(actual, r"^[0-9a-f]{40}$")
+
     def test_compiler_digest_reads_actual_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "program"
