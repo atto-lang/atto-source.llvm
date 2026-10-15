@@ -51,13 +51,14 @@ exit 97
         path.write_text(contents)
         path.chmod(0o755)
 
-    def run_verifier(self, sha):
+    def run_verifier(self, sha, root=None):
+        root = root or self.repo
         env = os.environ.copy()
         env["PATH"] = str(self.bin) + os.pathsep + env.get("PATH", "")
         env["CXX"] = str(self.bin / "fake-cxx")
         env["ORESLANG_EXPECTED_SOURCE_SHA"] = sha
         return subprocess.run(
-            ("bash", str(self.repo / "scripts" / self.script)), cwd=self.repo,
+            ("bash", str(root / "scripts" / self.script)), cwd=root,
             env=env, text=True, capture_output=True, timeout=15)
 
     def test_pinned_clean_tree_admitted(self):
@@ -85,6 +86,37 @@ exit 97
         result = self.run_verifier(self.sha)
         self.assertEqual(2, result.returncode)
         self.assertIn("modified or untracked", result.stderr)
+
+
+    def test_ignored_nested_checkout_denied(self):
+        # A clean parent repository has a valid HEAD, but its ignored nested
+        # project is not included in that Git tree. The verifier must refuse
+        # rather than reporting the parent's SHA as proof of source identity.
+        outer = Path(self.temp.name) / "foreign-worktree"
+        nested = outer / "ignored-checkout"
+        (nested / "scripts").mkdir(parents=True)
+        shutil.copyfile(
+            self.repo / "scripts" / self.script,
+            nested / "scripts" / self.script,
+        )
+        (outer / ".gitignore").write_text("ignored-checkout/\\n")
+        for args in (
+            ("init", "-q"),
+            ("config", "user.email", "test@example.invalid"),
+            ("config", "user.name", "Test"),
+            ("add", ".gitignore"),
+            ("commit", "-qm", "parent fixture"),
+        ):
+            subprocess.run(
+                ("git", *args), cwd=outer, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            )
+        foreign_sha = subprocess.check_output(
+            ("git", "rev-parse", "HEAD"), cwd=outer, text=True,
+        ).strip()
+        result = self.run_verifier(foreign_sha, root=nested)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("Git worktree root", result.stderr)
 
 if __name__ == "__main__":
     unittest.main()
