@@ -105,6 +105,7 @@ int main() {
     must_reject([&] { enum_tag("A"); }); // unqualified enums cannot cross files
     must_reject([&] { enum_tag("pkg/a.ores::0A"); });
     must_reject([&] { enum_tag("pkg/a.ores::A-B"); });
+    must_reject([&] { enum_tag("pkg::::A"); });
     must_reject([&] { enum_tag("pkg/A#$"); });
     must_reject([&] { primitive_tag("i128"); });
     // Compiler internal records may bypass constructor factory APIs. All
