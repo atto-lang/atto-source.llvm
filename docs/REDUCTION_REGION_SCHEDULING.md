@@ -5,7 +5,7 @@
 ## Guarantees
 
 - Actor, supervisor, and root logical lanes remain single-flight: no simultaneous guest execution on one lane, regardless of carrier thread.
-- `critical handle_state` is a sealed intrinsic. It permits `await`, `select`, and compiler-approved reentrancy; its callback is **not** an atomic transaction spanning suspension.
+- `critical handle_state` is a sealed intrinsic with exclusive state-loan admission. A live state-backed loan **must not cross** `await`, `select`, channel suspension, cancellation, or another logical suspension boundary. Release the loan before suspending, and reacquire a fresh capability afterward. Its callback is **not** an atomic transaction spanning suspension.
 - An **atomic evaluation** is the smallest compiler-proven non-suspending state operation (for example, primitive `s.count += 1` as one protected read-modify-write). A source line or arbitrary function call is **not** inherently atomic.
 - **Reduction region:** an optimizable section of guest code whose uninterrupted work is bounded, or whose control-flow is subdivided into bounded chunks. Region boundaries are the only *implicit* yield candidates.
 - **Reentrancy point:** an **explicitly permitted logical suspension** (such as await/select/readch) with verified continuation state and no conflicting live state-backed loans. A reduction-region boundary for automatic CPU fairness is **not** by itself a same-actor reentrancy point.
@@ -66,7 +66,7 @@ synchronous continuation.
 1. Pure finite arithmetic: no unnecessary scheduling calls.
 2. Infinite primitive loop: another actor progresses within the configured work bound.
 3. State compound assignment: no lost updates or mid-operation reentrancy.
-4. `await` / `select` inside `critical handle_state`: interleaving but never simultaneous state access.
+4. `await` / `select` while a `critical handle_state` loan is live: compile-time rejection (or verified lowering that ends the loan before suspension), with no simultaneous actor-state access.
 5. Nested same-continuation state access; queued different-continuation access.
 6. Mutable continuation local survives yield; live mutable state borrow crossing yield is rejected.
 7. Infinite loop with live state borrow: diagnostic or proven segmented transformation, never silent starvation.
