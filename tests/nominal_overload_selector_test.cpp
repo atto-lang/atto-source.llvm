@@ -22,44 +22,73 @@ int main() {
 
     // Two enums can both hold Foo=1; only declaration identity matters.
     const std::vector<NominalOverloadSlot> cases = {
-        {"root", "x", {a}}, {"root", "x", {b}},
-        {"root", "x", {integer}}, {"root", "x", {boolean}}
+        {"root", "x", {a}}, {"root", "x", {b}}
     };
     validate_nominal_overload_family(cases);
     check(resolve_nominal_overload_static(cases, {a}) == 0);
     check(resolve_nominal_overload_static(cases, {b}) == 1);
-    check(resolve_nominal_overload_static(cases, {integer}) == 2);
-    check(resolve_nominal_overload_static(cases, {boolean}) == 3);
     check(nominal_overload_link_key(cases[0]) != nominal_overload_link_key(cases[1]));
-    check(nominal_overload_link_key(cases[2]) != nominal_overload_link_key(cases[3]));
 
-    // Missing tags do not authorize inspecting runtime values.
+    // Missing proof, primitive argument, or unrelated enums never select.
     must_reject([&] { resolve_nominal_overload_static(cases, {std::nullopt}); });
-    must_reject([&] { resolve_nominal_overload_static(cases, {primitive_tag("string")}); });
+    must_reject([&] { resolve_nominal_overload_static(cases, {integer}); });
+    must_reject([&] { resolve_nominal_overload_static(cases, {enum_tag("pkg/c.ores::C")}); });
 
-    // A nominal case member's integer payload is not a distinct type key.
+    // Primitive-only differences and primitive/enum differences are forbidden.
+    must_reject([&] {
+        validate_nominal_overload_family({
+            {"root", "x", {integer}}, {"root", "x", {boolean}}
+        });
+    });
+    must_reject([&] {
+        validate_nominal_overload_family({
+            {"root", "x", {a}}, {"root", "x", {integer}}
+        });
+    });
+    // Even a DIFFERENT enum cannot excuse an additional primitive difference.
+    must_reject([&] {
+        validate_nominal_overload_family({
+            {"root", "x", {a, integer}}, {"root", "x", {b, boolean}}
+        });
+    });
     must_reject([&] {
         validate_nominal_overload_family({
             {"root", "x", {a}}, {"root", "x", {a}}
         });
     });
+    // Unknown/generic signature positions are never eligible discriminators.
     must_reject([&] {
         validate_nominal_overload_family({
             {"root", "x", {a, std::nullopt}},
-            {"root", "x", {a, std::nullopt}}
+            {"root", "x", {b, std::nullopt}}
         });
     });
-    // Structural/generic positions cannot prove disjointness.
-    must_reject([&] {
-        validate_nominal_overload_family({
-            {"root", "x", {a, std::nullopt}},
-            {"root", "x", {a, integer}}
-        });
-    });
-    // Two typed positions can prove disjointness even when one is shared.
+    // The other, identical scalar position is allowed; it is not a selector.
+    const std::vector<NominalOverloadSlot> valid_with_scalar = {
+        {"root", "x", {a, integer}}, {"root", "x", {b, integer}}
+    };
+    validate_nominal_overload_family(valid_with_scalar);
+    check(resolve_nominal_overload_static(valid_with_scalar, {b, integer}) == 1);
+    // Multiple distinct enum positions are allowed and statically checked.
     validate_nominal_overload_family({
-        {"root", "x", {a, integer}},
-        {"root", "x", {a, boolean}}
+        {"root", "x", {a, a}}, {"root", "x", {b, b}}
+    });
+    // Java normalizes String to string, rather than using separate ABI slots.
+    check(primitive_tag("String") == primitive_tag("string"));
+    check(primitive_tag("i8") == NominalTypeTag{NominalTypeTag::Kind::Primitive, "i8"});
+    check(primitive_tag("u8") == NominalTypeTag{NominalTypeTag::Kind::Primitive, "u8"});
+    must_reject([&] { primitive_tag("float"); });
+    must_reject([&] { primitive_tag("decimal"); });
+    must_reject([&] { primitive_tag("complex"); });
+    must_reject([&] {
+        validate_nominal_overload_family({
+            {"root", "x", {a, integer}},
+            {"root", "x", {b, primitive_tag("string")}}
+        });
+    });
+    must_reject([&] {
+        validate_nominal_overload_family(std::vector<NominalOverloadSlot>(
+            129, {"root", "x", {a}}));
     });
     // Escaping is mandatory: these two pairs collided under
     // owner + "::" + name concatenation.
@@ -77,11 +106,11 @@ int main() {
     must_reject([&] { enum_tag("pkg/a.ores::0A"); });
     must_reject([&] { enum_tag("pkg/a.ores::A-B"); });
     must_reject([&] { enum_tag("pkg/A#$"); });
-    must_reject([&] { primitive_tag("i8"); });
+    must_reject([&] { primitive_tag("i128"); });
     // Compiler internal records may bypass constructor factory APIs. All
     // public selectors, including single-member families, validate tags.
     const auto forged_primitive =
-        NominalTypeTag{NominalTypeTag::Kind::Primitive, "u8"};
+        NominalTypeTag{NominalTypeTag::Kind::Primitive, "String"};
     const auto forged_enum =
         NominalTypeTag{NominalTypeTag::Kind::Enum, "A"};
     const auto forged_discriminant =
