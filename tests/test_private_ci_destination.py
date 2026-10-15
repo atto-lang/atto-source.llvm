@@ -51,6 +51,26 @@ class PrivateCIMirrorGateTests(unittest.TestCase):
         with self.assertRaisesRegex(MirrorPolicyError, "regular non-symlink"):
             read_approved_repositories(alias)
 
+    def test_symlink_swap_after_precheck_still_fails_closed(self):
+        # Force a path swap precisely after the informational prechecks,
+        # but before the authoritative O_NOFOLLOW open.
+        import os
+        from unittest.mock import patch
+
+        self.allow("test-org/private\n")
+        alternate = Path(self.workspace.name) / "forged.txt"
+        alternate.write_text("attacker/target\n", encoding="utf-8")
+        raw_open = os.open
+
+        def race_swap(path, flags, *args, **kwargs):
+            self.manifest.unlink()
+            self.manifest.symlink_to(alternate)
+            return raw_open(path, flags, *args, **kwargs)
+
+        with patch("scripts.check_private_ci_destination.os.open", side_effect=race_swap):
+            with self.assertRaisesRegex(MirrorPolicyError, "cannot read"):
+                read_approved_repositories(self.manifest)
+
     def test_large_or_nonregular_manifest_is_denied(self):
         self.allow("#" + "x" * (16 * 1024))
         with self.assertRaisesRegex(MirrorPolicyError, "exceeds 16 KiB"):
