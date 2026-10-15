@@ -1,0 +1,2 @@
+@SupervisorMiddleware(Authenticate)
+define http actor Server as end
