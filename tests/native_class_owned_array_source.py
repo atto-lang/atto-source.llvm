@@ -30,6 +30,16 @@ end
 MIXED_FOUR = FOUR.replace("  pub let int ready = 0;",
                           "  let int internal = 99;\n  pub let int ready = 0;")
 POSITIVES = {
+    "val-array-fixed-slot-mutable-referent": ("""define class Shelf as
+  pub val Array<int> first: new Array<int>();
+end
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.first.add(41);
+  shelf.first.set(0, 42);
+  return shelf.first.get(0);
+}
+""", 42, 1),
     "four-atomic-filled-with-private-scalar": (MIXED_FOUR + """pub fnc main(): int {
   let mut Four q = new Four();
   rt array_commit_filled(q, 2, -1, -1, 21, 21);
