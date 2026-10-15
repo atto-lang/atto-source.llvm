@@ -23,3 +23,7 @@ typed registry, buffer ownership and completion wakeup path are implemented,
 guest I/O continues to reject. There is no hidden worker or Java fallback.
 The Java/Graal branch similarly defaults to mandatory enforcement and now
 returns structured Oreslang test records rather than writing synchronous stdio.
+
+The all-backend 22-case source corpus is pinned in tests/mandatory-async-io.json.
+CTest native_shared_mandatory_async_source checks both default and explicit
+strict assertion paths without emitting partial IR for unsupported operations.

@@ -1867,3 +1867,10 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(cortexm_source_actor_admission PROPERTIES TIMEOUT 90)
 endif()
+
+if(BUILD_TESTING)
+  add_test(NAME native_shared_mandatory_async_source
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/mandatory_async_source.py"
+      "$<TARGET_FILE:oreslang-llvmc>")
+  set_tests_properties(native_shared_mandatory_async_source PROPERTIES TIMEOUT 60)
+endif()
