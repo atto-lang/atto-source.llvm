@@ -44,3 +44,9 @@ The smoke runner now independently reads the checked-out Git HEAD with git rev-p
 For pull_request workflows, GITHUB_SHA may be a synthetic merge commit: treat it as the checked-out tree under test, not necessarily the PR branch head. SHA matching here still does not attest that the compiler artifact was reproducibly built from those sources.
 
 The shared Actions diagnostic counts steps only when execution is evidenced; skipped, queued or missing step entries do not imply executed tests. A green diagnostic unit test is not a compiler conformance result.
+
+## IR and native executable fingerprints
+
+For the LLVM positive fixture, the producer now hashes the exact UTF-8 LLVM IR bytes written to the linker input and the generated native executable both before and after guest execution. The shared adapter requires the IR digest to match recorded compiler stdout and the two executable digests to match, rejecting omitted or inconsistent fields. If Clang reports success but produces no regular executable, the producer fails closed.
+
+These checks detect unintended modification during an observed run but do **not** authenticate self-reported JSON, link the source tree cryptographically to compiler binaries, or prove the absence of a time-of-check/time-of-use race. Java continues to report only the launcher class digest rather than an entire Maven/JDK dependency closure. Public promotion still requires independent CI artifact/run verification.
