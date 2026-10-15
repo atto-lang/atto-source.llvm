@@ -51,9 +51,10 @@ static int check_concurrent_fifo() {
             // Revoke only after admission, never by echoing a notice ID as
             // sufficient authorization for the queue.
             const auto& child_id = notice.envelope().actor_id();
-            if (!inbox.register_direct_child(child_id)
-                    || !inbox.offer(notice, child_id)
-                    || !inbox.unregister_direct_child(child_id)) {
+            const auto permit = inbox.register_direct_child(child_id);
+            if (!permit
+                    || !inbox.offer(notice, *permit)
+                    || !inbox.unregister_direct_child(*permit)) {
                 fail();
                 return;
             }
@@ -102,17 +103,24 @@ static int check_concurrent_fifo() {
 
 static int check_retirement_race() {
     ActorFailureControlInbox inbox("parent", 16);
-    if (!inbox.register_direct_child("child")) return 13;
     constexpr int kAttempts = 512;
+    std::vector<ActorFailureControlInbox::DirectChildPermit> permits;
+    permits.reserve(kAttempts);
+    for (int i = 0; i < kAttempts; ++i) {
+        const auto permit = inbox.register_direct_child("child-" + std::to_string(i));
+        if (!permit) return 13;
+        permits.push_back(*permit);
+    }
+    const auto later = inbox.register_direct_child("later-child");
+    if (!later) return 21;
     std::atomic<int> attempted{0};
     std::thread producer([&] {
         for (int i = 0; i < kAttempts; ++i) {
             const auto child = "child-" + std::to_string(i);
             const auto notice = ActorFailureControlNotice::from_guest_effect(
                     ActorExceptionalEffect::Panic, child, "parent");
-            (void)inbox.register_direct_child(child);
-            (void)inbox.offer(notice, child);
-            (void)inbox.unregister_direct_child(child);
+            // All authority was issued before the retirement race.
+            (void)inbox.offer(notice, permits[static_cast<std::size_t>(i)]);
             attempted.fetch_add(1);
         }
     });
@@ -126,7 +134,7 @@ static int check_retirement_race() {
     if (inbox.dropped() != static_cast<std::size_t>(kAttempts)) return 4;
     const auto notice = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "later-child", "parent");
-    if (inbox.offer(notice, notice.envelope().actor_id())) return 5;
+    if (inbox.offer(notice, *later)) return 5;
     if (inbox.dropped() != static_cast<std::size_t>(kAttempts + 1)) return 6;
     return 0;
 }
@@ -140,14 +148,15 @@ static int check_supervisor_retirement_isolation() {
             ActorExceptionalEffect::Raise, "left-child", "left");
     const auto right_notice = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Panic, "right-child", "right");
-    if (!left.register_direct_child("left-child")
-            || !right.register_direct_child("right-child")) return 14;
-    if (!left.offer(left_notice, "left-child")) return 7;
-    if (!right.offer(right_notice, "right-child")) return 8;
+    const auto leftPermit = left.register_direct_child("left-child");
+    const auto rightPermit = right.register_direct_child("right-child");
+    if (!leftPermit || !rightPermit) return 14;
+    if (!left.offer(left_notice, *leftPermit)) return 7;
+    if (!right.offer(right_notice, *rightPermit)) return 8;
     left.retire();
     left.retire();
     if (left.pending() != 0 || left.dropped() != 1 || left.try_pop()) return 9;
-    if (left.offer(left_notice, "left-child") || left.dropped() != 2) return 10;
+    if (left.offer(left_notice, *leftPermit) || left.dropped() != 2) return 10;
     if (right.pending() != 1 || right.dropped() != 0 || right.retired()) return 11;
     const auto received = right.try_pop();
     if (!received || received->effect() != ActorExceptionalEffect::Panic
@@ -160,6 +169,13 @@ static int check_supervisor_retirement_isolation() {
 static int check_consumer_retirement_accounting() {
     ActorFailureControlInbox inbox("parent", 8);
     constexpr int kAttempts = 2048;
+    std::vector<ActorFailureControlInbox::DirectChildPermit> permits;
+    permits.reserve(kAttempts);
+    for (int i = 0; i < kAttempts; ++i) {
+        const auto permit = inbox.register_direct_child("child-" + std::to_string(i));
+        if (!permit) return 22;
+        permits.push_back(*permit);
+    }
     std::atomic<int> attempted{0};
     std::atomic<int> consumed{0};
     std::atomic<bool> producer_done{false};
@@ -170,13 +186,9 @@ static int check_consumer_retirement_accounting() {
             auto notice = ActorFailureControlNotice::from_guest_effect(
                     ActorExceptionalEffect::Raise,
                     "child-" + std::to_string(i), "parent");
-            const std::string child_id = notice.envelope().actor_id();
-            // Registration may race retirement. Either this child is
-            // registered before offer, or retirement makes offer count a
-            // discarded terminal notice; no unregistered live offer is legal.
-            (void)inbox.register_direct_child(child_id);
-            (void)inbox.offer(notice, child_id);
-            (void)inbox.unregister_direct_child(child_id);
+            // The issuer owns all permits before retirement can begin.
+            // Terminal offers made after retirement must count as dropped.
+            (void)inbox.offer(notice, permits[static_cast<std::size_t>(i)]);
             attempted.fetch_add(1);
             if ((i & 15) == 0) std::this_thread::yield();
         }
@@ -219,7 +231,8 @@ static int check_consumer_retirement_accounting() {
 // accepted event. Rejected replays are counted independently of overflow.
 static int check_duplicate_terminal_race() {
     ActorFailureControlInbox inbox("parent", 16);
-    if (!inbox.register_direct_child("child")) return 16;
+    const auto permit = inbox.register_direct_child("child");
+    if (!permit) return 16;
     constexpr int kWriters = 16;
     std::atomic<bool> start{false};
     std::atomic<int> accepted{0};
@@ -232,7 +245,7 @@ static int check_duplicate_terminal_race() {
                     i % 2 == 0 ? ActorExceptionalEffect::Raise
                                : ActorExceptionalEffect::Panic,
                     "child", "parent");
-            if (inbox.offer(notice, "child")) ++accepted;
+            if (inbox.offer(notice, *permit)) ++accepted;
         });
     }
     start.store(true, std::memory_order_release);
@@ -243,8 +256,8 @@ static int check_duplicate_terminal_race() {
     if (!inbox.try_pop() || inbox.try_pop()) return 18;
     const auto replay = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Panic, "child", "parent");
-    if (inbox.offer(replay, "child") || inbox.duplicate_rejections() != kWriters) return 19;
-    if (!inbox.unregister_direct_child("child")) return 20;
+    if (inbox.offer(replay, *permit) || inbox.duplicate_rejections() != kWriters) return 19;
+    if (!inbox.unregister_direct_child(*permit)) return 20;
     return 0;
 }
 
