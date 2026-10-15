@@ -319,6 +319,44 @@ int main() {
     if (authorized.register_direct_child("actor-1")) return 75;
     if (authorized.pending() != 0 || !authorized.retired()) return 76;
 
+    // An old child's accepted notice can survive unregister while a new
+    // incarnation reuses the same opaque ActorId. Dequeued CONTROL data must
+    // identify which generation actually emitted the terminal event.
+    ActorFailureControlInbox reusedId("parent-1", 2);
+    const auto oldPermit = reusedId.register_direct_child("reused");
+    if (!oldPermit) return 97;
+    const auto oldNotice = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "reused", "parent-1");
+    if (oldNotice.admitted_inbox_incarnation() != 0
+            || oldNotice.admitted_child_generation() != 0) return 98;
+    if (!reusedId.offer(oldNotice, *oldPermit)) return 99;
+    if (!reusedId.unregister_direct_child(*oldPermit)) return 100;
+    const auto newPermit = reusedId.register_direct_child("reused");
+    if (!newPermit) return 101;
+    if (!reusedId.offer(ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Panic, "reused", "parent-1"), *newPermit)) return 102;
+    const auto oldDelivered = reusedId.try_pop();
+    const auto newDelivered = reusedId.try_pop();
+    if (!oldDelivered || !newDelivered || reusedId.try_pop()) return 103;
+    if (oldDelivered->admitted_inbox_incarnation() == 0
+            || oldDelivered->admitted_inbox_incarnation()
+                    != newDelivered->admitted_inbox_incarnation()
+            || oldDelivered->admitted_child_generation() == 0
+            || oldDelivered->admitted_child_generation()
+                    == newDelivered->admitted_child_generation()) return 104;
+    if (reusedId.belongs_to_current_child(*oldDelivered, *newPermit)
+            || reusedId.belongs_to_current_child(*oldDelivered, *oldPermit)
+            || !reusedId.belongs_to_current_child(*newDelivered, *newPermit)
+            || reusedId.belongs_to_current_child(*newDelivered, *oldPermit)) return 105;
+    try {
+        (void)reusedId.offer(*oldDelivered, *newPermit);
+        return 106;
+    } catch (const std::invalid_argument&) {}
+    if (!reusedId.unregister_direct_child(*newPermit)
+            || reusedId.belongs_to_current_child(*newDelivered, *newPermit)) return 107;
+    if (authorized.belongs_to_current_child(*newDelivered, *current)) return 108;
+    if (reusedId.pending() || reusedId.dropped()) return 109;
+
     // Spawn-time registry growth is finite even when the CONTROL ring is tiny.
     // A retired or full supervisor cannot accidentally accept new lineage.
     ActorFailureControlInbox boundedChildren("bounded-parent", 1);
