@@ -64,6 +64,26 @@ struct Hooks final : SupervisorControlTurn::Hooks {
 int main() {
     using Kind = SupervisorFailureLane::Kind;
     using Key = SupervisorFailureLane::ActorKey;
+    // Actor reservation is upstream of mailbox publication. A bounded
+    // number of slots is not sufficient if each key may have arbitrary
+    // size or contain control/noncanonical bytes.
+    SupervisorControlTurn identity_lane(1);
+    for (const std::string& id : std::vector<std::string>{
+             "", std::string(129, 'x'), "child\\nforged",
+             std::string("bad\\x7f", 4), std::string(1, char(0xff))}) {
+        bool rejected = false;
+        try { identity_lane.reserve_child(Key{id, 0}); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        CHECK(rejected);
+        CHECK(identity_lane.reserved_count() == 0);
+        CHECK(!identity_lane.urgent());
+    }
+    const Key largest_allowed{std::string(128, 'x'), 0};
+    identity_lane.reserve_child(largest_allowed);
+    CHECK(identity_lane.reserved_count() == 1);
+    identity_lane.retire_child(largest_allowed);
+    CHECK(identity_lane.reserved_count() == 0);
+
     SupervisorControlTurn lane(3, 1);
     Hooks hooks;
     Key first{"child-one", 0}, second{"child-two", 0}, third{"child-three", 0};
