@@ -552,6 +552,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_scoped_borrow_parameter_refresh unsupported-borrow-param.ores
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    oreslang_contract_test(canonical_arrow_entrypoint canonical-arrow-main.ores
+        --run 42 --clang "${ORE_CLANG}")
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
