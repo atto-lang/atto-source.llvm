@@ -72,6 +72,33 @@ same-owner repositories: this tool is specifically for cross-organization
 mirrors, not same-organization runner selection.
 
 
+## Exact-head test evidence and approval-file safety
+
+The focused actor verification workflows check out the immutable PR-head SHA
+rather than a moving branch or a synthetic pull-request merge ref, and pass
+that SHA in `ORESLANG_EXPECTED_SOURCE_SHA`. Each verifier refuses a malformed
+SHA, a mismatched HEAD, and dirty tracked/untracked inputs **before** invoking
+Maven or the native host compiler. The SHA check is about tested *source
+identity*, not permission to export source across organizations.
+
+Run the offline guard regressions with:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_private_ci_destination.py' -v
+python3 -m unittest discover -s tests -p 'test_actor_ci_checkout_proof.py' -v
+```
+
+The latter suite uses temporary Git repositories and deliberately mocked
+`mvn`/`java`/C++ programs. Passing it proves the checkout admission logic,
+**not** actual Java/GraalVM/LLVM compilation or actor behavior.
+
+The cross-org approval parser uses bounded 16 KiB reads from an opened
+regular-file descriptor with `O_NOFOLLOW` (fail closed when unsupported)
+and `O_NONBLOCK` where available. This guards against symbolic-link swaps,
+special file stalls and oversized manifests. The policy *must still* come
+from independently trusted protected-default-branch authorization; being a
+well-formed checked-out file does not by itself establish approval.
+
 ## Status on October 14, 2026
 
 The Java source allowlist has **no approved repositories**. Current GitHub
