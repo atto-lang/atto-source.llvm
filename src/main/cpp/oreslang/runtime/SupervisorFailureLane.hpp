@@ -296,10 +296,14 @@ private:
                 const auto third = static_cast<unsigned char>(text[i + 2]);
                 display_control =
                         (second == 0x80
-                         && ((third >= 0x8e && third <= 0x8f) // U+200E/F
-                             || (third >= 0xaa && third <= 0xae))) // U+202A..E
-                        || (second == 0x81 && third >= 0xa6
-                            && third <= 0xa9); // U+2066..9
+                         && ((third >= 0x8b && third <= 0x8f) // U+200B..F
+                             || (third >= 0xa8 && third <= 0xae))) // U+2028..E
+                        || (second == 0x81
+                            && (third == 0xa0 // U+2060 WORD JOINER
+                                || (third >= 0xa6 && third <= 0xa9))); // U+2066..9
+            } else if (valid && width == 3 && first == 0xef) {
+                display_control = static_cast<unsigned char>(text[i + 1]) == 0xbb
+                               && static_cast<unsigned char>(text[i + 2]) == 0xbf; // U+FEFF
             }
             const std::size_t consumed = valid ? width : 1;
             const std::size_t written = (!valid || display_control) ? 1 : width;
