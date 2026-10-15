@@ -82,7 +82,7 @@ def main() -> int:
         exact_result = invoke(compiler, cortex_exact, cortex_flags)
         if "cortex-m source exceeds 128 KiB limit" in exact_result.stderr:
             raise SystemExit("FAIL: exact Cortex-M limit rejected during reading")
-        for suffix in (b"x", b"\\xff"):
+        for suffix in (b"x", bytes([0xff])):
             cortex_over = base / ("cortex-over-" + str(suffix[0]) + ".ores")
             cortex_over.write_bytes(b" " * cortex_limit + suffix)
             fail = invoke(compiler, cortex_over, cortex_flags)
@@ -90,7 +90,7 @@ def main() -> int:
                     or "cortex-m source exceeds 128 KiB limit" not in fail.stderr):
                 raise SystemExit("FAIL: Cortex-M byte admission did not precede parsing/encoding")
 
-    print("native source input budget: byte boundary, invalid UTF-8 and NUL and Cortex-M boundary checks passed")
+    print("native source input budget: byte boundary, invalid UTF-8, NUL and Cortex-M boundary checks passed")
     return 0
 
 
