@@ -1282,7 +1282,7 @@ if(BUILD_TESTING)
 
     # Host-only deterministic actor arena; no source actor lowering implied.
     add_executable(oreslang-native-actor-arena-test
-        tests/native_actor_arena_test.c
+        tests/native_actor_arena_test.cpp
         src/main/cpp/oreslang/runtime/ActorArena.c)
     target_include_directories(oreslang-native-actor-arena-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -1297,7 +1297,7 @@ if(BUILD_TESTING)
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
     add_executable(oreslang-actor-owned-i64-heap-test
-        tests/actor_owned_heap_lifecycle_test.c
+        tests/actor_owned_heap_lifecycle_test.cpp
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
     target_include_directories(oreslang-actor-owned-i64-heap-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
