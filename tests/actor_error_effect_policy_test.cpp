@@ -100,5 +100,40 @@ int main() {
     const auto root = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "actor-1", "");
     if (!root.envelope().supervisor_id().empty()) return 17;
+
+    // Host-owned per-supervisor queues must not route one child into another
+    // supervisor's CONTROL inbox, even when the actor identity matches.
+    ActorFailureControlInbox inbox("parent-1", 1);
+    if (inbox.pending() != 0 || inbox.dropped() != 0) return 18;
+    if (!inbox.offer(raised)) return 19;
+    if (inbox.pending() != 1) return 20;
+    if (inbox.offer(panicked)) return 21;
+    if (inbox.dropped() != 1) return 22;
+    const auto received = inbox.try_pop();
+    if (!received || received->effect() != ActorExceptionalEffect::Raise) return 23;
+    if (received->envelope().actor_id() != "actor-1") return 24;
+    if (inbox.try_pop()) return 25;
+
+    const auto foreign_child = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "actor-2", "parent-2");
+    try {
+        (void)inbox.offer(foreign_child);
+        return 26;
+    } catch (const std::invalid_argument&) {
+        // An inbox is structurally owned; no arbitrary parent ID routing.
+    }
+    if (inbox.pending() != 0 || inbox.dropped() != 1) return 27;
+    try {
+        (void)ActorFailureControlInbox("", 4);
+        return 28;
+    } catch (const std::invalid_argument&) {}
+    try {
+        (void)ActorFailureControlInbox("parent-1", 0);
+        return 29;
+    } catch (const std::invalid_argument&) {}
+    try {
+        (void)ActorFailureControlInbox("parent-1", 257);
+        return 30;
+    } catch (const std::invalid_argument&) {}
     return 0;
 }
