@@ -72,6 +72,11 @@ pub fnc main(): int {
 """,
 }
 
+# The final fi closes the final braced branch; intermediate } else remains.
+import re
+POSITIVE.update({name + "-canonical-fi": re.sub(r"}\s*fi\b", "fi", source)
+                 for name, source in list(POSITIVE.items())})
+
 NEGATIVE = {
     "divergent-field-move": (PAIR + """
 pub fnc main(): int {

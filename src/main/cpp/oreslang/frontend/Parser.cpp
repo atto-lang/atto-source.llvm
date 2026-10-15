@@ -735,7 +735,7 @@ private:
         // agree at the join; checked below by the ownership verifier.
         auto branch_arm = [&](bool finally_scope = false) {
             std::vector<Statement> actions;
-            while (token_.text != "}") {
+            while (token_.text != "}" && token_.text != "fi") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
                 if (token_.text == "while" || token_.text == "for" ||
@@ -962,7 +962,9 @@ private:
                     if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
-                    require("}");
+                    // fi closes the final branch. Retain the old extra }
+                    // as compatibility syntax for existing native fixtures.
+                    accept("}");
                     require("fi");
                     value.early_returns.push_back(std::move(guard));
                     return_guards_started = true;
@@ -983,7 +985,9 @@ private:
                     require("else");
                     require("{");
                     conditional.else_statements = branch_arm();
-                    require("}");
+                    // fi closes the final branch. Retain the old extra }
+                    // as compatibility syntax for existing native fixtures.
+                    accept("}");
                     require("fi");
                     value.statements.push_back(std::move(conditional));
                 }
