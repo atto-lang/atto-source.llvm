@@ -228,6 +228,19 @@ jobs:
             "$RUNNER_TEMP/checked-effect.c" "$RUNNER_TEMP/checked-effect.o" \
             -o "$RUNNER_TEMP/checked-effect"
           "$RUNNER_TEMP/checked-effect"
+          # Optimization must not erase a checked Throw or change its status.
+          for opt in 2 3; do
+            "$CLANG" -O"$opt" -Wno-override-module -c -x ir \
+              "$RUNNER_TEMP/checked-effect.ll" \
+              -o "$RUNNER_TEMP/checked-effect-O$opt.o"
+            objcopy --redefine-sym main=oreslang_guest_entry_unused \
+              "$RUNNER_TEMP/checked-effect-O$opt.o"
+            "$CLANG" -std=c11 -Wall -Wextra -Werror \
+              "$RUNNER_TEMP/checked-effect.c" \
+              "$RUNNER_TEMP/checked-effect-O$opt.o" \
+              -o "$RUNNER_TEMP/checked-effect-O$opt"
+            "$RUNNER_TEMP/checked-effect-O$opt"
+          done
       - name: Compile and execute typed checked-i64 error ABI
         run: |
           c++ -std=c++20 -Wall -Wextra -Werror -Isrc/main/cpp tests/checked_i64_failure_status_test.cpp -o "$RUNNER_TEMP/checked-i64-abi"
