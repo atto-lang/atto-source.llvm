@@ -27,8 +27,13 @@ both source and destination as private, unarchived GitHub repositories,
 (2) checks the source's **main** allowlist instead of PR-supplied authorization,
 (3) pins the full source commit and tree, (4) excludes symlinks, gitlinks,
 unsafe paths and oversized files, (5) checks destination blobs and exact
-materialized subtree hashes, (6) writes only a new, isolated temporary
-branch, and (7) rechecks visibility and authorization before every write.
+materialized subtree hashes, (6) writes only beneath a dedicated
+inert `snapshots/...` subtree on a new, isolated temporary branch, never into
+repository-root `.github/workflows/` where private source could be executed
+as destination GitHub Actions configuration, (7) checks canonical source
+blob base64 before transfer, and (8) rechecks source/destination privacy,
+source-main approval and the pinned destination-main commit before **each**
+blob/tree/commit/ref mutation.
 
 The proposed shared platform-conformance publisher hardening is in
 [security PR #29](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/29).
