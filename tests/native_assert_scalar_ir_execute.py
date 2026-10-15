@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -31,6 +32,7 @@ def main() -> None:
     parser.add_argument("--clang", required=True)
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--opt", choices=("0", "2"), required=True)
+    parser.add_argument("--pointer-mode", choices=("typed", "opaque"), required=True)
     args = parser.parse_args()
 
     root = args.source_root.resolve(strict=True)
@@ -53,6 +55,26 @@ def main() -> None:
         require("define void @oreslang_assert_equal_scalar_v0(" in source and
                 "define void @oreslang_assert_trap_bool_v0(" in source,
                 "generated IR lacks actual exported function definitions")
+
+        # LLVM 14 accepts typed pointers by default; LLVM 15+ emits opaque
+        # pointers. Verify the ABI signatures themselves so a compiler-version
+        # regression cannot hide behind a successful unrelated native link.
+        signatures = {}
+        for symbol in ("oreslang_assert_equal_scalar_v0",
+                       "oreslang_assert_trap_bool_v0"):
+            match = re.search(r"(?m)^define\\s+void\\s+@" + symbol +
+                              r"\\s*\\(\\s*([^,\\n]+)", source)
+            require(match is not None, "missing exported ABI signature: " + symbol)
+            signatures[symbol] = match.group(1)
+        if args.pointer_mode == "typed":
+            require(signatures["oreslang_assert_equal_scalar_v0"].startswith(
+                        "%oreslang.assert.scalar.v0*") and
+                    signatures["oreslang_assert_trap_bool_v0"].startswith(
+                        "%oreslang.assert.bool_result.v0*"),
+                    "LLVM 14 typed pointer ABI signature regression")
+        else:
+            require(all(sig.startswith("ptr ") for sig in signatures.values()),
+                    "LLVM 15+ opaque pointer ABI signature regression")
 
         binary = output / "native-assert-test"
         execute([args.clang, "-std=c++17", "-O" + args.opt,
