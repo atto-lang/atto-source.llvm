@@ -3,6 +3,7 @@
 import copy
 import sys
 import unittest
+from pathlib import Path
 
 from ctest_manifest_gate import (
     CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
