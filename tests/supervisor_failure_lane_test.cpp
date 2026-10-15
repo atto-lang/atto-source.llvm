@@ -163,6 +163,36 @@ int main() {
     CHECK(event->parent_id == std::string(127, 'p'));
     unicode_lane.ack(key(90));
 
+    // UTF-8 well-formedness does not make terminal CONTROL text safe for
+    // host logs: reject ASCII escapes/controls, C1 controls, directional
+    // formatting marks and isolate controls without breaking valid scalars.
+    unicode_lane.reserve(key(92));
+    const std::string hostile_text =
+            std::string("A\0B", 3) + "\x1b[31m\n\x7f"
+            + "\xc2\x85"      // U+0085 NEXT LINE (C1)
+            + "\xd8\x9c"      // U+061C ARABIC LETTER MARK
+            + "\xe2\x80\x8e"  // U+200E LEFT-TO-RIGHT MARK
+            + "\xe2\x80\xae"  // U+202E RIGHT-TO-LEFT OVERRIDE
+            + "\xe2\x81\xa7"  // U+2067 RIGHT-TO-LEFT ISOLATE
+            + "z";
+    CHECK(unicode_lane.publish_preallocated(
+            key(92), Lane::Kind::Panic, hostile_text,
+            std::string("parent\n") + "\xe2\x80\xae"));
+    const auto scrubbed = unicode_lane.poll();
+    CHECK(scrubbed.has_value());
+    CHECK(scrubbed->summary == "A?B?[31m" + std::string(7, '?') + "z");
+    CHECK(scrubbed->parent_id == "parent??");
+    unicode_lane.ack(key(92));
+
+    unicode_lane.reserve(key(93));
+    CHECK(unicode_lane.publish_preallocated(
+            key(93), Lane::Kind::Panic,
+            std::string(510, 'a') + "\xe2\x80\xae" + rocket));
+    const auto bounded = unicode_lane.poll();
+    CHECK(bounded.has_value());
+    CHECK(bounded->summary == std::string(510, 'a') + "?");
+    unicode_lane.ack(key(93));
+
     unicode_lane.reserve(key(91));
     bool rejected = false;
     try {
