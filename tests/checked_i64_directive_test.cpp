@@ -27,9 +27,9 @@ int main() {
         "// oreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n";
     require(checked_i64_source_opt_in(valid));
     require(!checked_i64_source_opt_in("pub fnc main(): int { return 43; }\n"));
-    // A string literal mentioning the directive is not a directive line.
-    require(!checked_i64_source_opt_in(
-        "pub fnc demo(): int { return 43; } // oreslang:checked-i64-v1\n"));
+    // An inline comment after executable code is a genuine displaced
+    // profile directive and must fail closed, not silently wrap arithmetic.
+    rejected("pub fnc demo(): int { return 43; } // oreslang:checked-i64-v1\n");
     rejected("// oreslang:checked-i64-v1");
     rejected("// oreslang:checked-i64-v1\r\npub fnc main(): int { return 43; }");
     rejected(" // oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
