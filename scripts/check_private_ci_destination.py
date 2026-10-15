@@ -28,6 +28,13 @@ def normalize_repository(value: str) -> str:
 
 def read_approved_repositories(policy_file: Path) -> set[str]:
     try:
+        # A caller-controlled symlink (or special file such as a FIFO) can
+        # redirect/block an otherwise pinned policy pathname. Reject both
+        # before reading, and bound the approval manifest to 16 KiB.
+        if policy_file.is_symlink() or not policy_file.is_file():
+            raise MirrorPolicyError("private CI allowlist must be a regular non-symlink file")
+        if policy_file.stat().st_size > 16 * 1024:
+            raise MirrorPolicyError("private CI allowlist exceeds 16 KiB safety limit")
         policy = policy_file.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         raise MirrorPolicyError("cannot read the reviewed private CI allowlist") from exc
