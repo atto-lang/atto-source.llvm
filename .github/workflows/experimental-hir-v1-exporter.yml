@@ -1,0 +1,43 @@
+name: Experimental HIR v1 Source Exporter
+
+on:
+  push:
+    paths:
+      - "src/main/cpp/oreslang/frontend/ExperimentalHirV1.hpp"
+      - "src/main/cpp/oreslang/main.cpp"
+      - "tests/experimental_hir_v1_exporter_test.cpp"
+      - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
+      - ".github/workflows/experimental-hir-v1-exporter.yml"
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/frontend/ExperimentalHirV1.hpp"
+      - "src/main/cpp/oreslang/main.cpp"
+      - "tests/experimental_hir_v1_exporter_test.cpp"
+      - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
+      - ".github/workflows/experimental-hir-v1-exporter.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  header-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile header-only exporter (no LLVM libraries)
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Isrc/main/cpp tests/experimental_hir_v1_exporter_test.cpp -o "$RUNNER_TEMP/experimental-hir-v1-test"
+      - name: Reject invalid AST and validate emitted document
+        run: |
+          "$RUNNER_TEMP/experimental-hir-v1-test" > "$RUNNER_TEMP/experimental-hir-v1.json"
+          python3 -m json.tool "$RUNNER_TEMP/experimental-hir-v1.json" >/dev/null
+          python3 - "$RUNNER_TEMP/experimental-hir-v1.json" <<'PY'
+          import json, pathlib, sys
+          doc = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert doc["ir_family"] == "ores-hir"
+          assert doc["schema_version"] == "1.0.0-experimental"
+          assert doc["module_id"] == "source"
+          assert [f["name"] for f in doc["functions"]] == ["counter_response", "main"]
+          assert doc["functions"][0]["body"]["op"] == "mul"
+          PY
