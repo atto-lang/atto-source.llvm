@@ -95,6 +95,11 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_compiler_source_budget
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
     # Self-test for a measurement-only compile benchmark. No performance
     # threshold is asserted in CI: runner timing is not reproducible.
     add_test(NAME native_compile_benchmark_harness_selftest
@@ -1796,4 +1801,9 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_freestanding_source_object.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(cortexm_freestanding_source_object PROPERTIES TIMEOUT 90)
+    add_test(NAME cortexm_source_actor_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(cortexm_source_actor_admission PROPERTIES TIMEOUT 90)
 endif()
