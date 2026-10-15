@@ -84,6 +84,10 @@ fnc sum(int a, int b): int {
                "): int { return x0; }\n", "parameter budget")
         reject("// comment\n" * 14000 + "fnc f(): int { return 1; }\n",
                "source exceeds")
+        # Reject significantly oversized input without ever buffering it all
+        # inside the compiler; the bounded reader stops at 128 KiB.
+        reject("// large input\n" * 400000 + "fnc f(): int { return 1; }\n",
+               "source exceeds")
         source.write_text("fnc f(): int { return 1; }\n")
         bad = run([a.compiler, "--target=thumbv6m-none-eabi", str(source)])
         require(bad.returncode != 0 and not bad.stdout and "target" in bad.stderr.lower(),
