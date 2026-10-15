@@ -107,3 +107,15 @@ produced Zephyr 4.3.0 firmware that ran on QEMU Cortex-M3 and logged
 `ORESLANG_CORTEXM_AOT_PASS value=42`.
 [GitHub Actions evidence](https://github.com/canonical-cloud/canonical-docs/actions/runs/38646752678).
 See [target constraints](docs/CORTEXM_SCALAR_IR.md).
+
+
+## Experimental Cortex-M3 source actor bootstrap
+
+The compiler's `--target=thumbv7m-none-eabi` target now includes a
+separately bounded scalar-actor slice, in addition to pure `int` functions.
+It admits source declarations and a restricted `main` with `spawn`, literal
+`send`, and `stop`, exposing `oreslang_cortexm_bootstrap` and
+compiler-generated actor init/handler ABI functions. The embedded platform
+provides the static adapter; this is **not** full actor lowering, inter-actor
+handler sends, suspension, or standard OresVM on Cortex-M.
+See [admission limits](docs/CORTEXM_SCALAR_IR.md).
