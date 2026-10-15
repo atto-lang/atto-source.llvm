@@ -78,5 +78,8 @@ int main() {
     must_fail<std::invalid_argument>([] {
         Plan::plan({}, 3, 2, 1, Overflow::reject);
     });
+    must_fail<std::invalid_argument>([&] {
+        Plan::plan(one, 3, 2, 1, static_cast<Overflow>(127));
+    });
     return 0;
 }
