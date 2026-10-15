@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_ctest_manifest_gate.py -v
-          python3 tests/ctest_manifest_gate.py --build-dir build --min-tests 120
+          python3 tests/ctest_manifest_gate.py --build-dir build --min-tests 250
       - name: Verify parser, IR and native execution
         run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2
       - name: Repeat actor stress and cancellation races
