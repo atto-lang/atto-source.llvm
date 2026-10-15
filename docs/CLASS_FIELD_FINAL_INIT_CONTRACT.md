@@ -51,93 +51,31 @@ emission; run JVM type checker + interpreter/AOT/hybrid as well as LLVM
 native execution, ownership and sanitizer tests. The formatter must be
 idempotent and never touch local `let`/`val`/`const` declarations.
 
-## Implementation slice in this PR
+## Current LLVM implementation
 
-Native LLVM supports a bounded scalar constructor form:
+The native subset supports up to 16 scalar constructor parameters with an
+empty or return-only body. Pure declaration-site integer arithmetic reads only
+constructor parameters or literals; argument values are evaluated once into
+private slots before field publication. Owned/effectful arguments and explicit
+constructors containing Array<int> fields remain rejected before IR.
 
-```ores
-define class Pair as
-  final int a: start + 1;
-  final mut int b: start * 2;
-  constructor(int start) { return; }
-end
-```
+`const` and `final const` retain the existing literal scalar initializer rule.
+`val T` is the fixed-slot, mutable-referent alias `final mut T`. Repeating `mut`
+after `val` is rejected. For owned arrays, mutation still requires a mutable
+owner and no conflicting loans; fixed slots cannot be reassigned or taken.
+The class metadata records slot fixedness and referent capability separately.
 
-Constructor parameters must be typed `int`, the body must be empty or
-`return;`, and constructor calls must have the exact positional arity.
-Arguments are checked as side-effect-free i64 scalar expressions, evaluated
-exactly once, and stored in private temporary slots. Declaration-site field
-expressions may reference only these parameters or i64 literals and may use
-addition, subtraction, multiplication, and negation. Each expression is checked
-for lexical names and accepted syntax before native IR generation. The native
-backend emits ordered, stack-owned i64 field stores before the constructed
-object is observable.
+Free functions require explicit `pub` for scalar and array projections,
+including bulk filled-array mutation. Owning a class does not bypass privacy.
+The native subset has no instance methods, inheritance or general effectful
+construction.
 
-The existing owner checker still rejects final/const/val slot reassignments
-and destructive moves. Owned Array<int> fields with an explicit constructor,
-effectful field/argument expressions, arbitrary constructor body statements,
-reference-valued parameters, inheritance, and general object field expression
-lowering remain **rejected before IR**. Unqualified and pub scalar constructors
-share the same bounded admission.
+## Verification identity
 
-CTest now includes a source-identical scalar constructor guest shared with
-Java/GraalVM (expected result 40), explicit/public ctor guests, duplicate and
-unknown params, arity failures, effectful expressions, and owned-array denials.
-These fixtures are currently committed but **not validated by a running CI
-worker**. This implementation must not be represented as backend parity until
-real exact-tree compiled native and GraalVM results pass.
-
-## Branch integration and source identity
-
-Main has advanced with overlapping parser, codegen, ownership and CMake
-changes. GitHub currently reports this draft PR as merge-conflicted.
-A conflict-aware rebase is required; neither replacement of main files
-with stale versions nor force-merge is acceptable. A source-identical
-native Pair constructor guest has been added to the Java test suite and
-the LLVM CTest fixtures (expected result 40); it is not yet executed.
-
-## Constructor argument ownership boundary
-
-Pure integer syntax is insufficient by itself: an experimental owned-int
-variable lowers to a native region-read operation and can fail. Native
-scalar constructors therefore accept only ordinary stack i64 operand
-sources; owned-region reads, class owners and array handles are rejected
-by the ownership checker even when the syntax is a single variable name.
-A negative CTest fixture covers this before LLVM IR generation.
-
-The PR remains merge-conflicted and its current native checks lack
-executed CI evidence.
-
-## Native field visibility admission (2026-10-13)
-
-In the bounded LLVM ordinary-class subset there are no compiled instance
-methods or constructor-body member accesses. Every supported field
-projection originates in a free function. A class field without `pub`
-must therefore be rejected for all such projections; it is not sufficient
-to enforce only `final` assignment and take restrictions.
-
-Parser field declarations retain explicit `pub` metadata. The native
-ownership checker carries the public-slot set through class parameters,
-newly constructed owners and moved owners. Its checked field-access path
-rejects private reads, writes and takes before LLVM IR is emitted, while
-the owned Array<int> path also rejects private field access (including
-`.size`). No public exposure is implied merely by an owned class
-reference or an exclusive borrow.
-
-The CTest manifest now registers four negative fixtures for those cases.
-Previously public member guest programs remain the positive cases.
-These edits are **unverified** pending a conflict-aware integration with
-main, a real CMake/CTest run and native ASan/UBSan. A mergeable PR status
-would not substitute for those gates.
-
-## Mainline forward-port hardening
-
-The native LLVM compiler now checks public visibility on scalar and owned-array
-field projections from free functions. A private field cannot be read, written,
-destructively taken, or accessed through the Array<int> member ABI. Slot
-fixedness is independent of referent mutability, and bare `mut Array<int>` is
-admitted with the same owner/cleanup restrictions as `let mut Array<int>`.
-
-All native compiler and sanitizer acceptance gates must execute on the exact
-updated Git source tree. Earlier parity evidence is not transferable after a
-source commit, even if only the checker changed.
+Merged #403 and #356 established the constructor/visibility baseline with 403
+Linux CTests, sanitizers and source-identical Java/LLVM/Wasm constructor result
+40. The #369 reconciliation adds val-array mutation, const/val/final mutation
+and take rejection controls, while preserving those newer guards and generic
+signatures. Results for the reconciled head are recorded in its PR; historical
+branch snapshots are not current evidence. Firmware execution and full Java
+feature parity remain separate work.
