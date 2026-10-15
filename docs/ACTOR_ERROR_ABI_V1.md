@@ -263,3 +263,29 @@ GitHub Actions workflow still reports failure with no executed job steps,
 so the new fixture is not verified passing under CTest or production native
 carriers. No private source was transferred to other GitHub organizations:
 both source allowlists currently approve no destinations.
+
+
+## Low-level CONTROL handler replay contract (October 15, 2026)
+
+`SupervisorFailureLane::dispatch_one` is **at-most-once** after entering a
+native host handler. A callback may have created a replacement actor, emitted
+a fatal notice, or otherwise changed host state *before* it throws. Its
+exception therefore retires that single terminal notice instead of placing
+it back into the CONTROL queue; the original exception is propagated.
+
+This favors **no duplicate side effects** over automatic redelivery for
+transient callback failures. Hosts requiring durable failure processing must
+handle rejection/escalation explicitly in their supervisor policy and maintain
+their own durable host-side audit record. It is not an exactly-once processing
+guarantee and not evidence that a parent handled the failure.
+
+`SupervisorControlTurn` still owns its separate admission and decision policy:
+its pre-decision hook failure is retryable; once a restart or escalation
+callback has started, that path retires the notice to avoid effect replay.
+The low-level `dispatch_one` must not be used to bypass the supervisor's
+restart-intensity and generation checks.
+
+Host regressions cover exceptions before any visible side effect and exceptions
+*after* recording a callback side effect. In both cases there is no second
+invocation of the terminal callback for the same child. Real native scheduler
+integration, LLVM guest lowering, and exact-head CI execution are still pending.
