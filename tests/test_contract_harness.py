@@ -394,10 +394,28 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
 
     def test_verify_object_rejects_compiler_only_stub_ir(self):
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n")
-        clang = self.linker(compile_status=1)
+        # Even a successful Clang exit and object file cannot turn empty
+        # compiler output into executable native-source proof.
+        clang = self.linker()
         p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("failed object compilation", p.stderr)
+        self.assertIn("no function definitions", p.stderr)
+
+    def test_verify_object_cannot_accept_declarations_as_definitions(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "declare i32 @external()\n")
+        clang = self.linker()
+        p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no function definitions", p.stderr)
+
+    def test_verify_object_cannot_accept_commented_function_definition(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "; define i32 @spoof() { ret i32 42 }\n")
+        clang = self.linker()
+        p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no function definitions", p.stderr)
 
 
 if __name__ == "__main__":
