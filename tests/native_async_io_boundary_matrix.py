@@ -65,4 +65,20 @@ with tempfile.TemporaryDirectory(prefix="oreslang-async-io-boundary-") as root:
                                 text=True, timeout=15, check=False)
         assert result.returncode != 0 and result.stderr.strip(), (label, result.stderr)
         assert not result.stdout.strip(), (label, "partial IR emitted", result.stdout)
+    # Strictness is unconditional. The accepted flag can only restate it.
+    file.write_text("pub fnc main(): int { return 42; }\n")
+    for options in [[], ["--core-io=native-async-only"]]:
+        result = subprocess.run([compiler, *options, str(file)], capture_output=True,
+                                text=True, timeout=15, check=False)
+        assert result.returncode == 0 and result.stdout.startswith("; ModuleID"), (options, result.stderr)
+    for options in [["--core-io=legacy-blocking"], ["--core-io=off"],
+                    ["--core-io=native-async-only", "--core-io=native-async-only"]]:
+        result = subprocess.run([compiler, *options, str(file)], capture_output=True,
+                                text=True, timeout=15, check=False)
+        assert result.returncode == 2 and not result.stdout.strip(), (options, result.stdout, result.stderr)
+    for expression in cases.values():
+        file.write_text(f"pub fnc main(): int {{ return {expression}; }}\n")
+        result = subprocess.run([compiler, "--core-io=native-async-only", str(file)],
+                                capture_output=True, text=True, timeout=15, check=False)
+        assert result.returncode != 0 and not result.stdout.strip(), (expression, result.stdout)
 print(f"Native async-only I/O boundary: {len(cases) + len(extra)} unsupported native bindings fail closed")

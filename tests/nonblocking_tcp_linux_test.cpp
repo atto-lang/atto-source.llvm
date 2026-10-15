@@ -12,6 +12,12 @@ static void check(bool yes) { if (!yes) throw std::runtime_error("nonblocking TC
 int main() {
     auto listener = NonblockingTcpListener::loopback(0, 32);
     check(listener.local_port() > 0);
+    const int original_flags = ::fcntl(listener.fd(), F_GETFL);
+    check(original_flags >= 0);
+    check(::fcntl(listener.fd(), F_SETFL, original_flags & ~O_NONBLOCK) == 0);
+    auto unsafe_listener = listener.try_accept();
+    check(!unsafe_listener.would_block && unsafe_listener.error_number == EINVAL);
+    check(::fcntl(listener.fd(), F_SETFL, original_flags) == 0);
     auto none = listener.try_accept();
     check(none.would_block && !none.client.valid());
     auto client = OwnedSocketFd::create_tcp();

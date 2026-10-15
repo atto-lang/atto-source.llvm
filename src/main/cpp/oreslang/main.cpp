@@ -61,10 +61,18 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
+    bool io_policy_seen = false;
     const char* path = nullptr;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--experimental-rt-scalar-loop") {
+        if (arg.rfind("--core-io=", 0) == 0) {
+            if (io_policy_seen) { std::cerr << "duplicate core I/O policy\n"; return 2; }
+            io_policy_seen = true;
+            if (arg != "--core-io=native-async-only") {
+                std::cerr << "core I/O is mandatory native-async-only; blocking compatibility modes are forbidden\n";
+                return 2;
+            }
+        } else if (arg == "--experimental-rt-scalar-loop") {
             if (experimental_rt_scalar_loop) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }

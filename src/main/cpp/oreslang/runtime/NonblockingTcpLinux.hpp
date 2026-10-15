@@ -86,6 +86,12 @@ public:
         return ::ntohs(address.sin_port);
     }
     TryAccept try_accept() const noexcept {
+        // accept4's flags apply to the accepted fd, not to whether accept itself
+        // may wait. A descriptor whose listener flags were changed must fail
+        // before invoking accept4, even when there are no incoming connections.
+        const int flags = ::fcntl(listener_.get(), F_GETFL);
+        if (flags < 0) return {OwnedSocketFd{}, false, errno};
+        if ((flags & O_NONBLOCK) == 0) return {OwnedSocketFd{}, false, EINVAL};
         const int fd = ::accept4(listener_.get(), nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (fd >= 0) return {OwnedSocketFd(fd), false, 0};
         if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) return {OwnedSocketFd{}, true, 0};
