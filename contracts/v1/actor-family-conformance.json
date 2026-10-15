@@ -1025,6 +1025,118 @@
       "description": "Java and LLVM compiled neural actor source fixtures match numerics and ownership under sanitizer and cancellation",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-145",
+      "expected": "reject",
+      "description": "wrapped executor forges source mailbox sender before first middleware stage",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-146",
+      "expected": "reject",
+      "description": "wrapped executor forges sequence before first middleware stage",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-147",
+      "expected": "reject",
+      "description": "intermediate middleware stage passes mutable replacement to subsequent stage",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-148",
+      "expected": "reject",
+      "description": "intermediate middleware stage expands string beyond original input bound",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-149",
+      "expected": "runtime_target",
+      "description": "bounded string sanitizer stages execute in original deterministic order within admitted actor turn",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-150",
+      "expected": "runtime_target",
+      "description": "trusted supervisor pre-dispatch recognizes original envelope identity even with zero middleware stages",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-151",
+      "expected": "runtime_target",
+      "description": "NeuralMoERoutingPlan validates unique expert IDs, finite scores, batch bounds and top-k limits",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-152",
+      "expected": "runtime_target",
+      "description": "MoE planner deterministically breaks score ties by expert index",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-153",
+      "expected": "runtime_target",
+      "description": "MoE planner atomically allocates all top-k experts for a token or drops/rejects without partial assignments",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-154",
+      "expected": "runtime_target",
+      "description": "MoE planner normalizes near-maximum floating-point scores without overflow",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-155",
+      "expected": "runtime_target",
+      "description": "MoE routing plan and score inputs are immutable snapshots",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-156",
+      "expected": "runtime_target",
+      "description": "NeuralTensorAdmissionBudget atomically reserves bounded tensor descriptors and total bytes",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-157",
+      "expected": "runtime_target",
+      "description": "concurrent tensor reservations cannot overbook memory/descriptor capacity",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-158",
+      "expected": "runtime_target",
+      "description": "tensor reservation close is idempotent and stale request ticket is rejected",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-159",
+      "expected": "runtime_target",
+      "description": "NeuralOptimizerStepLedger enforces complete distinct microbatch accumulation before commit",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-160",
+      "expected": "runtime_target",
+      "description": "optimizer step ledger fences stale topology and commits once or aborts",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
