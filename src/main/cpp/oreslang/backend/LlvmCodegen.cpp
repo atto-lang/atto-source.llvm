@@ -56,6 +56,8 @@ struct RegionMoveLowering {
     // Compiler-owned error tag survives every owner-drop and region close.
     // Values exactly match OresNativeIntArrayStatus; not a guest Result yet.
     llvm::Value* array_failure_status = nullptr;
+    // Owned by one guest invocation, passed through nested checked calls.
+    llvm::Value* checked_i64_status = nullptr;
     const std::unordered_map<std::string, llvm::Value*>* owned_failure_handles = nullptr;
 };
 
@@ -78,13 +80,14 @@ llvm::Value* array_handle_address(const Expression& receiver,
 }
 
 // Emit overflow-safe i64 arithmetic only for an explicitly opted-in host
-// source unit. A failed operation produces a stable guest-visible diagnostic
-// and terminates with status 86; no poisoned arithmetic result is observable.
+// source unit. A failed operation propagates a typed invocation-owned
+// effect; only the OS entry adapter turns it into a process exit code.
 llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
                                       llvm::Type* i64,
                                       llvm::Value* left, llvm::Value* right,
                                       llvm::Intrinsic::ID intrinsic_id,
-                                      const char* name) {
+                                      const char* name, llvm::Value* status_ptr) {
+    if (!status_ptr) throw std::runtime_error("checked-i64 missing effect status pointer");
     llvm::Module* module = builder.GetInsertBlock()->getModule();
     llvm::Function* checked = llvm::Intrinsic::getDeclaration(module, intrinsic_id, {i64});
     llvm::Value* pair = builder.CreateCall(checked, {left, right}, name);
@@ -95,15 +98,10 @@ llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
     llvm::BasicBlock* success = llvm::BasicBlock::Create(context, "checked.i64.ok", containing);
     builder.CreateCondBr(overflow, failed, success);
     builder.SetInsertPoint(failed);
-    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
-    llvm::Type* i8ptr = llvm::PointerType::getUnqual(context);
-    auto print = module->getOrInsertFunction("puts",
-        llvm::FunctionType::get(i32, {i8ptr}, false));
-    builder.CreateCall(print, {builder.CreateGlobalStringPtr("ORES_I64_OVERFLOW")});
-    auto terminate = module->getOrInsertFunction("exit",
-        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i32}, false));
-    builder.CreateCall(terminate, {llvm::ConstantInt::get(i32, 86)});
-    builder.CreateUnreachable();
+    // Signal a typed Throw; never terminate the process from a guest expression.
+    builder.CreateStore(llvm::ConstantInt::get(
+        llvm::Type::getInt32Ty(context), 0x494F0001u), status_ptr);
+    builder.CreateRet(llvm::ConstantInt::get(i64, 0));
     builder.SetInsertPoint(success);
     return builder.CreateExtractValue(pair, {0}, "checked.value");
 }
@@ -208,7 +206,8 @@ llvm::Value* lower(const Expression& expr,
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64")) {
                 return lower_checked_i64_binary(builder, i64,
                         llvm::ConstantInt::getSigned(i64, 0), value,
-                        llvm::Intrinsic::ssub_with_overflow, "checked.neg");
+                        llvm::Intrinsic::ssub_with_overflow, "checked.neg",
+                         moves ? moves->checked_i64_status : nullptr);
             }
             return builder.CreateNeg(value, "neg");
         }
@@ -246,7 +245,8 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
-                        llvm::Intrinsic::sadd_with_overflow, "checked.add");
+                        llvm::Intrinsic::sadd_with_overflow, "checked.add",
+                         moves ? moves->checked_i64_status : nullptr);
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
@@ -254,7 +254,8 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
-                        llvm::Intrinsic::ssub_with_overflow, "checked.sub");
+                        llvm::Intrinsic::ssub_with_overflow, "checked.sub",
+                         moves ? moves->checked_i64_status : nullptr);
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
@@ -262,12 +263,14 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64"))
                 return lower_checked_i64_binary(builder, i64, left, right,
-                        llvm::Intrinsic::smul_with_overflow, "checked.mul");
+                        llvm::Intrinsic::smul_with_overflow, "checked.mul",
+                         moves ? moves->checked_i64_status : nullptr);
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
-            if (callee->arg_size() != expr.arguments.size()) {
+            const bool checked = moves && moves->checked_i64_status;
+            if (callee->arg_size() != expr.arguments.size() + (checked ? 1u : 0u)) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
             if (!expr.argument_names.empty()
@@ -310,8 +313,25 @@ llvm::Value* lower(const Expression& expr,
                 ordered[target] = lower(*expr.arguments[i], builder, i64,
                                         storage, field_storage, functions, moves);
             }
-            return builder.CreateCall(callee, ordered,
+            if (checked) ordered.push_back(moves->checked_i64_status);
+            llvm::Value* result = builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
+            if (checked) {
+                llvm::Value* effect = builder.CreateLoad(
+                    llvm::Type::getInt32Ty(builder.getContext()),
+                    moves->checked_i64_status, "checked.call.effect");
+                llvm::Function* owner = builder.GetInsertBlock()->getParent();
+                auto* failed = llvm::BasicBlock::Create(
+                    builder.getContext(), "checked.call.propagate", owner);
+                auto* normal = llvm::BasicBlock::Create(
+                    builder.getContext(), "checked.call.normal", owner);
+                builder.CreateCondBr(builder.CreateICmpNE(effect,
+                    llvm::ConstantInt::get(effect->getType(), 0)), failed, normal);
+                builder.SetInsertPoint(failed);
+                builder.CreateRet(llvm::ConstantInt::get(i64, 0));
+                builder.SetInsertPoint(normal);
+            }
+            return result;
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
@@ -575,6 +595,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             argument_types.push_back(param.class_name.empty()
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
                 : class_types.at(param.class_name)->getPointerTo());
+        if (experimental_checked_i64)
+            argument_types.push_back(llvm::Type::getInt32Ty(context)->getPointerTo());
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
@@ -582,8 +604,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             signature, llvm::Function::ExternalLinkage, symbol, module);
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
-        for (auto& formal : declaration->args())
-            formal.setName(fn.parameters[label_index++].name);
+        for (auto& formal : declaration->args()) {
+            if (label_index < fn.parameters.size())
+                formal.setName(fn.parameters[label_index++].name);
+            else formal.setName("__ores_checked_effect");
+        }
         declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
     }
     for (const auto& fn : source.functions) {
@@ -594,6 +619,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         std::unordered_map<std::string, llvm::Value*> field_storage;
         std::size_t index = 0;
         for (auto& arg : function->args()) {
+            if (experimental_checked_i64 && index == fn.parameters.size()) break;
             const Parameter& param = fn.parameters[index++];
             arg.setName(param.name);
             if (!param.class_name.empty()) {
@@ -724,7 +750,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
-            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles};
+            &array_field_keys, array_failure, array_failure_status,
+            experimental_checked_i64
+                ? function->getArg(static_cast<unsigned>(fn.parameters.size())) : nullptr,
+            &owned_failure_handles};
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
@@ -1508,7 +1537,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
-        llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* checked_status = nullptr;
+        if (experimental_checked_i64) {
+            checked_status = builder.CreateAlloca(i32, nullptr, "checked.effect.status");
+            builder.CreateStore(llvm::ConstantInt::get(i32, 0), checked_status);
+        }
+        llvm::Value* result = experimental_checked_i64
+            ? builder.CreateCall(guest, {checked_status})
+            : builder.CreateCall(guest);
+        if (experimental_checked_i64) {
+            llvm::Value* effect = builder.CreateLoad(i32, checked_status, "checked.effect");
+            auto* failed = llvm::BasicBlock::Create(context, "checked.effect.failed", host_main);
+            auto* normal = llvm::BasicBlock::Create(context, "checked.effect.normal", host_main);
+            builder.CreateCondBr(builder.CreateICmpNE(effect, llvm::ConstantInt::get(i32, 0)),
+                                 failed, normal);
+            builder.SetInsertPoint(failed);
+            auto print = module.getOrInsertFunction("puts",
+                llvm::FunctionType::get(i32, {native_ptr}, false));
+            builder.CreateCall(print, {builder.CreateGlobalStringPtr("ORES_I64_OVERFLOW")});
+            builder.CreateRet(llvm::ConstantInt::get(i32, 86));
+            builder.SetInsertPoint(normal);
+        }
         if (main_it->returns_void) {
             builder.CreateRet(llvm::ConstantInt::get(i32, 0));
         } else {
