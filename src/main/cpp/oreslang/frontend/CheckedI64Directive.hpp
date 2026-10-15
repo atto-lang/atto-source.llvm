@@ -21,8 +21,12 @@ inline bool checked_i64_source_opt_in(std::string_view source) {
         std::size_t offset = 0;
         // UTF-8 BOM is not a valid checked profile prefix.
         if (pos == 0 && line.starts_with("\xEF\xBB\xBF")) offset = 3;
+        // Mirror the native lexer's ASCII whitespace admission. CR, VT and
+        // FF before a directive must never silently select wrapping i64.
         while (offset < line.size() &&
-               (line[offset] == ' ' || line[offset] == '\t')) ++offset;
+               (line[offset] == ' ' || line[offset] == '\t' ||
+                line[offset] == '\r' || line[offset] == '\v' ||
+                line[offset] == '\f')) ++offset;
         if (line.substr(offset).starts_with(directive_prefix) &&
             (!enabled || pos != 0 || offset != 0 || line != directive_line)) {
             throw std::runtime_error(
