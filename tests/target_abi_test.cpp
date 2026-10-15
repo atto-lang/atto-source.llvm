@@ -59,7 +59,12 @@ int main(int argc, char** argv) {
     // parse must not borrow the caller's temporary string storage.
     const auto stable = oreslang::TargetAbi::parse(std::string("wasm32-unknown-unknown"));
     check(stable.triple() == "wasm32-unknown-unknown");
-    check(count == 5);
+    const std::set<std::string> expected = {
+        "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+        "i686-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf",
+        "thumbv7m-none-eabi", "wasm32-unknown-unknown"};
+    check(seen == expected && count == expected.size());
+    check(oreslang::TargetAbi::parse("thumbv7m-none-eabi").experimental_cortexm_ir());
     static_assert(CHAR_BIT == 8, "native ABI requires 8-bit bytes");
     static_assert(sizeof(float) == 4, "DOP F32 requires 32-bit float");
     static_assert(sizeof(std::uint64_t) == 8, "Oreslang i64 requires 64-bit storage");

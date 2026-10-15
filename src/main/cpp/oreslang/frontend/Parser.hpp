@@ -11,6 +11,16 @@
 namespace oreslang {
 
 // Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
+struct GenericTypeArgument {
+    std::string name; // empty for positional arguments
+    std::string type; // native stage 1 admits only int
+    bool infer = false;
+};
+struct GenericParameter {
+    std::string name;
+    std::string default_type; // empty when required, int or earlier slot otherwise
+};
+
 struct Expression {
     enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
@@ -21,12 +31,15 @@ struct Expression {
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
     std::vector<std::string> argument_names; // indexed in lexical source order
+    std::vector<GenericTypeArgument> type_arguments;
+    bool type_arguments_present = false;
 };
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
     std::string class_name; // empty means primitive i64
+    std::string generic_type; // stage-one i64 generic slot
     Mode mode = Mode::Value;
 };
 
@@ -38,6 +51,8 @@ struct LocalBinding {
     bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
+    // Pure scalar constructor arguments, evaluated once at call site.
+    std::vector<std::unique_ptr<Expression>> constructor_arguments;
     // Restricted local stack-only explicit class move.
     bool move_class = false;
     std::string move_source;
@@ -49,6 +64,8 @@ struct LocalBinding {
 struct ClassField {
     std::string name;
     std::int64_t initial = 0;
+    std::unique_ptr<Expression> initializer_expression;
+    bool public_member = false;
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
 };
@@ -58,6 +75,8 @@ struct ClassDecl {
     // Up to 16 scalar i64 or owned Array<int> fields.
     // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
+    bool explicit_constructor = false;
+    std::vector<std::string> constructor_parameters;
 };
 
 // Native source value categories. Future<T> remains a no-IR boundary
@@ -137,6 +156,7 @@ struct ScalarWhileLoop {
 
 struct Function {
     std::string name;
+    std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
