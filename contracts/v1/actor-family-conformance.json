@@ -801,6 +801,230 @@
       "description": "unary actor middleware cancellation/disconnect/restart prevents stale typed result completion",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-113",
+      "expected": "runtime_target",
+      "description": "trusted source actor mail pre-dispatch runs only inside scheduler-owned admitted actor lane and before receive",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-114",
+      "expected": "runtime_target",
+      "description": "source mailbox middleware can normalize value while preserving sender recipient and sequence",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-115",
+      "expected": "reject",
+      "description": "source mail middleware forges sender actor identity",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-116",
+      "expected": "reject",
+      "description": "source mail middleware forges recipient actor identity",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-117",
+      "expected": "reject",
+      "description": "source mail middleware forges runtime mailbox sequence",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-118",
+      "expected": "reject",
+      "description": "source mail middleware returns null envelope or null payload",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-119",
+      "expected": "reject",
+      "description": "source mail middleware creates forbidden capability payload for an UNTRUSTED actor",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-120",
+      "expected": "runtime_target",
+      "description": "prepared source mailbox envelope and actor context currentMail are identical after normalization",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-121",
+      "expected": "runtime_target",
+      "description": "mail pre-dispatch exception fails actor and releases original mailbox credits exactly once",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-122",
+      "expected": "runtime_target",
+      "description": "source mail middleware cannot install async detached callback that bypasses actor single-lane execution",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-123",
+      "expected": "accept_target",
+      "description": "ModelActor<Input,Output> workload specialization is independent of reply role and transport",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-124",
+      "expected": "accept_target",
+      "description": "LLMActor<T> is a capability specialization not a second actor scheduler or special heap",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-125",
+      "expected": "runtime_target",
+      "description": "TokenizerActor enforces tokenizer vocabulary version and bounded token batch",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-126",
+      "expected": "runtime_target",
+      "description": "EmbeddingActor returns shape checked model-versioned tensor lease",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-127",
+      "expected": "runtime_target",
+      "description": "AttentionStageActor and FeedForwardStageActor launch CPU/GPU tensor kernels under bounded completion fences",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-128",
+      "expected": "runtime_target",
+      "description": "ExpertRouterActor batches MoE token dispatch with top-k capacity and explicit overflow policy",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-129",
+      "expected": "runtime_target",
+      "description": "ExpertActor returns versioned batched subgraph output and ExpertCombineActor checks routing provenance",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-130",
+      "expected": "runtime_target",
+      "description": "KVCacheActor issues generation-scoped bounded KV leases and evicts on cancellation",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-131",
+      "expected": "runtime_target",
+      "description": "SamplerActor yields reproducible token choices under declared seed and decode policy",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-132",
+      "expected": "runtime_target",
+      "description": "GenerationActor streams prefill/decode with byte/token credits and no duplicate EOF",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-133",
+      "expected": "runtime_target",
+      "description": "RecurrentMemoryActor isolates tenant and model generations and bounds graph traversal",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-134",
+      "expected": "reject",
+      "description": "cross-actor mutable tensor descriptor or raw GPU pointer escapes through ordinary ActorMail",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-135",
+      "expected": "reject",
+      "description": "untrusted model actor fabricates tensor lease or GPU completion event",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-136",
+      "expected": "runtime_target",
+      "description": "GPU kernel completion resumes exactly one logical actor request and cannot publish after cancellation",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-137",
+      "expected": "runtime_target",
+      "description": "self.forward carries typed activation batch and self.backward carries computed gradient batch with correct step identity",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-138",
+      "expected": "reject",
+      "description": "self.backward called with an activation or uncomputed gradient treated as automatic differentiation",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-139",
+      "expected": "runtime_target",
+      "description": "TrainingStageActor and LossActor match batch step microbatch and parameter snapshot versions",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-140",
+      "expected": "runtime_target",
+      "description": "OptimizerActor applies exactly one committed update after complete gradient accumulation barrier",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-141",
+      "expected": "runtime_target",
+      "description": "CheckpointActor restores consistent model weights optimizer RNG and scheduler state after injected failure",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-142",
+      "expected": "runtime_target",
+      "description": "ProxyActor transports authenticated neural tensors with bounded credits and rejects unauthorized remote state access",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-143",
+      "expected": "runtime_target",
+      "description": "compiled three actor neural training graph matches non actor CPU kernel outputs and gradients",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-144",
+      "expected": "runtime_target",
+      "description": "Java and LLVM compiled neural actor source fixtures match numerics and ownership under sanitizer and cancellation",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
