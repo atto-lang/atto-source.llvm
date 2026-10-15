@@ -33,17 +33,30 @@ def read_approved_repositories(policy_file: Path) -> set[str]:
     # the actual symlink-race authority. Read a bounded number of bytes from
     # the opened descriptor, not from a pathname that could be swapped.
     fd = -1
+    directory_fd = -1
     try:
         if policy_file.is_symlink():
             raise MirrorPolicyError("private CI allowlist must be a regular non-symlink file")
         if not policy_file.exists():
             raise MirrorPolicyError("cannot read the reviewed private CI allowlist")
         nofollow = getattr(os, "O_NOFOLLOW", None)
-        if nofollow is None:
+        directory = getattr(os, "O_DIRECTORY", None)
+        if nofollow is None or directory is None:
             raise MirrorPolicyError("secure no-follow private CI allowlist opening is unavailable")
-        fd = os.open(policy_file, os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0))
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise MirrorPolicyError("private CI allowlist must be a regular non-symlink file")
+        # Pin the immediate parent directory before reading the file. Without
+        # this dirfd an attacker can replace .github with a symlink to an
+        # unreviewed manifest even though the final file uses O_NOFOLLOW.
+        directory_fd = os.open(policy_file.parent, os.O_RDONLY | directory | nofollow)
+        if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+            raise MirrorPolicyError("private CI allowlist parent must be a real directory")
+        fd = os.open(
+            policy_file.name,
+            os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory_fd,
+        )
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise MirrorPolicyError("private CI allowlist must be a regular single-link non-symlink file")
         with os.fdopen(fd, "rb") as stream:
             fd = -1  # fdopen owns and closes the descriptor from here onward
             data = stream.read(16 * 1024 + 1)
@@ -55,6 +68,8 @@ def read_approved_repositories(policy_file: Path) -> set[str]:
     finally:
         if fd != -1:
             os.close(fd)
+        if directory_fd != -1:
+            os.close(directory_fd)
 
     approved: set[str] = set()
     for line_number, line in enumerate(policy.splitlines(), 1):
