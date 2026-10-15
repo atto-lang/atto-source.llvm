@@ -107,7 +107,18 @@ def main(argv: list[str] | None = None) -> int:
     for error in report["rejected_files"][:12]:
         print(f"  REJECTED {error['path']}: {error['error']}")
     if args.json:
-        args.json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        # Never truncate an existing file. In particular, --json must not
+        # overwrite a .ores source via a direct path, symlink, or hardlink.
+        # Exclusive creation also protects against races between checking
+        # for existence and opening the report destination.
+        if args.json.suffix.lower() == ".ores":
+            parser.error("--json must not target an .ores source file")
+        try:
+            with args.json.open("x", encoding="utf-8") as report_file:
+                json.dump(report, report_file, indent=2)
+                report_file.write("\n")
+        except OSError as exc:
+            parser.error(f"cannot create new JSON report without overwrite: {exc}")
     return int(args.strict and bool(report["would_change"] or report["format_errors"]))
 
 
