@@ -6,7 +6,7 @@ import unittest
 
 from ctest_manifest_gate import (
     CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
-    SOURCE_ACTOR_TESTS, TIMED_TESTS, check_manifest,
+    SOURCE_ACTOR_TESTS, TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE, check_manifest,
 )
 
 
@@ -16,7 +16,15 @@ def fixture():
     entries = []
     for name in CRITICAL_TESTS:
         props = [{"name": "TIMEOUT", "value": 90.0}] if name in TIMED_TESTS else []
-        if name in NATIVE_EXECUTABLES:
+        if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
+            positive = name == VISIBILITY_POSITIVE
+            source = ("class-public-field-read-native.ores" if positive
+                      else VISIBILITY_NEGATIVE_FIXTURES[name])
+            command = [sys.executable, "/work/src/tests/contract.py", "--compiler",
+                       "/work/build/oreslang-llvmc", "--fixture", "/work/src/tests/fixtures/" + source]
+            command += (["--run", "42", "--clang", "/usr/bin/clang", "--no-native-abi"]
+                        if positive else ["--diagnostic", "private class field"])
+        elif name in NATIVE_EXECUTABLES:
             command = ["/work/build/" + NATIVE_EXECUTABLES[name]]
             if name == "portable_target_abi_v1":
                 command.append("/work/src/contracts/architecture/v1/targets.tsv")
@@ -69,6 +77,31 @@ class ManifestAuditTests(unittest.TestCase):
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
+
+    def test_visibility_negatives_cannot_be_missing_or_swapped(self):
+        for name in VISIBILITY_NEGATIVE_FIXTURES:
+            for corruption in ("missing", "fixture", "diagnostic", "compiler", "run"):
+                doc = fixture()
+                entry = next(x for x in doc["tests"] if x["name"] == name)
+                cmd = entry["command"]
+                if corruption == "missing": doc["tests"].remove(entry)
+                elif corruption == "run": cmd += ["--run", "42"]
+                else:
+                    flag = {"fixture":"--fixture", "diagnostic":"--diagnostic", "compiler":"--compiler"}[corruption]
+                    cmd[cmd.index(flag) + 1] = "wrong-evidence"
+                with self.subTest(name=name, corruption=corruption), self.assertRaises(ManifestFailure):
+                    check_manifest(doc)
+
+    def test_visibility_positive_requires_real_execution(self):
+        for flag in ("--run", "--clang", "--fixture", "--compiler"):
+            doc = fixture()
+            cmd = next(x for x in doc["tests"] if x["name"] == VISIBILITY_POSITIVE)["command"]
+            cmd[cmd.index(flag) + 1] = "wrong-evidence"
+            # Any non-empty clang path is accepted as a configured executable;
+            # omitting its option value must still be refused.
+            if flag == "--clang": del cmd[cmd.index(flag) + 1]
+            with self.subTest(flag=flag), self.assertRaises(ManifestFailure):
+                check_manifest(doc)
 
     def test_empty_manifest_rejected(self):
         self.manifest["tests"] = []
