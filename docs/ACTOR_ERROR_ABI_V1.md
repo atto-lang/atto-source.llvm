@@ -238,3 +238,28 @@ terminal notices have been corrected.
 reports failed jobs with zero executed steps, and job log downloads are
 unavailable. This is not native LLVM guest lowering, source `on_raise`,
 native supervisor scheduling, or production evidence.
+
+## Side-effecting supervisor callback retry fence (2026-10-14)
+
+`SupervisorControlTurn::admit_turn` distinguishes a failed decision
+callback from an exception thrown after requesting a potentially
+side-effecting restart or escalation. Decision dispatch failures **before**
+a restart/escalation action remain retryable under the existing CONTROL lane
+policy. Once `on_restart` has been invoked, a later exception must **not**
+invoke the same restart callback again: a replacement incarnation may have
+already been created. The runtime instead attempts `on_escalate` once if
+escalation was not already attempted, retires the admitted terminal event,
+and propagates the original host exception. If `on_escalate` itself throws
+after producing a terminal host effect, the same event is not replayed.
+
+`supervisor_control_turn_test.cpp` adds fault-injected callbacks that
+simulate restart and escalation side effects followed by exceptions. It
+verifies at-most-once callback invocation, terminal notice retirement,
+no duplicate restart admission, and propagated exceptions.
+
+This is host-only C++17 behavior, **not** native Oreslang guest exception
+lowering or actual scheduler-driven actor restart. The focused exact-head
+GitHub Actions workflow still reports failure with no executed job steps,
+so the new fixture is not verified passing under CTest or production native
+carriers. No private source was transferred to other GitHub organizations:
+both source allowlists currently approve no destinations.
