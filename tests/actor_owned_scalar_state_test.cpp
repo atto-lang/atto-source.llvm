@@ -56,6 +56,34 @@ int main() {
     plain.callback_critical = false;
     plain.state_mode = CriticalStateMode::Read;
     plain.inferred = readonly;
+    // Empty state {} is a valid sealed schema: no keys means no state
+    // access, not an ambient dynamic map or writable ordinary actor field.
+    State empty_actor(actor + 2, {});
+    check(empty_actor.ready_to_suspend(actor + 2));
+    check(std::get<std::int64_t>(empty_actor.critical(
+            actor + 2, 303, plain, readonly,
+            [](State::Access&) -> State::Value {
+        return std::int64_t{7};
+    })) == 7);
+    rejects([&] {
+        (void) empty_actor.critical(actor + 2, 304, plain, readonly,
+                [](State::Access& access) -> State::Value {
+            return access.read("undeclared");
+        });
+    });
+    rejects([&] {
+        (void) empty_actor.critical(actor + 2, 305, checked, allowed,
+                [](State::Access& access) -> State::Value {
+            access.write("undeclared", std::int64_t{1});
+            return std::int64_t{0};
+        });
+    });
+    check(empty_actor.ready_to_suspend(actor + 2));
+    empty_actor.retire(actor + 2);
+    rejects([&] {
+        (void) empty_actor.critical(actor + 2, 306, plain, readonly,
+                [](State::Access&) -> State::Value { return std::int64_t{0}; });
+    });
     check(std::get<std::int64_t>(serial_actor.critical(
             actor + 1, 300, plain, readonly,
             [](State::Access& access) -> State::Value {
