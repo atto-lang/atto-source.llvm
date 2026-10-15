@@ -10,10 +10,10 @@
 
 static constexpr std::string_view SOURCE = R"ores(
 pub fnc counter_response(int count): int {
-  return count * 43;
+  return count;
 }
 pub fnc main(): int {
-  return counter_response(1);
+  return counter_response(43);
 }
 )ores";
 
@@ -25,6 +25,16 @@ int main() {
         throw std::runtime_error("nondeterministic native source-to-HIR serialization");
     assert(json.find("\"function\":\"counter_response\"") != std::string::npos);
     assert(json.find("\"value\":\"43\"") != std::string::npos);
+
+    // The runtime wraps for some values; HIR v1 requires a universal proof.
+    bool unsafe_rejected = false;
+    try {
+        const auto unsafe = oreslang::parse_program(
+            "pub fnc scale(int count): int { return count * 43; } "
+            "pub fnc main(): int { return scale(1); }");
+        (void) oreslang::emit_experimental_hir_v1(unsafe);
+    } catch (const std::exception&) { unsafe_rejected = true; }
+    if (!unsafe_rejected) throw std::runtime_error("overflow-risk HIR must be rejected");
 
     // Unknown arithmetic semantics must never silently lower to accepted HIR.
     bool rejected = false;
