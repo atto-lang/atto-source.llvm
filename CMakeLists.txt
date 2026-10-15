@@ -287,6 +287,20 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # Positive compiler-only contracts must assemble the emitted IR, not just
+    # accept an expected substring after the textual ModuleID header.
+    if(ORE_CLANG)
+        add_test(NAME native_contract_positive_object_verifies
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores"
+                --verify-object --clang "${ORE_CLANG}")
+        set_tests_properties(native_contract_positive_object_verifies
+            PROPERTIES TIMEOUT 90)
+    else()
+        message(FATAL_ERROR "Native source IR object verification requires Clang")
+    endif()
     # This isolated AOT source-to-native frame test does not relax the nine
     # default compiler-negative RT admission contracts.
     if(ORE_CLANG)
