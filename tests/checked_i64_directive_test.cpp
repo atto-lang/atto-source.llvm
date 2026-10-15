@@ -28,6 +28,10 @@ int main() {
     rejected("// oreslang:checked-i64-v1");
     rejected("// oreslang:checked-i64-v1\r\npub fnc main(): int { return 43; }");
     rejected(" // oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
+    rejected("\r// oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
+    rejected("\v// oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
+    rejected("\f// oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
+    rejected("// oreslang:checked-i64-v1\n\f// oreslang:checked-i64-v1\n");
     rejected("\n// oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
     rejected("// oreslang:checked-i64-v2\npub fnc main(): int { return 43; }");
     rejected("// oreslang:checked-i64-v1 extra\npub fnc main(): int { return 43; }");
