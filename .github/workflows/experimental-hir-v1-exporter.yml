@@ -140,12 +140,22 @@ jobs:
               -o "$RUNNER_TEMP/checked-packed-status-${cc}"
             "$RUNNER_TEMP/checked-packed-status-${cc}"
           done
-      - name: Fail closed on malformed checked-i64 directives
+      - name: Fail closed on malformed checked-i64 directives (debug and NDEBUG)
         run: |
           set -euo pipefail
-          c++ -std=c++20 -Wall -Wextra -Werror -Isrc/main/cpp \
-            tests/checked_i64_directive_test.cpp -o "$RUNNER_TEMP/checked-i64-directive"
-          "$RUNNER_TEMP/checked-i64-directive"
+          for cxx in g++ clang++; do
+            for opt in 0 2 3; do
+              for profile in debug release; do
+                extra=()
+                if [[ "$profile" == release ]]; then extra=(-DNDEBUG); fi
+                "$cxx" -std=c++20 -O"$opt" -Wall -Wextra -Werror \
+                  "${extra[@]}" -Isrc/main/cpp \
+                  tests/checked_i64_directive_test.cpp \
+                  -o "$RUNNER_TEMP/checked-i64-$cxx-$opt-$profile"
+                "$RUNNER_TEMP/checked-i64-$cxx-$opt-$profile"
+              done
+            done
+          done
       - name: Verify signed-i64 range arithmetic against widened mathematical oracle
         run: |
           c++ -std=c++20 -Wall -Wextra -Isrc/main/cpp tests/experimental_hir_v1_checked_range_property_test.cpp -o "$RUNNER_TEMP/checked-range-property"
