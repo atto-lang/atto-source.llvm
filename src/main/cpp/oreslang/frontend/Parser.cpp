@@ -121,6 +121,10 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
+        if (source_.substr(at_, 2) == "->") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
@@ -311,7 +315,7 @@ private:
         param.name = identifier();
         method.parameters.push_back(std::move(param));
         require(")");
-        require(":");
+        require_return_separator();
         require("int");
         require("{");
         while (token_.text != "return") {
@@ -489,7 +493,7 @@ private:
         require("fnc");
         loop.name = identifier();
         require("("); require(")");
-        require(":"); require("void");
+        require_return_separator(); require("void");
         require("{");
         require("val");
         loop.variable = identifier();
@@ -592,7 +596,7 @@ private:
             } while (accept(","));
             require(")");
         }
-        require(":");
+        require_return_separator();
         value.returns_void = accept("void");
         if (!value.returns_void && !accept("int")) {
             const std::string type = identifier();
@@ -1370,6 +1374,10 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    void require_return_separator() {
+        if (!accept(":")) require("->");
     }
 
     std::string identifier() {
