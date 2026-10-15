@@ -187,6 +187,51 @@ jobs:
             grep -Fxq ORES_I64_OVERFLOW "$RUNNER_TEMP/overflow-O$opt.log"
             test ! -s "$RUNNER_TEMP/safe-O$opt.log"
           done
+      - name: Execute nested operand and argument short-circuit at O0 O2 O3
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/checked-argument-overflow.ores" <<'ORES'
+          // oreslang:checked-i64-v1
+          pub fnc scale(int x): int { return x * 43; }
+          pub fnc combine(int a, int b): int { return a + b; }
+          pub fnc main(): int { return combine(scale(9223372036854775807), scale(1)); }
+          ORES
+          cat > "$RUNNER_TEMP/checked-operand-overflow.ores" <<'ORES'
+          // oreslang:checked-i64-v1
+          pub fnc scale(int x): int { return x * 43; }
+          pub fnc main(): int { return scale(9223372036854775807) + scale(1); }
+          ORES
+          cat > "$RUNNER_TEMP/checked-argument-safe.ores" <<'ORES'
+          // oreslang:checked-i64-v1
+          pub fnc scale(int x): int { return x * 43; }
+          pub fnc combine(int a, int b): int { return a + b; }
+          pub fnc main(): int { return combine(scale(0), scale(1)); }
+          ORES
+          for name in checked-argument-overflow checked-operand-overflow checked-argument-safe; do
+            "$RUNNER_TEMP/oreslang-llvmc" "$RUNNER_TEMP/$name.ores" > "$RUNNER_TEMP/$name.ll"
+          done
+          grep -q 'checked.argument.propagate' "$RUNNER_TEMP/checked-argument-overflow.ll"
+          grep -q 'checked.operand.propagate' "$RUNNER_TEMP/checked-operand-overflow.ll"
+          for opt in 0 2 3; do
+            for name in checked-argument-overflow checked-operand-overflow checked-argument-safe; do
+              "$CLANG" -O"$opt" -Wno-override-module -x ir "$RUNNER_TEMP/$name.ll" \
+                -o "$RUNNER_TEMP/$name-O$opt"
+              set +e
+              "$RUNNER_TEMP/$name-O$opt" > "$RUNNER_TEMP/$name-O$opt.log" 2>&1
+              status=$?
+              set -e
+              case "$name" in
+                checked-argument-safe)
+                  test "$status" -eq 43
+                  test ! -s "$RUNNER_TEMP/$name-O$opt.log"
+                  ;;
+                *)
+                  test "$status" -eq 86
+                  grep -Fxq ORES_I64_OVERFLOW "$RUNNER_TEMP/$name-O$opt.log"
+                  ;;
+              esac
+            done
+          done
       - name: Execute invocation-local checked Throw across C ABI and nested calls
         run: |
           set -euo pipefail
