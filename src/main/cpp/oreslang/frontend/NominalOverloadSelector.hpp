@@ -45,6 +45,10 @@ inline NominalTypeTag primitive_tag(std::string identity) {
 inline NominalTypeTag enum_tag(std::string canonical_identity) {
     if (canonical_identity.empty() || canonical_identity.size() > 1024)
         throw std::invalid_argument("invalid canonical enum identity length");
+    // A doubled scope delimiter cannot name a canonical declaration owner.
+    // Keep this aligned with Java's nominal overload Position admission.
+    if (canonical_identity.find("::::") != std::string::npos)
+        throw std::invalid_argument("invalid repeated canonical scope delimiter");
     for (unsigned char ch : canonical_identity) {
         if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
                 || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.'
