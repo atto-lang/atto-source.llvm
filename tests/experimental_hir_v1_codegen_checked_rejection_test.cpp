@@ -82,6 +82,19 @@ int main() {
     locals.functions[0].locals.emplace_back();
     expect_checked_rejection(locals);
 
+    Program reservedHost = valid_scalar_program();
+    reservedHost.functions[0].name = "puts";
+    expect_checked_rejection(reservedHost);
+
+    Program noEntry;
+    Function libraryFunction;
+    libraryFunction.name = "helper";
+    libraryFunction.result = std::make_unique<Expression>();
+    libraryFunction.result->kind = Expression::Kind::Integer;
+    libraryFunction.result->integer = 43;
+    noEntry.functions.push_back(std::move(libraryFunction));
+    expect_checked_rejection(noEntry);
+
     Program recursive = valid_scalar_program();
     recursive.functions[0].result->kind = Expression::Kind::Call;
     recursive.functions[0].result->name = "main";
