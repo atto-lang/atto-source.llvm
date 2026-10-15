@@ -51,6 +51,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-error-effect-policy-test)
     set_tests_properties(actor_error_effect_policy_host_only PROPERTIES TIMEOUT 20)
 
+    # Cross-thread host-only CONTROL delivery, ordering, and retirement race.
+    # This does not exercise LLVM guest exception lowering or actor schedulers.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-failure-control-concurrency-test
+        tests/actor_failure_control_concurrency_test.cpp)
+    target_include_directories(oreslang-actor-failure-control-concurrency-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-failure-control-concurrency-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-failure-control-concurrency-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_failure_control_concurrent_fifo_retirement
+        COMMAND oreslang-actor-failure-control-concurrency-test)
+    set_tests_properties(native_actor_failure_control_concurrent_fifo_retirement
+        PROPERTIES TIMEOUT 30)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
