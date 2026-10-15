@@ -174,13 +174,19 @@ int main() {
             + "\xe2\x80\x8e"  // U+200E LEFT-TO-RIGHT MARK
             + "\xe2\x80\xae"  // U+202E RIGHT-TO-LEFT OVERRIDE
             + "\xe2\x81\xa7"  // U+2067 RIGHT-TO-LEFT ISOLATE
+            + "\xe2\x80\x8b"  // U+200B ZERO WIDTH SPACE
+            + "\xe2\x80\x8d"  // U+200D ZERO WIDTH JOINER
+            + "\xe2\x80\xa8"  // U+2028 LINE SEPARATOR
+            + "\xe2\x80\xa9"  // U+2029 PARAGRAPH SEPARATOR
+            + "\xe2\x81\xa0"  // U+2060 WORD JOINER
+            + "\xef\xbb\xbf"  // U+FEFF ZERO WIDTH NO-BREAK SPACE
             + "z";
     CHECK(unicode_lane.publish_preallocated(
             key(92), Lane::Kind::Panic, hostile_text,
             std::string("parent\n") + "\xe2\x80\xae"));
     const auto scrubbed = unicode_lane.poll();
     CHECK(scrubbed.has_value());
-    CHECK(scrubbed->summary == "A?B?[31m" + std::string(7, '?') + "z");
+    CHECK(scrubbed->summary == "A?B?[31m" + std::string(13, '?') + "z");
     CHECK(scrubbed->parent_id == "parent??");
     unicode_lane.ack(key(92));
 
