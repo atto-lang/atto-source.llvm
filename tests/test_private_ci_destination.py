@@ -71,6 +71,24 @@ class PrivateCIMirrorGateTests(unittest.TestCase):
         with self.assertRaisesRegex(MirrorPolicyError, "single-link"):
             read_approved_repositories(self.manifest)
 
+    def test_rejected_hardlinks_do_not_leak_descriptors(self):
+        import os
+
+        fd_directory = Path("/proc/self/fd")
+        if not fd_directory.is_dir():
+            self.skipTest("requires Linux descriptor accounting")
+        self.allow("test-org/private\n")
+        alias = Path(self.workspace.name) / "unreviewed-hardlink.txt"
+        try:
+            alias.hardlink_to(self.manifest)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"hardlinks unsupported: {exc}")
+        before = len(os.listdir(fd_directory))
+        for _ in range(250):
+            with self.assertRaisesRegex(MirrorPolicyError, "single-link"):
+                read_approved_repositories(self.manifest)
+        self.assertLessEqual(len(os.listdir(fd_directory)), before + 1)
+
     def test_parent_directory_swap_before_open_is_denied(self):
         import os
         from unittest.mock import patch
