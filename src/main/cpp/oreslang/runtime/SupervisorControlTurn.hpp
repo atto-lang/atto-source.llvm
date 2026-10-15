@@ -102,36 +102,60 @@ public:
 
         const auto next = child_failures_.poll();
         if (next) {
+            bool restart_invoked = false;
+            bool escalation_invoked = false;
             try {
                 const auto decision = dispatch(hooks, *next);
                 switch (decision) {
                     case Decision::Acknowledge:
                         break;
                     case Decision::Escalate:
+                        escalation_invoked = true;
                         hooks.on_escalate(*next);
                         break;
                     case Decision::Restart:
-                        // Budget is supervisor-scoped. A failed attempt must
-                        // escalate; no actor generation may be silently reused.
+                        // A restart callback may have already created a new
+                        // generation when it throws. Never invoke it twice for
+                        // one terminal notice, even if its return is unknown.
                         if (restarts_used_ >= restart_budget_) {
+                            escalation_invoked = true;
                             hooks.on_escalate(*next);
                         } else {
                             ++restarts_used_;
-                            if (!hooks.on_restart(*next)) hooks.on_escalate(*next);
+                            restart_invoked = true;
+                            if (!hooks.on_restart(*next)) {
+                                escalation_invoked = true;
+                                hooks.on_escalate(*next);
+                            }
                         }
                         break;
                     default:
-                        // Invalid FFI/hook decision must escalate in this
-                        // same CONTROL turn: endless retries would strand the
-                        // pre-reserved child failure and allow no progress.
-                        // An exception thrown by escalation itself is still
-                        // retried through the existing catch/retry boundary.
+                        // An invalid FFI decision must escalate once rather
+                        // than loop on the same pre-reserved failure.
+                        escalation_invoked = true;
                         hooks.on_escalate(*next);
                         break;
                 }
                 child_failures_.ack(next->actor);
             } catch (...) {
-                child_failures_.retry(next->actor);
+                if (restart_invoked || escalation_invoked) {
+                    // Callback side effects cannot be rolled back. Retrying
+                    // might start a second incarnation or duplicate fatal
+                    // escalation. Attempt host escalation at most once, then
+                    // retire the notice and propagate the original exception.
+                    if (restart_invoked && !escalation_invoked) {
+                        try { hooks.on_escalate(*next); }
+                        catch (...) {
+                            // Original callback failure still reaches host;
+                            // no replay of ambiguous side effects is allowed.
+                        }
+                    }
+                    child_failures_.ack(next->actor);
+                } else {
+                    // A decision hook failed before selecting any action.
+                    // This remains retryable under the existing lane policy.
+                    child_failures_.retry(next->actor);
+                }
                 throw;
             }
             return Admitted::Control;
