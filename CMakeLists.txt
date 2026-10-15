@@ -1044,6 +1044,13 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
             "$<TARGET_FILE:oreslang-llvmc>")
+    # Do not accept sealed declarations until native class/interface metadata,
+    # admission and typed exhaustive matching are implemented.
+    add_test(NAME native_sealed_permits_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_sealed_permits_fail_closed.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_sealed_permits_fail_closed PROPERTIES TIMEOUT 60)
     oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
     # Until typed descriptor ownership and atomic selection land, source
