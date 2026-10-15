@@ -35,7 +35,7 @@ def main():
                  "unsupported-result-composition.ores",
                  "unsupported-question-propagation.ores"):
         check(args.compiler, args.fixtures / name, False)
-    print("native functional composition: positive control + 2 fail-closed gates")
+    print("native functional composition: positive control + 3 fail-closed gates")
 
 
 if __name__ == "__main__":
