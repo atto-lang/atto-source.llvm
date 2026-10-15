@@ -181,6 +181,11 @@ public:
         children_.erase(it);
     }
 
+    // This convenience dispatcher is at-most-once, not a transactional
+    // callback executor. A handler may have restarted an actor or emitted
+    // an escalation before throwing. Requeueing after entry would replay
+    // irreversible side effects. Higher-level SupervisorControlTurn owns
+    // its own explicit pre-decision retry and restart policy.
     bool dispatch_one(Handler& handler) {
         auto event = poll();
         if (!event) return false;
@@ -192,11 +197,13 @@ public:
                 case Kind::Cancel: handler.on_cancel(*event); break;
                 case Kind::HostFailure: handler.on_host_failure(*event); break;
             }
-            ack(event->actor);
         } catch (...) {
-            retry(event->actor);
+            // The callback's side-effect status is unknowable at this point.
+            // Retire the event before propagating the original exception.
+            ack(event->actor);
             throw;
         }
+        ack(event->actor);
         return true;
     }
 
