@@ -9,7 +9,7 @@ namespace oreslang {
 // wrapping because its directive is malformed, displaced, duplicated or
 // requests an unsupported version. Ordinary unmarked source remains legacy.
 inline bool checked_i64_source_opt_in(std::string_view source) {
-    constexpr std::string_view directive_prefix = "// oreslang:checked-i64";
+    constexpr std::string_view directive_prefix = "oreslang:checked-i64";
     constexpr std::string_view exact_header = "// oreslang:checked-i64-v1\n";
     const bool enabled = source.starts_with(exact_header);
 
@@ -42,12 +42,19 @@ inline bool checked_i64_source_opt_in(std::string_view source) {
             // lines inside nested block comments, rejecting valid unmarked
             // source. This lexical gate rejects malformed first-line forms,
             // duplicates, and displaced directives without that false positive.
-            if (source.substr(i).starts_with(directive_prefix) &&
+            const auto end = source.find('\n', i);
+            const std::size_t stop = end == std::string_view::npos ? source.size() : end;
+            // Extra/missing whitespace after // must never silently downgrade
+            // an intended checked header to legacy wrapping semantics.
+            std::size_t marker = i + 2;
+            while (marker < stop && (source[marker] == ' ' ||
+                    source[marker] == '\t' || source[marker] == '\r' ||
+                    source[marker] == '\v' || source[marker] == '\f')) ++marker;
+            if (source.substr(marker).starts_with(directive_prefix) &&
                 (!enabled || i != 0)) {
                 throw std::runtime_error(
                     "checked-i64-v1: malformed, duplicated, displaced or unsupported directive");
             }
-            const auto end = source.find('\n', i);
             i = end == std::string_view::npos ? source.size() : end + 1;
             continue;
         }
