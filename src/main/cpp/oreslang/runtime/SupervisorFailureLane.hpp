@@ -73,7 +73,18 @@ public:
     }
 
     void reserve(const ActorKey& actor) {
-        if (actor.id.empty()) throw std::invalid_argument("empty actor identity");
+        // ActorId is a host-owned printable token. Bound its allocation and
+        // reject control/non-ASCII bytes before map-node admission; the child
+        // reservation quota alone does not limit a malicious identifier's
+        // memory footprint. Actor generations may legitimately begin at zero.
+        if (actor.id.empty() || actor.id.size() > 128) {
+            throw std::invalid_argument("actor identity length outside 1..128 bytes");
+        }
+        for (const unsigned char ch : actor.id) {
+            if (ch <= 0x20 || ch >= 0x7f) {
+                throw std::invalid_argument("actor identity contains nonprintable or non-ASCII bytes");
+            }
+        }
         std::lock_guard<std::mutex> lock(mu_);
         if (children_.size() >= capacity_) {
             throw std::logic_error("supervision slots exhausted");
