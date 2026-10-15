@@ -30,6 +30,12 @@ public:
         if (actor_id.empty()) {
             throw std::invalid_argument("actor CONTROL notice requires actor identity");
         }
+        // Structured supervision is irreflexive. Otherwise a forged native
+        // actor failure can be routed back to the same actor's CONTROL inbox,
+        // violating the direct-parent trust boundary.
+        if (!supervisor_id.empty() && actor_id == supervisor_id) {
+            throw std::invalid_argument("actor cannot supervise itself");
+        }
         // A child can never be its own structured supervisor. Reject forged
         // self-parenting metadata before constructing the CONTROL envelope.
         if (actor_id == supervisor_id) {
