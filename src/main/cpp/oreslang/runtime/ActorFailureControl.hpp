@@ -5,13 +5,13 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace oreslang::runtime {
 
@@ -70,37 +70,44 @@ public:
             std::string_view supervisor_id,
             std::size_t capacity = 256)
             : supervisor_id_(checked_actor_identity(supervisor_id)),
-              capacity_(capacity) {
+              capacity_(checked_capacity(capacity)),
+              slots_(capacity_) {
         if (supervisor_id_.empty()) {
             throw std::invalid_argument("CONTROL inbox requires supervisor identity");
-        }
-        if (capacity == 0 || capacity > 256) {
-            throw std::invalid_argument("invalid bounded supervisor inbox capacity");
         }
     }
 
     ActorFailureControlInbox(const ActorFailureControlInbox&) = delete;
     ActorFailureControlInbox& operator=(const ActorFailureControlInbox&) = delete;
 
-    bool offer(const ActorFailureControlNotice& notice) {
+    // The incoming notice is copied before acquiring the lock. Once inside,
+    // only std::string moves and optional emplacement into fixed slots occur:
+    // no queue growth, reallocations, guest callbacks or unbounded waits.
+    bool offer(ActorFailureControlNotice notice) {
         if (notice.envelope().supervisor_id() != supervisor_id_) {
             throw std::invalid_argument("CONTROL notice is not owned by this supervisor");
         }
         std::lock_guard<std::mutex> lock(mutex_);
-        if (pending_.size() >= capacity_) {
+        if (count_ == capacity_) {
             ++dropped_;
             return false;
         }
-        pending_.push_back(notice);
+        slots_[(head_ + count_) % capacity_].emplace(std::move(notice));
+        ++count_;
         return true;
     }
 
     std::optional<ActorFailureControlNotice> try_pop() {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (pending_.empty()) return std::nullopt;
-        auto next = std::move(pending_.front());
-        pending_.pop_front();
-        return next;
+        if (count_ == 0) return std::nullopt;
+        // Move into caller-owned metadata; never retain a pointer into a
+        // supervisor-owned slot after releasing its lock.
+        std::optional<ActorFailureControlNotice> result(
+                std::move(*slots_[head_]));
+        slots_[head_].reset();
+        head_ = (head_ + 1) % capacity_;
+        --count_;
+        return result;
     }
 
     std::size_t dropped() const {
@@ -110,14 +117,23 @@ public:
 
     std::size_t pending() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return pending_.size();
+        return count_;
     }
 
 private:
+    static std::size_t checked_capacity(std::size_t capacity) {
+        if (capacity == 0 || capacity > 256) {
+            throw std::invalid_argument("invalid bounded supervisor inbox capacity");
+        }
+        return capacity;
+    }
+
     const std::string supervisor_id_;
     const std::size_t capacity_;
     mutable std::mutex mutex_;
-    std::deque<ActorFailureControlNotice> pending_;
+    std::vector<std::optional<ActorFailureControlNotice>> slots_;
+    std::size_t head_ = 0;
+    std::size_t count_ = 0;
     std::size_t dropped_ = 0;
 };
 
