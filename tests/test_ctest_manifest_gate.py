@@ -121,6 +121,35 @@ class ManifestAuditTests(unittest.TestCase):
             with self.subTest(properties=props), self.assertRaises(ManifestFailure):
                 check_manifest(document)
 
+    def test_configured_build_dir_authenticates_compiler_and_native_paths(self):
+        self.assertEqual(check_manifest(self.manifest, build_dir=Path("/work/build")),
+                         260 + len(CRITICAL_TESTS))
+        for name, flag in (
+                ("native_scalar_generic_source_execution", "--compiler"),
+                ("native_contract_positive_object_verifies", "--compiler"),
+                ("source_actor_compiled_native_lifecycle", "--compiler"),
+                ("native_actor_owned_heap_contract", None),
+        ):
+            document = fixture()
+            entry = next(item for item in document["tests"] if item["name"] == name)
+            command = entry["command"]
+            replacement = "/work/build-evil/oreslang-llvmc" if flag else (
+                "/work/build-evil/oreslang-actor-owned-heap-test")
+            if flag:
+                command[command.index(flag) + 1] = replacement
+            else:
+                command[0] = replacement
+            with self.subTest(name=name), self.assertRaisesRegex(
+                    ManifestFailure, "escapes configured build directory"):
+                check_manifest(document, build_dir=Path("/work/build"))
+
+    def test_relative_native_executable_is_not_attested(self):
+        entry = next(x for x in self.manifest["tests"]
+                     if x["name"] == "native_actor_owned_heap_contract")
+        entry["command"] = ["oreslang-actor-owned-heap-test"]
+        with self.assertRaisesRegex(ManifestFailure, "escapes configured build directory"):
+            check_manifest(self.manifest, build_dir=Path("/work/build"))
+
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
 
