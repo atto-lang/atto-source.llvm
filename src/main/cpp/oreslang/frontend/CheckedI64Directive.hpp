@@ -35,6 +35,41 @@ inline bool checked_i64_source_opt_in(std::string_view source) {
         if (end == std::string_view::npos) break;
         pos = end + 1;
     }
+    // A displaced directive after code or a closed block comment is still a
+    // real line comment. Detect it before native parsing can silently select
+    // the legacy wrapping profile. Ignore quoted source text and nested block
+    // comments, neither of which is a line-comment directive.
+    unsigned block_depth = 0;
+    char quote = '\0';
+    for (std::size_t i = 0; i < source.size();) {
+        const char c = source[i];
+        const char next = i + 1 < source.size() ? source[i + 1] : '\0';
+        if (quote != '\0') {
+            if (c == '\\' && i + 1 < source.size()) { i += 2; continue; }
+            if (c == quote) quote = '\0';
+            ++i;
+            continue;
+        }
+        if (block_depth != 0) {
+            if (c == '/' && next == '*') { ++block_depth; i += 2; continue; }
+            if (c == '*' && next == '/') { --block_depth; i += 2; continue; }
+            ++i;
+            continue;
+        }
+        if (c == '"' || c == '\'') { quote = c; ++i; continue; }
+        if (c == '/' && next == '*') { block_depth = 1; i += 2; continue; }
+        if (c == '/' && next == '/') {
+            if (i != 0 && source.substr(i).starts_with(directive_prefix)) {
+                throw std::runtime_error(
+                    "checked-i64-v1: displaced directive after source tokens");
+            }
+            const auto end = source.find('\n', i);
+            i = end == std::string_view::npos ? source.size() : end + 1;
+            continue;
+        }
+        ++i;
+    }
+
     return enabled;
 }
 
