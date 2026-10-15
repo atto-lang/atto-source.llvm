@@ -287,6 +287,35 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         p = self.run_contract(compiler, "--ir", "call i64 @add")
         self.assertNotEqual(p.returncode, 0)
 
+    def test_failure_does_not_echo_private_compiler_output(self):
+        secret = "private-source-SECRET-raw-ir"
+        compiler = self.compiler(stdout=secret)
+        p = self.run_contract(compiler)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("compiler output lacks an LLVM IR module header", p.stderr)
+        self.assertNotIn(secret, p.stderr)
+
+    def test_missing_expected_diagnostic_redacts_stderr(self):
+        secret = "private-source-SECRET-compiler-stderr"
+        compiler = self.compiler(status=1, stderr=secret)
+        p = self.run_contract(compiler, "--diagnostic", "expected bounded diagnostic")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("expected compiler diagnostic was absent", p.stderr)
+        self.assertNotIn(secret, p.stderr)
+
+    def test_wrong_guest_exit_does_not_echo_private_stderr(self):
+        secret = "private-source-SECRET-guest-stderr"
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "define i32 @main() { ret i32 42 }\n")
+        clang = self.linker(exit_code=41)
+        path = self.root / "fake-clang"
+        # The fake executable currently exits 41; its stderr must not be
+        # surfaced even if a guest prints private runtime diagnostics.
+        p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("native exit 41, expected 42", p.stderr)
+        self.assertNotIn(secret, p.stderr)
+
     def test_positive_rejects_stderr_and_forbidden_abi(self):
         compiler = self.compiler(stdout="; ModuleID = 'good'\n",
                                  stderr="unexpected warning")
