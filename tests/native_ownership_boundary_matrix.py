@@ -21,6 +21,18 @@ cases = {
     "share cannot box borrowed reference": (
         "fnc read(int x): int { return rt share (rt borrow x); }",
         "borrowed reference may only be passed"),
+    "ref pointer unsupported": (
+        "pub fnc main(): int { const x: int = 42; return rt ref x; }",
+        "native rt ref requires provenance-checked Pointer<T> and lifetime/drop lowering"),
+    "unref pointer unsupported": (
+        "pub fnc main(): int { return rt unref pointer; }",
+        "native rt unref requires provenance-checked Pointer<T> and lifetime/drop lowering"),
+    "deref pointer unsupported": (
+        "pub fnc main(): int { return rt deref pointer; }",
+        "native rt deref requires provenance-checked Pointer<T> and lifetime/drop lowering"),
+    "mutable deref pointer unsupported": (
+        "pub fnc main(): int { return rt deref mut pointer; }",
+        "native rt deref requires provenance-checked Pointer<T> and lifetime/drop lowering"),
     "public owned qualifier": (
         "pub fnc main(): int { const value: owned int = 42; return 0; }",
         "experimental owned int requires"),
