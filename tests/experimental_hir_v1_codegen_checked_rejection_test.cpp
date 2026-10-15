@@ -111,7 +111,8 @@ int main() {
     for (const char* required : {
             "checked.effect.status", "checked.call.propagate",
             "checked.i64.overflow", "store i32 1229914113",
-            "checked.effect.failed"}) {
+            "checked.effect.failed", "checked.entry.failed",
+            "checked.entry.normal", "checked.entry.effect"}) {
         if (checked_ir.find(required) == std::string::npos)
             throw std::runtime_error(std::string("checked effect IR missing: ") + required);
     }
