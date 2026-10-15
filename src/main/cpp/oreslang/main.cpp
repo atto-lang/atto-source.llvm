@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     try {
+        std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         std::ifstream source(path, std::ios::binary);
         if (!source.is_open()) {
             throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
@@ -310,6 +311,7 @@ int main(int argc, char** argv) {
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout.flush();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';
