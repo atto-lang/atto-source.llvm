@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/ExperimentalHirV1.hpp"
+#include "oreslang/frontend/CheckedI64Directive.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
@@ -76,7 +77,7 @@ int main(int argc, char** argv) {
                                std::istreambuf_iterator<char>());
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
         const bool experimental_checked_i64 =
-            text.rfind("// oreslang:checked-i64-v1\n", 0) == 0;
+            oreslang::checked_i64_source_opt_in(text);
         if (experimental_checked_i64 && (wasm32_target || cortex_m_target
                 || experimental_owned_int || experimental_rt_scalar_loop)) {
             throw std::runtime_error("checked-i64-v1 is currently host scalar only");
