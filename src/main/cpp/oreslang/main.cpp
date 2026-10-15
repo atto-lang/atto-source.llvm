@@ -12,6 +12,48 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <array>
+#include <string_view>
+
+// Reject malformed Unicode (overlong encodings, surrogates, truncated input and
+// code points above U+10FFFF) and binary NUL before native parser admission.
+static void require_valid_source_utf8(std::string_view source) {
+    for (std::size_t i = 0; i < source.size();) {
+        const auto lead = static_cast<unsigned char>(source[i]);
+        if (lead == 0) throw std::runtime_error("native source contains NUL byte");
+        if (lead <= 0x7f) { ++i; continue; }
+
+        std::size_t continuation_count = 0;
+        unsigned char min_first = 0x80;
+        unsigned char max_first = 0xbf;
+        if (lead >= 0xc2 && lead <= 0xdf) {
+            continuation_count = 1;
+        } else if (lead >= 0xe0 && lead <= 0xef) {
+            continuation_count = 2;
+            if (lead == 0xe0) min_first = 0xa0;
+            if (lead == 0xed) max_first = 0x9f;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            continuation_count = 3;
+            if (lead == 0xf0) min_first = 0x90;
+            if (lead == 0xf4) max_first = 0x8f;
+        } else {
+            throw std::runtime_error("native source is not valid UTF-8");
+        }
+        if (source.size() - i <= continuation_count) {
+            throw std::runtime_error("native source is not valid UTF-8");
+        }
+        for (std::size_t j = 1; j <= continuation_count; ++j) {
+            const auto byte = static_cast<unsigned char>(source[i + j]);
+            if (byte < (j == 1 ? min_first : 0x80) ||
+                byte > (j == 1 ? max_first : 0xbf)) {
+                throw std::runtime_error("native source is not valid UTF-8");
+            }
+        }
+        i += continuation_count + 1;
+    }
+}
+
+
 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
@@ -65,9 +107,27 @@ int main(int argc, char** argv) {
         if (!source.is_open()) {
             throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
         }
-        const std::string text((std::istreambuf_iterator<char>(source)),
-                               std::istreambuf_iterator<char>());
-        if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
+        // Bound input before lexing and IR construction; istreambuf_iterator
+        // used to grow memory without limit for attacker-controlled files.
+        // Enforce the stricter Cortex-M budget while streaming, before allocating.
+        const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
+        std::array<char, 8192> buffer{};
+        std::string text;
+        while (source) {
+            source.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const auto n = source.gcount();
+            if (n <= 0) break;
+            if (static_cast<std::size_t>(n) > kMaxSourceBytes - text.size())
+                throw std::runtime_error(cortex_m_target
+                    ? "cortex-m source exceeds 128 KiB limit"
+                    : "native source exceeds 8 MiB admission limit");
+            text.append(buffer.data(), static_cast<std::size_t>(n));
+        }
+        // A short final read normally sets eofbit and failbit. Other I/O
+        // errors must be rejected rather than admitting a truncated source.
+        if (source.bad() || (source.fail() && !source.eof()))
+            throw std::runtime_error("failed reading Oreslang source");
+        require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
         // constraints before parsing or emitting LLVM IR.
@@ -164,6 +224,38 @@ int main(int argc, char** argv) {
                         send.payload->kind != oreslang::Expression::Kind::Integer)
                         throw std::runtime_error("cortex-m actor send must be a literal i64");
                 }
+                // All bootstrap effects are statically ordered. Prove no
+                // mailbox can overflow before lowering irreversible void sends.
+                // The runtime's 16-entry cap is an ABI contract, not a hint.
+                std::unordered_map<std::string, std::size_t> pending;
+                std::unordered_set<std::string> stopped;
+                for (const auto& spawn : start.actor_spawns) {
+                    if (!pending.emplace(spawn.name, 0).second)
+                        throw std::runtime_error("cortex-m duplicate actor ref");
+                }
+                for (const auto& action : start.actor_actions) {
+                    std::string ref;
+                    if (action.kind == oreslang::ActorAction::Kind::Send) {
+                        if (action.index >= start.actor_sends.size())
+                            throw std::runtime_error("cortex-m invalid actor send index");
+                        ref = start.actor_sends[action.index].reference;
+                    } else {
+                        if (action.index >= start.actor_stops.size())
+                            throw std::runtime_error("cortex-m invalid actor stop index");
+                        ref = start.actor_stops[action.index];
+                    }
+                    const auto it = pending.find(ref);
+                    if (it == pending.end() || stopped.count(ref))
+                        throw std::runtime_error("cortex-m invalid or stopped actor capability");
+                    if (action.kind == oreslang::ActorAction::Kind::Send) {
+                        if (++it->second > 16)
+                            throw std::runtime_error("cortex-m static mailbox capacity exceeded (16)");
+                    } else {
+                        stopped.insert(ref);
+                    }
+                }
+                if (stopped.size() != pending.size())
+                    throw std::runtime_error("cortex-m bootstrap must stop all actors");
                 // The trusted C runtime owns static actors, mailboxes, and
                 // orderly stop/drain; this does not admit guest awaits.
             }
