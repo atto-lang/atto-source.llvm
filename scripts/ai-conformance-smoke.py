@@ -33,6 +33,11 @@ def sha256(path):
     return hasher.hexdigest()
 
 
+def regular_native_binary(path):
+    """Exclude symlinked, absent or non-file linker outputs."""
+    return path.is_file() and not path.is_symlink()
+
+
 def git_checkout_sha(root):
     """Read the actual checked-out Git revision, not just CI's claimed SHA."""
     completed = subprocess.run(
@@ -268,12 +273,12 @@ def main():
                             binary = temp / "app"
                             linked = run([str(clang), "-x", "ir", str(ir_file), "-o", str(binary)], 90, root)
                             case["link"] = linked
-                            if good(linked) and binary.is_file():
+                            if good(linked) and regular_native_binary(binary):
                                 case["linked_native_sha256"] = sha256(binary)
                                 executed = run([str(binary)], 10, root)
                                 case["execution"] = executed
                                 case["post_execution_native_sha256"] = (
-                                    sha256(binary) if binary.is_file() else None
+                                    sha256(binary) if regular_native_binary(binary) else None
                                 )
                                 case["passed"] = (
                                     not executed["timeout"] and not executed["output_truncated"]
