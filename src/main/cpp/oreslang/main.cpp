@@ -164,6 +164,38 @@ int main(int argc, char** argv) {
                         send.payload->kind != oreslang::Expression::Kind::Integer)
                         throw std::runtime_error("cortex-m actor send must be a literal i64");
                 }
+                // All bootstrap effects are statically ordered. Prove no
+                // mailbox can overflow before lowering irreversible void sends.
+                // The runtime's 16-entry cap is an ABI contract, not a hint.
+                std::unordered_map<std::string, std::size_t> pending;
+                std::unordered_set<std::string> stopped;
+                for (const auto& spawn : start.actor_spawns) {
+                    if (!pending.emplace(spawn.name, 0).second)
+                        throw std::runtime_error("cortex-m duplicate actor ref");
+                }
+                for (const auto& action : start.actor_actions) {
+                    std::string ref;
+                    if (action.kind == oreslang::ActorAction::Kind::Send) {
+                        if (action.index >= start.actor_sends.size())
+                            throw std::runtime_error("cortex-m invalid actor send index");
+                        ref = start.actor_sends[action.index].reference;
+                    } else {
+                        if (action.index >= start.actor_stops.size())
+                            throw std::runtime_error("cortex-m invalid actor stop index");
+                        ref = start.actor_stops[action.index];
+                    }
+                    const auto it = pending.find(ref);
+                    if (it == pending.end() || stopped.count(ref))
+                        throw std::runtime_error("cortex-m invalid or stopped actor capability");
+                    if (action.kind == oreslang::ActorAction::Kind::Send) {
+                        if (++it->second > 16)
+                            throw std::runtime_error("cortex-m static mailbox capacity exceeded (16)");
+                    } else {
+                        stopped.insert(ref);
+                    }
+                }
+                if (stopped.size() != pending.size())
+                    throw std::runtime_error("cortex-m bootstrap must stop all actors");
                 // The trusted C runtime owns static actors, mailboxes, and
                 // orderly stop/drain; this does not admit guest awaits.
             }
