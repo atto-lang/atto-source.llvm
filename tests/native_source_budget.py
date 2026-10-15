@@ -47,7 +47,9 @@ def main() -> int:
             linked_fifo = base / "fifo-link.ores"
             linked_fifo.symlink_to(fifo)
             linked_good = base / "regular-link.ores"
-            linked_good.symlink_to(good)
+            portable = base / "portable-scalar.ores"
+            portable.write_text("fnc scalar(): int { return 42; }\n")
+            linked_good.symlink_to(portable)
             for flags in ( [], ["--target=thumbv7m-none-eabi"]):
                 for special in (fifo, linked_fifo, base, type(good)("/dev/zero")):
                     rejected = subprocess.run([str(compiler), *flags, str(special)],
