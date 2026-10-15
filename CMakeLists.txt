@@ -120,6 +120,16 @@ if(BUILD_TESTING)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
         set(ORE_NATIVE_ARRAY_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang")
     endif()
+    # Exercise the scalar generic source compiler through real LLVM IR, Clang,
+    # and guest execution on every full CTest run. Loader-only tests are not
+    # sufficient evidence that scalar specialization still works.
+    add_test(NAME native_scalar_generic_source_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_generic_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}")
+    set_tests_properties(native_scalar_generic_source_execution PROPERTIES TIMEOUT 240)
+
     add_test(NAME native_annotation_macro_aot_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/annotation_macro_aot_admission_matrix.py"

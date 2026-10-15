@@ -28,6 +28,11 @@ def fixture():
             command = ["/work/build/" + NATIVE_EXECUTABLES[name]]
             if name == "portable_target_abi_v1":
                 command.append("/work/src/contracts/architecture/v1/targets.tsv")
+        elif name == "native_scalar_generic_source_execution":
+            command = [sys.executable,
+                       "/work/src/tests/native_scalar_generic_source_execution.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--clang", "/usr/bin/clang"]
         elif name in GUEST_FIXTURES:
             source, evidence = GUEST_FIXTURES[name]
             command = [sys.executable, "/work/src/tests/contract.py",
@@ -74,6 +79,47 @@ class ManifestAuditTests(unittest.TestCase):
     def fail_on(self, expected):
         with self.assertRaisesRegex(ManifestFailure, expected):
             check_manifest(self.manifest)
+
+    def test_scalar_generic_source_execution_is_required(self):
+        self.manifest["tests"] = [entry for entry in self.manifest["tests"]
+                                  if entry["name"] != "native_scalar_generic_source_execution"]
+        self.fail_on("required CTest was not registered")
+
+    def test_scalar_generic_source_execution_rejects_stubbed_commands(self):
+        corruptions = [
+            [sys.executable, "-c", "pass"],
+            ["/bin/sh", "/work/src/tests/native_scalar_generic_source_execution.py",
+             "--compiler", "/work/build/oreslang-llvmc", "--clang", "/usr/bin/clang"],
+            [sys.executable, "/work/src/tests/test_native_scalar_generic_contract.py",
+             "--compiler", "/work/build/oreslang-llvmc", "--clang", "/usr/bin/clang"],
+            [sys.executable, "/work/src/tests/native_scalar_generic_source_execution.py",
+             "--compiler", "/work/build/not-the-compiler", "--clang", "/usr/bin/clang"],
+            [sys.executable, "/work/src/tests/native_scalar_generic_source_execution.py",
+             "--compiler", "/work/build/oreslang-llvmc", "--clang", "/work/build/missing-clang"],
+            [sys.executable, "/work/src/tests/native_scalar_generic_source_execution.py",
+             "--compiler", "/work/build/oreslang-llvmc"],
+            [sys.executable, "/work/src/tests/native_scalar_generic_source_execution.py",
+             "--compiler", "/work/build/oreslang-llvmc", "--clang", "/usr/bin/clang", "--skip-guest"],
+        ]
+        for command in corruptions:
+            document = fixture()
+            entry = next(item for item in document["tests"]
+                         if item["name"] == "native_scalar_generic_source_execution")
+            entry["command"] = command
+            with self.subTest(command=command), self.assertRaisesRegex(
+                    ManifestFailure, "native scalar generic CTest"):
+                check_manifest(document)
+
+    def test_scalar_generic_source_execution_cannot_skip_or_lose_timeout(self):
+        for props in ([], [{"name": "SKIP_RETURN_CODE", "value": 77}],
+                      [{"name": "DISABLED", "value": True}],
+                      [{"name": "TIMEOUT", "value": 0}]):
+            document = fixture()
+            entry = next(item for item in document["tests"]
+                         if item["name"] == "native_scalar_generic_source_execution")
+            entry["properties"] = props
+            with self.subTest(properties=props), self.assertRaises(ManifestFailure):
+                check_manifest(document)
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))

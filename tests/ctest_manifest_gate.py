@@ -35,6 +35,7 @@ CRITICAL_TESTS = (
     "native_contract_harness_python_O",
     "native_contract_harness_python_OO",
     "native_contract_positive_object_verifies",
+    "native_scalar_generic_source_execution",
     "constant_main",
     "native_rt_while_loop_failclosed",
     "native_actor_owned_heap_contract",
@@ -61,7 +62,7 @@ CRITICAL_TESTS = (
     VISIBILITY_POSITIVE,
 )
 
-TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
+TIMED_TESTS = frozenset((*CRITICAL_TESTS[:4], "native_scalar_generic_source_execution"))
 # Bind critical CTest *names* to the real commands in CMakeLists.txt. A
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
@@ -114,6 +115,22 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
     This is deliberately a manifest check, not binary provenance or evidence
     that the command executed. Full CTest and independent CI remain mandatory.
     """
+    if name == "native_scalar_generic_source_execution":
+        # Pin the exact interpreter, source harness, compiler, and Clang
+        # arguments. A synthetic command under the same CTest name does not
+        # prove native generic lowering or executable guest behavior.
+        clang_names = {"clang", *(f"clang-{version}" for version in range(14, 20))}
+        if (len(command) != 6 or not python_program(command[0])
+                or not command[1].endswith("/tests/native_scalar_generic_source_execution.py")
+                or not Path(command[1]).is_absolute()
+                or command[2] != "--compiler"
+                or not Path(command[3]).is_absolute()
+                or Path(command[3]).name != "oreslang-llvmc"
+                or command[4] != "--clang"
+                or not Path(command[5]).is_absolute()
+                or Path(command[5]).name not in clang_names):
+            raise ManifestFailure("native scalar generic CTest does not execute real LLVM/Clang guest harness")
+        return
     if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
         positive = name == VISIBILITY_POSITIVE
         fixture = ("class-public-field-read-native.ores" if positive
