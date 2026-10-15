@@ -1,3 +1,4 @@
 # This protected-main file controls private cross-org source mirroring.
 # DENY BY DEFAULT. No destinations have yet been independently approved.
 # Add exact owner/repository entries only after independent security review.
+benefactor-cc/benefactor-e2e
