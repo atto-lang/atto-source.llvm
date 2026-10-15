@@ -42,6 +42,14 @@ def git_checkout_sha(root):
     revision = completed.stdout.strip()
     if not SOURCE_SHA.fullmatch(revision):
         raise ValueError("checkout HEAD is not a full lowercase Git commit SHA")
+    # A matching HEAD alone is insufficient if a build step rewrote tracked
+    # compiler sources, manifests, or lockfiles after checkout.
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=no"],
+        capture_output=True, text=True, check=True, timeout=20,
+    )
+    if tracked.stdout:
+        raise ValueError("tracked checkout differs from recorded Git HEAD")
     return revision
 
 
