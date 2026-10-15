@@ -27,9 +27,15 @@ struct NominalTypeTag {
 };
 
 inline NominalTypeTag primitive_tag(std::string identity) {
-    if (identity != "int" && identity != "bool" && identity != "string"
-            && identity != "float" && identity != "decimal"
-            && identity != "complex")
+    // Keep ABI-compatible with the Java compiler's canonical scalar tags.
+    // An alias is normalized before publication, never treated as distinct.
+    if (identity == "String") identity = "string";
+    if (identity != "bool" && identity != "int" && identity != "uint"
+            && identity != "string" && identity != "i8" && identity != "u8"
+            && identity != "i16" && identity != "u16"
+            && identity != "i32" && identity != "u32"
+            && identity != "i64" && identity != "u64"
+            && identity != "f64")
         throw std::invalid_argument("unrecognized canonical primitive tag");
     return {NominalTypeTag::Kind::Primitive, std::move(identity)};
 }
@@ -75,7 +81,8 @@ struct NominalOverloadSlot {
 inline void validate_nominal_tag(const NominalTypeTag& tag) {
     switch (tag.kind) {
         case NominalTypeTag::Kind::Primitive:
-            (void)primitive_tag(tag.identity);
+            if (primitive_tag(tag.identity).identity != tag.identity)
+                throw std::invalid_argument("noncanonical primitive tag identity");
             return;
         case NominalTypeTag::Kind::Enum:
             (void)enum_tag(tag.identity);
@@ -84,31 +91,44 @@ inline void validate_nominal_tag(const NominalTypeTag& tag) {
     throw std::invalid_argument("unknown nominal tag discriminant");
 }
 
+// Same-arity admission matches Java: ONLY distinct nominal enum IDs can
+// discriminate; *every* other position must be the identical known primitive
+// or enum identity. Primitive-only or structural/dynamic discrimination is
+// forbidden, even if another position would otherwise distinguish the pair.
 inline void validate_nominal_overload_family(const std::vector<NominalOverloadSlot>& slots) {
-    if (slots.size() > 256) throw std::invalid_argument("nominal overload family exceeds 256 declarations");
+    if (slots.size() > 128)
+        throw std::invalid_argument("nominal overload family exceeds 128 declarations");
     if (slots.empty()) return;
     const auto& first = slots.front();
-    if (first.name.empty() || first.parameter_tags.size() > 64)
-        throw std::invalid_argument("invalid nominal overload name/arity");
+    if (first.owner.empty() || first.owner.size() > 1024
+            || first.name.empty() || first.name.size() > 128
+            || first.parameter_tags.size() > 64)
+        throw std::invalid_argument("invalid nominal overload owner/name/arity");
     for (std::size_t i = 0; i < slots.size(); ++i) {
         const auto& a = slots[i];
         if (a.owner != first.owner || a.name != first.name
                 || a.parameter_tags.size() != first.parameter_tags.size())
             throw std::invalid_argument("nominal overload family mixes owner/name/arity");
-        for (const auto& tag : a.parameter_tags)
-            if (tag) validate_nominal_tag(*tag);
+        for (const auto& tag : a.parameter_tags) {
+            if (!tag)
+                throw std::invalid_argument("unresolved overload parameter tag");
+            validate_nominal_tag(*tag);
+        }
         for (std::size_t j = 0; j < i; ++j) {
             const auto& b = slots[j];
-            bool distinguishable = false;
+            bool distinct_enums = false;
             for (std::size_t k = 0; k < a.parameter_tags.size(); ++k) {
-                if (a.parameter_tags[k] && b.parameter_tags[k]
-                        && *a.parameter_tags[k] != *b.parameter_tags[k]) {
-                    distinguishable = true;
-                    break;
-                }
+                const auto& left = *a.parameter_tags[k];
+                const auto& right = *b.parameter_tags[k];
+                if (left == right) continue;
+                if (left.kind != NominalTypeTag::Kind::Enum
+                        || right.kind != NominalTypeTag::Kind::Enum)
+                    throw std::invalid_argument(
+                        "primitive or enum/primitive difference cannot distinguish same-arity overloads");
+                distinct_enums = true;
             }
-            if (!distinguishable)
-                throw std::invalid_argument("same-arity nominal overloads overlap; no structural fallback");
+            if (!distinct_enums)
+                throw std::invalid_argument("same-arity nominal overloads overlap");
         }
     }
 }
@@ -168,7 +188,7 @@ inline std::string nominal_overload_link_key(const NominalOverloadSlot& slot) {
             + "$n" + encode(slot.name)
             + "$a" + std::to_string(slot.parameter_tags.size());
     for (const auto& tag : slot.parameter_tags) {
-        if (!tag) { key += "$u"; continue; }
+        if (!tag) throw std::invalid_argument("unresolved overload ABI parameter");
         validate_nominal_tag(*tag);
         key += tag->kind == NominalTypeTag::Kind::Enum ? "$e" : "$p";
         key += encode(tag->identity);
