@@ -2,8 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdatomic.h>
-#include <threads.h>
+#include <thread>
 #if defined(__unix__) || defined(__APPLE__)
 #include <signal.h>
 #include <sys/resource.h>
@@ -106,10 +105,9 @@ int main(void) {
     ores_actor_i64_heap_leave(heap, next); /* shared loan still protects saved */
     /* A different native thread executes the next actor turn. */
     Carrier carrier = {heap, 21, 43, 0};
-    thrd_t native;
-    CHECK(thrd_create(&native, second_carrier, &carrier) == thrd_success);
     int exit_status = -1;
-    CHECK(thrd_join(native, &exit_status) == thrd_success);
+    std::thread native([&] { exit_status = second_carrier(&carrier); });
+    native.join();
     CHECK(exit_status == 0 && !carrier.failed);
     OresActorTurn after = ores_actor_i64_heap_enter(heap, 29, 7);
     CHECK(ores_actor_i64_heap_read(heap, after, saved) == 40);

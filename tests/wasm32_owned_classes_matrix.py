@@ -32,8 +32,10 @@ with tempfile.TemporaryDirectory(prefix="oreslang-wasm32-classes-") as tmp:
     for i, name in enumerate(positive):
         source = root / name
         compiled = run([args.compiler, "--target=wasm32", str(source)])
-        assert compiled.returncode == 0, (name, compiled.stderr)
-        assert 'target triple = "wasm32-unknown-unknown"' in compiled.stdout
+        if compiled.returncode != 0:
+            raise AssertionError((name, compiled.stderr))
+        if 'target triple = "wasm32-unknown-unknown"' not in compiled.stdout:
+            raise AssertionError((name, "missing wasm32 target triple"))
         dest = str(Path(tmp) / f"guest{i}.wasm")
         linked = run([
             args.clang, "--target=wasm32", "-x", "ir", "-Oz", "-nostdlib",
@@ -41,7 +43,8 @@ with tempfile.TemporaryDirectory(prefix="oreslang-wasm32-classes-") as tmp:
             "-Wl,--initial-memory=131072", "-Wl,--max-memory=131072",
             "-o", dest, "-"
         ], input=compiled.stdout)
-        assert linked.returncode == 0, (name, linked.stderr)
+        if linked.returncode != 0:
+            raise AssertionError((name, linked.stderr))
         js = """
 import { readFileSync } from 'node:fs';
 const bytes=readFileSync(process.argv[1]);
@@ -54,16 +57,21 @@ const instance=new WebAssembly.Instance(module);
 if(instance.exports.main()!==42n)process.exit(24);
 """
         executed = run([args.node, "--input-type=module", "-e", js, dest])
-        assert executed.returncode == 0, (name, executed.stderr, executed.returncode)
+        if executed.returncode != 0:
+            raise AssertionError((name, executed.stderr, executed.returncode))
     for name in negative:
         failed = run([args.compiler, "--target=wasm32", str(root / name)])
-        assert failed.returncode != 0 and not failed.stdout, (name, failed.stdout)
+        if failed.returncode != 1 or failed.stdout:
+            raise AssertionError((name, failed.returncode, failed.stdout))
     # Deliberately exercise the two unsupported host ABI paths.
     actor = run([args.compiler, "--target=wasm32", str(root / "unsupported-actor.ores")])
-    assert actor.returncode != 0 and not actor.stdout
+    if actor.returncode != 1 or actor.stdout:
+        raise AssertionError(("unsupported actor admission", actor.returncode, actor.stdout))
     region = run([args.compiler, "--target=wasm32", "--experimental-owned-int",
                   str(root / "owned-native-region-main.ores")])
-    assert region.returncode != 0 and "wasm32 native heap-owned" in region.stderr
-    assert not region.stdout
+    if region.returncode != 1 or "wasm32 native heap-owned" not in region.stderr:
+        raise AssertionError(("unsupported heap region", region.returncode, region.stderr))
+    if region.stdout:
+        raise AssertionError(("unexpected heap region IR", region.stdout))
 print(json.dumps({"ok": True, "realWasm32Classes": len(positive),
                   "compileTimeRejections": len(negative) + 2}))

@@ -13,19 +13,40 @@ import tempfile
 
 CLASS = """define class Shelf as
   pub let int number = 7;
-  let mut Array<int> first = new Array<int>();
-  let mut Array<int> second = new Array<int>();
+  pub let mut Array<int> first = new Array<int>();
+  pub let mut Array<int> second = new Array<int>();
 end
 """
 FOUR = """define class Four as
-  let mut Array<int> previous = new Array<int>();
-  let mut Array<int> following = new Array<int>();
-  let mut Array<int> values = new Array<int>();
-  let mut Array<int> occupied = new Array<int>();
-  let int ready = 0;
+  pub let mut Array<int> previous = new Array<int>();
+  pub let mut Array<int> following = new Array<int>();
+  pub let mut Array<int> values = new Array<int>();
+  pub let mut Array<int> occupied = new Array<int>();
+  pub let int ready = 0;
 end
 """
+# Visibility is independent of ownership: bulk array mutation may use four
+# public array fields while an unrelated scalar class field remains private.
+MIXED_FOUR = FOUR.replace("  pub let int ready = 0;",
+                          "  let int internal = 99;\n  pub let int ready = 0;")
 POSITIVES = {
+    "val-array-fixed-slot-mutable-referent": ("""define class Shelf as
+  pub val Array<int> first: new Array<int>();
+end
+pub fnc main(): int {
+  let mut Shelf shelf = new Shelf();
+  shelf.first.add(41);
+  shelf.first.set(0, 42);
+  return shelf.first.get(0);
+}
+""", 42, 1),
+    "four-atomic-filled-with-private-scalar": (MIXED_FOUR + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 2, -1, -1, 21, 21);
+  q.ready = 1;
+  return q.values.get(1) + q.occupied.get(0);
+}
+""", 42, 4),
     "four-atomic-filled": (FOUR + """pub fnc main(): int {
   let mut Four q = new Four();
   rt array_commit_filled(q, 3, -1, -1, 19, 23);
@@ -136,7 +157,7 @@ POSITIVES = {
     # The per-function source owner bound remains 64, not the number of
     # class variable names or transfer operations.
     "exact-64-owned-array-move": ("""define class Slot16 as
-""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+""" + "".join(f"  pub let mut Array<int> f{i} = new Array<int>();\n"
              for i in range(16)) + """end
 pub fnc main(): int {
   let mut Slot16 a = new Slot16();
@@ -152,7 +173,7 @@ pub fnc main(): int {
 }
 """, 42, 64),
     "exact-64-owned-array-limit": ("""define class Slot16 as
-""" + "".join(f"  let mut Array<int> f{i} = new Array<int>();\n"
+""" + "".join(f"  pub let mut Array<int> f{i} = new Array<int>();\n"
              for i in range(16)) + """end
 pub fnc main(): int {
   let mut Slot16 a = new Slot16();
@@ -233,6 +254,21 @@ pub fnc main(): int {
 """, 42, 2),
 }
 NEGATIVES = {
+    "reject-private-array-read": ("""define class PrivateShelf as
+  let mut Array<int> hidden = new Array<int>();
+end
+pub fnc main(): int {
+  let mut PrivateShelf shelf = new PrivateShelf();
+  return shelf.hidden.size;
+}
+""", "private class field"),
+    "reject-private-batch-field": (FOUR.replace(
+        "  pub let mut Array<int> previous", "  let mut Array<int> previous") + """pub fnc main(): int {
+  let mut Four q = new Four();
+  rt array_commit_filled(q, 1, 4, 5, 6, 7);
+  return 42;
+}
+""", "private class field"),
     "reject-batch-two-array-class": (CLASS + """pub fnc main(): int {
   let mut Shelf q = new Shelf();
   rt array_commit_filled(q, 4, -1, -1, 0, 0);
@@ -339,7 +375,7 @@ pub fnc main(): int {
     # Before this guard, nested writes could silently target an unrelated
     # local object sharing the nested receiver's final field name.
     "nested-write-colliding-local": ("""define class Bucket as
-  let mut Array<int> items = new Array<int>();
+  pub let mut Array<int> items = new Array<int>();
 end
 define class Counter as
   pub let int size = 1;
@@ -476,12 +512,12 @@ pub fnc main(): int {
 }
 """, "Array<int> field is non-Copy and cannot escape"),
     "forbid-false-constructor": ("""define class Shelf as
-  let mut Array<int> items = new Array<int>(5);
+  pub let mut Array<int> items = new Array<int>(5);
 end
 pub fnc main(): int { return 42; }
 """, "expected ')'"),
     "forbid-untyped-array": ("""define class Shelf as
-  let Array<int> items = new Array<int>();
+  pub let Array<int> items = new Array<int>();
 end
 pub fnc main(): int { return 42; }
 """, "expected 'int'"),

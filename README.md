@@ -91,3 +91,34 @@ any existing output. No unsupported source falls back to interpretation.
 This is not a static-linking or cross-compilation guarantee, and it does not
 make Spin compile: imports, actors, channels and async HTTP still require guest
 lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
+
+## Experimental Cortex-M3 native AOT (scalar subset)
+
+`oreslang-llvmc --target=thumbv7m-none-eabi` now admits a deliberately narrow
+freestanding `int` function subset, emits ARM-targeted LLVM IR and rejects
+actors, owners, suspension, non-scalar locals, guest `main` and unsupported
+runtime features. Clang 18 cross-compiles the IR into 32-bit ARM ELF objects.
+This **does not** constitute general embedded actor/runtime support.
+
+**Verified firmware smoke:** the exact compiler source change
+`ba8552bc9ca8cc4e9edc3b7f665ed2a1ed9a5b39`, combined with
+`oreslang-platform.embedded@5705a25b0dc5ee9ddb1a7c15ebe747142d51975c`,
+produced Zephyr 4.3.0 firmware that ran on QEMU Cortex-M3 and logged
+`ORESLANG_CORTEXM_AOT_PASS value=42`.
+[GitHub Actions evidence](https://github.com/canonical-cloud/canonical-docs/actions/runs/38646752678).
+See [target constraints](docs/CORTEXM_SCALAR_IR.md).
+
+
+## Experimental Cortex-M3 source actor bootstrap
+
+The compiler's `--target=thumbv7m-none-eabi` target now includes a
+separately bounded scalar-actor slice, in addition to pure `int` functions.
+It admits source declarations and a restricted `main` with `spawn`, literal
+`send`, and `stop`, exposing `oreslang_cortexm_bootstrap` and
+compiler-generated actor init/handler ABI functions. The embedded platform
+provides the static adapter; this is **not** full actor lowering, inter-actor
+handler sends, suspension, or standard OresVM on Cortex-M.
+See [admission limits](docs/CORTEXM_SCALAR_IR.md).
+
+See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
+aggregate, call, string, conditional and async feature limits.

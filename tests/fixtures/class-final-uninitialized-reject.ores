@@ -1,0 +1,6 @@
+define class Pair as
+  pub final int a;
+end
+pub fnc main(): int {
+  return 42;
+}
