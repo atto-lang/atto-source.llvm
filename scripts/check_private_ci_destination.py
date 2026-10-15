@@ -51,6 +51,8 @@ def assert_destination_approved(source: str, destination: str, policy_file: Path
     target = normalize_repository(destination)
     if original == target:
         raise MirrorPolicyError("cross-organization mirror must name a different repository")
+    if original.split("/", 1)[0] == target.split("/", 1)[0]:
+        raise MirrorPolicyError("cross-organization mirror requires different organization owners")
     if target not in read_approved_repositories(policy_file):
         raise MirrorPolicyError("destination is not approved in the protected private CI allowlist")
 
