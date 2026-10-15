@@ -5,6 +5,7 @@ Stage 1 intentionally admits only generics whose concrete representation is
 int64. This test never treats unsupported classes/actors as generic support.
 """
 import argparse
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -82,13 +83,39 @@ pub fnc main(): int { return fixed(); }
 """, "forward or self-referential generic default"),
 }
 
+def load_shared_conformance():
+    contract = Path(__file__).resolve().parents[1] / "contracts/v1/generics-stage1/cases.json"
+    payload = json.loads(contract.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != "1.0.0":
+        raise AssertionError("unsupported generic conformance contract schema")
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        raise AssertionError("generic conformance cases must be a list")
+    seen = set()
+    valid, invalid = {}, {}
+    for case in cases:
+        identifier = case["id"]
+        if identifier in seen:
+            raise AssertionError(f"duplicate generic conformance ID: {identifier}")
+        seen.add(identifier)
+        source = case["source"]
+        if case["kind"] == "native_exit":
+            valid[identifier] = (source, case["expected_exit"])
+        elif case["kind"] == "diagnostic":
+            invalid[identifier] = (source, case["expected_substring"])
+        else:
+            raise AssertionError(f"unsupported generic conformance case {identifier}")
+    return valid, invalid
+
+
 def run(argv):
     return subprocess.run(argv, capture_output=True, timeout=65, check=False)
 
 def verify(compiler, clang):
     with tempfile.TemporaryDirectory(prefix="oreslang-native-generics-") as tmp:
         tmp = Path(tmp)
-        for name, (source, exit_code) in VALID.items():
+        shared_valid, shared_invalid = load_shared_conformance()
+        for name, (source, exit_code) in {**VALID, **shared_valid}.items():
             path = tmp / (name + ".ores")
             path.write_text(source)
             result = run([str(compiler), str(path)])
@@ -104,7 +131,7 @@ def verify(compiler, clang):
             if executed.returncode != exit_code:
                 raise AssertionError(f"{name}: guest exit {executed.returncode}, expected {exit_code}, stderr={executed.stderr!r}")
             print(f"PASS guest {name}: {exit_code}", flush=True)
-        for name, (source, diagnostic) in INVALID.items():
+        for name, (source, diagnostic) in {**INVALID, **shared_invalid}.items():
             path = tmp / (name + ".ores")
             path.write_text(source)
             result = run([str(compiler), str(path)])
