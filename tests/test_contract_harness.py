@@ -35,11 +35,13 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         return path
 
     def linker(self, *, exit_code=0, link_status=0, compile_status=0,
-               link_error="undefined reference to main", stub_link_status=0):
+               link_error="undefined reference to main", stub_link_status=0,
+               guest_stderr=""):
         path = self.root / "fake-clang"
         executable_contents = (
             "#!" + sys.executable + "\n"
             + "import sys\n"
+            + f"sys.stderr.write({guest_stderr!r})\n"
             + f"sys.exit({exit_code})\n"
         )
         path.write_text(
@@ -307,10 +309,8 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         secret = "private-source-SECRET-guest-stderr"
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
                                         "define i32 @main() { ret i32 42 }\n")
-        clang = self.linker(exit_code=41)
-        path = self.root / "fake-clang"
-        # The fake executable currently exits 41; its stderr must not be
-        # surfaced even if a guest prints private runtime diagnostics.
+        clang = self.linker(exit_code=41, guest_stderr=secret)
+        # The linked fake guest prints a sensitive sentinel on stderr.
         p = self.run_contract(compiler, "--run", "42", "--clang", str(clang))
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("native exit 41, expected 42", p.stderr)
