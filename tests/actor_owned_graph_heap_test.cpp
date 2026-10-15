@@ -176,6 +176,8 @@ static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
     const auto proof = carrier.retirement_proof();
     check(proof.has_value(), "missing joined carrier proof for destructor drop");
     h.retire(owner, *proof);
+    must_reject([&] { h.retire(owner, *proof); },
+                "duplicate retirement ran or admitted destructor glue twice");
     check(drops.load(std::memory_order_relaxed) == 3,
           "actor retirement did not drop exactly two remaining live objects");
     std::cout << "PASS deterministic native destructor glue and cyclic actor retirement\\n";
