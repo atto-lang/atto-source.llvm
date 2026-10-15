@@ -4,6 +4,8 @@
 #include "oreslang/runtime/ExceptionPolicy.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -77,7 +79,8 @@ public:
             std::size_t capacity = 256)
             : supervisor_id_(checked_actor_identity(supervisor_id)),
               capacity_(checked_capacity(capacity)),
-              slots_(capacity_) {
+              slots_(capacity_),
+              inbox_nonce_(allocate_inbox_nonce()) {
         if (supervisor_id_.empty()) {
             throw std::invalid_argument("CONTROL inbox requires supervisor identity");
         }
@@ -86,49 +89,76 @@ public:
     ActorFailureControlInbox(const ActorFailureControlInbox&) = delete;
     ActorFailureControlInbox& operator=(const ActorFailureControlInbox&) = delete;
 
+    // This is a host-issued registration capability, not a guest ActorRef.
+    // It carries a unique inbox incarnation and a monotonic child generation.
+    // Its constructor is private; the native runtime retains a copy at spawn.
+    class DirectChildPermit final {
+    public:
+        DirectChildPermit(const DirectChildPermit&) = default;
+        DirectChildPermit(DirectChildPermit&&) = default;
+        DirectChildPermit& operator=(const DirectChildPermit&) = default;
+        DirectChildPermit& operator=(DirectChildPermit&&) = default;
+        std::string_view child_id() const noexcept { return child_id_; }
+    private:
+        friend class ActorFailureControlInbox;
+        DirectChildPermit(std::string id, std::uint64_t owner, std::uint64_t generation)
+            : child_id_(std::move(id)), inbox_nonce_(owner), generation_(generation) {}
+        std::string child_id_;
+        std::uint64_t inbox_nonce_;
+        std::uint64_t generation_;
+    };
+
     // Call ONLY from the host scheduler while admitting an actual structured
     // child. A notice, guest ActorRef, or source argument cannot create this
     // registration. Bounds are independent of the CONTROL notice ring.
-    bool register_direct_child(std::string_view child_id) {
+    std::optional<DirectChildPermit> register_direct_child(std::string_view child_id) {
         const std::string checked = checked_actor_identity(child_id);
         if (checked.empty() || checked == supervisor_id_) {
             throw std::invalid_argument("invalid structured child identity");
         }
         std::lock_guard<std::mutex> lock(mutex_);
-        if (retired_) return false;
+        if (retired_) return std::nullopt;
         if (std::any_of(direct_children_.begin(), direct_children_.end(),
-                [&](const DirectChild& entry) { return entry.id == checked; })) return false;
-        if (direct_children_.size() == max_direct_children) return false;
-        direct_children_.push_back({checked, false});
-        return true;
+                [&](const DirectChild& entry) { return entry.id == checked; })
+                || direct_children_.size() == max_direct_children) return std::nullopt;
+        if (next_child_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("native child generation counter exhausted");
+        }
+        const std::uint64_t generation = next_child_generation_++;
+        DirectChildPermit permit(checked, inbox_nonce_, generation);
+        direct_children_.push_back({checked, generation, false});
+        return permit;
     }
 
-    // Remove registry authority after the child's CONTROL handoff completes.
-    // Already-admitted notices remain value-only and can still be drained.
-    bool unregister_direct_child(std::string_view child_id) {
+    // Revocation must use the original generation's permit. A late teardown
+    // cannot revoke a new child that reuses the same string identity.
+    bool unregister_direct_child(const DirectChildPermit& permit) {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (permit.inbox_nonce_ != inbox_nonce_) return false;
         auto found = std::find_if(direct_children_.begin(), direct_children_.end(),
-                [&](const DirectChild& entry) { return entry.id == child_id; });
+                [&](const DirectChild& entry) {
+                    return entry.id == permit.child_id_
+                            && entry.generation == permit.generation_;
+                });
         if (found == direct_children_.end()) return false;
-        // Child IDs are opaque: their order is not observable or significant.
         *found = std::move(direct_children_.back());
         direct_children_.pop_back();
         return true;
     }
 
-    // The native runtime must supply direct_child_id from its STRUCTURED
-    // child registry, never from guest input or the notice itself. Checking
-    // both identities makes the ownership proof explicit at the call site.
+    // Native actor spawn must supply the exact trusted registration permit;
+    // matching strings alone cannot authorize a CONTROL effect.
     // The incoming notice is copied before acquiring the lock. Once inside,
     // only std::string moves and optional emplacement into fixed slots occur:
     // no queue growth, reallocations, guest callbacks or unbounded waits.
-    bool offer(ActorFailureControlNotice notice, std::string_view direct_child_id) {
-        if (notice.envelope().supervisor_id() != supervisor_id_) {
+    bool offer(ActorFailureControlNotice notice, const DirectChildPermit& permit) {
+        if (notice.envelope().supervisor_id() != supervisor_id_
+                || permit.inbox_nonce_ != inbox_nonce_) {
             throw std::invalid_argument("CONTROL notice is not owned by this supervisor");
         }
-        if (direct_child_id.empty()
-                || direct_child_id == supervisor_id_
-                || notice.envelope().actor_id() != direct_child_id) {
+        if (permit.child_id_.empty()
+                || permit.child_id_ == supervisor_id_
+                || notice.envelope().actor_id() != permit.child_id_) {
             throw std::invalid_argument("CONTROL notice does not match direct-child authority");
         }
         std::lock_guard<std::mutex> lock(mutex_);
@@ -138,7 +168,10 @@ public:
             return false;
         }
         auto child = std::find_if(direct_children_.begin(), direct_children_.end(),
-                [&](const DirectChild& entry) { return entry.id == direct_child_id; });
+                [&](const DirectChild& entry) {
+                    return entry.id == permit.child_id_
+                            && entry.generation == permit.generation_;
+                });
         if (child == direct_children_.end()) {
             throw std::invalid_argument("CONTROL notice requires registered direct child");
         }
@@ -211,9 +244,23 @@ public:
 private:
     struct DirectChild {
         std::string id;
+        std::uint64_t generation;
         bool terminal_admitted = false;
     };
     static constexpr std::size_t max_direct_children = 4096;
+    static inline std::atomic<std::uint64_t> next_inbox_nonce_{1};
+
+    // Do not wrap: address-based identity permits ABA on placement-new reuse.
+    static std::uint64_t allocate_inbox_nonce() {
+        auto nonce = next_inbox_nonce_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (nonce == std::numeric_limits<std::uint64_t>::max()) {
+                throw std::overflow_error("native CONTROL inbox incarnations exhausted");
+            }
+            if (next_inbox_nonce_.compare_exchange_weak(
+                    nonce, nonce + 1, std::memory_order_relaxed)) return nonce;
+        }
+    }
 
     static std::size_t checked_capacity(std::size_t capacity) {
         if (capacity == 0 || capacity > 256) {
@@ -229,8 +276,10 @@ private:
     // Host-admitted structural membership, never inferred from a notice.
     // Registration allocates only at actor spawn, never in offer/try_pop.
     std::vector<DirectChild> direct_children_;
-    // Runtime must never reuse a child actor identity across generations.
-    // An entry stays terminal-fenced until explicit child unregister.
+    // Monotonic registration generations are never recycled during inbox life.
+    const std::uint64_t inbox_nonce_;
+    std::uint64_t next_child_generation_ = 1;
+    // An entry stays terminal-fenced until exact-permit child unregister.
     std::size_t duplicate_rejections_ = 0;
     std::size_t head_ = 0;
     std::size_t count_ = 0;
