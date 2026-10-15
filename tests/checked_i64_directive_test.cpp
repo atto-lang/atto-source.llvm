@@ -38,6 +38,18 @@ int main() {
     rejected("\f// oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
     rejected("// oreslang:checked-i64-v1\n\f// oreslang:checked-i64-v1\n");
     rejected("\n// oreslang:checked-i64-v1\npub fnc main(): int { return 43; }");
+    // Spelling a checked header with non-canonical whitespace must not
+    // downgrade to ordinary wrapping arithmetic.
+    rejected("//oreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n");
+    rejected("//  oreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n");
+    rejected("//\toreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n");
+    rejected("// \toreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n");
+    rejected("//\roreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n");
+    rejected("//\voreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n");
+    rejected("//\foreslang:checked-i64-v1\npub fnc main(): int { return 43; }\n");
+    require(!checked_i64_source_opt_in(
+        "/*\n//  oreslang:checked-i64-v1\n*/\n"
+        "pub fnc main(): int { return 43; }\n"));
     rejected("// oreslang:checked-i64-v2\npub fnc main(): int { return 43; }");
     rejected("// oreslang:checked-i64-v1 extra\npub fnc main(): int { return 43; }");
     rejected("// oreslang:checked-i64-v1\n// oreslang:checked-i64-v1\n");
