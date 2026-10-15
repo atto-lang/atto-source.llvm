@@ -347,3 +347,23 @@ are committed but **not verified passing in the exact-head native CTest**
 because source-org Actions continues to fail before runner admission.
 No guest exception lowering or actor carrier execution is implied.
 
+
+## Terminal CONTROL text display-safety boundary (2026-10-15)
+
+`SupervisorFailureLane::publish_preallocated()` copies bounded summary and
+parent metadata into its pre-reserved host CONTROL storage. Strictly valid
+UTF-8 is **not** sufficient to make these fields safe for host diagnostics.
+The low-level lane now replaces ASCII C0/DEL, UTF-8 C1 controls, U+061C,
+U+200E/U+200F, U+202A–U+202E and U+2066–U+2069 with a single ASCII
+`?` per scalar. Malformed bytes retain the existing one-byte-at-a-time
+replacement rule. The 512-byte summary and 128-byte parent fields still
+truncate at UTF-8 scalar boundaries, and ordinary Unicode remains intact.
+
+The source regression fixture checks ANSI ESC, embedded NUL/newline, DEL,
+C1, bidi marks/isolates, parent metadata and truncation beside a 4-byte
+scalar. An independently compiled sanitizer-body reproduction passed
+GCC and Clang with ASan/UBSan and 100,000 deterministic random byte
+inputs per compiler. **This is isolated sanitizer verification**, not
+compilation of the full GitHub tree or passing CTest, and it does not authorize
+private-source CI mirroring.
+
