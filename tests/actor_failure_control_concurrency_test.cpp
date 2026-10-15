@@ -261,10 +261,63 @@ static int check_duplicate_terminal_race() {
     return 0;
 }
 
+// ActorIds are not sufficient proof of generation. Many obsolete callbacks
+// may race with a replacement registration bearing the same opaque string.
+// The original permit must never publish or revoke the new incarnation.
+static int check_reused_id_stale_permit_race() {
+    ActorFailureControlInbox inbox("parent", 8);
+    const auto stale = inbox.register_direct_child("reused");
+    if (!stale || !inbox.unregister_direct_child(*stale)) return 30;
+    const auto current = inbox.register_direct_child("reused");
+    if (!current) return 31;
+
+    constexpr int kWriters = 8;
+    constexpr int kAttempts = 128;
+    std::atomic<bool> start{false};
+    std::atomic<int> denied{0};
+    std::atomic<int> violation{0};
+    std::vector<std::thread> writers;
+    for (int worker = 0; worker < kWriters; ++worker) {
+        writers.emplace_back([&] {
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            for (int i = 0; i < kAttempts; ++i) {
+                const auto notice = ActorFailureControlNotice::from_guest_effect(
+                        ActorExceptionalEffect::Panic, "reused", "parent");
+                try {
+                    // Returning true OR false without rejecting stale
+                    // authority is a bug; rejected old permits must throw.
+                    (void)inbox.offer(notice, *stale);
+                    violation.fetch_add(1, std::memory_order_relaxed);
+                } catch (const std::invalid_argument&) {
+                    denied.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (inbox.unregister_direct_child(*stale)) {
+                    violation.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& worker : writers) worker.join();
+
+    if (violation.load() != 0 || denied.load() != kWriters * kAttempts
+            || inbox.pending() != 0 || inbox.dropped() != 0) return 32;
+    const auto currentNotice = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Raise, "reused", "parent");
+    if (!inbox.offer(currentNotice, *current)) return 33;
+    const auto admitted = inbox.try_pop();
+    if (!admitted || admitted->effect() != ActorExceptionalEffect::Raise) return 34;
+    if (!inbox.unregister_direct_child(*current)) return 35;
+    return 0;
+}
+
 int main() {
     if (int status = check_concurrent_fifo()) return status;
     if (int status = check_retirement_race()) return status;
     if (int status = check_supervisor_retirement_isolation()) return status;
     if (int status = check_consumer_retirement_accounting()) return status;
-    return check_duplicate_terminal_race();
+    if (int status = check_duplicate_terminal_race()) return status;
+    return check_reused_id_stale_permit_race();
 }
