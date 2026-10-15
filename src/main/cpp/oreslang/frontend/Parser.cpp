@@ -410,7 +410,6 @@ private:
                     fail(field.final_field
                         ? "final class field requires declaration-site initializer"
                         : "class field requires declaration-site initializer");
-                const std::size_t initializer_begin = token_.offset;
                 const std::size_t literal_end = token_.offset + token_.text.size();
                 if (literal_const && token_.kind != Kind::Integer)
                     fail("class field requires i64 literal initializer");
