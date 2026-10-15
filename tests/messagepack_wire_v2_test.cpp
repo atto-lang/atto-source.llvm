@@ -96,10 +96,56 @@ static void negatives() {
     });
 }
 
+
+static void ownedDecodeAndEncodeSnapshot() {
+    using namespace oreslang::wire;
+    const Shape shape = Shape::list(Shape::string());
+    const std::string id = "demo.OwnedActorData.v1";
+    Value sender(Value::Items{Value("before"), Value("stable")});
+    const auto original = sender;
+    auto bytes = encode(id, shape, sender);
+
+    // The sender remains owned and mutable after the synchronous encoding
+    // borrow. Its later changes must never alter the staged mailbox bytes.
+    std::get<Value::Items>(sender.payload)[0] = Value("after");
+    if (!(decode(id, shape, bytes) == original))
+        throw std::runtime_error("encoded actor snapshot aliases sender state");
+
+    // Once decoded, the receiver's graph must not alias its input byte
+    // buffer, the original sender graph, or the sender's updated graph.
+    Value receiver = decode(id, shape, bytes);
+    std::fill(bytes.begin(), bytes.end(), 0);
+    if (!(receiver == original))
+        throw std::runtime_error("receiver retains borrowed wire bytes");
+
+    std::get<Value::Items>(receiver.payload)[1] = Value("receiver");
+    if (!(std::get<Value::Items>(sender.payload)[1] == Value("stable")))
+        throw std::runtime_error("receiver mutation aliases sender");
+
+    // Staging errors are atomic with respect to the caller's value: an
+    // invalid schema/shape must not move, mutate, or destroy sender data.
+    const Value beforeFailure = sender;
+    rejection("schema validation before ownership commit", [&] {
+        (void)encode("", shape, sender);
+    });
+    rejection("shape validation before ownership commit", [&] {
+        (void)encode(id, Shape::integer(), sender);
+    });
+    if (!(sender == beforeFailure))
+        throw std::runtime_error("failed encode destroyed sender ownership");
+
+    // Hostile/oversized input must fail before decoding into a receiver.
+    const std::vector<unsigned char> oversized(kMaxBytes + 1, 0);
+    rejection("oversized actor DATA envelope", [&] {
+        (void)decode(id, shape, oversized);
+    });
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc==2 && std::string(argv[1])=="--negative") {
             negatives();
+            ownedDecodeAndEncodeSnapshot();
             std::cout<<"PASS MessagePack v2 hostile binary cases\n";
             return 0;
         }
