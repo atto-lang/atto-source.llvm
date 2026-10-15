@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -9,6 +10,9 @@
 #include <vector>
 
 namespace oreslang::types::overloads {
+
+inline constexpr std::size_t MaxSameArityCandidates = 128;
+inline constexpr std::size_t MaxOverloadArity = 64;
 
 // This is a compiler/linker policy, NOT a guest runtime multimethod.
 // Native source overload admission remains disabled until enum lowering and
@@ -86,6 +90,8 @@ inline Signature signature(
     const std::vector<std::pair<Kind, std::string>>& resolvedParameters,
     const std::unordered_set<std::string>& verifiedEligibleEnumIds) {
     if (name.empty()) throw std::invalid_argument("callable name cannot be empty");
+    if (resolvedParameters.size() > MaxOverloadArity)
+        throw std::invalid_argument("nominal enum overload arity bound exceeded");
     Signature result{std::move(name), {}};
     for (const auto& parameter : resolvedParameters) {
         if (parameter.second.empty()) {
@@ -114,6 +120,8 @@ inline std::size_t select(
     const std::vector<Signature>& candidates,
     const std::unordered_map<std::size_t, std::string>& staticEnumProofs) {
     if (candidates.empty()) throw std::invalid_argument("empty overload set");
+    if (candidates.size() > MaxSameArityCandidates)
+        throw std::invalid_argument("nominal enum overload candidate bound exceeded");
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         if (candidates[i].name != candidates.front().name
             || candidates[i].arity() != candidates.front().arity())

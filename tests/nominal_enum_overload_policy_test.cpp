@@ -83,6 +83,12 @@ int main() {
         {Kind::Enum, "unit::Color"}, {Kind::Primitive, "string"}}, eligibleIds);
     REQUIRE(compare(upper, lowercase) == PairStatus::Same);
 
+    std::vector<std::pair<Kind, std::string>> tooManyParameters(
+        MaxOverloadArity + 1, {Kind::Enum, "unit::Color"});
+    rejects([&] { (void)signature("go", tooManyParameters, eligibleIds); });
+    std::vector<Signature> tooManyCandidates(MaxSameArityCandidates + 1, color);
+    rejects([&] { (void)select(tooManyCandidates, {{0, "unit::Color"}}); });
+
     rejects([&] { (void)select({color, mode}, {}); });
     rejects([&] { (void)select({color, mode}, {{0, "unknown::Color"}}); });
     rejects([&] { (void)select({color, mode}, {{2, "unit::Color"}}); });
