@@ -2,7 +2,8 @@
 """Run two REAL Oreslang compiler smoke fixtures. No mocks or shell.
 
 The report attests observations of this CI job, not reproducible binary provenance,
-cross-backend parity, or general language support. Compiler processes run with\nnormal runner privileges: sandbox/network isolation is the CI runner's duty.
+cross-backend parity, or general language support. Compiler processes run with
+normal runner privileges: sandbox/network isolation is the CI runner's duty.
 """
 import argparse
 import hashlib
