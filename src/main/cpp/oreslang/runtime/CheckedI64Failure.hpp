@@ -18,6 +18,16 @@ struct CheckedI64Failure final {
     enum class Operation : std::uint32_t {
         Add = 1u, Subtract = 2u, Multiply = 3u, Negate = 4u
     };
+    // Internal host-scalar checked invocation status: upper 32 bits carry
+    // operation identity; lower 32 carry the Throw error code. Zero means
+    // success. This is not a source Error object or serialized guest ABI.
+    [[nodiscard]] static constexpr std::uint64_t packed_status(Operation op) noexcept {
+        return (std::uint64_t(static_cast<std::uint32_t>(op)) << 32) | effect_code;
+    }
+    [[nodiscard]] static constexpr bool valid_packed_status(std::uint64_t bits) noexcept {
+        return (bits & 0xFFFFFFFFull) == effect_code &&
+               valid_operation(static_cast<std::uint32_t>(bits >> 32));
+    }
     [[nodiscard]] static constexpr bool valid_operation(std::uint32_t op) noexcept {
         return op >= static_cast<std::uint32_t>(Operation::Add) &&
                op <= static_cast<std::uint32_t>(Operation::Negate);
