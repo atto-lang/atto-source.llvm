@@ -30,3 +30,19 @@ and recursion (including mutual recursion). Distinct overloads by name are
 not admitted to keep the embedded call graph unambiguous. These are coarse
 compiler resource controls, **not** a proof of a precise stack/flash upper
 bound; inspect Zephyr map/stack usage before claiming a memory budget.
+
+## Experimental fixed-size actor bootstrap
+
+A distinct, **bounded** `thumbv7m-none-eabi` admission variant permits up to eight
+literal-initialized scalar actor declarations with one zero-argument source
+`main` containing at most eight spawns, 32 literal `send` actions and matching
+`stop` actions. The compiler exports `oreslang_cortexm_bootstrap()` rather
+than a conflicting C `main`. Generated actor entrypoints use the native
+actor-field and source-bootstrap ABI, implemented by the embedded platform's
+fully static runtime. Actors have 1..8 scalar fields, up to 16 writes per
+handler, and no guest calls, suspension, heap ownership or arbitrary I/O.
+
+The first firmware milestone verifies two actor types with source-directed
+spawn/send/stop, bounded FIFO delivery and persistent private scalar state.
+It does **not** yet support actor-to-actor sends originating in handlers,
+reader/writer locks, structured messages, or live scheduler preemption.

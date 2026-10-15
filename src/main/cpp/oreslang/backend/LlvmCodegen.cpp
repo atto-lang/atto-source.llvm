@@ -320,7 +320,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     constexpr const char* guest_main_symbol = "__oreslang_guest_main";
     const auto main_it = std::find_if(source.functions.begin(), source.functions.end(),
         [](const Function& fn) { return fn.name == "main"; });
-    const bool native_main = !wasm32_target && main_it != source.functions.end();
+    const bool native_main = !wasm32_target && !cortex_m_target &&
+        main_it != source.functions.end();
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
@@ -497,9 +498,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
     for (const auto& fn : source.functions) {
-        const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
+        const std::string base_symbol = cortex_m_target && fn.name == "main"
+            ? "oreslang_cortexm_bootstrap"
+            : (native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
-            : (source.module.empty() ? fn.name : source.module + "." + fn.name);
+            : (source.module.empty() ? fn.name : source.module + "." + fn.name));
         const std::string symbol = family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, fn.parameters.size())
             : base_symbol;
