@@ -88,17 +88,18 @@ jobs:
           python3 - "$RUNNER_TEMP/hir-v1-real-parser" "$RUNNER_TEMP" <<'PY'
           import pathlib, subprocess, sys
           cli, work = sys.argv[1], pathlib.Path(sys.argv[2])
-          ordinary = "pub fnc main(): int { return 43; }\\n"
-          prefix = "// oreslang:checked-i64-v1\\n"
+          ordinary = "pub fnc main(): int { return 43; }\n"
+          prefix = "// oreslang:checked-i64-v1\n"
+          checked_source = prefix + "pub fnc scale(int x): int { return x * 43; }\n" + "pub fnc main(): int { return scale(1); }\n"
           inputs = {
-              "exact": (prefix + ordinary, True, True),
+              "exact": (checked_source, True, True),
               "ordinary": (ordinary, True, False),
-              "displaced": ("\\n" + prefix + ordinary, False, False),
+              "displaced": ("\n" + prefix + ordinary, False, False),
               "indented": (" " + prefix + ordinary, False, False),
-              "unsupported": ("// oreslang:checked-i64-v2\\n" + ordinary, False, False),
-              "crlf": ("// oreslang:checked-i64-v1\\r\\n" + ordinary, False, False),
+              "unsupported": ("// oreslang:checked-i64-v2\n" + ordinary, False, False),
+              "crlf": ("// oreslang:checked-i64-v1\r\n" + ordinary, False, False),
               "duplicate": (prefix + prefix + ordinary, False, False),
-              "bom": ("\\ufeff" + prefix + ordinary, False, False),
+              "bom": ("\ufeff" + prefix + ordinary, False, False),
           }
           for name, (source, should_pass, checked) in inputs.items():
               path = work / ("hir-check-" + name + ".ores")
@@ -108,6 +109,7 @@ jobs:
                   capture_output=True, text=True, check=False)
               if should_pass:
                   assert proc.returncode == 0 and '"ir_family":"ores-hir"' in proc.stdout, (name, proc.stderr)
+                  if checked: assert '"op":"mul"' in proc.stdout, (name, proc.stdout)
               else:
                   assert proc.returncode != 0 and not proc.stdout, (name, proc.stdout, proc.stderr)
                   assert "checked-i64-v1" in proc.stderr, (name, proc.stderr)
