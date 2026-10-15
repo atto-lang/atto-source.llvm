@@ -34,6 +34,20 @@ cases = {
           return 0;
         }
     """,
+    "stream_filter_map": """
+        pub fnc main(): int {
+          val Stream<int> s = make_stream();
+          val Stream<int> selected = s.filter_map(|int n| -> { return Some(n); });
+          return 0;
+        }
+    """,
+    "channel_not_observable": """
+        pub fnc main(): int {
+          val Channel<int> c = Channel.new<int>(0);
+          val Observable<int> o = c;
+          return 0;
+        }
+    """,
 }
 with tempfile.TemporaryDirectory(prefix="ores-elm-admission-") as td:
     path = Path(td) / "main.ores"
