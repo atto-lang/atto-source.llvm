@@ -98,7 +98,7 @@ int main() {
             != nominal_overload_link_key({"root", "x", {a}}));
     check(nominal_overload_link_key({"a", "bc", {a}})
             != nominal_overload_link_key({"ab", "c", {a}}));
-    check(nominal_overload_link_key({"root", std::string("x\\0y", 3), {a}})
+    check(nominal_overload_link_key({"root", std::string("x\0y", 3), {a}})
             != nominal_overload_link_key({"root", "x", {a}}));
     must_reject([&] { nominal_overload_link_key({"", "x", {a}}); });
     must_reject([&] { nominal_overload_link_key({"root", "", {a}}); });
@@ -135,8 +135,8 @@ int main() {
         nominal_overload_link_key({"root", "x", overlong});
     });
     // Also distinguish a truly embedded NUL from a source spelling.
-    const std::string embedded_nul("x\\0y", 3);
-    check(embedded_nul.size() == 3 && embedded_nul[1] == '\\0');
+    const std::string embedded_nul("x\0y", 3);
+    check(embedded_nul.size() == 3 && embedded_nul[1] == '\0');
     check(nominal_overload_link_key({"root", embedded_nul, {a}})
             != nominal_overload_link_key({"root", "x", {a}}));
     must_reject([&] {
