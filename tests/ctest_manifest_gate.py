@@ -60,6 +60,23 @@ def check_manifest(manifest: object, *, min_tests: int = 120,
                 or not all(isinstance(x, str) and x for x in command)
                 or any("NOTFOUND" in x or "$<" in x for x in command)):
             raise ManifestFailure(f"CTest has unresolved/empty command: {name}")
+        # A test of the right *name* can still silently do the wrong thing.
+        # Preserve Python -O/-OO and the real native-object positive control.
+        if name.startswith("native_contract_harness_"):
+            if not any(arg.endswith("test_contract_harness.py") for arg in command):
+                raise ManifestFailure(f"optimized harness command targets wrong script: {name}")
+        if name == "native_contract_harness_python_O" and "-O" not in command:
+            raise ManifestFailure("optimized harness is not invoked with Python -O")
+        if name == "native_contract_harness_python_OO" and "-OO" not in command:
+            raise ManifestFailure("optimized harness is not invoked with Python -OO")
+        if name == "native_contract_positive_object_verifies":
+            for flag in ("--verify-object", "--clang", "--compiler", "--fixture"):
+                if flag not in command:
+                    raise ManifestFailure(f"source object CTest is missing {flag}")
+            if not any(arg.endswith("contract.py") for arg in command):
+                raise ManifestFailure("source object CTest does not invoke contract.py")
+            if not any(arg.endswith("constant-main.ores") for arg in command):
+                raise ManifestFailure("source object CTest does not compile positive guest source")
         properties = entry.get("properties", [])
         if not isinstance(properties, list):
             raise ManifestFailure(f"CTest has invalid properties: {name}")
