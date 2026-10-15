@@ -75,6 +75,8 @@ int main(int argc, char** argv) {
         const std::string text((std::istreambuf_iterator<char>(source)),
                                std::istreambuf_iterator<char>());
         if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
+        if (experimental_emit_hir_v1 && text.size() > 1'048'576)
+            throw std::runtime_error("experimental HIR v1 source exceeds 1 MiB");
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
         // constraints before parsing or emitting LLVM IR.
