@@ -201,8 +201,16 @@ llvm::Value* lower(const Expression& expr,
             }
             return storage.at(expr.left->name);
         }
-        case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
+        case Expression::Kind::Negate: {
+            llvm::Value* value = lower(*expr.left, builder, i64, storage,
+                                      field_storage, functions, moves);
+            if (builder.GetInsertBlock()->getModule()->getModuleFlag("ores.experimental.checked_i64")) {
+                return lower_checked_i64_binary(builder, i64,
+                        llvm::ConstantInt::getSigned(i64, 0), value,
+                        llvm::Intrinsic::ssub_with_overflow, "checked.neg");
+            }
+            return builder.CreateNeg(value, "neg");
+        }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
