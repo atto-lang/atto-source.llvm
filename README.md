@@ -119,3 +119,6 @@ compiler-generated actor init/handler ABI functions. The embedded platform
 provides the static adapter; this is **not** full actor lowering, inter-actor
 handler sends, suspension, or standard OresVM on Cortex-M.
 See [admission limits](docs/CORTEXM_SCALAR_IR.md).
+
+See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
+aggregate, call, string, conditional and async feature limits.
