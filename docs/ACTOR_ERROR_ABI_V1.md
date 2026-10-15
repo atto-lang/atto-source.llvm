@@ -90,7 +90,11 @@ PR heads. Do not merge either PR on static headers or source admission alone.
 - Replaced the supervisor inbox's dynamically growing `std::deque` with a
   fixed-capacity ring (`vector<optional<notice>>`) allocated in the constructor
   *after* validating that capacity is within 1–256.
-- `offer(notice)` accepts a value copy before acquiring the mutex and moves
+- `offer(notice, direct_child_id)` requires a trusted runtime-supplied structured
+  child identity (not an identity copied from the notice) before acquiring the
+  mutex. The host API rejects self-parenting and mismatched child authority,
+  independently of the envelope's claimed parent. This does not yet constitute
+  a native scheduler integration. It accepts a value copy and moves
   the owned value into an existing slot. It never grows a queue while the
   CONTROL lock is held. `try_pop` moves a complete notice out before releasing
   the lock. No guest object/callback enters either path.
