@@ -47,27 +47,27 @@ int main() {
     // This source is UNMARKED: text that resembles a directive inside a
     // block comment is not a line-comment token and must not opt in or fail.
     require(!checked_i64_source_opt_in(
-        "/*\\n// oreslang:checked-i64-v1\\n*/\\n"
-        "pub fnc main(): int { return 43; }\\n"));
+        "/*\n// oreslang:checked-i64-v1\n*/\n"
+        "pub fnc main(): int { return 43; }\n"));
     require(!checked_i64_source_opt_in(
-        "/* outer /* nested\\n// oreslang:checked-i64-v2\\n"
-        "*/ still outer */\\npub fnc main(): int { return 43; }\\n"));
+        "/* outer /* nested\n// oreslang:checked-i64-v2\n"
+        "*/ still outer */\npub fnc main(): int { return 43; }\n"));
     require(!checked_i64_source_opt_in(
-        "pub fnc main(): int { return 43; }\\n"
-        "/*\\n // oreslang:checked-i64-v1\\n */\\n"));
+        "pub fnc main(): int { return 43; }\n"
+        "/*\n // oreslang:checked-i64-v1\n */\n"));
     require(checked_i64_source_opt_in(
-        "// oreslang:checked-i64-v1\\n"
-        "/*\\n// oreslang:checked-i64-v1\\n*/\\n"
-        "pub fnc main(): int { return 43; }\\n"));
+        "// oreslang:checked-i64-v1\n"
+        "/*\n// oreslang:checked-i64-v1\n*/\n"
+        "pub fnc main(): int { return 43; }\n"));
     // Quoted material also must not be interpreted as a directive.
     require(!checked_i64_source_opt_in(
-        "\\\"// oreslang:checked-i64-v1\\\"\\n"
-        "pub fnc main(): int { return 43; }\\n"));
+        "\"// oreslang:checked-i64-v1\"\n"
+        "pub fnc main(): int { return 43; }\n"));
     // But genuine line comments after block close/code remain malformed.
-    rejected("/* harmless */ // oreslang:checked-i64-v1\\n");
-    rejected("/* harmless */\\n// oreslang:checked-i64-v1\\n");
-    rejected("pub fnc main(): int { return 43; }\\n"
-             "// oreslang:checked-i64-v2\\n");
+    rejected("/* harmless */ // oreslang:checked-i64-v1\n");
+    rejected("/* harmless */\n// oreslang:checked-i64-v1\n");
+    rejected("pub fnc main(): int { return 43; }\n"
+             "// oreslang:checked-i64-v2\n");
 
     // Validate state independence and displaced directives even in long
     // comment sequences. This must run in release builds with -DNDEBUG.
