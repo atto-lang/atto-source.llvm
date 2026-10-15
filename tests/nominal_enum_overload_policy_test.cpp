@@ -104,6 +104,19 @@ int main() {
     rejects([&] { (void)select({unqualifiedEnum}, {}); });
     rejects([&] { (void)select({missingId}, {}); });
     rejects([&] { (void)select({unknownKind}, {}); });
+    // Public C++ aggregates cannot bypass bounded ABI identity admission,
+    // even when no pairwise comparison would otherwise inspect the key.
+    for (const std::string& malformed : std::vector<std::string>{
+            "pkg/a.ores::0Color", "pkg/a.ores::Bad-Case",
+            "pkg::::Color", "pkg/a.ores::Color\n",
+            "pkg/a.ores::" + std::string(1024, 'A')}) {
+        rejects([&] {
+            (void)select({Signature{"go", {{Kind::Enum, malformed}}}}, {});
+        });
+    }
+    rejects([&] {
+        (void)select({Signature{"go", {{Kind::Primitive, "String"}}}}, {});
+    });
     rejects([&] { (void)signature("go",
         {{static_cast<Kind>(99), "unit::Color"}}, eligibleIds); });
 
