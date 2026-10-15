@@ -8,6 +8,7 @@ on:
       - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
+      - "tests/experimental_hir_v1_checked_range_property_test.cpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
   pull_request:
@@ -17,6 +18,7 @@ on:
       - "src/main/cpp/oreslang/backend/LlvmCodegen.cpp"
       - "src/main/cpp/oreslang/backend/LlvmCodegen.hpp"
       - "tests/experimental_hir_v1_exporter_test.cpp"
+      - "tests/experimental_hir_v1_checked_range_property_test.cpp"
       - "docs/EXPERIMENTAL_HIR_V1_FRONTEND.md"
       - ".github/workflows/experimental-hir-v1-exporter.yml"
 
@@ -47,3 +49,7 @@ jobs:
           assert doc["functions"][1]["body"]["kind"] == "call"
           assert doc["functions"][1]["body"]["function"] == "counter_response"
           PY
+      - name: Verify signed-i64 range arithmetic against widened mathematical oracle
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Isrc/main/cpp tests/experimental_hir_v1_checked_range_property_test.cpp -o "$RUNNER_TEMP/checked-range-property"
+          "$RUNNER_TEMP/checked-range-property"
