@@ -179,6 +179,7 @@ def main():
         evidence["compiler_artifact_sha256"] = sha256(clazz)
         evidence["compiler_artifact_kind"] = "java-launcher-class-only"
         evidence["maven_classpath_sha256"] = sha256(cp)
+        evidence["java_probe_path"] = str(probe)
         evidence["java_probe_sha256"] = sha256(probe)
         compile_argv = lambda source: [str(compiler), str(probe), str(source)]
         run_argv = lambda source: [str(compiler), str(probe), str(source), "--execute"]
@@ -188,6 +189,7 @@ def main():
         clang = Path(args.clang)
         if not clang.is_absolute() or not clang.is_file():
             parser.error("--clang must be an existing absolute file")
+        evidence["clang_path"] = str(clang)
         evidence["clang_sha256"] = sha256(clang)
         evidence["compiler_artifact_sha256"] = sha256(compiler)
         evidence["compiler_artifact_kind"] = "llvm-native-executable"
