@@ -176,16 +176,18 @@ int main() {
     // supervisor's CONTROL inbox, even when the actor identity matches.
     ActorFailureControlInbox inbox("parent-1", 1);
     if (inbox.pending() != 0 || inbox.dropped() != 0) return 18;
-    if (!inbox.register_direct_child("actor-1")) return 63;
-    if (!inbox.offer(raised, "actor-1")) return 19;
+    const auto inboxPermit = inbox.register_direct_child("actor-1");
+    if (!inboxPermit) return 63;
+    if (!inbox.offer(raised, *inboxPermit)) return 19;
     if (inbox.pending() != 1) return 20;
-    if (inbox.offer(panicked, "actor-1")) return 21;
+    if (inbox.offer(panicked, *inboxPermit)) return 21;
     // The first accepted terminal effect fences all later attempts from the
     // same child, even if its parent has not consumed the original notice.
     if (inbox.duplicate_rejections() != 1 || inbox.dropped() != 0) return 22;
-    if (!inbox.register_direct_child("actor-3")) return 82;
+    const auto inboxThree = inbox.register_direct_child("actor-3");
+    if (!inboxThree) return 82;
     if (inbox.offer(ActorFailureControlNotice::from_guest_effect(
-            ActorExceptionalEffect::Raise, "actor-3", "parent-1"), "actor-3")) return 83;
+            ActorExceptionalEffect::Raise, "actor-3", "parent-1"), *inboxThree)) return 83;
     if (inbox.dropped() != 1) return 84;
     const auto received = inbox.try_pop();
     if (!received || received->effect() != ActorExceptionalEffect::Raise) return 23;
@@ -195,7 +197,7 @@ int main() {
     const auto foreign_child = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "actor-2", "parent-2");
     try {
-        (void)inbox.offer(foreign_child, "actor-2");
+        (void)inbox.offer(foreign_child, *inboxPermit);
         return 26;
     } catch (const std::invalid_argument&) {
         // An inbox is structurally owned; no arbitrary parent ID routing.
@@ -217,17 +219,18 @@ int main() {
     // Fixed-size ring reuses slots after pop without duplicating or
     // reordering child notices, even after multiple wraparounds.
     ActorFailureControlInbox ring("parent-1", 2);
-    if (!ring.register_direct_child("actor-1")
-            || !ring.register_direct_child("actor-3")
-            || !ring.register_direct_child("actor-4")) return 64;
+    const auto ringOne = ring.register_direct_child("actor-1");
+    const auto ringThree = ring.register_direct_child("actor-3");
+    const auto ringFour = ring.register_direct_child("actor-4");
+    if (!ringOne || !ringThree || !ringFour) return 64;
     const auto third = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Raise, "actor-3", "parent-1");
     const auto fourth = ActorFailureControlNotice::from_guest_effect(
             ActorExceptionalEffect::Panic, "actor-4", "parent-1");
-    if (!ring.offer(raised, "actor-1") || !ring.offer(fourth, "actor-4")) return 31;
-    if (ring.offer(third, "actor-3") || ring.dropped() != 1) return 32;
+    if (!ring.offer(raised, *ringOne) || !ring.offer(fourth, *ringFour)) return 31;
+    if (ring.offer(third, *ringThree) || ring.dropped() != 1) return 32;
     if (ring.try_pop()->effect() != ActorExceptionalEffect::Raise) return 33;
-    if (!ring.offer(third, "actor-3")) return 34;
+    if (!ring.offer(third, *ringThree)) return 34;
     if (ring.try_pop()->effect() != ActorExceptionalEffect::Panic) return 35;
     if (ring.try_pop()->envelope().actor_id() != "actor-3") return 36;
     if (ring.try_pop() || ring.pending() != 0 || ring.dropped() != 1) return 37;
@@ -237,11 +240,12 @@ int main() {
         const std::string child = "cycle-" + std::to_string(i);
         const auto next = ActorFailureControlNotice::from_guest_effect(
                 ActorExceptionalEffect::Raise, child, "parent-1");
-        if (!ring.register_direct_child(child) || !ring.offer(next, child)) return 38;
+        const auto cyclePermit = ring.register_direct_child(child);
+        if (!cyclePermit || !ring.offer(next, *cyclePermit)) return 38;
         auto item = ring.try_pop();
         if (!item || item->effect() != ActorExceptionalEffect::Raise
                 || item->envelope().actor_id() != child) return 39;
-        if (!ring.unregister_direct_child(child)) return 85;
+        if (!ring.unregister_direct_child(*cyclePermit)) return 85;
     }
     if (ring.pending() != 0 || ring.dropped() != 1
             || ring.duplicate_rejections() != 0) return 40;
@@ -249,55 +253,60 @@ int main() {
     // A retired supervisor cannot receive another child CONTROL notice;
     // unread notices are counted as dropped and cannot be resurrected.
     ActorFailureControlInbox retiring("parent-1", 2);
-    if (!retiring.register_direct_child("actor-1")
-            || !retiring.register_direct_child("actor-3")) return 65;
-    if (!retiring.offer(raised, "actor-1") || !retiring.offer(third, "actor-3")) return 41;
+    const auto retiringOne = retiring.register_direct_child("actor-1");
+    const auto retiringThree = retiring.register_direct_child("actor-3");
+    if (!retiringOne || !retiringThree) return 65;
+    if (!retiring.offer(raised, *retiringOne) || !retiring.offer(third, *retiringThree)) return 41;
     if (retiring.pending() != 2 || retiring.dropped() != 0) return 42;
     retiring.retire();
     if (!retiring.retired() || retiring.pending() != 0) return 43;
     if (retiring.dropped() != 2 || retiring.try_pop()) return 44;
     retiring.retire();
     if (retiring.dropped() != 2) return 45;
-    if (retiring.offer(third, "actor-3")) return 46;
+    if (retiring.offer(third, *retiringThree)) return 46;
     if (retiring.pending() != 0 || retiring.dropped() != 3) return 47;
 
     // An envelope's claimed parent alone is insufficient. The runtime must
     // independently prove which direct child is being reported.
     ActorFailureControlInbox authorized("parent-1", 2);
+    // A valid permit from a different inbox, even with the same supervisor
+    // string, cannot grant rights in this incarnation.
     try {
-        (void)authorized.offer(raised, "actor-2");
+        (void)authorized.offer(raised, *inboxPermit);
         return 57;
     } catch (const std::invalid_argument&) {}
+    if (authorized.unregister_direct_child(*inboxPermit)) return 58;
+    const auto wrongActor = authorized.register_direct_child("actor-2");
+    if (!wrongActor) return 59;
     try {
-        (void)authorized.offer(raised, "");
-        return 58;
-    } catch (const std::invalid_argument&) {}
-    try {
-        (void)authorized.offer(raised, "parent-1");
-        return 59;
-    } catch (const std::invalid_argument&) {}
-    if (authorized.pending() || authorized.dropped()) return 60;
-    try {
-        (void)authorized.offer(raised, "actor-1");
+        (void)authorized.offer(raised, *wrongActor);
         return 66;
-    } catch (const std::invalid_argument&) {
-        // A matching pair of IDs is not sufficient without registration.
-    }
-    if (!authorized.register_direct_child("actor-1")) return 67;
+    } catch (const std::invalid_argument&) {}
+    if (!authorized.unregister_direct_child(*wrongActor)) return 91;
+    if (authorized.pending() || authorized.dropped()) return 60;
+    const auto current = authorized.register_direct_child("actor-1");
+    if (!current) return 67;
     if (authorized.register_direct_child("actor-1")) return 68;
-    if (!authorized.offer(raised, "actor-1")) return 61;
-    if (authorized.offer(panicked, "actor-1")) return 86;
+    if (!authorized.offer(raised, *current)) return 61;
+    if (authorized.offer(panicked, *current)) return 86;
     if (authorized.duplicate_rejections() != 1 || authorized.dropped() != 0) return 87;
     if (authorized.try_pop()->effect() != ActorExceptionalEffect::Raise) return 88;
-    if (authorized.offer(raised, "actor-1")) return 89; // replay after drain
+    if (authorized.offer(raised, *current)) return 89; // replay after drain
     if (authorized.duplicate_rejections() != 2) return 90;
-    if (!authorized.unregister_direct_child("actor-1")) return 69;
-    if (authorized.unregister_direct_child("actor-1")) return 70;
+    if (!authorized.unregister_direct_child(*current)) return 69;
+    if (authorized.unregister_direct_child(*current)) return 70;
     if (authorized.try_pop()) return 71;
+    // A stale permit must not revive or revoke a new incarnation with reused ID.
+    const auto replacement = authorized.register_direct_child("actor-1");
+    if (!replacement) return 92;
     try {
-        (void)authorized.offer(raised, "actor-1");
+        (void)authorized.offer(raised, *current);
         return 72;
     } catch (const std::invalid_argument&) {}
+    if (authorized.unregister_direct_child(*current)) return 93;
+    if (!authorized.offer(raised, *replacement)) return 94;
+    if (!authorized.try_pop()) return 95;
+    if (!authorized.unregister_direct_child(*replacement)) return 96;
     try {
         (void)authorized.register_direct_child("parent-1");
         return 73;
@@ -313,12 +322,14 @@ int main() {
     // Spawn-time registry growth is finite even when the CONTROL ring is tiny.
     // A retired or full supervisor cannot accidentally accept new lineage.
     ActorFailureControlInbox boundedChildren("bounded-parent", 1);
+    std::optional<ActorFailureControlInbox::DirectChildPermit> firstPermit;
     for (int i = 0; i < 4096; ++i) {
-        if (!boundedChildren.register_direct_child("child-" + std::to_string(i)))
-            return 77;
+        auto permit = boundedChildren.register_direct_child("child-" + std::to_string(i));
+        if (!permit) return 77;
+        if (i == 0) firstPermit = permit;
     }
     if (boundedChildren.register_direct_child("overflow-child")) return 78;
-    if (!boundedChildren.unregister_direct_child("child-0")) return 79;
+    if (!firstPermit || !boundedChildren.unregister_direct_child(*firstPermit)) return 79;
     if (!boundedChildren.register_direct_child("replacement-child")) return 80;
     boundedChildren.retire();
     if (boundedChildren.register_direct_child("post-retirement")) return 81;
