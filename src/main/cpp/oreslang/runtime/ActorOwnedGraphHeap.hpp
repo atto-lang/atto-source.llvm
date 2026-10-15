@@ -58,6 +58,18 @@ private:
     };
 
     inline static std::atomic<std::uint64_t> next_heap_id_{1};
+    // Heap identity must never wrap: recycling an identity would permit a
+    // stale generation-matching handle from an earlier heap to resolve again.
+    static std::uint64_t reserve_heap_id() {
+        auto candidate = next_heap_id_.load(std::memory_order_relaxed);
+        while (candidate != 0 && candidate != std::numeric_limits<std::uint64_t>::max()) {
+            if (next_heap_id_.compare_exchange_weak(candidate, candidate + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return candidate;
+        }
+        throw std::overflow_error("actor graph heap identity exhausted");
+    }
+
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
     mutable ActorHeapBorrowGate borrow_gate_;
@@ -137,9 +149,8 @@ private:
 
 public:
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
-        : owner_(owner), heap_id_(next_heap_id_.fetch_add(1, std::memory_order_relaxed)),
-          borrow_gate_(owner) {
-        if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
+        : owner_(owner), heap_id_(reserve_heap_id()), borrow_gate_(owner) {
+        if (!owner_.runtime || !owner_.actor || !owner_.epoch)
             throw std::invalid_argument("invalid actor graph heap identity");
     }
     ActorOwnedGraphHeap(const ActorOwnedGraphHeap&) = delete;
