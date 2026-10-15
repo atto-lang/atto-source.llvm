@@ -91,7 +91,7 @@ public:
         if (retired_ || count_ == capacity_) {
             // Late notifications and full-ring overflow are equally visible
             // in the durable supervisor loss counter.
-            ++dropped_;
+            dropped_ = saturated_control_count(dropped_, 1);
             return false;
         }
         slots_[(head_ + count_) % capacity_].emplace(std::move(notice));
@@ -121,7 +121,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if (retired_) return;
         retired_ = true;
-        dropped_ += count_;
+        dropped_ = saturated_control_count(dropped_, count_);
         for (auto& slot : slots_) slot.reset();
         head_ = 0;
         count_ = 0;
