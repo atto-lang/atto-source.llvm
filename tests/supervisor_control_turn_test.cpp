@@ -108,18 +108,21 @@ int main() {
     CHECK(lane.restarts_used() == 1);
     CHECK(lane.reserved_count() == 0);
 
-    // A failing hook never loses the event; it is retried next admission.
-    lane.reserve_child(Key{"retry", 2});
-    CHECK(lane.publish_child(Key{"retry", 2}, Kind::Panic, "panic"));
+    // Even a decision hook can perform host side effects before throwing.
+    // Retrying the notice would replay the callback, so escalate once and
+    // permanently retire the terminal event while preserving its exception.
+    lane.reserve_child(Key{"decision-side-effect", 2});
+    CHECK(lane.publish_child(Key{"decision-side-effect", 2}, Kind::Panic, "panic"));
     hooks.fail_once = true;
+    const auto decisions_before = hooks.order.size();
     bool threw = false;
     try { (void) lane.admit_turn(hooks, true); }
     catch (const std::logic_error&) { threw = true; }
     CHECK(threw);
-    CHECK(lane.urgent());
-    CHECK(lane.pending_count() == 1);
-    hooks.next = SupervisorControlTurn::Decision::Acknowledge;
-    CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
+    CHECK(hooks.order.size() == decisions_before + 2);
+    CHECK(hooks.order.at(decisions_before) == "panic");
+    CHECK(hooks.order.at(decisions_before + 1) == "escalate");
+    CHECK(!lane.urgent() && lane.pending_count() == 0);
     CHECK(lane.reserved_count() == 0);
     CHECK(lane.admit_turn(hooks, false) == SupervisorControlTurn::Admitted::None);
 
