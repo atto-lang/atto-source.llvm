@@ -21,6 +21,15 @@ if [[ -n "${ORESLANG_EXPECTED_SOURCE_SHA:-}" ]]; then
             "$ORESLANG_EXPECTED_SOURCE_SHA" "${checkout_sha:-unavailable}" >&2
         exit 2
     fi
+    # A Git HEAD from a parent (or unrelated) worktree cannot prove this
+    # script's source tree. Ignored nested directories may be completely
+    # absent from that parent's tracked Git objects while status is clean.
+    checkout_top=""
+    if ! checkout_top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" \
+            || [[ "$(cd -- "$checkout_top" && pwd -P)" != "$root" ]]; then
+        printf 'Exact-head verification refused: script directory is not the Git worktree root\\n' >&2
+        exit 2
+    fi
     # A matching HEAD hash is not a source-integrity proof when tracked files
     # or untracked compiler inputs were changed after checkout. Verify the
     # entire worktree before invoking any compiler or test process.
