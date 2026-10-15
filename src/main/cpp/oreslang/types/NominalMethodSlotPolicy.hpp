@@ -34,7 +34,14 @@ struct Slot {
 inline void requireValidUtf8(const std::string& value) {
     for (std::size_t i = 0; i < value.size();) {
         unsigned char first = static_cast<unsigned char>(value[i]);
-        if (first <= 0x7f) { ++i; continue; }
+        if (first <= 0x7f) {
+            if (first < 0x20 || first == 0x7f) {
+                throw std::invalid_argument(
+                    "control character in nominal method identity");
+            }
+            ++i;
+            continue;
+        }
         unsigned width = 0;
         unsigned codepoint = 0;
         unsigned minimum = 0;
