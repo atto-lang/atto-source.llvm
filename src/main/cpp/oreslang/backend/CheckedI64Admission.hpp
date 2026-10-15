@@ -35,7 +35,8 @@ inline void verify_checked_i64_host_profile(const Program& program) {
             !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
             !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
             !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
-            fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
+            fn.caught_throw_value || !fn.catch_binding.empty() ||
+            !fn.caught_throw_defers.empty() ||
             fn.has_declared_effects || fn.parameters.size() > 32)
             reject("function ownership, effects or non-scalar body unsupported");
         if (fn.name == "main" && !fn.parameters.empty())
