@@ -30,6 +30,11 @@ inline void verify_checked_i64_host_profile(const Program& program) {
     for (const auto& fn : program.functions) {
         if (fn.name.empty() || !functions.emplace(fn.name, &fn).second)
             reject("duplicate/empty function identity");
+        // The standalone checked profile owns a single OS boundary, which
+        // emits an authenticated libc diagnostic. Reject a guest symbol that
+        // could collide with the host declaration at LLVM link time.
+        if (fn.name == "puts")
+            reject("reserved host diagnostic function identity");
         if (fn.returns_void || !fn.result || fn.scalar_while ||
             !fn.locals.empty() || !fn.statements.empty() ||
             !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
@@ -47,6 +52,11 @@ inline void verify_checked_i64_host_profile(const Program& program) {
                 !param.class_name.empty() || param.mode != Parameter::Mode::Value)
                 reject("parameters must be distinct primitive i64 values");
     }
+
+    // Until a stable exported checked-result ABI exists, every checked
+    // source module must have an entrypoint which owns and resets its status.
+    if (!functions.count("main"))
+        reject("host checked source requires a main entrypoint");
 
     std::unordered_map<std::string, std::vector<std::string>> calls;
     for (const auto& fn : program.functions) {
