@@ -174,6 +174,22 @@ int main() {
         duplicate.result = integer(1);
         p.functions.push_back(std::move(duplicate));
     });
+    // Generic metadata from the integrated parser has no checked scalar ABI.
+    expect_reject("generic function declaration", [](Program& p) {
+        p.functions.front().generic_parameters.push_back({"T", ""});
+    });
+    expect_reject("generic parameter identity", [](Program& p) {
+        p.functions.front().parameters.front().generic_type = "T";
+    });
+    expect_reject("generic call marker", [](Program& p) {
+        p.functions.back().result->type_arguments_present = true;
+    });
+    expect_reject("generic call argument payload", [](Program& p) {
+        p.functions.back().result->type_arguments.push_back({"", "int", false});
+    });
+    expect_reject("unlowered catch binding", [](Program& p) {
+        p.functions.front().catch_binding = "error";
+    });
     expect_reject("main parameters", [](Program& p) {
         Parameter param; param.name = "extra";
         p.functions.back().parameters.push_back(std::move(param));
