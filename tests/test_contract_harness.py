@@ -213,17 +213,55 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("comments do not count", p.stderr)
 
-    def test_expected_ir_remains_visible_outside_comments(self):
+    def test_expected_ir_remains_visible_inside_function_definition(self):
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
-                                 "ret i64 42 ; harmless note\n")
+                                 "define i64 @answer() { ret i64 42 } ; harmless note\n")
         p = self.run_contract(compiler, "--ir", "ret i64 42")
         self.assertEqual(p.returncode, 0, p.stderr)
 
+    def test_global_string_cannot_spoof_expected_call(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 '@bait = private constant [14 x i8] c"call i64 @add\\00"\n'
+                                 "define i32 @main() { ret i32 42 }\n")
+        clang = self.linker(exit_code=42)
+        p = self.run_contract(compiler, "--ir", "call i64 @add",
+                              "--run", "42", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("expected executable LLVM IR was absent", p.stderr)
+
+    def test_metadata_cannot_spoof_instruction(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 "define i32 @main() { ret i32 42 }\n"
+                                 '!0 = !{!"call void @missing"}\n')
+        p = self.run_contract(compiler, "--ir", "call void @missing")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("expected executable LLVM IR was absent", p.stderr)
+
     def test_comment_token_inside_llvm_string_is_not_comment(self):
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
-                                 '@msg = private constant [11 x i8] c"hello;world"\n')
+                                 '@msg = private constant [11 x i8] c"hello;world"\n'
+                                 "define i32 @main() { ret i32 42 }\n")
         p = self.run_contract(compiler, "--ir", 'c"hello;world"')
-        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("expected executable LLVM IR was absent", p.stderr)
+
+    def test_real_quoted_symbol_and_multiline_header_pass(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                 'define dso_local i64 @"pick$arity0"(\n'
+                                 ") {\n"
+                                 "entry:\n"
+                                 "  ret i64 42\n"
+                                 "}\n"
+                                 '@str = private constant [14 x i8] c"call i64 @bad\\00"\n')
+        self.assertEqual(
+            self.run_contract(compiler, "--ir", "pick$arity0").returncode, 0
+        )
+        self.assertEqual(
+            self.run_contract(compiler, "--ir", "ret i64 42").returncode, 0
+        )
+        self.assertNotEqual(
+            self.run_contract(compiler, "--ir", "call i64 @bad").returncode, 0
+        )
 
     def test_positive_rejects_stderr_and_forbidden_abi(self):
         compiler = self.compiler(stdout="; ModuleID = 'good'\n",
