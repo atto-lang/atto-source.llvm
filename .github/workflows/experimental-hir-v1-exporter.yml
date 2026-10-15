@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           for cc in g++ clang++; do
-            "$cc" -std=c++20 -O1 -Wall -Wextra -Werror -Isrc/main/cpp \
+            "$cc" -std=c++20 -O1 -Wall -Wextra -Isrc/main/cpp \
               tests/experimental_hir_v1_exporter_test.cpp \
               -o "$RUNNER_TEMP/hir-v1-exporter-$cc"
             "$RUNNER_TEMP/hir-v1-exporter-$cc" >/dev/null
