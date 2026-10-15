@@ -303,6 +303,15 @@ jobs:
                      "unknown pending effect is not overwritten");
               status = 0;
               expect(scale(1, &status) == 43 && status == 0, "scale success");
+              // ABI storage is exactly one uint64_t. A neighboring canary
+              // detects an accidental wider write in future codegen changes.
+              struct { uint64_t status; uint64_t canary; } guarded = {
+                  0, UINT64_C(0xD3A9F197A03B4C52)
+              };
+              expect(scale(INT64_MAX, &guarded.status) == 0 &&
+                     guarded.status == PACKED_MUL &&
+                     guarded.canary == UINT64_C(0xD3A9F197A03B4C52),
+                     "packed status write must preserve neighboring host memory");
               status = 0;
               expect(scale(INT64_MAX, &status) == 0 && status == PACKED_MUL,
                      "scale overflow returns typed effect");
