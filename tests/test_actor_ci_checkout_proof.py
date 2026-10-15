@@ -99,7 +99,7 @@ exit 97
             self.repo / "scripts" / self.script,
             nested / "scripts" / self.script,
         )
-        (outer / ".gitignore").write_text("ignored-checkout/\\n")
+        (outer / ".gitignore").write_text("ignored-checkout/\n")
         for args in (
             ("init", "-q"),
             ("config", "user.email", "test@example.invalid"),
