@@ -3,6 +3,7 @@
 #include "oreslang/runtime/ActorErrorCatalog.hpp"
 #include "oreslang/runtime/ExceptionPolicy.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -85,6 +86,35 @@ public:
     ActorFailureControlInbox(const ActorFailureControlInbox&) = delete;
     ActorFailureControlInbox& operator=(const ActorFailureControlInbox&) = delete;
 
+    // Call ONLY from the host scheduler while admitting an actual structured
+    // child. A notice, guest ActorRef, or source argument cannot create this
+    // registration. Bounds are independent of the CONTROL notice ring.
+    bool register_direct_child(std::string_view child_id) {
+        const std::string checked = checked_actor_identity(child_id);
+        if (checked.empty() || checked == supervisor_id_) {
+            throw std::invalid_argument("invalid structured child identity");
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (retired_) return false;
+        if (std::find(direct_children_.begin(), direct_children_.end(), checked)
+                != direct_children_.end()) return false;
+        if (direct_children_.size() == max_direct_children) return false;
+        direct_children_.push_back(checked);
+        return true;
+    }
+
+    // Remove registry authority after the child's CONTROL handoff completes.
+    // Already-admitted notices remain value-only and can still be drained.
+    bool unregister_direct_child(std::string_view child_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto found = std::find(direct_children_.begin(), direct_children_.end(), child_id);
+        if (found == direct_children_.end()) return false;
+        // Child IDs are opaque: their order is not observable or significant.
+        *found = std::move(direct_children_.back());
+        direct_children_.pop_back();
+        return true;
+    }
+
     // The native runtime must supply direct_child_id from its STRUCTURED
     // child registry, never from guest input or the notice itself. Checking
     // both identities makes the ownership proof explicit at the call site.
@@ -101,9 +131,16 @@ public:
             throw std::invalid_argument("CONTROL notice does not match direct-child authority");
         }
         std::lock_guard<std::mutex> lock(mutex_);
-        if (retired_ || count_ == capacity_) {
-            // Late notifications and full-ring overflow are equally visible
-            // in the durable supervisor loss counter.
+        if (retired_) {
+            // Late notices after retirement cannot revive child authority.
+            dropped_ = saturated_control_count(dropped_, 1);
+            return false;
+        }
+        if (std::find(direct_children_.begin(), direct_children_.end(),
+                direct_child_id) == direct_children_.end()) {
+            throw std::invalid_argument("CONTROL notice requires registered direct child");
+        }
+        if (count_ == capacity_) {
             dropped_ = saturated_control_count(dropped_, 1);
             return false;
         }
@@ -136,6 +173,7 @@ public:
         retired_ = true;
         dropped_ = saturated_control_count(dropped_, count_);
         for (auto& slot : slots_) slot.reset();
+        direct_children_.clear();
         head_ = 0;
         count_ = 0;
     }
@@ -156,6 +194,8 @@ public:
     }
 
 private:
+    static constexpr std::size_t max_direct_children = 4096;
+
     static std::size_t checked_capacity(std::size_t capacity) {
         if (capacity == 0 || capacity > 256) {
             throw std::invalid_argument("invalid bounded supervisor inbox capacity");
@@ -167,6 +207,9 @@ private:
     const std::size_t capacity_;
     mutable std::mutex mutex_;
     std::vector<std::optional<ActorFailureControlNotice>> slots_;
+    // Host-admitted structural membership, never inferred from a notice.
+    // Registration allocates only at actor spawn, never in offer/try_pop.
+    std::vector<std::string> direct_children_;
     std::size_t head_ = 0;
     std::size_t count_ = 0;
     std::size_t dropped_ = 0;
