@@ -203,6 +203,10 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            // Contextual type modifiers are recognized as unsupported syntax,
+            // never misparsed as ordinary class/actor/function declarations.
+            if (token_.text == "sealed" || token_.text == "final")
+                fail("native sealed/final/permits hierarchy unsupported");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -223,6 +227,8 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (token_.text == "sealed" || token_.text == "final")
+                    fail("native sealed/final/permits hierarchy unsupported");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
@@ -337,6 +343,8 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (token_.text == "permits" || token_.text == "from")
+            fail("native sealed/final/permits hierarchy unsupported");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
