@@ -1,0 +1,59 @@
+name: Actor CONTROL host contract (no LLVM install)
+
+on:
+  push:
+    branches:
+      - feat/native-actor-errors-flags2env-20261014
+    paths:
+      - "src/main/cpp/oreslang/runtime/ActorFailureControl.hpp"
+      - "src/main/cpp/oreslang/runtime/ActorErrorCatalog.hpp"
+      - "src/main/cpp/oreslang/runtime/ExceptionPolicy.hpp"
+      - "tests/actor_*"
+      - "tests/effect_*"
+      - "tests/supervisor_*"
+      - "scripts/verify_actor_control_host.sh"
+      - "scripts/check_private_ci_destination.py"
+      - "tests/test_private_ci_destination.py"
+      - ".github/workflows/actor-control-host-contract.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actor-control-host-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-only:
+    name: gcc C++17 native CONTROL + transfer policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact workflow commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert compiler available
+        run: |
+          command -v g++
+          g++ --version
+      - name: Compile and execute native host CONTROL contracts
+        env:
+          CXX: g++
+        run: bash scripts/verify_actor_control_host.sh
+      - name: Verify private-source transfer is deny-by-default
+        run: |
+          python3 -m unittest discover -s tests -p 'test_private_ci_destination.py' -v
+          if python3 scripts/check_private_ci_destination.py \
+              --source ores-truffle-oreslang/oreslang-source.llvm \
+              --destination hypothetical-org/unapproved-repo; then
+            echo "ERROR: unapproved private source mirror was accepted" >&2
+            exit 1
+          fi
+      - name: Record exact provenance
+        run: |
+          echo "source_repo=${GITHUB_REPOSITORY}"
+          echo "source_sha=${GITHUB_SHA}"
+          echo "This workflow tests host-only native CONTROL, not guest LLVM lowering."
