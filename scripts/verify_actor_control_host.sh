@@ -27,7 +27,7 @@ if [[ -n "${ORESLANG_EXPECTED_SOURCE_SHA:-}" ]]; then
     checkout_top=""
     if ! checkout_top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" \
             || [[ "$(cd -- "$checkout_top" && pwd -P)" != "$root" ]]; then
-        printf 'Exact-head verification refused: script directory is not the Git worktree root\\n' >&2
+        printf 'Exact-head verification refused: script directory is not the Git worktree root\n' >&2
         exit 2
     fi
     # A matching HEAD hash is not a source-integrity proof when tracked files
