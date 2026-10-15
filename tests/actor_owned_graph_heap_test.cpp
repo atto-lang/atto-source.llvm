@@ -181,7 +181,45 @@ static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
     std::cout << "PASS deterministic native destructor glue and cyclic actor retirement\\n";
 }
 
+static void borrowed_nodes_cannot_be_mutated_or_dropped() {
+    using Heap = ActorOwnedGraphHeap<4, 64, 3>;
+    const ActorHeapIdentity owner{43, 37, 4};
+    std::uint32_t data = 73;
+    std::atomic<int> drops{0};
+    Heap graph(owner);
+    const auto a = graph.allocate(owner, &data, sizeof(data)).value();
+    const auto b = graph.emplace_owned<DroppableActorObject>(owner, &drops).value();
+
+    auto pinned = graph.borrow(owner);
+    check(pinned.has_value(), "failed to acquire borrowed native graph view");
+    must_reject([&] { graph.remove(owner, b); },
+                "dropped borrowed object while a live FFI lease existed");
+    must_reject([&] { graph.write(owner, a, &data, sizeof(data)); },
+                "mutated bytes underneath a live FFI lease");
+    must_reject([&] { (void)graph.allocate(owner, &data, sizeof(data)); },
+                "reused arena allocation while an FFI lease existed");
+    must_reject([&] { (void)graph.emplace_owned<DroppableActorObject>(owner, &drops); },
+                "constructed object under an outstanding FFI lease");
+    must_reject([&] { (void)graph.link(owner, a, b); },
+                "mutated graph edges while an FFI lease existed");
+    check(graph.live_nodes(owner) == 2 && drops.load() == 0,
+          "denied pointer mutation changed object lifetime or drop counters");
+
+    std::uint32_t copied = 0;
+    check(graph.copy_out(owner, a, &copied, sizeof(copied)) == sizeof(copied)
+                && copied == data,
+          "read-only copy_out failed while a shared lease was active");
+    pinned->reset();
+    check(graph.link(owner, a, b), "graph mutation remained sealed after loan release");
+    graph.remove(owner, b);
+    check(drops.load() == 1, "owned pointer destructor failed after loan release");
+    graph.write(owner, a, &data, sizeof(data));
+    graph.remove(owner, a);
+    std::cout << "PASS borrowed graph node removal/mutation exclusion\\n";
+}
+
 int main() {
+    borrowed_nodes_cannot_be_mutated_or_dropped();
     cycles_reclaim_without_gc();
     stale_generation_and_foreign_heap_rejected();
     bounded_capacity_and_purge();
