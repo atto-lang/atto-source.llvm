@@ -55,7 +55,7 @@ def ir_function_definitions(source):
     depth = 0
     for line in ir_without_comments(source).splitlines():
         if not inside:
-            if not re.match(r"^[ \\t]*define\\b", line):
+            if not re.match(r"^[ \t]*define\b", line):
                 continue
             inside = True
         selected.append(line)
@@ -64,7 +64,7 @@ def ir_function_definitions(source):
         for char in line:
             if escaped:
                 escaped = False
-            elif quoted and char == "\\\\":
+            elif quoted and char == "\\":
                 escaped = True
             elif char == '"':
                 quoted = not quoted
@@ -76,8 +76,40 @@ def ir_function_definitions(source):
         if saw_open and depth == 0:
             inside = False
             saw_open = False
-    return "\\n".join(selected)
+    return "\n".join(selected)
 
+def ir_evidence_text(source, expected):
+    """Exclude LLVM quoted literals that can fake an instruction or symbol.
+
+    Inline asm such as 'asm "# call i64 @add"' is valid, runnable IR but
+    does not call @add. A quoted symbol like @"pick$arity0" is retained for
+    single-token symbol expectations, never for instruction fragments.
+    """
+    preserve_quoted_names = not any(char.isspace() for char in expected)
+    output = []
+    for line in ir_function_definitions(source).splitlines():
+        masked = []
+        quoted = False
+        escaped = False
+        preserve = False
+        for pos, char in enumerate(line):
+            if not quoted and char == '"':
+                quoted = True
+                preserve = (preserve_quoted_names and pos > 0 and
+                            line[pos - 1] in '@%')
+                masked.append(char if preserve else ' ')
+            elif quoted:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+                masked.append(char if preserve else ' ')
+            else:
+                masked.append(char)
+        output.append(''.join(masked))
+    return "\n".join(output)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -131,7 +163,7 @@ def main():
     require(compile_result.stdout.startswith("; ModuleID"), compile_result.stdout)
     require(not compile_result.stderr, compile_result.stderr)
     if args.ir:
-        require(args.ir in ir_function_definitions(compile_result.stdout),
+        require(args.ir in ir_evidence_text(compile_result.stdout, args.ir),
                 "expected executable LLVM IR was absent (comments do not count): " + args.ir)
     if args.no_native_abi:
         require("oreslang_owned_i64_region_" not in compile_result.stdout,
