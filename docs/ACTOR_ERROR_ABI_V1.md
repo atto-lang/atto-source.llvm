@@ -90,9 +90,10 @@ PR heads. Do not merge either PR on static headers or source admission alone.
 - Replaced the supervisor inbox's dynamically growing `std::deque` with a
   fixed-capacity ring (`vector<optional<notice>>`) allocated in the constructor
   *after* validating that capacity is within 1–256.
-- `offer(notice, direct_child_id)` requires a trusted runtime-supplied structured
-  child identity (not an identity copied from the notice) before acquiring the
-  mutex. The host API rejects self-parenting and mismatched child authority,
+- `offer(notice, permit)` requires a trusted runtime-issued structured
+  child permit minted by `register_direct_child` (never a notice field)
+  before acquiring the mutex. The host API rejects self-parenting,
+  mismatched child authority, stale generations and foreign inbox incarnations,
   independently of the envelope's claimed parent. This does not yet constitute
   a native scheduler integration. It accepts a value copy and moves
   the owned value into an existing slot. It never grows a queue while the
@@ -148,14 +149,15 @@ The native host-only `ActorFailureControlInbox` now checks **three** independent
 conditions before accepting a terminal child notice:
 
 1. The envelope's supervisor matches the owning inbox.
-2. The scheduler-supplied direct-child identity matches the notice's actor ID.
-3. That child identity is currently registered with this supervisor by the
-   trusted native actor spawn/finalization machinery.
+2. The trusted registration permit's child identity matches the notice's actor ID.
+3. That exact inbox incarnation + child generation is currently registered
+   with the supervisor by the host actor spawn/finalization machinery.
 
-`register_direct_child(id)` is for the host actor-spawn boundary only; guest
-mailboxes, source code, a notice's claimed IDs, and untrusted `ActorRef` values
-must **never** register membership. `unregister_direct_child(id)` runs only
-after the final CONTROL handoff. Revocation prevents new admissions, but
+`register_direct_child(id)` returns a host-only `optional<DirectChildPermit>`
+from the trusted actor-spawn boundary. Guest mailboxes, source code, notice IDs
+and untrusted `ActorRef` values must **never** register membership or receive
+a permit. `unregister_direct_child(permit)` runs only after the final CONTROL
+handoff using precisely that generation's permit. Revocation prevents new admissions, but
 already queued immutable notices remain readable. A supervisor's retirement
 clears the membership registry and ring atomically under the same mutex.
 
@@ -212,12 +214,19 @@ terminal bit; a failed first attempt may be retried after capacity returns.
 A retired supervisor still rejects late offers and counts discarded notices
 under its previous retirement contract.
 
-**Identity assumption:** the future native scheduler must issue a globally
-fresh child identity per generation and must unregister old child identity
-only after its final CONTROL handoff. Re-registering a reused identity after
-unregister would start a new registration; the container does not prove that
-a purported identity represents a new generation. The native scheduler
-integration must supply that proof.
+**Generational authority:** `register_direct_child` now mints a
+`DirectChildPermit` with a globally monotonic inbox incarnation nonce and
+strictly increasing per-inbox child generation. The old generation cannot
+`offer` or `unregister` after its ID is reused; a token from a different
+inbox cannot authorize publication even if its supervisor ID string is
+identical. Counters refuse to wrap. The public string-only CONTROL-offer API
+has been removed so a copied actor ID alone can never authorize the notice.
+
+The future native scheduler must mint and retain permits exclusively in host
+actor-spawn state, not guest data; it must pass the exact permit for terminal
+handoff and revoke it after teardown. Host caller misuse of a fresh permit
+with forged metadata remains outside the container's proof. The notice
+retains value-only IDs and fixed diagnostics, never a token/guest object.
 
 Native host tests now cover one successful terminal admission, duplicate
 rejection before and after drain, saturation followed by a first-admission
