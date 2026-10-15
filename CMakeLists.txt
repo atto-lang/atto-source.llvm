@@ -1034,6 +1034,18 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-supervisor-failure-lane-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-supervisor-failure-lane-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_supervisor_failure_lane COMMAND oreslang-supervisor-failure-lane-test)
+    # Compile the actual flags2env helper separately from the LLVM toolchain.
+    # setenv/unsetenv are POSIX APIs; keep Windows CMake admission unaffected.
+    if(UNIX)
+        add_executable(oreslang-flags2env-header-test
+            tests/native_flags2env_header_test.cpp)
+        target_include_directories(oreslang-flags2env-header-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-flags2env-header-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_flags2env_header_rejects_invalid_values
+            COMMAND oreslang-flags2env-header-test)
+    endif()
     oreslang_contract_test(reject_throw_effect unsupported-throw-effect.ores --diagnostic "native exceptional-control boundary unsupported")
     oreslang_contract_test(reject_raise_effect unsupported-raise-effect.ores --diagnostic "native exceptional-control boundary unsupported")
     oreslang_contract_test(reject_panic_effect unsupported-panic-effect.ores --diagnostic "native exceptional-control boundary unsupported")
