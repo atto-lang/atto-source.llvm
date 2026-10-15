@@ -98,7 +98,7 @@ define class NormalizeOrders as
         if req.invalid then
             return MiddlewareDecision<int>.Reject(400, "invalid");
         fi
-        return MiddlewareDecision<int>.Continue(req.clean());
+        return MiddlewareDecision<int>.Continue(req.clean(), res);
     }
 
     // Around hook: selected for streaming actors, or for unary actors
@@ -125,3 +125,5 @@ Supervisor stages share the conceptual signatures and may `Continue` or `Reject`
 `MiddlewareResponseDraft` may specify bounded, validated status and headers (e.g. 201 and `Content-Type`), but is **never** a response writer, transport handle or committed HTTP exchange. In the host reference model, status 204/205/304 are forbidden for a typed body and framing headers cannot be set by middleware. The final HTTP reply codec and connection generation check belong to the trusted adapter. There is no automatic `Future<Future<R>>` nesting, no simultaneous `Reply<R>` and streaming write, and no empty/void `next_val` result.
 
 **Implementation in Java host reference:** `ActorMiddlewareValuePipeline<R>` has two independently selectable hook kinds (`ValueHook<R>` and `AroundHook<R>`), immutable `ResponseDraft`, typed `Continue/Reply/Reject`, supervisor/actor stage ordering, single-use `next`, cancellation checks, bounded metadata through `ActorMiddlewarePipeline.Envelope`, exact identity-fenced supervisor skip receipts, and downstream-drain failure fencing. It does not attach to real Oreslang `run`/`receive` or raw network sockets; guest declarations remain fail-closed and LLVM must not report parity.
+
+**Response-draft propagation invariant:** every `Continue(updatedRequest, responseDraft)` and `next.proceed(updatedRequest, responseDraft)` passes the explicit draft; there is no one-argument shorthand which silently resets a previously selected status or safe header. The Java reference engine has removed both shorthand methods and carries request/draft revision identity in the skip proof.
