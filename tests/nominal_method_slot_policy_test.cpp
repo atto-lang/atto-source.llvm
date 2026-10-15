@@ -88,6 +88,16 @@ int main() {
         Signature{utf8Name, {{Kind::Enum, "root::Color"}}}}).size() > 0,
         "valid bounded method identifier rejected");
 
+    std::string multibyteName;
+    for (std::size_t i = 0; i < 128; ++i) multibyteName += "\xc3\xa9";
+    check(m::linkSymbol("root.Picker", {m::Domain::Instance,
+        Signature{multibyteName, {{Kind::Enum, "root::Color"}}}}).size() > 0,
+        "256-byte UTF-8 method name incorrectly rejected");
+    multibyteName += "\xc3\xa9";
+    denied([&] { (void)m::linkSymbol("root.Picker",
+        {m::Domain::Instance,
+         Signature{multibyteName, {{Kind::Enum, "root::Color"}}}}); },
+         "258-byte UTF-8 method name bypassed ceiling");
     std::cout << "nominal method slot policy OK\n";
     return 0;
 }
