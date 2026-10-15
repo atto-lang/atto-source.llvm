@@ -16,6 +16,44 @@
 #include <string>
 
 
+// Reject malformed Unicode (overlong encodings, surrogates, truncated input and
+// code points above U+10FFFF) and binary NUL before native parser admission.
+static void require_valid_source_utf8(std::string_view source) {
+    for (std::size_t i = 0; i < source.size();) {
+        const auto lead = static_cast<unsigned char>(source[i]);
+        if (lead == 0) throw std::runtime_error("native source contains NUL byte");
+        if (lead <= 0x7f) { ++i; continue; }
+
+        std::size_t continuation_count = 0;
+        unsigned char min_first = 0x80;
+        unsigned char max_first = 0xbf;
+        if (lead >= 0xc2 && lead <= 0xdf) {
+            continuation_count = 1;
+        } else if (lead >= 0xe0 && lead <= 0xef) {
+            continuation_count = 2;
+            if (lead == 0xe0) min_first = 0xa0;
+            if (lead == 0xed) max_first = 0x9f;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            continuation_count = 3;
+            if (lead == 0xf0) min_first = 0x90;
+            if (lead == 0xf4) max_first = 0x8f;
+        } else {
+            throw std::runtime_error("native source is not valid UTF-8");
+        }
+        if (source.size() - i <= continuation_count) {
+            throw std::runtime_error("native source is not valid UTF-8");
+        }
+        for (std::size_t j = 1; j <= continuation_count; ++j) {
+            const auto byte = static_cast<unsigned char>(source[i + j]);
+            if (byte < (j == 1 ? min_first : 0x80) ||
+                byte > (j == 1 ? max_first : 0xbf)) {
+                throw std::runtime_error("native source is not valid UTF-8");
+            }
+        }
+        i += continuation_count + 1;
+    }
+}
+
 // flags-2-env exports these variables using .cli-flags.toml. Read them without
 // depending on an ambient TOML parser in the compiler (the upstream wrapper
 // owns TOML/argv validation). Invalid inherited values always fail closed.
