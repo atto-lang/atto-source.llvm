@@ -60,7 +60,7 @@ private:
     inline static std::atomic<std::uint64_t> next_heap_id_{1};
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
-    ActorHeapBorrowGate borrow_gate_;
+    mutable ActorHeapBorrowGate borrow_gate_;
     std::array<Slot, NodeCapacity> slots_{};
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
@@ -76,7 +76,7 @@ private:
 
     // All payload reads take a shared admission lease, including metadata
     // reads; retirement can never reclaim slots while one is in flight.
-    ActorHeapBorrowGate::Lease begin_read(ActorHeapIdentity actor) {
+    ActorHeapBorrowGate::Lease begin_read(ActorHeapIdentity actor) const {
         auto loan = borrow_gate_.acquire(actor);
         if (!loan)
             throw std::logic_error("actor graph read conflicts with mutation or retirement");
@@ -166,11 +166,11 @@ public:
         if (pin) require_owner(actor);
         return pin;
     }
-    std::size_t live_nodes(ActorHeapIdentity actor) {
+    std::size_t live_nodes(ActorHeapIdentity actor) const {
         auto read = begin_read(actor);
         return active_nodes_;
     }
-    std::size_t live_edges(ActorHeapIdentity actor) {
+    std::size_t live_edges(ActorHeapIdentity actor) const {
         auto read = begin_read(actor);
         return active_edges_;
     }
