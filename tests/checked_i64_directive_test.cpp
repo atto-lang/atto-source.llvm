@@ -81,6 +81,28 @@ int main() {
     rejected("pub fnc main(): int { return 43; }\n"
              "// oreslang:checked-i64-v2\n");
 
+    // Deterministic structural fuzz: every noncanonical checked marker
+    // after // is rejected, but the same bytes inside nested comments
+    // remain ordinary source. These cases also execute under NDEBUG.
+    for (int i = 0; i < 4096; ++i) {
+        const std::string gap = i % 3 == 0
+            ? std::string(i % 5 + 2, ' ')
+            : (i % 3 == 1 ? "\t" : " \t");
+        const std::string malformed =
+            "//" + gap + "oreslang:checked-i64-v1\n";
+        const std::string ordinary =
+            "pub fnc main(): int { return 43; }\n";
+        rejected(malformed + ordinary);
+        rejected(std::string("// oreslang:checked-i64-v1\n") +
+                 malformed + ordinary);
+        const std::string hidden =
+            "/* outer /* nested\n" + malformed + "*/ outer */\n";
+        require(!checked_i64_source_opt_in(hidden + ordinary));
+        require(checked_i64_source_opt_in(
+            std::string("// oreslang:checked-i64-v1\n") +
+            hidden + ordinary));
+    }
+
     // Validate state independence and displaced directives even in long
     // comment sequences. This must run in release builds with -DNDEBUG.
     std::uint64_t seed = 20261015u;
