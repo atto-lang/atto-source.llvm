@@ -289,6 +289,19 @@ int main() {
     if (authorized.register_direct_child("actor-1")) return 75;
     if (authorized.pending() != 0 || !authorized.retired()) return 76;
 
+    // Spawn-time registry growth is finite even when the CONTROL ring is tiny.
+    // A retired or full supervisor cannot accidentally accept new lineage.
+    ActorFailureControlInbox boundedChildren("bounded-parent", 1);
+    for (int i = 0; i < 4096; ++i) {
+        if (!boundedChildren.register_direct_child("child-" + std::to_string(i)))
+            return 77;
+    }
+    if (boundedChildren.register_direct_child("overflow-child")) return 78;
+    if (!boundedChildren.unregister_direct_child("child-0")) return 79;
+    if (!boundedChildren.register_direct_child("replacement-child")) return 80;
+    boundedChildren.retire();
+    if (boundedChildren.register_direct_child("post-retirement")) return 81;
+
     try {
         (void)ActorFailureControlNotice::from_guest_effect(
                 ActorExceptionalEffect::Raise, "same-id", "same-id");
