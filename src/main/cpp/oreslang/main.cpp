@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
@@ -103,30 +104,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     try {
-        std::ifstream source(path, std::ios::binary);
-        if (!source.is_open()) {
-            throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
-        }
-        // Bound input before lexing and IR construction; istreambuf_iterator
-        // used to grow memory without limit for attacker-controlled files.
-        // Enforce the stricter Cortex-M budget while streaming, before allocating.
+        std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
-        std::array<char, 8192> buffer{};
-        std::string text;
-        while (source) {
-            source.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-            const auto n = source.gcount();
-            if (n <= 0) break;
-            if (static_cast<std::size_t>(n) > kMaxSourceBytes - text.size())
-                throw std::runtime_error(cortex_m_target
-                    ? "cortex-m source exceeds 128 KiB limit"
-                    : "native source exceeds 8 MiB admission limit");
-            text.append(buffer.data(), static_cast<std::size_t>(n));
-        }
-        // A short final read normally sets eofbit and failbit. Other I/O
-        // errors must be rejected rather than admitting a truncated source.
-        if (source.bad() || (source.fail() && !source.eof()))
-            throw std::runtime_error("failed reading Oreslang source");
+        const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
+            ? "cortex-m source exceeds 128 KiB limit"
+            : "native source exceeds 8 MiB admission limit");
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
@@ -310,6 +292,7 @@ int main(int argc, char** argv) {
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout.flush();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';

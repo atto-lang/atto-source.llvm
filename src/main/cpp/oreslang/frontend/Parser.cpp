@@ -377,13 +377,17 @@ private:
             ClassField field;
             field.public_member = publicly_visible;
             bool literal_const = false;
+            bool val_alias = false;
             if (!legacy_let) {
                 field.final_field = accept("final");
                 if (field.final_field) literal_const = accept("const");
                 else if (accept("const")) literal_const = field.final_field = true;
-                else field.final_field = accept("val");
+                else field.final_field = val_alias = accept("val");
             }
-            const bool mutable_referent = accept("mut");
+            const bool explicit_mut = accept("mut");
+            if (val_alias && explicit_mut) fail("duplicate mut class field qualifier");
+            const bool mutable_referent = val_alias || explicit_mut;
+            field.mutable_referent = mutable_referent;
             if (mutable_referent && accept("Array")) {
                 // 'mut Array<int>' is canonical: mut is the referent
                 // capability, independent of whether the slot is final.
