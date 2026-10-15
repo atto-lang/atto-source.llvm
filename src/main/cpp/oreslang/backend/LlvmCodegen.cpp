@@ -2,6 +2,7 @@
 #include "oreslang/backend/CheckedI64Admission.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/CheckedI64Failure.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -100,7 +101,8 @@ llvm::Value* lower_checked_i64_binary(llvm::IRBuilder<>& builder,
     builder.SetInsertPoint(failed);
     // Signal a typed Throw; never terminate the process from a guest expression.
     builder.CreateStore(llvm::ConstantInt::get(
-        llvm::Type::getInt32Ty(context), 0x494F0001u), status_ptr);
+        llvm::Type::getInt32Ty(context),
+        runtime::CheckedI64Failure::effect_code), status_ptr);
     builder.CreateRet(llvm::ConstantInt::get(i64, 0));
     builder.SetInsertPoint(success);
     return builder.CreateExtractValue(pair, {0}, "checked.value");
