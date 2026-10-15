@@ -229,5 +229,38 @@ int main() {
     CHECK(failed_restart_escalation.reserved_count() == 0);
     CHECK(failed_restart_escalation.admit_turn(both, false)
           == SupervisorControlTurn::Admitted::None);
+    // The logical supervisor turn is single-writer, but monitoring may
+    // observe restart intensity concurrently from a separate host thread.
+    // All snapshots must be monotonic and never access non-atomic state.
+    constexpr std::size_t kConcurrentRestarts = 1024;
+    SupervisorControlTurn observed_restarts(1, kConcurrentRestarts);
+    Hooks monitor_hooks;
+    monitor_hooks.next = SupervisorControlTurn::Decision::Restart;
+    std::atomic<bool> reader_stop{false};
+    std::atomic<bool> reader_regressed{false};
+    std::thread monitor([&] {
+        std::size_t prior = 0;
+        while (!reader_stop.load(std::memory_order_acquire)) {
+            const auto current = observed_restarts.restarts_used();
+            if (current < prior || current > kConcurrentRestarts) {
+                reader_regressed.store(true, std::memory_order_release);
+            }
+            prior = current;
+            std::this_thread::yield();
+        }
+    });
+    for (std::size_t i = 0; i < kConcurrentRestarts; ++i) {
+        Key child{"monitored-restart-" + std::to_string(i), 1};
+        observed_restarts.reserve_child(child);
+        CHECK(observed_restarts.publish_child(child, Kind::Panic, "panic"));
+        CHECK(observed_restarts.admit_turn(monitor_hooks, false)
+              == SupervisorControlTurn::Admitted::Control);
+    }
+    reader_stop.store(true, std::memory_order_release);
+    monitor.join();
+    CHECK(!reader_regressed.load(std::memory_order_acquire));
+    CHECK(observed_restarts.restarts_used() == kConcurrentRestarts);
+    CHECK(observed_restarts.reserved_count() == 0);
+
     return 0;
 }
