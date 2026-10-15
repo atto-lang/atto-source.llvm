@@ -169,3 +169,27 @@ child authority as well as producer/consumer/retirement races.
 container. It is not wired into LLVM's actor scheduler and it does not
 implement guest `throw`, `raise`, `panic`, unwinding, `recover`, or native
 supervisor callbacks. No exact-head LLVM CTest/AOT results have been obtained.
+
+## Actor-local hook-to-supervisor host conformance (October 14, 2026)
+
+The `effect_supervisor_end_to_end_test.cpp` host fixture now composes
+`dispatch_actor_local_unhandled`, `EffectSupervisorBridge`, and
+`SupervisorControlTurn` in one test, rather than asserting only the isolated
+policy calls:
+
+- `on_throw` returning `Handled + Return` prevents terminal CONTROL
+  publication and permits the host child reservation to retire normally.
+- A callback returning `Escalate + Return` does **not** suppress the original
+  Throw: the bridge promotes it to supervisor Panic with Throw provenance.
+- An already-terminal Panic bypasses every actor-local `on_throw` callback.
+- Panic inside the callback dominates its claimed `Handled` resolution.
+- An unknown native `ActorLocalResolution` enum discriminant is converted to
+  fixed Fatal code `0xFFFFFFFD`, never treated as successful recovery or
+  silently downgraded to an ordinary throw.
+
+This fixture is strictly **host-native conformance**, not linked Oreslang
+source execution. The LLVM guest compiler still rejects actual source
+`Error` inheritance, `throw`, `raise`, and `panic`. The Java backend
+has introduced a narrower source actor `on_throw(Error): bool` receive-turn
+slice; this does **not** establish cross-backend feature parity. Exact-head
+CTest, sanitizers, native AOT and scheduler integration remain unverified.
