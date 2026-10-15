@@ -33,6 +33,18 @@ def sha256(path):
     return hasher.hexdigest()
 
 
+def git_checkout_sha(root):
+    """Read the actual checked-out Git revision, not just CI's claimed SHA."""
+    completed = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+        capture_output=True, text=True, check=True, timeout=10,
+    )
+    revision = completed.stdout.strip()
+    if not SOURCE_SHA.fullmatch(revision):
+        raise ValueError("checkout HEAD is not a full lowercase Git commit SHA")
+    return revision
+
+
 def _kill_process_group(proc):
     """Kill the dedicated process group; separately daemonized children may escape."""
     try:
@@ -157,11 +169,19 @@ def main():
     if not compiler.is_absolute() or not compiler.is_file():
         parser.error("--compiler must name an existing absolute file")
     root = Path(__file__).resolve().parents[1]
+    try:
+        checkout_sha = git_checkout_sha(root)
+    except (OSError, ValueError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as error:
+        parser.error("cannot independently read Git checkout HEAD: " + type(error).__name__)
+    if checkout_sha != args.source_sha:
+        parser.error("declared source revision does not match Git checkout HEAD")
     evidence = {
         "schema_version": 1,
         "evidence_type": "real-compiler-smoke",
         "backend": args.backend,
         "source_commit_declared": args.source_sha,
+        "actual_git_checkout_sha": checkout_sha,
         "source_commit_binary_link_attested": False,
         "compiler_path": str(compiler),
         "process_invoker_sha256": sha256(compiler),
