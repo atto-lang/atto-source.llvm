@@ -50,3 +50,9 @@ The shared Actions diagnostic counts steps only when execution is evidenced; ski
 For the LLVM positive fixture, the producer now hashes the exact UTF-8 LLVM IR bytes written to the linker input and the generated native executable both before and after guest execution. The shared adapter requires the IR digest to match recorded compiler stdout and the two executable digests to match, rejecting omitted or inconsistent fields. If Clang reports success but produces no regular executable, the producer fails closed.
 
 These checks detect unintended modification during an observed run but do **not** authenticate self-reported JSON, link the source tree cryptographically to compiler binaries, or prove the absence of a time-of-check/time-of-use race. Java continues to report only the launcher class digest rather than an entire Maven/JDK dependency closure. Public promotion still requires independent CI artifact/run verification.
+
+## Tracked-checkout and native target hardening
+
+Before running the smoke fixtures, the producer compares the caller's source commit with `git rev-parse --verify HEAD` and requires the tracked working tree to be clean (`git status --porcelain=v1 --untracked-files=no`). This rejects tracked source, manifests, or lockfiles modified by preceding build steps. Untracked or ignored generated files are not proven absent, and the Git check alone does not authenticate a binary.
+
+LLVM linking must create an actual regular file in the private test directory, not a symlink. The runner hashes this executable before and after guest execution and rejects missing, symlinked, or changed outputs. New unit cases cover dirty tracked files, symlink paths, nonexistent native outputs and digest changes. This is not an OS sandbox or a cryptographic build attestation.
