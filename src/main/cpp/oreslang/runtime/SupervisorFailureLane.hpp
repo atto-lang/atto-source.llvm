@@ -278,16 +278,39 @@ private:
                 if ((first == 0xf0 && second < 0x90)
                         || (first == 0xf4 && second > 0x8f)) valid = false;
             }
-            const std::size_t bytes = valid ? width : 1;
-            if (bytes > N - length) break;
-            if (valid) {
-                std::memcpy(buffer.data() + length, text.data() + i, bytes);
-                i += bytes;
-            } else {
-                buffer[length] = '?';
-                ++i;
+            // Well-formed UTF-8 alone is insufficient for host CONTROL
+            // metadata. Remove display-control and bidi formatting scalars
+            // before logs/host handlers can mistake source text for authority.
+            // Replace each forbidden *scalar* with one '?' (malformed bytes
+            // are still replaced individually).
+            bool display_control = false;
+            if (valid && width == 1) {
+                display_control = first < 0x20 || first == 0x7f;
+            } else if (valid && width == 2) {
+                const auto second = static_cast<unsigned char>(text[i + 1]);
+                display_control = (first == 0xc2 && second >= 0x80
+                                   && second <= 0x9f)
+                               || (first == 0xd8 && second == 0x9c); // U+061C
+            } else if (valid && width == 3 && first == 0xe2) {
+                const auto second = static_cast<unsigned char>(text[i + 1]);
+                const auto third = static_cast<unsigned char>(text[i + 2]);
+                display_control =
+                        (second == 0x80
+                         && ((third >= 0x8e && third <= 0x8f) // U+200E/F
+                             || (third >= 0xaa && third <= 0xae))) // U+202A..E
+                        || (second == 0x81 && third >= 0xa6
+                            && third <= 0xa9); // U+2066..9
             }
-            length += bytes;
+            const std::size_t consumed = valid ? width : 1;
+            const std::size_t written = (!valid || display_control) ? 1 : width;
+            if (written > N - length) break;
+            if (!valid || display_control) {
+                buffer[length] = '?';
+            } else {
+                std::memcpy(buffer.data() + length, text.data() + i, width);
+            }
+            i += consumed;
+            length += written;
         }
     }
 
