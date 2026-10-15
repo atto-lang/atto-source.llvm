@@ -119,6 +119,26 @@ int main() {
         checked_ir.find("declare void @exit") != std::string::npos)
         throw std::runtime_error("checked arithmetic must not call process exit");
 
+    // Regression: an overflowing first call argument must return before
+    // evaluating the second argument or issuing the enclosing call. Likewise
+    // arithmetic cannot evaluate its RHS after a nested LHS Throw.
+    const auto evaluation_order = parse_program(
+        "pub fnc scale(int x): int { return x * 43; } "
+        "pub fnc combine(int a, int b): int { return a + b; } "
+        "pub fnc main(): int { return combine(scale(9223372036854775807), "
+        "scale(1)) + scale(1); }");
+    const std::string order_ir = emit_verified_llvm_ir(
+        evaluation_order, false, false, true);
+    for (const char* required : {
+            "checked.argument.propagate", "checked.operand.propagate",
+            "checked.call.propagate"}) {
+        if (order_ir.find(required) == std::string::npos)
+            throw std::runtime_error(
+                std::string("checked short-circuit guard missing: ") + required);
+    }
+    // LLVM verification is performed inside emit_verified_llvm_ir. A valid
+    // returned module here also proves each exceptional return is well-typed.
+
     const std::string legacy_ir = emit_verified_llvm_ir(
         parse_program("pub fnc main(): int { return 40 + 3; }"), false, false, false);
     if (legacy_ir.find("checked.effect.status") != std::string::npos)
