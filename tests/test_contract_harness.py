@@ -351,5 +351,72 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
 
 
 
+    def test_verify_object_rejects_missing_clang(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n")
+        p = self.run_contract(compiler, "--verify-object")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--verify-object requires --clang", p.stderr)
+
+    def test_verify_object_is_incompatible_with_negative_diagnostic(self):
+        compiler = self.compiler(status=1, stderr="private class field")
+        p = self.run_contract(compiler, "--diagnostic", "private class field",
+                              "--verify-object", "--clang", "/does/not/matter")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("cannot be combined with positive test modes", p.stderr)
+
+    def test_verify_object_successful_compilation_is_admitted(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "define i32 @main() { ret i32 42 }\n")
+        clang = self.linker()
+        p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_verify_object_rejects_malformed_ir_even_with_matching_token(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "define i32 @main() { not-LLVM-IR }\n")
+        clang = self.linker(compile_status=1)
+        p = self.run_contract(compiler, "--ir", "define i32 @main",
+                              "--verify-object", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("failed object compilation", p.stderr)
+
+    def test_verify_object_rejects_missing_output_object(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "define i32 @main() { ret i32 42 }\n")
+        # Separate fake Clang path: writing over the fake compiler would
+        # fail the ModuleID preflight rather than exercising this object gate.
+        clang = self.linker()
+        clang.write_text("#!" + sys.executable + "\nimport sys\nsys.exit(0)\n",
+                         encoding="utf-8")
+        p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("nonempty native object", p.stderr)
+
+    def test_verify_object_rejects_compiler_only_stub_ir(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n")
+        # Even a successful Clang exit and object file cannot turn empty
+        # compiler output into executable native-source proof.
+        clang = self.linker()
+        p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no function definitions", p.stderr)
+
+    def test_verify_object_cannot_accept_declarations_as_definitions(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "declare i32 @external()\n")
+        clang = self.linker()
+        p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no function definitions", p.stderr)
+
+    def test_verify_object_cannot_accept_commented_function_definition(self):
+        compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
+                                        "; define i32 @spoof() { ret i32 42 }\n")
+        clang = self.linker()
+        p = self.run_contract(compiler, "--verify-object", "--clang", str(clang))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no function definitions", p.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

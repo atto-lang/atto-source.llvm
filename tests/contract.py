@@ -54,13 +54,14 @@ def main():
     parser.add_argument("--experimental-owned-int", action="store_true")
     parser.add_argument("--no-native-abi", action="store_true")
     parser.add_argument("--no-main-link", action="store_true")
+    parser.add_argument("--verify-object", action="store_true")
     args = parser.parse_args()
     # A rejected-source test must never silently skip other requested gates.
     if args.diagnostic is not None:
         require(bool(args.diagnostic), "--diagnostic requires nonempty text")
         require(args.run is None and args.ir is None and
                 not args.no_native_abi and not args.no_main_link and
-                args.native_runtime is None,
+                not args.verify_object and args.native_runtime is None,
                 "--diagnostic cannot be combined with positive test modes")
     if args.ir is not None:
         require(bool(args.ir), "--ir requires nonempty text")
@@ -71,6 +72,8 @@ def main():
             "--no-main-link cannot request successful execution")
     require(args.native_runtime is None or args.run is not None,
             "--native-runtime requires --run")
+    require(not args.verify_object or bool(args.clang),
+            "--verify-object requires --clang")
     cmd = [args.compiler]
     if args.target:
         cmd.append("--target=" + args.target)
@@ -95,6 +98,30 @@ def main():
     if args.no_native_abi:
         require("oreslang_owned_i64_region_" not in compile_result.stdout,
                 "ordinary source unexpectedly references the experimental native heap ABI")
+    # A textual IR substring is not proof of a valid compiler output. For
+    # compile-only positive fixtures, assemble with real Clang and reject
+    # invalid IR even when --ir or --no-native-abi otherwise matches.
+    if args.verify_object:
+        # Clang happily assembles a comment-only or declare-only module into
+        # an object. A positive source fixture must emit at least one actual
+        # function body; comments and forward declarations are not proof.
+        executable_def = re.search(
+            r"(?m)^[ \t]*define[ \t]+[^\n]*@",
+            ir_without_comments(compile_result.stdout),
+        )
+        require(executable_def is not None,
+                "positive LLVM IR contained no function definitions")
+        with tempfile.TemporaryDirectory(prefix="oreslang-verify-object-") as directory:
+            object_file = pathlib.Path(directory) / "guest.o"
+            assembled = subprocess.run(
+                [args.clang, "-x", "ir", "-", "-c", "-o", str(object_file)],
+                input=compile_result.stdout, capture_output=True,
+                text=True, check=False, timeout=30,
+            )
+            require(assembled.returncode == 0,
+                    "positive LLVM IR failed object compilation: " + assembled.stderr)
+            require(object_file.is_file() and object_file.stat().st_size > 0,
+                    "Clang did not produce a nonempty native object")
     # Match a real IR *definition*, not a substring inside LLVM comments.
     # The Oreslang host wrapper must define a zero-argument i32 main.
     host_main = re.search(
