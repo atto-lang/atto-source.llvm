@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
@@ -12,6 +13,48 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <array>
+#include <string_view>
+
+// Reject malformed Unicode (overlong encodings, surrogates, truncated input and
+// code points above U+10FFFF) and binary NUL before native parser admission.
+static void require_valid_source_utf8(std::string_view source) {
+    for (std::size_t i = 0; i < source.size();) {
+        const auto lead = static_cast<unsigned char>(source[i]);
+        if (lead == 0) throw std::runtime_error("native source contains NUL byte");
+        if (lead <= 0x7f) { ++i; continue; }
+
+        std::size_t continuation_count = 0;
+        unsigned char min_first = 0x80;
+        unsigned char max_first = 0xbf;
+        if (lead >= 0xc2 && lead <= 0xdf) {
+            continuation_count = 1;
+        } else if (lead >= 0xe0 && lead <= 0xef) {
+            continuation_count = 2;
+            if (lead == 0xe0) min_first = 0xa0;
+            if (lead == 0xed) max_first = 0x9f;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            continuation_count = 3;
+            if (lead == 0xf0) min_first = 0x90;
+            if (lead == 0xf4) max_first = 0x8f;
+        } else {
+            throw std::runtime_error("native source is not valid UTF-8");
+        }
+        if (source.size() - i <= continuation_count) {
+            throw std::runtime_error("native source is not valid UTF-8");
+        }
+        for (std::size_t j = 1; j <= continuation_count; ++j) {
+            const auto byte = static_cast<unsigned char>(source[i + j]);
+            if (byte < (j == 1 ? min_first : 0x80) ||
+                byte > (j == 1 ? max_first : 0xbf)) {
+                throw std::runtime_error("native source is not valid UTF-8");
+            }
+        }
+        i += continuation_count + 1;
+    }
+}
+
+
 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
@@ -61,13 +104,12 @@ int main(int argc, char** argv) {
         return 2;
     }
     try {
-        std::ifstream source(path, std::ios::binary);
-        if (!source.is_open()) {
-            throw std::runtime_error(std::string("cannot open Oreslang source: ") + path);
-        }
-        const std::string text((std::istreambuf_iterator<char>(source)),
-                               std::istreambuf_iterator<char>());
-        if (source.bad()) throw std::runtime_error("failed reading Oreslang source");
+        std::cout.exceptions(std::ios::badbit | std::ios::failbit);
+        const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
+        const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
+            ? "cortex-m source exceeds 128 KiB limit"
+            : "native source exceeds 8 MiB admission limit");
+        require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
         // constraints before parsing or emitting LLVM IR.
@@ -164,6 +206,38 @@ int main(int argc, char** argv) {
                         send.payload->kind != oreslang::Expression::Kind::Integer)
                         throw std::runtime_error("cortex-m actor send must be a literal i64");
                 }
+                // All bootstrap effects are statically ordered. Prove no
+                // mailbox can overflow before lowering irreversible void sends.
+                // The runtime's 16-entry cap is an ABI contract, not a hint.
+                std::unordered_map<std::string, std::size_t> pending;
+                std::unordered_set<std::string> stopped;
+                for (const auto& spawn : start.actor_spawns) {
+                    if (!pending.emplace(spawn.name, 0).second)
+                        throw std::runtime_error("cortex-m duplicate actor ref");
+                }
+                for (const auto& action : start.actor_actions) {
+                    std::string ref;
+                    if (action.kind == oreslang::ActorAction::Kind::Send) {
+                        if (action.index >= start.actor_sends.size())
+                            throw std::runtime_error("cortex-m invalid actor send index");
+                        ref = start.actor_sends[action.index].reference;
+                    } else {
+                        if (action.index >= start.actor_stops.size())
+                            throw std::runtime_error("cortex-m invalid actor stop index");
+                        ref = start.actor_stops[action.index];
+                    }
+                    const auto it = pending.find(ref);
+                    if (it == pending.end() || stopped.count(ref))
+                        throw std::runtime_error("cortex-m invalid or stopped actor capability");
+                    if (action.kind == oreslang::ActorAction::Kind::Send) {
+                        if (++it->second > 16)
+                            throw std::runtime_error("cortex-m static mailbox capacity exceeded (16)");
+                    } else {
+                        stopped.insert(ref);
+                    }
+                }
+                if (stopped.size() != pending.size())
+                    throw std::runtime_error("cortex-m bootstrap must stop all actors");
                 // The trusted C runtime owns static actors, mailboxes, and
                 // orderly stop/drain; this does not admit guest awaits.
             }
@@ -218,6 +292,7 @@ int main(int argc, char** argv) {
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout.flush();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';

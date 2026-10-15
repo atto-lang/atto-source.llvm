@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include <pthread.h>
+#include "test_barrier.h"
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -11,7 +12,7 @@ static void check(int condition) { if (!condition) abort(); }
 typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef actor;
-    pthread_barrier_t start;
+    OresTestBarrier start;
     atomic_uint accepted;
     atomic_uint errors;
     atomic_uint completed;
@@ -24,7 +25,7 @@ static void handler(void* raw, size_t slot, uint64_t payload) {
 }
 static void* sender(void* raw) {
     Race* race = (Race*) raw;
-    (void) pthread_barrier_wait(&race->start);
+    (void) ores_test_barrier_wait(&race->start);
     for (unsigned i = 1; i <= SENDS; ++i) {
         OresNativeSendStatus outcome =
             ores_native_actor_scheduler_try_send(race->scheduler, race->actor, i);
@@ -38,7 +39,7 @@ static void* sender(void* raw) {
 }
 static void* stopper(void* raw) {
     Race* race = (Race*) raw;
-    (void) pthread_barrier_wait(&race->start);
+    (void) ores_test_barrier_wait(&race->start);
     if (!ores_native_actor_scheduler_stop(race->scheduler, race->actor))
         atomic_fetch_add(&race->errors, 1);
     /* Stop has definitely won the scheduler lock. No new send can succeed. */
@@ -57,13 +58,13 @@ int main(void) {
         check(ores_native_actor_scheduler_try_send(race.scheduler, race.actor, 0)
               == ORES_NATIVE_SEND_ACCEPTED);
         atomic_store(&race.accepted, 1);
-        check(pthread_barrier_init(&race.start, NULL, 2) == 0);
+        check(ores_test_barrier_init(&race.start, 2) == 0);
         pthread_t send_thread, stop_thread;
         check(pthread_create(&send_thread, NULL, sender, &race) == 0);
         check(pthread_create(&stop_thread, NULL, stopper, &race) == 0);
         check(pthread_join(send_thread, NULL) == 0);
         check(pthread_join(stop_thread, NULL) == 0);
-        check(pthread_barrier_destroy(&race.start) == 0);
+        check(ores_test_barrier_destroy(&race.start) == 0);
         check(atomic_load(&race.errors) == 0);
         check(ores_native_actor_scheduler_try_send(race.scheduler, race.actor, 0)
               == ORES_NATIVE_SEND_TERMINATED);
