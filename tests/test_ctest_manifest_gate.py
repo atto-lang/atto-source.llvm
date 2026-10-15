@@ -23,9 +23,11 @@ def fixture():
                             "--verify-object", "--clang", "clang"])
         else:
             command.extend(["-c", "pass"])
+        if name == "source_actor_compiled_native_asan_ubsan":
+            command.append("--sanitize")
         entries.append({"name": name, "command": command,
                         "properties": props})
-    for index in range(125):
+    for index in range(260):
         entries.append({"name": f"native_extra_{index}", "command": ["/tmp/test"]})
     return {"kind": "ctestInfo", "version": {"major": 1, "minor": 0},
             "tests": entries}
@@ -40,7 +42,7 @@ class ManifestAuditTests(unittest.TestCase):
             check_manifest(self.manifest)
 
     def test_complete_manifest_is_admitted(self):
-        self.assertEqual(check_manifest(self.manifest), 125 + len(CRITICAL_TESTS))
+        self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
 
     def test_empty_manifest_rejected(self):
         self.manifest["tests"] = []
@@ -97,6 +99,47 @@ class ManifestAuditTests(unittest.TestCase):
         idx = entry["command"].index("tests/fixtures/constant-main.ores")
         entry["command"][idx] = "tests/fixtures/empty.ores"
         self.fail_on("does not compile positive guest source")
+
+    def test_noncritical_skipped_test_is_never_silent(self):
+        self.manifest["tests"][-1]["properties"] = [
+            {"name": "SKIP_RETURN_CODE", "value": 77}
+        ]
+        self.fail_on("skip policy")
+
+    def test_noncritical_disabled_test_is_never_silent(self):
+        self.manifest["tests"][-1]["properties"] = [
+            {"name": "DISABLED", "value": True}
+        ]
+        self.fail_on("disabled/inverted")
+
+    def test_noncritical_unresolved_binary_is_never_silent(self):
+        self.manifest["tests"][-1]["command"] = ["/tmp/BINARY-NOTFOUND"]
+        self.fail_on("unresolved/empty")
+
+    def test_optimized_python_flag_cannot_follow_script(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_contract_harness_python_O")
+        target["command"].remove("-O")
+        target["command"].append("-O")
+        self.fail_on("not invoked with Python -O")
+
+    def test_native_clang_option_requires_a_value(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_contract_positive_object_verifies")
+        pos = target["command"].index("--clang")
+        target["command"][pos + 1] = "--empty"
+        self.fail_on("no value for --clang")
+
+    def test_actor_sanitizer_gate_does_not_run_unsanitized(self):
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "source_actor_compiled_native_asan_ubsan")
+        target["command"].remove("--sanitize")
+        self.fail_on("missing --sanitize")
+
+    def test_audit_must_not_miss_supervisor_gate(self):
+        self.manifest["tests"] = [x for x in self.manifest["tests"]
+            if x["name"] != "native_supervisor_hierarchy_control"]
+        self.fail_on("required CTest was not registered")
 
     def test_duplicate_test_names_rejected(self):
         self.manifest["tests"].append(copy.deepcopy(self.manifest["tests"][0]))
