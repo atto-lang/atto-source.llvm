@@ -84,7 +84,9 @@ public:
 
     std::size_t pending_count() const { return child_failures_.pending_count(); }
     std::size_t reserved_count() const { return child_failures_.reserved_count(); }
-    std::size_t restarts_used() const noexcept { return restarts_used_; }
+    std::size_t restarts_used() const noexcept {
+        return restarts_used_.load(std::memory_order_acquire);
+    }
 
     /**
      * At most one CONTROL event per admitted turn. CONTROL takes priority
@@ -185,7 +187,9 @@ private:
 
     SupervisorFailureLane child_failures_;
     const std::size_t restart_budget_;
-    std::size_t restarts_used_ = 0; // single-writer supervisor turn
+    // Single-writer updates from admitted CONTROL turns, with safe reads by
+    // external host monitors. A plain size_t caused a data race with observers.
+    std::atomic<std::size_t> restarts_used_{0};
     std::atomic_flag lease_ = ATOMIC_FLAG_INIT;
 
 };
