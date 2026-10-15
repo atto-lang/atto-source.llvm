@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/ExperimentalHirV1.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
+    bool experimental_emit_hir_v1 = false;
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
@@ -22,7 +24,12 @@ int main(int argc, char** argv) {
     const char* path = nullptr;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--experimental-rt-scalar-loop") {
+        if (arg == "--experimental-emit-hir-v1") {
+            if (experimental_emit_hir_v1) {
+                std::cerr << "duplicate experimental HIR export option\n"; return 2;
+            }
+            experimental_emit_hir_v1 = true;
+        } else if (arg == "--experimental-rt-scalar-loop") {
             if (experimental_rt_scalar_loop) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
@@ -56,7 +63,7 @@ int main(int argc, char** argv) {
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-emit-hir-v1] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -78,8 +85,16 @@ int main(int argc, char** argv) {
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
+        if (experimental_emit_hir_v1 && (target_seen || experimental_owned_int || experimental_rt_scalar_loop))
+            throw std::runtime_error("experimental HIR exporter cannot combine with target/owned/loop flags");
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
+        if (experimental_emit_hir_v1) {
+            // Emit only after the REAL native parser has admitted source grammar.
+            // The exporter rejects any unsupported semantics, without LLVM fallback.
+            std::cout << oreslang::emit_experimental_hir_v1(ast);
+            return 0;
+        }
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls
