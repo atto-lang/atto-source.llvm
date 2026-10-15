@@ -87,5 +87,29 @@ int main() {
     recursive.functions[0].result->name = "main";
     expect_checked_rejection(recursive);
 
+
+    // Real frontend -> codegen: checked overflow must return a per-invocation
+    // Throw status through nested scalar calls. No guest branch may call exit.
+    const auto nested = parse_program(
+        "pub fnc explode(int x): int { return x * 2; } "
+        "pub fnc forward(int x): int { return explode(x); } "
+        "pub fnc main(): int { return forward(9223372036854775807); }");
+    const std::string checked_ir = emit_verified_llvm_ir(nested, false, false, true);
+    for (const char* required : {
+            "checked.effect.status", "checked.call.propagate",
+            "checked.i64.overflow", "store i32 1229914113",
+            "checked.effect.failed"}) {
+        if (checked_ir.find(required) == std::string::npos)
+            throw std::runtime_error(std::string("checked effect IR missing: ") + required);
+    }
+    if (checked_ir.find("call void @exit") != std::string::npos ||
+        checked_ir.find("declare void @exit") != std::string::npos)
+        throw std::runtime_error("checked arithmetic must not call process exit");
+
+    const std::string legacy_ir = emit_verified_llvm_ir(
+        parse_program("pub fnc main(): int { return 40 + 3; }"), false, false, false);
+    if (legacy_ir.find("checked.effect.status") != std::string::npos)
+        throw std::runtime_error("unmarked guest must retain its original ABI");
+
     return 0;
 }
