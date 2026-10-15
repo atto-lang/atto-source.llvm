@@ -1848,4 +1848,10 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(cortexm_source_actor_admission PROPERTIES TIMEOUT 90)
+    # Exhaustive bounded-queue pairs and shuffled actor lifecycle schedules.
+    add_test(NAME cortexm_actor_admission_model_matrix
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_actor_admission_stress.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(cortexm_actor_admission_model_matrix PROPERTIES TIMEOUT 180)
 endif()
