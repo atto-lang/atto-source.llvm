@@ -183,5 +183,27 @@ int main() {
     CHECK(uncertain_escalation.admit_turn(escalated, false)
           == SupervisorControlTurn::Admitted::None);
 
+    // A restart callback can report failure without throwing, but the
+    // subsequent escalation can itself emit a host effect and then throw.
+    // Neither operation may be replayed on the same terminal notice.
+    SupervisorControlTurn failed_restart_escalation(1, 1);
+    Key failed_both{"failed-restart-escalation", 19};
+    failed_restart_escalation.reserve_child(failed_both);
+    CHECK(failed_restart_escalation.publish_child(
+            failed_both, Kind::Panic, "panic"));
+    Hooks both;
+    both.next = SupervisorControlTurn::Decision::Restart;
+    both.restart_ok = false;
+    both.throw_after_escalation = true;
+    bool both_threw = false;
+    try { (void) failed_restart_escalation.admit_turn(both, true); }
+    catch (const std::logic_error&) { both_threw = true; }
+    CHECK(both_threw);
+    CHECK(both.order == std::vector<std::string>({"panic", "restart", "escalate"}));
+    CHECK(failed_restart_escalation.restarts_used() == 1);
+    CHECK(!failed_restart_escalation.urgent());
+    CHECK(failed_restart_escalation.reserved_count() == 0);
+    CHECK(failed_restart_escalation.admit_turn(both, false)
+          == SupervisorControlTurn::Admitted::None);
     return 0;
 }
