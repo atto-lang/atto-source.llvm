@@ -88,6 +88,26 @@ int main() {
         p.functions.back().result = std::move(negate);
         verify_checked_i64_host_profile(p);
     }
+    expect_reject("missing OS entry", [](Program& p) {
+        p.functions.pop_back();
+    });
+    expect_reject("reserved diagnostic", [](Program& p) {
+        p.functions.front().name = "puts";
+    });
+    expect_reject("empty function identity", [](Program& p) {
+        p.functions.front().name.clear();
+    });
+    expect_reject("missing unary operand", [](Program& p) {
+        auto e = std::make_unique<Expression>();
+        e->kind = Expression::Kind::Negate;
+        p.functions.back().result = std::move(e);
+    });
+    expect_reject("malformed positional labels", [](Program& p) {
+        p.functions.back().result->argument_names = {"", ""};
+    });
+    expect_reject("null function-call argument", [](Program& p) {
+        p.functions.back().result->arguments[0].reset();
+    });
     expect_reject("module", [](Program& p) { p.module = "nonempty"; });
     expect_reject("class", [](Program& p) { p.classes.emplace_back(); });
     expect_reject("actor", [](Program& p) { p.actors.emplace_back(); });
