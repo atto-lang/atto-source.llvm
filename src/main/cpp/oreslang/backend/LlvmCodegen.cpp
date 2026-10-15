@@ -321,6 +321,18 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target,
                                   bool experimental_checked_i64) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // Defense in depth: this experimental opt-in is currently certified only
+    // for host scalar lowering. The special scalar-loop emitter below returns
+    // before construction of the checked module, so it MUST NOT be allowed to
+    // silently bypass overflow detection even when invoked outside main.cpp.
+    if (experimental_checked_i64 &&
+        (wasm32_target || cortex_m_target || !source.classes.empty() ||
+         !source.actors.empty() || !source.cooperative_loops.empty() ||
+         std::any_of(source.functions.begin(), source.functions.end(),
+                     [](const Function& fn) { return fn.scalar_while != nullptr; }))) {
+        throw std::runtime_error(
+            "checked-i64-v1 requires host scalar lowering; unsupported owner or loop");
+    }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
