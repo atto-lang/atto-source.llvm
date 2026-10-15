@@ -1308,6 +1308,14 @@ if(BUILD_TESTING)
             class-final-write-reject.ores --diagnostic "cannot reassign final class field")
         oreslang_contract_test(reject_native_final_field_take
             class-final-take-reject.ores --diagnostic "cannot take final class field")
+        oreslang_contract_test(native_class_final_read class-final-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_class_colon_write class-colon-rebindable-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_class_val_final_mut_read class-val-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_native_const_alias_write class-final-alias-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_final_uninitialized class-final-uninitialized-reject.ores --diagnostic "final class field requires declaration-site initializer")
+        oreslang_contract_test(reject_native_val_alias_write class-val-alias-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_final_mut_write class-final-mut-write-reject.ores --diagnostic "cannot reassign final class field")
+        oreslang_contract_test(reject_native_const_alias_take class-const-take-reject.ores --diagnostic "cannot take final class field")
         # Source-identical Java/GraalVM constructor parity and fail-closed
         # malformed/effectful/owned-input negative controls.
         oreslang_contract_test(native_scalar_constructor_arithmetic

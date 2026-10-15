@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise native compiler size limits at boundaries; never accept IR on rejection."""
 import pathlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,36 @@ def main() -> int:
     compiler = pathlib.Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix="oreslang-source-budget-") as tmp:
         base = pathlib.Path(tmp)
+        good = base / "valid.ores"
+        good.write_text("pub fnc main(): int { return 42; }\n")
+        control = invoke(compiler, good)
+        if control.returncode != 0 or "define i64 @__oreslang_guest_main(" not in control.stdout:
+            raise SystemExit("FAIL: valid LLVM output control failed")
+        if os.name == "posix":
+            fifo = base / "unwritten-fifo.ores"
+            os.mkfifo(fifo)
+            linked_fifo = base / "fifo-link.ores"
+            linked_fifo.symlink_to(fifo)
+            linked_good = base / "regular-link.ores"
+            portable = base / "portable-scalar.ores"
+            portable.write_text("fnc scalar(): int { return 42; }\n")
+            linked_good.symlink_to(portable)
+            for flags in ( [], ["--target=thumbv7m-none-eabi"]):
+                for special in (fifo, linked_fifo, base, type(good)("/dev/zero")):
+                    rejected = subprocess.run([str(compiler), *flags, str(special)],
+                                              capture_output=True, text=True, timeout=3)
+                    if (rejected.returncode != 1 or rejected.stdout
+                            or "source must be a regular file" not in rejected.stderr):
+                        raise SystemExit("FAIL: nonregular source admission: " + str(special))
+                accepted = subprocess.run([str(compiler), *flags, str(linked_good)],
+                                          capture_output=True, text=True, timeout=3)
+                if accepted.returncode != 0 or not accepted.stdout:
+                    raise SystemExit("FAIL: regular source symlink rejected")
+        with good.open("rb") as readonly_stdout:
+            failed = subprocess.run([str(compiler), str(good)], stdout=readonly_stdout,
+                                    stderr=subprocess.PIPE, text=True, timeout=20)
+        if failed.returncode == 0:
+            raise SystemExit("FAIL: compiler reported success for unwritable IR output")
         # Exercise the exact limit before testing overflow: whitespace can be
         # syntactically rejected, but must not trip the byte-size budget.
         exact = base / "exact-limit.ores"
