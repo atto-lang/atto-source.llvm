@@ -285,7 +285,10 @@ jobs:
                   seed ^= seed << 13;
                   seed ^= seed >> 7;
                   seed ^= seed << 17;
-                  check_i64_oracle((int64_t)seed);
+                  // Avoid implementation-defined out-of-range conversion of u64
+                  // to i64: subtract a widened 2^63 before narrowing.
+                  check_i64_oracle((int64_t)((__int128)seed -
+                      ((__int128)1 << 63)));
               }
               return 0;
           }
