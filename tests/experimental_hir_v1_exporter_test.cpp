@@ -169,6 +169,35 @@ int main() {
     const std::string dense_json = emit_experimental_hir_v1(dense);
     assert(dense_json.find("\"bulk3\"") != std::string::npos);
 
+    // Budget enforcement must precede expensive/unsafe arithmetic proofs.
+    // A balanced 4095-node tree is shallow enough for the 48-level depth
+    // limit but exceeds the per-function 2048-node contract. Its leaves
+    // also overflow if multiplied, so unmarked export must report the
+    // size gate first rather than a misleading overflow-proof error.
+    std::function<std::unique_ptr<Expression>(int)> overflowing_tree;
+    overflowing_tree = [&](int depth) -> std::unique_ptr<Expression> {
+        if (depth == 0) return integer(INT64_MAX);
+        return multiply(overflowing_tree(depth - 1),
+                        overflowing_tree(depth - 1));
+    };
+    for (bool checked : {false, true}) {
+        Program oversized;
+        Function fn;
+        fn.name = "main";
+        fn.result = overflowing_tree(11);
+        oversized.functions.push_back(std::move(fn));
+        bool rejected_for_budget = false;
+        try {
+            (void) emit_experimental_hir_v1(oversized, checked);
+        } catch (const std::runtime_error& error) {
+            if (std::string(error.what()).find("expression depth or size limit")
+                    == std::string::npos) throw;
+            rejected_for_budget = true;
+        }
+        if (!rejected_for_budget)
+            throw std::runtime_error("oversized HIR tree bypassed node budget");
+    }
+
     program.functions[0].name = "counter_response";
     rejects([&] { (void) emit_experimental_hir_v1(program); });
     std::cout << json;
