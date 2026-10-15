@@ -2,6 +2,7 @@
 // Checked host execution currently exits on overflow and must never admit
 // guest ownership, deferred cleanup, effects, recursive calls, or actor paths.
 #include "oreslang/backend/CheckedI64Admission.hpp"
+#include "oreslang/frontend/CheckedI64Directive.hpp"
 
 #include <functional>
 #include <memory>
@@ -68,6 +69,34 @@ static void expect_reject(const char* label,
 }
 int main() {
     verify_checked_i64_host_profile(good());
+    const auto reject_misplaced_checked_comment = [](const std::string& source) {
+        try { (void) checked_i64_source_opt_in(source); }
+        catch (const std::runtime_error& e) {
+            if (std::string(e.what()).find("checked-i64-v1:") == 0) return;
+            throw;
+        }
+        throw std::runtime_error("misplaced checked comment silently downgraded");
+    };
+    reject_misplaced_checked_comment(
+        "/* ordinary */ // oreslang:checked-i64-v1\n"
+        "pub fnc main(): int { return 43; }\n");
+    reject_misplaced_checked_comment(
+        "pub fnc helper(): int { return 1; } // oreslang:checked-i64-v1\n"
+        "pub fnc main(): int { return helper(); }\n");
+    reject_misplaced_checked_comment(
+        "/* outer /* nested */ finished */ // oreslang:checked-i64-v2\n"
+        "pub fnc main(): int { return 43; }\n");
+    if (!checked_i64_source_opt_in(
+            "// oreslang:checked-i64-v1\n"
+            "pub fnc main(): int { return 43; }\n"))
+        throw std::runtime_error("exact checked directive rejected");
+    if (checked_i64_source_opt_in(
+            "pub fnc main(): int { return 43; }\n"))
+        throw std::runtime_error("unmarked host source selected checked profile");
+    if (checked_i64_source_opt_in(
+            "pub fnc main(): int { return \"// oreslang:checked-i64-v1\"; }\n"))
+        throw std::runtime_error("quoted comment was misclassified as a directive");
+
     {
         // Real Parser.cpp records a blank label per positional argument.
         auto p = good();
