@@ -1137,6 +1137,20 @@
       "description": "optimizer step ledger fences stale topology and commits once or aborts",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-161",
+      "expected": "reject",
+      "description": "source actor middleware preserves admitted payload runtime type across scalar normalization",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-162",
+      "expected": "reject",
+      "description": "MoE host routing rejects forged out-of-range overflow policy and maintains total selected expert weights",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
