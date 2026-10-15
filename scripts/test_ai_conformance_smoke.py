@@ -52,6 +52,42 @@ class SmokeAdmission(unittest.TestCase):
                 "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
             )
 
+    def test_process_capture_is_bounded_and_executes_no_shell(self):
+        import sys
+        from pathlib import Path
+        cmd = [
+            sys.executable, "-c",
+            "import sys;sys.stdout.write('x'*70000);sys.stdout.flush()",
+        ]
+        result = smoke.run(cmd, 5, Path(__file__).resolve().parent)
+        self.assertTrue(result["output_truncated"])
+        self.assertFalse(result["timeout"])
+        self.assertLessEqual(len(result["stdout"].encode()), smoke.MAX_OUTPUT)
+        self.assertFalse(smoke.good(result))
+
+    def test_timeout_stops_launcher_and_descendants(self):
+        import sys
+        from pathlib import Path
+        # An inner child retains the inherited pipe writers if a launcher
+        # crashes or hangs. A process-group timeout must still terminate.
+        cmd = [
+            sys.executable, "-c",
+            "import subprocess,sys,time;"
+            "subprocess.Popen([sys.executable,'-c','import time;time.sleep(12)']);"
+            "time.sleep(12)",
+        ]
+        result = smoke.run(cmd, 0.25, Path(__file__).resolve().parent)
+        self.assertTrue(result["timeout"])
+        self.assertFalse(smoke.good(result))
+        self.assertLess(result["duration_ms"], 5000)
+
+    def test_missing_compiler_fails_closed(self):
+        from pathlib import Path
+        result = smoke.run(["/definitely/nonexistent/oreslangc", "input.ores"], 1, Path(__file__).resolve().parent)
+        self.assertIsNone(result["exit_code"])
+        self.assertFalse(smoke.good(result))
+        self.assertFalse(smoke.rejected(result))
+
 
 if __name__ == "__main__":
     unittest.main()
