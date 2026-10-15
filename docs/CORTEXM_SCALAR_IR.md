@@ -30,3 +30,37 @@ and recursion (including mutual recursion). Distinct overloads by name are
 not admitted to keep the embedded call graph unambiguous. These are coarse
 compiler resource controls, **not** a proof of a precise stack/flash upper
 bound; inspect Zephyr map/stack usage before claiming a memory budget.
+
+## Experimental fixed-size actor bootstrap
+
+A distinct, **bounded** `thumbv7m-none-eabi` admission variant permits up to eight
+literal-initialized scalar actor declarations with one zero-argument source
+`main` containing at most eight spawns, 32 literal `send` actions and matching
+`stop` actions. The compiler exports `oreslang_cortexm_bootstrap()` rather
+than a conflicting C `main`. Generated actor entrypoints use the native
+actor-field and source-bootstrap ABI, implemented by the embedded platform's
+fully static runtime. Actors have 1..8 scalar fields, up to 16 writes per
+handler, and no guest calls, suspension, heap ownership or arbitrary I/O.
+
+The first firmware milestone verifies two actor types with source-directed
+spawn/send/stop, bounded FIFO delivery and persistent private scalar state.
+It does **not** yet support actor-to-actor sends originating in handlers,
+reader/writer locks, structured messages, or live scheduler preemption.
+
+
+## Admission reader resource hardening (2026-10-14)
+
+Cortex-M source files are now consumed through a bounded 4 KiB streaming
+reader that rejects immediately when the cumulative input would exceed
+128 KiB. The cap is applied *before* constructing an arbitrarily large
+source string, not after a full-file allocation. File I/O errors continue
+to fail closed; ordinary host and WebAssembly input behavior is unchanged.
+
+The existing scalar suite checks the size boundary, and an additional
+multi-megabyte rejection case exercises the early cap. This does not
+independently prove the parser's peak memory or compilation WCET within
+128 KiB; deeper parser recursion and AST budgets remain separate work.
+
+The source actor bootstrap also rejects per-actor FIFO occupancy above
+16 before generating IR. The 16-message budget is backed by the Embedded
+runtime's static mailbox capacity, not dynamic buffering.
