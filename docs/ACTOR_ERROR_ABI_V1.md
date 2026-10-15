@@ -118,3 +118,22 @@ This remains a **host C++ data-structure contract only**, not LLVM guest Error
 construction, effects, scheduler integration or native actor restarts.
 No exact-head CMake/CTest result is available from the failing Actions jobs.
 
+
+
+## Bounded native suppressed-failure policy (October 14, 2026)
+
+The native host `ExceptionPolicy::Failure` now retains at most **16
+suppressed failure nodes** at a maximum depth of **8**, regardless of the
+number of failed cleanup actions or priority transitions. Each individual
+diagnostic retains its 1024-byte bound. Truncated metadata contributes to
+`suppressed_dropped()` via saturating counters; terminal failure priority
+is unchanged. This is a host-owned, value-only representation, not
+source-level LLVM guest exception lowering or a trace-disclosure API.
+
+The policy CTest adds a 4,096-cleanup stress sequence, checks total retained
+nodes and nesting, validates cancellation still takes precedence, and
+verifies counter arithmetic at the size_t overflow boundary. The companion
+negative parser test now demands a successful LLVM IR positive control and
+specific effect-rejection diagnostics, preventing an invalid executable or
+broken parser from reporting a false pass. **Neither test has yet completed
+in available CI.**
