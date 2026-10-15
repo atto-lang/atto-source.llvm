@@ -222,7 +222,8 @@ UNSAFE_PROPERTIES = frozenset((
 
 
 def check_manifest(manifest: object, *, min_tests: int = 250,
-                   required: tuple[str, ...] = CRITICAL_TESTS) -> int:
+                   required: tuple[str, ...] = CRITICAL_TESTS,
+                   build_dir: Path | None = None) -> int:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("tests"), list):
         raise ManifestFailure("CTest JSON must have a tests array")
     version = manifest.get("version")
@@ -330,6 +331,20 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                 raise ManifestFailure(f"critical CTest timeout is unsafe: {name}")
         # Validate actual CMake test executables and fixtures, not names alone.
         require_real_critical_command(name, command)
+        # During real CI, verify that critical native test executables and
+        # the source compiler are built in the inspected tree. A binary of
+        # the right basename in /tmp is not the reviewed CMake target.
+        if build_dir is not None:
+            binaries = [command[0]] if name in NATIVE_EXECUTABLES else []
+            if "--compiler" in command:
+                binaries.append(option_value(command, "--compiler", name))
+            for binary in binaries:
+                target = Path(binary)
+                if (not target.is_absolute()
+                        or not target.resolve(strict=False).is_relative_to(
+                            build_dir.resolve(strict=False))):
+                    raise ManifestFailure(
+                        f"critical CTest binary escapes configured build directory: {name}")
     return len(tests)
 
 
@@ -353,7 +368,7 @@ def main() -> int:
         document = json.loads(probe.stdout)
     except json.JSONDecodeError as exc:
         raise ManifestFailure("CTest did not provide valid JSON") from exc
-    count = check_manifest(document, min_tests=args.min_tests)
+    count = check_manifest(document, min_tests=args.min_tests, build_dir=build)
     print(f"CTEST_MANIFEST_GATE=PASS tests={count} critical={len(CRITICAL_TESTS)}")
     return 0
 
