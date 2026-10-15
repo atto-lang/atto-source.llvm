@@ -84,3 +84,44 @@ LLVM branch: `@ActorMiddleware` and `@SupervisorMiddleware` are rejected in nati
 **Required release proofs:** executable annotated unary/stream generic-mail and HTTP guest programs in both compilers; imported middleware ABI/version binding; linked graph of inherited middleware; proper `next` one-shot and cancellation before/after await; dynamic disconnect/timeout/retry/restart generation fences; falsified header/receipt attacks; UTF-8/CRLF/duplicate/header-budget tests; multiple-stream frame ordering and response ownership; AOT and hybrid; LLVM native CTest/sanitizer; exact private source CI. The shared `contracts/v1/actor-family-conformance.json` enumerates these as unverified targets.
 
 `ProxyActor` may carry the already-authenticated request context through an approved codec but cannot carry raw middleware continuations, actor state, response writers or supervisor receipts as untrusted wire fields. Remote claims must be independently verified by the receiving trusted supervisor.
+
+## Typed `next_val` vs procedural `next` (2026-10-14 extension)
+
+Do **not** spell a generic typed middleware response as `!void`. In Oreslang `!void` is a complement type, not a complete continuation or outcome protocol. A middleware method must instead declare the precise *actor reply type* `R`:
+
+```ores
+define class NormalizeOrders as
+    // Value hook: one invocation either continues, returns a typed reply,
+    // or rejects; the middleware does not own an HTTP response writer.
+    async next_val(MiddlewareContext req, MiddlewareResponseDraft res):
+            MiddlewareDecision<int> {
+        if req.invalid then
+            return MiddlewareDecision<int>.Reject(400, "invalid");
+        fi
+        return MiddlewareDecision<int>.Continue(req.clean());
+    }
+
+    // Around hook: selected for streaming actors, or for unary actors
+    // without next_val. The next capability is one-shot.
+    async next(MiddlewareContext req, MiddlewareResponseDraft res,
+               MiddlewareNext<int> next): MiddlewareOutcome<int> {
+        return await next.proceed(req, res);
+    }
+end
+```
+
+The above is **target Oreslang source syntax**, not executable guest code. The parser/validator recognizes the middleware method signatures on the Java feature branch but rejects activated decorators until the guest continuation backend is integrated.
+
+`MiddlewareDecision<R>` is the sum of:
+
+- `Continue(updatedRequest, responseDraft)`: continue with bounded, immutable application payload/metadata and an optional uncommitted response draft. The **runtime** calls the next stage exactly once; a `next_val` method never receives the continuation capability.
+- `Reply(value: R, responseDraft)`: short-circuit with one concrete typed `R`. The **runtime** validates ownership and encodes/sends it exactly once.
+- `Reject(error/status)`: terminate the unary request without invoking the actor handler.
+
+`MiddlewareOutcome<R>` is the completed typed `Reply<R> | Reject`, used by an around hook after it invokes `MiddlewareNext<R>` or short-circuits. For streaming actors, the procedural next hook does **not** change the `void` return type of `receive(...)`; it manages continuation/stream control in a request-scoped outcome rather than fabricating a per-message typed reply. A single middleware class may declare both hooks; select **one** according to the actor's effective role (for unary prefer `next_val`, falling back to `next`; for stream use `next`). The compiler rejects stream actors with value-only middleware.
+
+Supervisor stages share the conceptual signatures and may `Continue` or `Reject`. A supervisor value stage may **not** produce an application actor `Reply<R>` without a trusted actor reply authority; the current host reference executor explicitly rejects this. Supervisor policy binding remains privileged and cannot be installed by actor decorator.
+
+`MiddlewareResponseDraft` may specify bounded, validated status and headers (e.g. 201 and `Content-Type`), but is **never** a response writer, transport handle or committed HTTP exchange. In the host reference model, status 204/205/304 are forbidden for a typed body and framing headers cannot be set by middleware. The final HTTP reply codec and connection generation check belong to the trusted adapter. There is no automatic `Future<Future<R>>` nesting, no simultaneous `Reply<R>` and streaming write, and no empty/void `next_val` result.
+
+**Implementation in Java host reference:** `ActorMiddlewareValuePipeline<R>` has two independently selectable hook kinds (`ValueHook<R>` and `AroundHook<R>`), immutable `ResponseDraft`, typed `Continue/Reply/Reject`, supervisor/actor stage ordering, single-use `next`, cancellation checks, bounded metadata through `ActorMiddlewarePipeline.Envelope`, exact identity-fenced supervisor skip receipts, and downstream-drain failure fencing. It does not attach to real Oreslang `run`/`receive` or raw network sockets; guest declarations remain fail-closed and LLVM must not report parity.
