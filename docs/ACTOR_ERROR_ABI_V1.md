@@ -99,3 +99,22 @@ PR heads. Do not merge either PR on static headers or source admission alone.
 - **Unverified:** These additions have not passed an exact-head CTest build;
   LLVM guest exception lowering and scheduler integration remain unimplemented.
 
+## Supervisor inbox retirement and concurrent stress (October 14, 2026)
+
+The host-only native `ActorFailureControlInbox` is now explicitly
+retirable. Retirement is idempotent, serializes with `offer`/`try_pop`,
+clears unread value-only notices and increments the durable per-inbox drop
+counter for each orphaned notice. Later offers fail closed and count as
+dropped instead of reviving a supervisor.
+
+Added a new threaded CTest
+`native_actor_failure_control_concurrent_fifo_retirement`, registered with
+`Threads::Threads`. It exercises a single producer/consumer FIFO under
+concurrent offers and pops, plus a producer racing irreversible retirement
+with conservation of accepted/rejected/orphaned notices. The host-only
+effect-policy test covers idempotence and post-retirement rejection.
+
+This remains a **host C++ data-structure contract only**, not LLVM guest Error
+construction, effects, scheduler integration or native actor restarts.
+No exact-head CMake/CTest result is available from the failing Actions jobs.
+
