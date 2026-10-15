@@ -77,6 +77,19 @@ class SmokeAdmission(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "tracked checkout differs"):
                 smoke.git_checkout_sha(path)
 
+    def test_linked_binary_must_be_an_unsymlinked_regular_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            binary = folder / "app"
+            missing = folder / "missing"
+            alias = folder / "alias"
+            self.assertFalse(smoke.regular_native_binary(missing))
+            self.assertFalse(smoke.regular_native_binary(folder))
+            binary.write_bytes(b"native")
+            self.assertTrue(smoke.regular_native_binary(binary))
+            alias.symlink_to(binary)
+            self.assertFalse(smoke.regular_native_binary(alias))
+
     def test_native_artifact_digest_detects_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "native-bin"
