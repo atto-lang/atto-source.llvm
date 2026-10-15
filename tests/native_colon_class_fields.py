@@ -16,7 +16,7 @@ pub fnc main(): int {
 }
 """,
     "final-const-literal": """define class Foo as
-  int a: 13
+  pub int a: 13
   pub final const int b: 29
 end
 pub fnc main(): int {
@@ -45,6 +45,12 @@ pub fnc main(): int {
 """,
 }
 REJECTIONS = {
+    "final-const-constructor-param-reject": ("""define class Foo as
+  pub final const int a: input;
+  constructor(int input) { return; }
+end
+pub fnc main(): int { let Foo f = new Foo(42); return f.a; }
+""", "class field requires i64 literal initializer"),
     "same-line-field-without-semicolon": ("""define class Foo as
   pub int a: 5 int b: 9
 end
