@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace oreslang::runtime;
 
@@ -105,10 +106,13 @@ static int check_retirement_race() {
     constexpr int kAttempts = 512;
     std::atomic<int> attempted{0};
     std::thread producer([&] {
-        const auto notice = ActorFailureControlNotice::from_guest_effect(
-                ActorExceptionalEffect::Panic, "child", "parent");
         for (int i = 0; i < kAttempts; ++i) {
-            (void)inbox.offer(notice, notice.envelope().actor_id());
+            const auto child = "child-" + std::to_string(i);
+            const auto notice = ActorFailureControlNotice::from_guest_effect(
+                    ActorExceptionalEffect::Panic, child, "parent");
+            (void)inbox.register_direct_child(child);
+            (void)inbox.offer(notice, child);
+            (void)inbox.unregister_direct_child(child);
             attempted.fetch_add(1);
         }
     });
@@ -211,9 +215,43 @@ static int check_consumer_retirement_accounting() {
     return 0;
 }
 
+// Concurrent, same-generation terminal publications must linearize to one
+// accepted event. Rejected replays are counted independently of overflow.
+static int check_duplicate_terminal_race() {
+    ActorFailureControlInbox inbox("parent", 16);
+    if (!inbox.register_direct_child("child")) return 16;
+    constexpr int kWriters = 16;
+    std::atomic<bool> start{false};
+    std::atomic<int> accepted{0};
+    std::vector<std::thread> writers;
+    writers.reserve(kWriters);
+    for (int i = 0; i < kWriters; ++i) {
+        writers.emplace_back([&, i] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            const auto notice = ActorFailureControlNotice::from_guest_effect(
+                    i % 2 == 0 ? ActorExceptionalEffect::Raise
+                               : ActorExceptionalEffect::Panic,
+                    "child", "parent");
+            if (inbox.offer(notice, "child")) ++accepted;
+        });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& writer : writers) writer.join();
+    if (accepted.load() != 1 || inbox.pending() != 1
+            || inbox.duplicate_rejections() != kWriters - 1
+            || inbox.dropped() != 0) return 17;
+    if (!inbox.try_pop() || inbox.try_pop()) return 18;
+    const auto replay = ActorFailureControlNotice::from_guest_effect(
+            ActorExceptionalEffect::Panic, "child", "parent");
+    if (inbox.offer(replay, "child") || inbox.duplicate_rejections() != kWriters) return 19;
+    if (!inbox.unregister_direct_child("child")) return 20;
+    return 0;
+}
+
 int main() {
     if (int status = check_concurrent_fifo()) return status;
     if (int status = check_retirement_race()) return status;
     if (int status = check_supervisor_retirement_isolation()) return status;
-    return check_consumer_retirement_accounting();
+    if (int status = check_consumer_retirement_accounting()) return status;
+    return check_duplicate_terminal_race();
 }
