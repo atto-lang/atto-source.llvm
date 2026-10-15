@@ -1,0 +1,6 @@
+fnc main(): int {
+  val Option<int> value = Some(3);
+  return value.map<int>(|int x| -> {
+    return x + 1;
+  }).unwrap();
+}
