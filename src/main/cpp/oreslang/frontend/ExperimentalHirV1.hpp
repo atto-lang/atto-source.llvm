@@ -142,7 +142,8 @@ inline std::string hir_v1_expr_json(const Expression& expr,
     }
 }
 
-inline std::string emit_experimental_hir_v1(const Program& program) {
+inline std::string emit_experimental_hir_v1(const Program& program,
+                                            bool checked_i64_runtime = false) {
     if (!program.module.empty() || !program.classes.empty() ||
         !program.actors.empty() || !program.cooperative_loops.empty() ||
         program.functions.empty() || program.functions.size() > 32) {
@@ -183,7 +184,7 @@ inline std::string emit_experimental_hir_v1(const Program& program) {
             if (p) out += ',';
             out += "{\"name\":\"" + arg.name + "\",\"type\":\"i64\"}";
         }
-        (void)hir_v1_prove_checked_i64(*fn.result);
+        if (!checked_i64_runtime) (void)hir_v1_prove_checked_i64(*fn.result);
         // The shared HIR verifier applies this budget PER function,
         // not across all functions in the module.
         std::size_t nodes = 0;
