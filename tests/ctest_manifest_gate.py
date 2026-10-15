@@ -18,6 +18,24 @@ class ManifestFailure(RuntimeError):
     """CTest's advertised suite is not a sufficient release-test manifest."""
 
 
+VISIBILITY_NEGATIVE_FIXTURES = {
+    "reject_native_private_field_read": "class-private-read-reject.ores",
+    "reject_native_private_field_write": "class-private-write-reject.ores",
+    "reject_native_private_field_take": "class-private-take-reject.ores",
+    "reject_native_private_array_size": "class-private-array-size-reject.ores",
+    "reject_native_private_array_mutation": "class-private-array-mutation-reject.ores",
+    "reject_native_private_filled_commit": "class-private-filled-array-commit-reject.ores",
+}
+VISIBILITY_POSITIVE_FIXTURE = "class-public-field-read-native.ores"
+
+
+def option_value(command: list[str], option: str) -> str | None:
+    for position, argument in enumerate(command):
+        if argument == option:
+            return command[position + 1] if position + 1 < len(command) else None
+    return None
+
+
 CRITICAL_TESTS = (
     "native_contract_harness_optimize_failclosed",
     "native_contract_harness_python_O",
@@ -26,6 +44,8 @@ CRITICAL_TESTS = (
     "constant_main",
     "native_rt_while_loop_failclosed",
     "native_actor_owned_heap_contract",
+    *VISIBILITY_NEGATIVE_FIXTURES,
+    "native_public_class_field_read",
 )
 
 TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
@@ -77,6 +97,21 @@ def check_manifest(manifest: object, *, min_tests: int = 120,
                 raise ManifestFailure("source object CTest does not invoke contract.py")
             if not any(arg.endswith("constant-main.ores") for arg in command):
                 raise ManifestFailure("source object CTest does not compile positive guest source")
+        if name in VISIBILITY_NEGATIVE_FIXTURES:
+            expected_fixture = VISIBILITY_NEGATIVE_FIXTURES[name]
+            if (not any(arg.endswith("contract.py") for arg in command)
+                    or not (option_value(command, "--fixture") or "").endswith(expected_fixture)
+                    or option_value(command, "--diagnostic") != "private class field"):
+                raise ManifestFailure(
+                    f"native private-field negative gate changed its command: {name}")
+        if name == "native_public_class_field_read":
+            if (not any(arg.endswith("contract.py") for arg in command)
+                    or not (option_value(command, "--fixture") or "").endswith(VISIBILITY_POSITIVE_FIXTURE)
+                    or option_value(command, "--run") != "42"
+                    or "--no-native-abi" not in command
+                    or not option_value(command, "--clang")):
+                raise ManifestFailure(
+                    "native public-field positive execution gate changed its command")
         properties = entry.get("properties", [])
         if not isinstance(properties, list):
             raise ManifestFailure(f"CTest has invalid properties: {name}")
