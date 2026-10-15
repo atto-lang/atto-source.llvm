@@ -33,7 +33,41 @@ static_assert(!admits_guest_failure(
 static_assert(!admits_guest_failure(
         GuestFailureBoundary::ExplicitCatch, GuestFailureOrigin::HostFatal));
 
+static std::size_t retained_suppressed(
+        const Failure& failure, std::size_t depth = 0) {
+    if (depth > max_control_suppressed_depth) {
+        throw std::logic_error("native suppressed failure depth unbounded");
+    }
+    std::size_t count = 0;
+    for (const auto& child : failure.suppressed()) {
+        ++count;
+        count += retained_suppressed(child, depth + 1);
+    }
+    return count;
+}
+
 int main() {
+    // Failures are host metadata and must not accumulate unbounded suppression
+    // under thousands of cleanup failures or repeated priority changes.
+    auto bounded = Failure::make(FailureKind::Throw, "original guest failure");
+    for (int i = 0; i < 4096; ++i) {
+        bounded = combine_failure(
+                std::move(bounded),
+                Failure::make(FailureKind::Throw, "cleanup failure"));
+        if (retained_suppressed(bounded) > max_control_suppressed_nodes) return 48;
+    }
+    if (bounded.kind() != FailureKind::Throw) return 49;
+    if (bounded.suppressed_dropped() < 4096 - max_control_suppressed_nodes) return 50;
+
+    bounded = combine_failure(
+            std::move(bounded),
+            Failure::make(FailureKind::Cancelled, "scheduler cancellation"));
+    if (bounded.kind() != FailureKind::Cancelled) return 51;
+    if (retained_suppressed(bounded) > max_control_suppressed_nodes) return 52;
+    if (bounded.suppressed_dropped() < 4096 - max_control_suppressed_nodes) return 53;
+    if (bounded.suppressed().size() != 1
+            || bounded.suppressed().front().kind() != FailureKind::Throw) return 54;
+
     // Higher-priority supervisor failures must win over ordinary throw.
     const auto ordinary = Failure::make(FailureKind::Throw, "guest throw");
     const auto terminal = Failure::make(FailureKind::Panic, "supervisor escalation");
