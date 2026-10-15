@@ -241,6 +241,244 @@
       "description": "ProxyActor transports typed forward/backward messages across an admitted IPC/TCP/HTTP link with bounded byte/item credits, peer generation fencing, cancellation and explicit disconnect failure",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-033",
+      "expected": "accept_target",
+      "description": "parse define unary actor with one run(T): R",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-034",
+      "expected": "accept_target",
+      "description": "parse define stream actor with one receive(ActorMail<T>): void",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-035",
+      "expected": "accept_target",
+      "description": "normalize plain define actor receive as STREAM with ACTOR_MAIL transport",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-036",
+      "expected": "accept_target",
+      "description": "legacy plain define actor with sole run(T): R preserves inferred UNARY in migration",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-037",
+      "expected": "accept_target",
+      "description": "normalize define http actor to STREAM and HTTP without auto listener spawn",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-038",
+      "expected": "accept_target",
+      "description": "normalize define tcp actor to STREAM and TCP without auto listener spawn",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-039",
+      "expected": "accept_target",
+      "description": "normalize define websocket actor to STREAM and WEBSOCKET without auto listener spawn",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-040",
+      "expected": "accept_target",
+      "description": "normalize define unary http actor to UNARY and HTTP with run(HttpMessage): R",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-041",
+      "expected": "reject",
+      "description": "explicit unary actor declaring receive(...) instead of run(...)",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-042",
+      "expected": "reject",
+      "description": "explicit stream actor declaring run(...) or nonvoid receive(...)",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-043",
+      "expected": "reject",
+      "description": "actor with run and receive including inherited mixed handler modes",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-044",
+      "expected": "reject",
+      "description": "actor overloads run(T) with run(ActorMail<T>)",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-045",
+      "expected": "reject",
+      "description": "unary run has void return or is public static generic or called directly",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-046",
+      "expected": "reject",
+      "description": "stream receive has nonvoid return or is public static or called directly",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-047",
+      "expected": "reject",
+      "description": "unary ActorRef.send or stream ActorRef.request admitted before any capacity/copy",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-048",
+      "expected": "runtime_target",
+      "description": "unary ActorRef.request returns exactly one owned typed Future<R> reply",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-049",
+      "expected": "runtime_target",
+      "description": "unary async run preserves one terminal reply across await cancellation and carrier migration",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-050",
+      "expected": "runtime_target",
+      "description": "stream actor emits zero multiple or one bounded outputs without receive-return causing EOF",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-051",
+      "expected": "reject",
+      "description": "network actor generic spawn without bound listener/session transport adapter",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-052",
+      "expected": "reject",
+      "description": "unary tcp actor without declared framing and correlation protocol",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-053",
+      "expected": "reject",
+      "description": "unary websocket actor without declared RPC message correlation protocol",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-054",
+      "expected": "runtime_target",
+      "description": "HTTP stream receives HttpMessage and response writer finishes exactly once with backpressure",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-055",
+      "expected": "runtime_target",
+      "description": "unary HTTP int return generates exactly one JSON reply with status 200 and body/content type",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-056",
+      "expected": "reject",
+      "description": "unary HTTP handler obtains streaming writer or returns value after manual committed response",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-057",
+      "expected": "runtime_target",
+      "description": "unary HTTP failed request maps to one HTTP error or stream abort without duplicate status",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-058",
+      "expected": "reject",
+      "description": "HTTP body_to_json type unbounded invalid or double-consumed body cannot silently succeed",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-059",
+      "expected": "reject",
+      "description": "HttpMessage TCP and websocket handles leaked through state message return or borrowed alias",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-060",
+      "expected": "runtime_target",
+      "description": "TCP streaming adapter retains event framing ownership EOF and byte credit bounds",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-061",
+      "expected": "runtime_target",
+      "description": "WebSocket streaming adapter handles fragmentation control frames UTF-8 close correctly",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-062",
+      "expected": "runtime_target",
+      "description": "request concurrency/message concurrency bounded independently under one physical actor lane",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-063",
+      "expected": "reject",
+      "description": "actor state loan remains live across unary async suspension/select or transport writer await",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-064",
+      "expected": "runtime_target",
+      "description": "ProxyActor unary versus stream protocol agreement rejects mismatched mode and forged reply",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-065",
+      "expected": "runtime_target",
+      "description": "HTTP disconnect and deadline race retires exactly one exchange and reply slot",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-066",
+      "expected": "runtime_target",
+      "description": "Java/Graal and LLVM compiled source fixtures return identical unary/stream network outcomes",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
