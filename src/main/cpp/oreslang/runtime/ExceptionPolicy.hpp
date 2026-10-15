@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -54,6 +55,16 @@ constexpr bool admits_guest_failure(
 }
 
 constexpr std::size_t max_control_diagnostic_bytes = 1024;
+// Cleanup can fail arbitrarily often, including in recursive actor teardown.
+// Suppressed metadata must be bounded independently of diagnostic bytes.
+constexpr std::size_t max_control_suppressed_nodes = 16;
+constexpr std::size_t max_control_suppressed_depth = 8;
+
+constexpr std::size_t saturated_control_count(
+        std::size_t a, std::size_t b) noexcept {
+    return b > std::numeric_limits<std::size_t>::max() - a
+            ? std::numeric_limits<std::size_t>::max() : a + b;
+}
 
 // Immutable-on-delivery, value-only metadata for a native supervisor.
 // Invalid UTF-8 bytes become '?' rather than crossing actor boundaries.
@@ -116,6 +127,15 @@ public:
     FailureKind kind() const noexcept { return kind_; }
     const std::string& diagnostic() const noexcept { return diagnostic_; }
     const std::vector<Failure>& suppressed() const noexcept { return suppressed_; }
+    // Includes dropped metadata in retained subtrees, not just this node.
+    // Recursion is safe: combine_failure enforces a maximum nesting depth.
+    std::size_t suppressed_dropped() const noexcept {
+        std::size_t total = suppressed_dropped_;
+        for (const auto& child : suppressed_) {
+            total = saturated_control_count(total, child.suppressed_dropped());
+        }
+        return total;
+    }
 
 private:
     Failure(FailureKind kind, std::string diagnostic)
@@ -124,6 +144,42 @@ private:
     FailureKind kind_;
     std::string diagnostic_;
     std::vector<Failure> suppressed_;
+    std::size_t suppressed_dropped_ = 0;
+
+    // Called only on combined trees constructed by Failure::make/combination,
+    // so every input graph was already bounded. Flattening / pruning is
+    // independent of catchability, runtime actor data and error diagnostics.
+    static std::size_t subtree_size(const Failure& node) noexcept {
+        std::size_t count = saturated_control_count(1, node.suppressed_dropped_);
+        for (const auto& child : node.suppressed_) {
+            count = saturated_control_count(count, subtree_size(child));
+        }
+        return count;
+    }
+
+    static void trim_suppression(Failure& node, std::size_t depth,
+                                  std::size_t& budget,
+                                  std::size_t& removed) {
+        auto it = node.suppressed_.begin();
+        if (depth < max_control_suppressed_depth) {
+            for (; it != node.suppressed_.end() && budget != 0; ++it) {
+                --budget;
+                trim_suppression(*it, depth + 1, budget, removed);
+            }
+        }
+        for (auto ignored = it; ignored != node.suppressed_.end(); ++ignored) {
+            removed = saturated_control_count(removed, subtree_size(*ignored));
+        }
+        node.suppressed_.erase(it, node.suppressed_.end());
+    }
+
+    static void enforce_suppression_budget(Failure& root) {
+        std::size_t budget = max_control_suppressed_nodes;
+        std::size_t removed = 0;
+        trim_suppression(root, 0, budget, removed);
+        root.suppressed_dropped_ =
+                saturated_control_count(root.suppressed_dropped_, removed);
+    }
 
     friend Failure combine_failure(Failure pending, Failure cleanup);
 };
@@ -134,9 +190,11 @@ private:
 inline Failure combine_failure(Failure pending, Failure cleanup) {
     if (failure_priority(cleanup.kind()) > failure_priority(pending.kind())) {
         cleanup.suppressed_.push_back(std::move(pending));
+        Failure::enforce_suppression_budget(cleanup);
         return cleanup;
     }
     pending.suppressed_.push_back(std::move(cleanup));
+    Failure::enforce_suppression_budget(pending);
     return pending;
 }
 
