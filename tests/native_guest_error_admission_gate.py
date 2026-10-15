@@ -23,14 +23,28 @@ cases = [
      "pub fnc main(): int { return 0; }\n",
      "Error is a compiler-owned guest root"),
     ("pub fnc main(): int { throw 1; return 0; }\n",
-     "not supported"),
+     "native exception/control effect unsupported"),
     ("pub fnc main(): int { raise 1; return 0; }\n",
-     "not supported"),
+     "native exception/control effect unsupported"),
     ("pub fnc main(): int { panic 1; return 0; }\n",
-     "not supported"),
+     "native exception/control effect unsupported"),
 ]
 with tempfile.TemporaryDirectory(prefix="ores-native-error-gate-") as tmp:
     source = Path(tmp) / "main.ores"
+
+    # A broken compiler invocation must never make every negative-admission
+    # test appear green. First prove the exact executable emits valid IR.
+    source.write_text("pub fnc main(): int { return 42; }\n", encoding="utf-8")
+    healthy = subprocess.run(
+        [args.compiler, str(source)], text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env, timeout=20)
+    assert healthy.returncode == 0, (
+        f"native compiler positive control failed: {healthy.stderr!r}")
+    assert "define " in healthy.stdout and "ret i64 42" in healthy.stdout, (
+        f"native compiler did not emit expected scalar LLVM IR: "
+        f"{healthy.stdout[:1200]!r}")
+
     for text, diagnostic in cases:
         source.write_text(text, encoding="utf-8")
         out = subprocess.run(
@@ -38,10 +52,7 @@ with tempfile.TemporaryDirectory(prefix="ores-native-error-gate-") as tmp:
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, timeout=20)
         assert out.returncode != 0, f"unexpected admission of native source: {text}"
-        if diagnostic not in out.stderr:
-            # Existing unsupported exception-effect diagnostics vary by
-            # exact parser path; require semantic rejection, not spelling.
-            if diagnostic != "not supported":
-                raise AssertionError(
-                    f"expected {diagnostic!r}, got {out.stderr!r}")
-print("LLVM guest Error/typed effects remain fail-closed")
+        assert diagnostic in out.stderr, (
+            f"expected native parser diagnostic {diagnostic!r}, "
+            f"got stderr={out.stderr!r}, stdout={out.stdout!r}")
+print("LLVM guest Error/typed effects remain fail-closed after positive native IR control")
