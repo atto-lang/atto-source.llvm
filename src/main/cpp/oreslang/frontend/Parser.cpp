@@ -167,6 +167,14 @@ bool native_pure_scalar_tree(const Expression& expr) {
     return false;
 }
 
+struct NativeCallSignature {
+    std::vector<std::string> parameters;
+    std::vector<GenericParameter> generics;
+    std::vector<std::string> parameter_generic_types;
+};
+using NativeSignatures = std::unordered_map<
+    std::string, std::unordered_map<std::size_t, NativeCallSignature>>;
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -457,6 +465,33 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = identifier();
+        if (accept("<")) {
+            if (accept(">")) fail("native generic declaration cannot be empty");
+            do {
+                GenericParameter slot;
+                slot.name = identifier();
+                if (slot.name == "_" || slot.name.rfind("$", 0) == 0)
+                    fail("invalid generic parameter name");
+                for (const auto& prior : value.generic_parameters)
+                    if (prior.name == slot.name)
+                        fail("duplicate generic parameter '" + slot.name + "'");
+                if (accept("=")) {
+                    if (accept("int")) slot.default_type = "int";
+                    else {
+                        const std::string dependency = identifier();
+                        const bool earlier = std::any_of(value.generic_parameters.begin(),
+                            value.generic_parameters.end(),
+                            [&](const GenericParameter& p) { return p.name == dependency; });
+                        if (!earlier) fail("forward or self-referential generic default");
+                        slot.default_type = dependency;
+                    }
+                }
+                value.generic_parameters.push_back(std::move(slot));
+            } while (accept(","));
+            require(">");
+        }
+        if (value.name == "main" && !value.generic_parameters.empty())
+            fail("native entrypoint main cannot be generic");
         require("(");
         if (!accept(")")) {
             do {
@@ -465,7 +500,14 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (!accept("int")) parameter.class_name = identifier();
+                if (!accept("int")) {
+                    const std::string type = identifier();
+                    const bool generic = std::any_of(value.generic_parameters.begin(),
+                        value.generic_parameters.end(),
+                        [&](const GenericParameter& p) { return p.name == type; });
+                    if (generic) parameter.generic_type = type;
+                    else parameter.class_name = type;
+                }
                 parameter.name = identifier();
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
@@ -473,7 +515,13 @@ private:
         }
         require(":");
         value.returns_void = accept("void");
-        if (!value.returns_void) require("int");
+        if (!value.returns_void && !accept("int")) {
+            const std::string type = identifier();
+            const bool generic = std::any_of(value.generic_parameters.begin(),
+                value.generic_parameters.end(),
+                [&](const GenericParameter& p) { return p.name == type; });
+            if (!generic) fail("native return type requires int or scalar generic slot");
+        }
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -1122,6 +1170,32 @@ private:
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
+        if (accept("<")) {
+            expr->type_arguments_present = true;
+            if (!accept(">")) {
+                bool seen_named = false;
+                do {
+                    GenericTypeArgument argument;
+                    if (token_.kind == Kind::Identifier && token_.text != "int") {
+                        Lexer lookahead = lexer_;
+                        if (lookahead.next().text == "=") {
+                            argument.name = identifier();
+                            require("=");
+                            seen_named = true;
+                        }
+                    }
+                    if (argument.name.empty() && seen_named)
+                        fail("positional generic argument after named argument");
+                    if (accept("_")) argument.infer = true;
+                    else if (accept("int")) argument.type = "int";
+                    else fail("native scalar generic type requires int or bare '_' (non-scalar generics unsupported)");
+                    expr->type_arguments.push_back(std::move(argument));
+                } while (accept(","));
+                require(">");
+            }
+            if (token_.text != "(")
+                fail("generic type arguments require a call");
+        }
         if (accept("(")) {
             expr->kind = Expression::Kind::Call;
             bool named_seen = false;
@@ -1237,7 +1311,7 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>>& functions) {
+                                    const NativeSignatures& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1265,7 +1339,55 @@ private:
                 if (!expr.argument_names.empty() &&
                     expr.argument_names.size() != expr.arguments.size())
                     throw std::runtime_error("invalid named call argument layout");
-                const auto& formals = found->second.at(expr.arguments.size());
+                const auto& signature = found->second.at(expr.arguments.size());
+                const auto& formals = signature.parameters;
+                if (expr.type_arguments_present && signature.generics.empty())
+                    throw std::runtime_error("call-site type arguments require generic function");
+                if (!signature.generics.empty()) {
+                    std::unordered_set<std::string> inferred;
+                    std::unordered_set<std::string> assigned;
+                    std::unordered_set<std::string> holes;
+                    std::size_t positional_type = 0;
+                    bool saw_named_type = false;
+                    if (expr.type_arguments.size() > signature.generics.size())
+                        throw std::runtime_error("too many generic type arguments");
+                    for (const auto& arg : expr.type_arguments) {
+                        std::size_t slot = positional_type;
+                        if (!arg.name.empty()) {
+                            saw_named_type = true;
+                            auto it = std::find_if(signature.generics.begin(), signature.generics.end(),
+                                [&](const GenericParameter& candidate) { return candidate.name == arg.name; });
+                            if (it == signature.generics.end())
+                                throw std::runtime_error("unknown named generic argument '" + arg.name + "'");
+                            slot = static_cast<std::size_t>(it - signature.generics.begin());
+                        } else {
+                            if (saw_named_type)
+                                throw std::runtime_error("positional generic argument after named argument");
+                            ++positional_type;
+                        }
+                        const std::string& name = signature.generics.at(slot).name;
+                        if (!assigned.insert(name).second)
+                            throw std::runtime_error("duplicate generic argument '" + name + "'");
+                        if (arg.infer) holes.insert(name);
+                        else if (arg.type == "int") inferred.insert(name);
+                        else throw std::runtime_error("unsupported native generic type specialization");
+                    }
+                    // Every native scalar value argument is i64. Only slots that
+                    // actually appear in a scalar formal may be inferred.
+                    for (const auto& type : signature.parameter_generic_types)
+                        if (!type.empty()) inferred.insert(type);
+                    for (const auto& slot : signature.generics) {
+                        if (inferred.count(slot.name)) continue;
+                        if (!holes.count(slot.name) && !slot.default_type.empty()) {
+                            if (slot.default_type == "int" || inferred.count(slot.default_type)) {
+                                inferred.insert(slot.name);
+                                continue;
+                            }
+                            throw std::runtime_error("cannot resolve dependent default for generic '" + slot.name + "'");
+                        }
+                        throw std::runtime_error("cannot infer generic parameter '" + slot.name + "'");
+                    }
+                }
                 std::vector<bool> bound(formals.size(), false);
                 bool saw_named = false;
                 std::size_t positional = 0;
@@ -1376,7 +1498,7 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
-        std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>> functions;
+        NativeSignatures functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
             // Compiler-owned ABI imports and generated exports may be
@@ -1408,9 +1530,13 @@ private:
             // Parameter types, borrow modes and returns cannot select a slot.
             if (fn.name == "main" && functions.count("main"))
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
-            std::vector<std::string> labels;
-            for (const auto& param : fn.parameters) labels.push_back(param.name);
-            if (!functions[fn.name].emplace(fn.parameters.size(), std::move(labels)).second)
+            NativeCallSignature signature;
+            signature.generics = fn.generic_parameters;
+            for (const auto& param : fn.parameters) {
+                signature.parameters.push_back(param.name);
+                signature.parameter_generic_types.push_back(param.generic_type);
+            }
+            if (!functions[fn.name].emplace(fn.parameters.size(), std::move(signature)).second)
                 throw std::runtime_error("function '" + fn.name + "' already has arity "
                     + std::to_string(fn.parameters.size()) +
                     "; parameter and return types do not select overloads at byte " +
