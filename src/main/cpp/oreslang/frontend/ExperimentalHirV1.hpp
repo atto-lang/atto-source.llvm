@@ -81,7 +81,6 @@ inline std::string emit_experimental_hir_v1(const Program& program) {
               [](const Function* a, const Function* b) { return a->name < b->name; });
 
     std::unordered_set<std::string> declared;
-    std::size_t nodes = 0;
     std::string out = "{\"ir_family\":\"ores-hir\",\"schema_version\":\"1.0.0-experimental\","
                       "\"module_id\":\"source\",\"required_features\":"
                       "[\"bool.v1\",\"checked-i64.v1\",\"control-flow.v1\",\"functions.v1\"],"
@@ -110,6 +109,9 @@ inline std::string emit_experimental_hir_v1(const Program& program) {
             if (p) out += ',';
             out += "{\"name\":\"" + arg.name + "\",\"type\":\"i64\"}";
         }
+        // The shared HIR verifier applies this budget PER function,
+        // not across all functions in the module.
+        std::size_t nodes = 0;
         out += "],\"result_type\":\"i64\",\"body\":"
             + hir_v1_expr_json(*fn.result, 0, nodes) + "}";
     }
