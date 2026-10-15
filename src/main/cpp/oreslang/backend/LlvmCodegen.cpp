@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/CheckedI64Admission.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
@@ -325,13 +326,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // for host scalar lowering. The special scalar-loop emitter below returns
     // before construction of the checked module, so it MUST NOT be allowed to
     // silently bypass overflow detection even when invoked outside main.cpp.
-    if (experimental_checked_i64 &&
-        (wasm32_target || cortex_m_target || !source.classes.empty() ||
-         !source.actors.empty() || !source.cooperative_loops.empty() ||
-         std::any_of(source.functions.begin(), source.functions.end(),
-                     [](const Function& fn) { return fn.scalar_while != nullptr; }))) {
-        throw std::runtime_error(
-            "checked-i64-v1 requires host scalar lowering; unsupported owner or loop");
+    if (experimental_checked_i64) {
+        if (wasm32_target || cortex_m_target)
+            throw std::runtime_error("checked-i64-v1 requires the host target");
+        verify_checked_i64_host_profile(source);
     }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
