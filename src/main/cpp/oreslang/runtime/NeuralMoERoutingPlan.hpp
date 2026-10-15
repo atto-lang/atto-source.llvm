@@ -62,6 +62,8 @@ public:
             throw std::invalid_argument("invalid MoE expert or top-k configuration");
         if (per_expert_capacity == 0 || per_expert_capacity > MAX_TOKENS)
             throw std::invalid_argument("invalid per-expert token capacity");
+        if (policy != OverflowPolicy::reject && policy != OverflowPolicy::drop_token)
+            throw std::invalid_argument("invalid MoE overflow policy");
 
         Plan result{{}, {}, std::vector<std::size_t>(expert_count, 0),
                     top_k, per_expert_capacity};
