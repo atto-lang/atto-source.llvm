@@ -8,3 +8,5 @@ The native source compiler has narrower `Result`, `Option`, callback, actor and 
 `tests/elm_composition_admission.py` checks one known-good native integer program and four **currently unsupported** real Oreslang sources. A rejection must return a diagnostic and zero IR. When native composition is implemented, replace each rejection with a positive typed source->IR->binary execution test plus negative shape, ownership, callback-effect and cancellation tests.
 
 Native lowering later requires tagged payload ownership, exactly-once active-variant destruction, short-circuit callback counts, no borrow/actor escape, safe continuation lifetimes, bounded channel demand and distinct cancellation/complete/failure outcomes. Host-only C++ Option/Result emulations are not guest parity. No general `Monad<F<_>>` typeclass in this phase.
+
+Additional negative admission fixtures cover `Stream.filter_map` and illegal implicit `Channel<T>` to `Observable<T>` conversion. Both are unsupported in native guest code; future admission needs explicit backpressure/subscription and ownership proofs.
