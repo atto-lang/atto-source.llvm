@@ -682,6 +682,69 @@ int main() {
         pipe.close();
     }
 
+    // A receives a zero-buffer handoff, B fails an allocated enqueue,
+    // and C still accepts. All receipts must be stable and independently
+    // resolved, including the failure in the middle.
+    {
+        const std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Payload", "producer"},
+            {"Worker", PipeRole::writable, "Payload", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Payload", "", "worker-b"},
+            {"Worker", PipeRole::writable, "Payload", "", "worker-c"}
+        };
+        const std::vector<PipeConnection> links = {
+            {"producer", "worker-a", "Payload"},
+            {"producer", "worker-b", "Payload"},
+            {"producer", "worker-c", "Payload"}
+        };
+        NativeActorPipeTransport pipe(
+            registry, supervisor, stages, links, 2, 4, 16, 2);
+        const auto waiting = pipe.read_async(0);
+        check(pipe.pending_reader_count() == 1,
+              "fanout OOM precondition: direct reader not admitted");
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto report = pipe.write_all_report_async("producer", "abc");
+        check(report.size() == 3 &&
+              report[0].target == "worker-a" &&
+              report[1].target == "worker-b" &&
+              report[2].target == "worker-c",
+              "middle-OOM fanout lost stable target-labelled receipts");
+        report[0].admission.get();
+        bool middle_oom = false;
+        try { report[1].admission.get(); }
+        catch (const std::bad_alloc&) { middle_oom = true; }
+        check(middle_oom, "middle allocation fault lost its failure receipt");
+        report[2].admission.get();
+        check(waiting.get() == "abc" && pipe.read_async(2).get() == "abc",
+              "middle OOM lost direct handoff or later healthy delivery");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0 &&
+              pipe.pending_reader_count() == 0,
+              "middle-OOM fanout leaked graph or reader credits");
+        pipe.close();
+    }
+
+    // Even the compatibility return-vector API must preserve both the
+    // failed first slot and the successful second slot after allocation OOM.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 16, 2);
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto futures = pipe.write_all_async("Producer", "compat");
+        check(futures.size() == 2,
+              "legacy fanout allocation fault truncated result slots");
+        bool first_oom = false;
+        try { futures[0].get(); }
+        catch (const std::bad_alloc&) { first_oom = true; }
+        check(first_oom, "legacy fanout did not surface first-branch OOM");
+        futures[1].get();
+        check(pipe.read_async(1).get() == "compat",
+              "legacy fanout lost healthy second branch after first OOM");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "legacy fanout allocation fault leaked aggregate credit");
+        pipe.close();
+    }
     // Buffered insertion can fail after credit reservation. The queue and
     // pending-writer paths must both roll back graph bytes/message credits,
     // and a subsequent write must use the same mailbox successfully.
