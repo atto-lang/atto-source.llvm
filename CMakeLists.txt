@@ -1892,3 +1892,20 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only fixed-size, lock-free physical turn credits. This does NOT enable
+# concurrent source actors or relax the existing NativeExecutionAuthority.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-turn-credits-test
+        tests/native_actor_turn_credits_test.cpp)
+    target_include_directories(oreslang-native-actor-turn-credits-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-turn-credits-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-turn-credits-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_physical_turn_credit_host_only
+        COMMAND oreslang-native-actor-turn-credits-test)
+    set_tests_properties(native_actor_physical_turn_credit_host_only
+        PROPERTIES TIMEOUT 25)
+endif()
