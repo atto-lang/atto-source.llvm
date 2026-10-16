@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
@@ -103,8 +104,11 @@ public:
     }
     SharedDomainArena(const SharedDomainArena&) = delete;
     SharedDomainArena& operator=(const SharedDomainArena&) = delete;
-    ~SharedDomainArena() {
-        // The supervisor must establish quiescence before object destruction.
+    ~SharedDomainArena() noexcept {
+        // Destruction requires completed CONTROL retirement and no live
+        // actor lease. Never scrub storage beneath a concurrent carrier.
+        std::unique_lock<std::shared_mutex> lock(mutex_, std::try_to_lock);
+        if (!lock.owns_lock() || !retired_) std::terminate();
         for (auto& s : slots_) scrub(s.data);
     }
 
