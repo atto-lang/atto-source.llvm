@@ -6,12 +6,34 @@ function; it does not claim actor cleanup, arbitrary call graphs, or ordinary
 Oreslang function overflow parity. No Oreslang repository source is exported.
 """
 import argparse
+from itertools import product
 import pathlib
 import re
 import subprocess
 import tempfile
 
 SYMBOL = "__oreslang_checked_scalar_v1"
+LO = -(1 << 63)
+HI = (1 << 63) - 1
+BOUNDS = (LO, LO + 1, -3037000500, -2, -1, 0, 1, 2, 3037000500, HI - 1, HI)
+
+
+def c_i64(value):
+    if value == LO:
+        return "INT64_MIN"
+    if value == HI:
+        return "INT64_MAX"
+    return "INT64_C(" + str(value) + ")"
+
+
+def differential_cases(op):
+    # Deterministic cross-sign runtime parameter sweep. Every intermediate
+    # value must fit signed i64, not merely the final OS exit status.
+    for a, b in product(BOUNDS, repeat=2):
+        result = op(a, b)
+        valid = LO <= result <= HI
+        yield (c_i64(a), c_i64(b), 0 if valid else 1,
+               c_i64(result) if valid else None)
 
 
 def execute(argv, *, input=None, timeout=30):
@@ -59,14 +81,14 @@ def run_case(compiler, clang, folder, name, expr, count, assertions):
         code += [
             "  int64_t out%d = INT64_C(987654);" % index,
             "  int32_t status%d = %s(%s&out%d);" % (index, SYMBOL, args, index),
-            "  if (status%d != %d) return %d;" % (index, expected_status, index + 1),
+            "  if (status%d != %d) { fputs(\"status mismatch\\n\", stderr); return 1; }" % (index, expected_status),
         ]
         if expected_status == 0:
-            code.append("  if (out%d != %s) return %d;" %
-                        (index, expected_value, index + 40))
+            code.append("  if (out%d != %s) { fputs(\"value mismatch\\n\", stderr); return 1; }" %
+                        (index, expected_value))
         else:
-            code.append("  if (out%d != INT64_C(987654)) return %d;" %
-                        (index, index + 60))
+            code.append("  if (out%d != INT64_C(987654)) { fputs(\"output mutated on failure\\n\", stderr); return 1; }" %
+                        index)
     null_args = ",".join(["INT64_C(1)"] * count) + ("," if count else "")
     code.append("  if (%s(%s0) != 2) return 90;" % (SYMBOL, null_args))
     code += ['  puts("CHECKED_SCALAR_' + name.upper() + '=PASS");',
@@ -113,8 +135,15 @@ def main():
                 ("INT64_MAX", "INT64_C(1)", 1, None),
                 ("INT64_MAX", "INT64_C(-1)", 1, None)]),
         ]
-        for args in suites:
-            run_case(compiler, clang, folder, *args)
+        runtime_cases = 0
+        operations = {"add": lambda a, b: a + b,
+                      "subtract": lambda a, b: a - b,
+                      "multiply": lambda a, b: a * b}
+        for name, expr, count, assertions in suites:
+            if name in operations:
+                assertions = assertions + list(differential_cases(operations[name]))
+            runtime_cases += len(assertions)
+            run_case(compiler, clang, folder, name, expr, count, assertions)
         for name, source in [
             ("unsupported-locals", "fnc checked(int a):int{val x:int=a;return x;}"),
             ("unsupported-calls", "fnc checked(int a):int{return other(a);}"),
@@ -126,7 +155,8 @@ def main():
                                capture_output=True, text=True, timeout=15)
             if p.returncode != 1 or not p.stderr.startswith("oreslang-llvmc:"):
                 raise AssertionError(name + ": unsupported program not explicitly rejected")
-    print("NATIVE_CHECKED_SCALAR_SUITES=5 NEGATIVE=3 ABI_STATUS=0,1,2")
+    print("NATIVE_CHECKED_SCALAR_SUITES=5 RUNTIME_CASES=" + str(runtime_cases) +
+          " NEGATIVE=3 ABI_STATUS=0,1,2")
 
 
 if __name__ == "__main__":
