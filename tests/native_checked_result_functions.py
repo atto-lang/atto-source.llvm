@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Real Oreslang -> LLVM IR -> Clang checked-result ABI executable test.
+
+The opt-in pure value-only ABI is i32 __oreslang_checked_v2_NAME_ARITY(
+    i64 arguments..., i64* out).
+0 = success and one committed output; 1 = arithmetic overflow with untouched
+output; 2 = null output pointer. Nested failures do not trap or publish values.
+This is NOT actor/owner cleanup evidence or an approved cross-org mirror.
+"""
+import argparse
+from itertools import product
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+LO, HI = -(1 << 63), (1 << 63) - 1
+BOUNDS = (LO, LO + 1, -3037000500, -2, -1, 0, 1, 2, 3037000500, HI - 1, HI)
+SOURCE = """
+fnc add(int a,int b):int{return a+b;}
+fnc sub(int a,int b):int{return a-b;}
+fnc mul(int a,int b):int{return a*b;}
+fnc neg(int a):int{return -a;}
+fnc inc(int a):int{return a+1;}
+fnc twice(int a):int{return inc(inc(a));}
+fnc combine(int a,int b):int{return a+b;}
+fnc nested(int a,int b):int{return combine(inc(a),inc(b));}
+fnc intermediate(int a,int b):int{return (a+b)*3;}
+"""
+HOST = r"""
+#include <stdint.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+extern int32_t __oreslang_checked_v2_add_2(int64_t,int64_t,int64_t*);
+extern int32_t __oreslang_checked_v2_sub_2(int64_t,int64_t,int64_t*);
+extern int32_t __oreslang_checked_v2_mul_2(int64_t,int64_t,int64_t*);
+extern int32_t __oreslang_checked_v2_neg_1(int64_t,int64_t*);
+extern int32_t __oreslang_checked_v2_twice_1(int64_t,int64_t*);
+extern int32_t __oreslang_checked_v2_nested_2(int64_t,int64_t,int64_t*);
+extern int32_t __oreslang_checked_v2_intermediate_2(int64_t,int64_t,int64_t*);
+int main(int argc, char** argv) {
+    if (argc != 4) return 99;
+    int64_t a = (int64_t)strtoll(argv[2], NULL, 10);
+    int64_t b = (int64_t)strtoll(argv[3], NULL, 10);
+    int64_t out = INT64_C(987654321);
+    int32_t status;
+    int64_t* address = !strcmp(argv[1], "null") ? NULL : &out;
+    if (!strcmp(argv[1], "add") || !strcmp(argv[1], "null"))
+        status = __oreslang_checked_v2_add_2(a,b,address);
+    else if (!strcmp(argv[1], "sub"))
+        status = __oreslang_checked_v2_sub_2(a,b,address);
+    else if (!strcmp(argv[1], "mul"))
+        status = __oreslang_checked_v2_mul_2(a,b,address);
+    else if (!strcmp(argv[1], "neg"))
+        status = __oreslang_checked_v2_neg_1(a,address);
+    else if (!strcmp(argv[1], "twice"))
+        status = __oreslang_checked_v2_twice_1(a,address);
+    else if (!strcmp(argv[1], "nested"))
+        status = __oreslang_checked_v2_nested_2(a,b,address);
+    else if (!strcmp(argv[1], "intermediate"))
+        status = __oreslang_checked_v2_intermediate_2(a,b,address);
+    else return 98;
+    printf("%" PRId32 " %" PRId64 "\n", status, out);
+    return 0;
+}
+"""
+
+
+def run(args):
+    return subprocess.run(args, text=True, capture_output=True,
+                          timeout=30, check=False)
+
+
+def executable_case(binary, op, a, b, value):
+    p = run([str(binary), op, str(a), str(b)])
+    status = 0 if value is not None else 1
+    observed = value if value is not None else 987654321
+    expected = "%d %d\n" % (status, observed)
+    if p.returncode != 0 or p.stdout != expected or p.stderr:
+        raise AssertionError("%s(%s,%s): expected %r, got rc=%d stdout=%r stderr=%r" %
+                             (op, a, b, expected, p.returncode, p.stdout, p.stderr))
+
+
+def rejected(compiler, work, label, source, flags=None):
+    file = work / (label + ".ores")
+    file.write_text(source + "\n", encoding="utf-8")
+    args = [compiler, "--target=host", "--experimental-checked-i64-result-functions"]
+    if flags:
+        args.extend(flags)
+    p = run(args + [str(file)])
+    if p.returncode != 1 or not p.stderr.startswith("oreslang-llvmc:") or p.stdout:
+        raise AssertionError(label + ": invalid guest was not rejected: " + repr(p))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--compiler", required=True)
+    ap.add_argument("--clang", required=True)
+    opt = ap.parse_args()
+    compiler = str(Path(opt.compiler).resolve(strict=True))
+    clang = str(Path(opt.clang).resolve(strict=True))
+    with tempfile.TemporaryDirectory(prefix="ores-checked-result-native-") as tmp:
+        work = Path(tmp)
+        source = work / "pure.ores"
+        source.write_text(SOURCE, encoding="utf-8")
+        p = run([compiler, "--target=host", "--experimental-checked-i64-result-functions",
+                 str(source)])
+        if p.returncode or p.stderr:
+            raise AssertionError("Oreslang checked result compiler failed " + repr(p))
+        ir = p.stdout
+        for symbol in ("add_2", "sub_2", "mul_2", "neg_1", "twice_1", "nested_2"):
+            if not re.search(r"(?m)^define\s+i32\s+@__oreslang_checked_v2_" +
+                             symbol + r"\s*\(", ir):
+                raise AssertionError("missing checked result callable " + symbol)
+        for intrinsic in ("sadd", "ssub", "smul"):
+            if "llvm." + intrinsic + ".with.overflow.i64" not in ir:
+                raise AssertionError("missing signed overflow intrinsic " + intrinsic)
+        if "llvm.trap" in ir:
+            raise AssertionError("pure checked-result mode must not trap on arithmetic overflow")
+        irfile = work / "pure.ll"
+        irfile.write_text(ir, encoding="utf-8")
+        host = work / "host.c"
+        host.write_text(HOST, encoding="utf-8")
+        passed = 0
+        for optimization in ("0", "2"):
+            exe = work / ("guest-O" + optimization)
+            compiled = run([clang, "-O" + optimization, "-std=c11",
+                            "-Wall", "-Wextra", "-Werror", str(host),
+                            str(irfile), "-o", str(exe)])
+            if compiled.returncode:
+                raise AssertionError("Clang could not link real guest IR: " + compiled.stderr)
+            # NULL first: no arithmetic, callee or output publication.
+            p = run([str(exe), "null", str(HI), "1"])
+            if p.returncode or p.stdout != "2 987654321\n" or p.stderr:
+                raise AssertionError("null output contract failed: " + repr(p))
+            passed += 1
+            for name, op in (("add", lambda a,b: a+b),
+                             ("sub", lambda a,b: a-b),
+                             ("mul", lambda a,b: a*b)):
+                for a, b in product(BOUNDS, repeat=2):
+                    exact = op(a, b)
+                    executable_case(exe, name, a, b, exact if LO <= exact <= HI else None)
+                    passed += 1
+            for name, a, b, result in (
+                ("neg", LO, 0, None),
+                ("neg", LO+1, 0, HI),
+                ("neg", HI, 0, -HI),
+                ("twice", 2, 0, 4),
+                ("twice", HI-2, 0, HI),
+                ("twice", HI-1, 0, None), # inner success, outer failure
+                ("twice", HI, 0, None), # inner failure
+                ("nested", 2, 3, 7),
+                ("nested", HI, 2, None), # first argument fails
+                ("nested", 2, HI, None), # second argument fails
+                ("intermediate", 2, 3, 15),
+                ("intermediate", HI, 1, None),
+                ("intermediate", HI, -1, None),
+            ):
+                executable_case(exe, name, a, b, result)
+                passed += 1
+        negatives = {
+            "owner": "fnc bad(int a):int{val x:int=a;return x;}",
+            "borrow": "fnc bad(int a):int{return rt borrow(a);}",
+            "effect": "fnc bad(int a):int{defer other(a);return a;}",
+            "unknown": "fnc bad(int a):int{return missing(a);}",
+            "recursive": "fnc bad(int a):int{return bad(a);}",
+            "indirect-cycle": ("fnc x(int a):int{return y(a);}"
+                               "fnc y(int a):int{return x(a);}"),
+            "duplicate": ("fnc bad(int a):int{return a;}"
+                          "fnc bad(int b):int{return b;}"),
+            "named-arguments": ("fnc inc(int a):int{return a+1;}"
+                                "fnc twice(int a):int{return inc(a:a);}"),
+        }
+        for label, code in negatives.items():
+            rejected(compiler, work, label, code)
+        rejected(compiler, work, "mixed-trap", SOURCE,
+                 ["--experimental-checked-i64-functions"])
+        rejected(compiler, work, "mixed-status", SOURCE,
+                 ["--experimental-checked-i64"])
+    print("CHECKED_RESULT_GUEST_CASES=%d NEGATIVE_ADMISSION=%d RESULT_ABI_V2=PASS" %
+          (passed, len(negatives)+2))
+
+
+if __name__ == "__main__":
+    main()
