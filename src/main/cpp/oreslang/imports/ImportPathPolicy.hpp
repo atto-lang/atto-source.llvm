@@ -58,9 +58,12 @@ inline bool beneath(const fs::path &root, const fs::path &candidate) {
 }
 inline fs::path rooted_path(const fs::path &root, std::string_view suffix) {
     if (suffix.empty()||suffix.front()=='/') throw std::invalid_argument("invalid rooted import");
-    fs::path p(suffix);
+    std::string normalized(suffix);
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    fs::path p(normalized);
     if(p.is_absolute()) throw std::invalid_argument("absolute rooted import");
     auto anchor=fs::absolute(root).lexically_normal();
+    if (!anchor.has_filename()) anchor=anchor.parent_path();
     auto candidate=(anchor/p).lexically_normal();
     if(!beneath(anchor,candidate)) throw std::invalid_argument("root escape");
     return candidate;
