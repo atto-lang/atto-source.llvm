@@ -114,6 +114,43 @@ public:
             while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) {
                 ++at_;
             }
+            // Match Java/Graal's real-literal boundaries before returning an
+            // integer token. Native LLVM is intentionally i64-only today:
+            // splitting 1.25 into 1 '.' 25, or 1e4 into 1 'e4', can
+            // misdiagnose or accidentally compile a different program.
+            bool real = false;
+            if (at_ + 1 < source_.size() && source_[at_] == '.' &&
+                    digit(source_[at_ + 1])) {
+                real = true;
+                at_ += 2;
+                while (at_ < source_.size() &&
+                        (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+            }
+            if (at_ < source_.size() && (source_[at_] == 'e' || source_[at_] == 'E')) {
+                const std::size_t exponent = at_;
+                ++at_;
+                if (at_ < source_.size() &&
+                        (source_[at_] == '+' || source_[at_] == '-')) ++at_;
+                if (at_ < source_.size() && digit(source_[at_])) {
+                    real = true;
+                    ++at_;
+                    while (at_ < source_.size() &&
+                            (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+                } else {
+                    at_ = exponent; // Let existing parser diagnose malformed syntax.
+                }
+            }
+            if (at_ < source_.size() && source_[at_] == 'd' &&
+                    (at_ + 1 == source_.size() || !identifier_part(source_[at_ + 1]))) {
+                ++at_;
+                real = true;
+            }
+            if (real) {
+                throw std::runtime_error(
+                        "native floating-point/decimal literal unsupported until typed "
+                        "LLVM f32/f64 and exact decimal lowering (at byte " +
+                        std::to_string(start) + ")");
+            }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
