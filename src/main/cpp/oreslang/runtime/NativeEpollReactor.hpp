@@ -175,7 +175,16 @@ private:
     static void signal(int fd) noexcept {
         if (fd < 0) return;
         const std::uint64_t one = 1;
-        (void)::write(fd, &one, sizeof(one)); // EAGAIN means notification already queued
+        // GCC's warn_unused_result applies even to an explicit (void) cast.
+        // eventfd is O_NONBLOCK: EAGAIN means a wakeup is already pending.
+        // Retry only interrupted syscalls, never wait for notification space.
+        ssize_t written;
+        do { written = ::write(fd, &one, sizeof(one)); }
+        while (written == -1 && errno == EINTR);
+        if (written == static_cast<ssize_t>(sizeof(one))
+            || (written == -1 && errno == EAGAIN)) return;
+        // A failed host notification must never call guest code or block here.
+        // Shutdown/terminal cleanup also publishes a completion record.
     }
     void emit_locked(Completion completion) noexcept {
         // Each ACTIVE slot can emit exactly one completion before it is freed,
