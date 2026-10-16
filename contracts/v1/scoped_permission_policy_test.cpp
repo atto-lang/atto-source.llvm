@@ -198,5 +198,70 @@ int main() {
     try { (void)ScopedPolicy::from_host({static_cast<Permission>(99)},{}); }
     catch (const std::invalid_argument&) {invalid = true;}
     require(invalid,true,"invalid enum");
+
+    // Real native substrate (not guest host-I/O) executes every canonical
+    // authorization vector from the SHA-pinned scoped-permissions v1 corpus.
+    struct GoldenAuthorization {
+        const char* id;
+        Permission permission;
+        const char* resource;
+        bool coarse;
+        std::vector<std::string> grants;
+        std::vector<std::string> denials;
+        bool expected;
+    };
+    const std::vector<GoldenAuthorization> goldenAuthorizations{
+        {"default-read-denied", Permission::Read, "/workspace/input.txt", false, {}, {}, false},
+        {"default-write-denied", Permission::Write, "/workspace/out.txt", false, {}, {}, false},
+        {"default-net-denied", Permission::Net, "api.example.com:443", false, {}, {}, false},
+        {"default-env-denied", Permission::Env, "API_KEY", false, {}, {}, false},
+        {"default-run-denied", Permission::Run, "git", false, {}, {}, false},
+        {"default-sys-denied", Permission::Sys, "os", false, {}, {}, false},
+        {"default-ffi-denied", Permission::Ffi, "/workspace/libplugin.so", false, {}, {}, false},
+        {"default-import-denied", Permission::Import, "/workspace/import.ores", false, {}, {}, false},
+        {"coarse-ceiling-net", Permission::Net, "api.example.com:443", false, {"*"}, {}, false},
+        {"coarse-ceiling-env", Permission::Env, "API_KEY", false, {"*"}, {}, false},
+        {"explicit-net-grant", Permission::Net, "api.example.com:443", true, {"api.example.com:443"}, {}, true},
+        {"explicit-env-grant", Permission::Env, "API_KEY", true, {"API_KEY"}, {}, true},
+        {"explicit-run-grant", Permission::Run, "git", true, {"git"}, {}, true},
+        {"deny-wins-net", Permission::Net, "api.example.com:443", true, {"*"}, {"api.example.com:443"}, false},
+        {"deny-wins-env", Permission::Env, "API_KEY", true, {"*"}, {"API_KEY"}, false},
+        {"deny-all-wins", Permission::Net, "other.example.org:443", true, {"*"}, {"*"}, false},
+        {"endpoint-port-separation", Permission::Net, "api.example.com:444", true, {"api.example.com:443"}, {}, false},
+        {"endpoint-upper-normalized", Permission::Net, "API.EXAMPLE.COM.:0443", true, {"api.example.com:443"}, {}, true},
+        {"endpoint-deny-fqdn", Permission::Net, "API.EXAMPLE.COM.:443", true, {"*"}, {"api.example.com:443"}, false},
+        {"endpoint-subdomain-yes", Permission::Net, "a.example.com:443", true, {"*.example.com:443"}, {}, true},
+        {"endpoint-subdomain-no-apex", Permission::Net, "example.com:443", true, {"*.example.com:443"}, {}, false},
+        {"endpoint-subdomain-no-suffix", Permission::Net, "badexample.com:443", true, {"*.example.com:443"}, {}, false},
+        {"endpoint-deny-portless", Permission::Net, "api.example.com", true, {"*"}, {"api.example.com:443"}, false},
+        {"endpoint-deny-wildcard-port", Permission::Net, "a.example.com:443", true, {"*"}, {"*.example.com:443"}, false},
+        {"endpoint-ipv6-short", Permission::Net, "[::1]:443", true, {"[0:0:0:0:0:0:0:1]:443"}, {}, true},
+        {"endpoint-ipv6-deny", Permission::Net, "[0:0:0:0:0:0:0:1]:443", true, {"*"}, {"[::1]:443"}, false},
+        {"endpoint-ipv4-alias", Permission::Net, "127.1:443", true, {"*"}, {"127.0.0.1"}, false},
+        {"endpoint-ipv4-hex-alias", Permission::Net, "0x7f.0.0.1:443", true, {"*"}, {"127.0.0.1"}, false},
+        {"endpoint-invalid-port", Permission::Net, "api.example.com:0", true, {"*"}, {}, false},
+        {"endpoint-invalid-credentials", Permission::Net, "alice@api.example.com:443", true, {"*"}, {}, false},
+        {"env-whitespace-exact", Permission::Env, "API_KEY ", true, {"API_KEY"}, {}, false},
+        {"env-case-exact", Permission::Env, "api_key", true, {"API_KEY"}, {}, false},
+        {"run-prefix", Permission::Run, "git-status", true, {"git*"}, {}, true},
+        {"run-prefix-no-match", Permission::Run, "curl", true, {"git*"}, {}, false},
+        {"path-child-allowed", Permission::Read, "/workspace/data/file.txt", true, {"/workspace/data"}, {}, true},
+        {"path-prefix-no-match", Permission::Read, "/workspace/database/file.txt", true, {"/workspace/data"}, {}, false},
+        {"path-whitespace-exact", Permission::Read, "/workspace/data ", true, {"/workspace/data"}, {}, false}
+    };
+    require(goldenAuthorizations.size() == 37, true, "canonical authorization case count");
+    for (const auto& golden : goldenAuthorizations) {
+        std::vector<Permission> ceiling;
+        if (golden.coarse) ceiling.push_back(golden.permission);
+        std::vector<ScopeRule> rules;
+        for (const auto& grant : golden.grants)
+            rules.push_back(scope(golden.permission, grant));
+        for (const auto& deny : golden.denials)
+            rules.push_back(scope(golden.permission, deny, true));
+        const auto actual = ScopedPolicy::from_host(std::move(ceiling), std::move(rules));
+        require(actual.allows(golden.permission, golden.resource),
+                golden.expected, golden.id);
+    }
+
     std::cout << "NATIVE_SCOPED_PERMISSION_POLICY_SUBSTRATE_PASS checks=" << checks << "\n";
 }
