@@ -15,10 +15,42 @@ ACTIONS = (
     "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
 )
+# Pin the security-sensitive workflow admission envelope. This simple
+# source-only guard intentionally rejects new triggers, token scopes or jobs
+# until they are separately reviewed; it is not an authorization boundary.
+APPROVED_PREFIX = (
+    "name: LLVM conformance contract\n"
+    "on:\n"
+    "  push:\n"
+    "    branches: [main]\n"
+    "  pull_request:\n"
+    "  workflow_dispatch:\n"
+    "\n"
+    "permissions:\n"
+    "  contents: read\n"
+    "\n"
+    "jobs:\n"
+)
+APPROVED_SELF_CHECK = (
+    "      - name: Audit minimal workflow permissions, immutable Actions and credential-free checkout\n"
+    "        run: python3 scripts/test_llvm_conformance_workflow_security.py -v\n"
+)
 
 
 def problems(text):
     errors = []
+    if not text.startswith(APPROVED_PREFIX):
+        errors.append("unreviewed workflow trigger or top-level permissions")
+    if len(re.findall(r"(?m)^\s*permissions\s*:", text)) != 1:
+        errors.append("job-scoped or duplicate permissions must not override read-only policy")
+    if len(re.findall(r"(?m)^jobs\s*:", text)) != 1:
+        errors.append("unexpected jobs mapping")
+    else:
+        names = re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", text.split("\njobs:\n", 1)[-1])
+        if names != ["conformance"]:
+            errors.append("unreviewed additional or renamed CI job")
+    if text.count(APPROVED_SELF_CHECK) != 1:
+        errors.append("workflow must execute the security guard after checkout")
     found = re.findall(r"(?m)^\s*- uses:\s*(\S+)", text)
     if tuple(found) != ACTIONS:
         errors.append("workflow actions must be exactly the reviewed immutable SHAs")
@@ -49,6 +81,21 @@ class WorkflowSecurityProof(unittest.TestCase):
             with self.subTest(action=immutable):
                 self.assertTrue(problems(clean.replace(immutable,
                     immutable.split("@")[0] + "@v4")))
+
+    def test_event_scope_and_security_guard_bypasses_are_rejected(self):
+        clean = WORKFLOW.read_text()
+        self.assertFalse(problems(clean))
+        for mutated in (
+            clean.replace("  contents: read\n", "  contents: read\n  actions: write\n"),
+            clean.replace("    runs-on: ubuntu-24.04\n",
+                          "    runs-on: ubuntu-24.04\n    permissions:\n      actions: write\n"),
+            clean.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n  workflow_run:\n"),
+            clean + "\n  unrestricted:\n    runs-on: ubuntu-latest\n"
+                    "    steps:\n      - run: echo unreviewed\n",
+            clean.replace(APPROVED_SELF_CHECK, ""),
+        ):
+            with self.subTest(fragment=mutated[:120]):
+                self.assertTrue(problems(mutated))
 
     def test_all_120_single_character_action_pin_mutations_are_rejected(self):
         # An attacker must not change even one nibble of a reviewed Action.
