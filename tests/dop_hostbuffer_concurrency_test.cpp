@@ -58,6 +58,39 @@ int main() {
         successor.close();
         must_reject_loan([&] { (void)successor.read(0, 0); });
     }
+    // A kernel's output is reserved as one exclusive region, not a sequence
+    // of independent per-element writes. Even other readers must fail closed.
+    Plan batch_plan(Layout::AoSoA, 7, 3, 4, 16, 4);
+    HostBuffer destination(batch_plan);
+    {
+        auto writer = destination.borrow_write();
+        writer.write(0, 0, 19.0f);
+        must_reject_loan([&] { (void)destination.read(0, 0); });
+        must_reject_loan([&] { (void)destination.borrow_read(); });
+        must_reject_loan([&] { (void)destination.borrow_write(); });
+        must_reject_loan([&] { destination.write(1, 1, -1.0f); });
+        must_reject_loan([&] { (void)destination.take(); });
+        must_reject_loan([&] { destination.close(); });
+        must_reject_loan([&] { HostBuffer stolen(std::move(destination)); });
+        std::atomic<bool> rejected{false};
+        std::thread observer([&] {
+            try { (void)destination.read(0, 0); }
+            catch (const std::logic_error&) { rejected.store(true, std::memory_order_release); }
+        });
+        observer.join();
+        if (!rejected.load(std::memory_order_acquire))
+            throw std::runtime_error("reader observed partially written kernel destination");
+        writer.release();
+        must_reject_loan([&] { writer.write(0, 0, 1.0f); });
+    }
+    if (destination.read(0, 0) != 19.0f)
+        throw std::runtime_error("exclusive output loan did not commit writes");
+    {
+        auto reader = destination.borrow_read();
+        must_reject_loan([&] { (void)destination.borrow_write(); });
+    }
+    destination.close();
+
     // Direct C++ move/assignment must enforce the same active-loan
     // exclusion as the explicit take() method, without consuming the
     // source on a rejected transfer.
