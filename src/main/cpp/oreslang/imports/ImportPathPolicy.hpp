@@ -144,8 +144,14 @@ inline void append_list(std::vector<fs::path>& roots, std::string_view s, char s
     size_t start=0;
     while(true){
         auto end=s.find(sep,start);
-        auto item=trim(s.substr(start,end==std::string_view::npos?end:end-start));
-        if(!item.empty()){fs::path p(item);append(roots,p.is_absolute()?p:cwd/p);}
+        // PATH-like segments are literal filesystem names, not TOML tokens.
+        // Java/Graal ignores only truly empty fields; trimming would silently
+        // retarget a directory whose name begins or ends with spaces.
+        const auto item=s.substr(start,end==std::string_view::npos?end:end-start);
+        if(!item.empty()){
+            fs::path p{std::string(item)};
+            append(roots,p.is_absolute()?p:cwd/p);
+        }
         if(end==std::string_view::npos) break;
         start=end+1;
     }
