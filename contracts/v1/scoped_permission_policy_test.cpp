@@ -38,6 +38,18 @@ int main() {
     require(host.allows(Permission::Net,"api.example.com:0"),false,"invalid port");
     require(host.allows(Permission::Net,"127.1:443"),false,"numeric alias");
     require(host.allows(Permission::Net,"alice@api.example.com:443"),false,"url credentials");
+    auto numeric_alias = make(Permission::Net,{scope(Permission::Net,"*"),
+        scope(Permission::Net,"127.0.0.1",true)});
+    for (const char* host_alias : {"127.0x0.0.1:443", "1.2.3.0x01:443",
+                                   "0x7f.0.0.1:443", "127.0.0.01:443",
+                                   "127.1:443"}) {
+        require(numeric_alias.allows(Permission::Net,host_alias),false,
+                "numeric IPv4 alias under broad allow");
+    }
+    require(numeric_alias.allows(Permission::Net,"127.0.0.1:443"),false,
+            "canonical denied IPv4");
+    require(numeric_alias.allows(Permission::Net,"api.example.com:443"),true,
+            "ordinary DNS permitted under wildcard");
     auto sub = make(Permission::Net,{scope(Permission::Net,"*.example.com:443")});
     require(sub.allows(Permission::Net,"a.example.com:443"),true,"wildcard subdomain");
     require(sub.allows(Permission::Net,"example.com:443"),false,"no apex");
