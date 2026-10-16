@@ -554,6 +554,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     oreslang_contract_test(native_scalar_value_pipeline value-pipe-scalar-main.ores
         --ir "call i64 @plus")
+    oreslang_contract_test(native_pipeline_named_stage_ir value-pipe-named-stage-main.ores
+        --ir "call i64 @combine")
+    oreslang_contract_test(native_pipeline_named_binding_collision_rejected value-pipe-named-stage-collision.ores
+        --diagnostic "duplicate native named call binding")
     oreslang_contract_test(native_pipeline_depth_128_accepted value-pipe-depth-128.ores
         --ir "call i64 @next")
     oreslang_contract_test(native_pipeline_depth_129_rejected value-pipe-depth-129-reject.ores
@@ -578,6 +582,8 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_scalar_value_pipeline_executed value-pipe-scalar-main.ores
             --run 7 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_pipeline_named_stage_executed value-pipe-named-stage-main.ores
+            --run 40 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_pipeline_depth_128_executed value-pipe-depth-128.ores
             --run 129 --clang "${ORE_CLANG}")
     endif()
