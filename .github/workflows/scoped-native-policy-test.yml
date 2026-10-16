@@ -1,0 +1,26 @@
+name: Native scoped permission host-policy unit tests (not guest I/O parity)
+on:
+  pull_request:
+    paths:
+      - "contracts/v1/scoped_permission_policy.hpp"
+      - "contracts/v1/scoped_permission_policy_test.cpp"
+      - ".github/workflows/scoped-native-policy-test.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - name: Compile with strict GCC warnings
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_permission_policy_test.cpp -o /tmp/ores-native-policy-gcc
+          /tmp/ores-native-policy-gcc
+      - name: Compile with strict Clang warnings
+        run: |
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_permission_policy_test.cpp -o /tmp/ores-native-policy-clang
+          /tmp/ores-native-policy-clang
