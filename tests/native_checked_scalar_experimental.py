@@ -31,7 +31,7 @@ def run_case(compiler, clang, folder, name, expr, count, assertions):
         "fnc checked(" + parameters + "):int{return " + expr + ";}\n",
         encoding="utf-8")
     ir = execute([compiler, "--target=host", "--experimental-checked-i64", str(source)])
-    signature = r"(?m)^define\\s+i32\\s+@" + SYMBOL + r"\\s*\\("
+    signature = r"(?m)^define\s+i32\s+@" + SYMBOL + r"\s*\("
     if not re.search(signature, ir):
         raise AssertionError(name + ": checked scalar ABI not emitted")
     for intrinsic in ("llvm.sadd.with.overflow.i64", "llvm.ssub.with.overflow.i64",
