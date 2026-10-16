@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end native scalar imports: actual compiler IR, Clang, and process exit."""
 import argparse
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,12 +13,18 @@ def write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
-def expect_success(compiler, clang, source, exit_code=42):
+def expect_success(compiler, clang, source, exit_code=42, required_calls=()):
     produced = run(compiler, "--experimental-scalar-imports", str(source))
     if produced.returncode != 0:
         raise AssertionError("scalar import compilation failed: " + produced.stderr)
     if "define" not in produced.stdout:
         raise AssertionError("compiler did not emit LLVM definitions")
+    # A correct exit status alone cannot prove an imported call was lowered.
+    # Require a direct call in emitted, linker-accepted LLVM IR.
+    for symbol in required_calls:
+        pattern = r"\\bcall\\s+i64\\s+@" + re.escape(symbol) + r"\\s*\\("
+        if not re.search(pattern, produced.stdout):
+            raise AssertionError(f"missing imported call to {symbol}: " + produced.stdout[:4000])
     binary = source.parent / "compiled-scalar-import"
     linked = run(clang, "-x", "ir", "-o", str(binary), "-", input=produced.stdout)
     if linked.returncode != 0:
@@ -40,10 +47,42 @@ def main():
         root = Path(directory)
         write(root / "helper.ores", "pub fnc add(int a, int b): int { return a + b; }\n")
         write(root / "main.ores", 'import "./helper";\npub fnc main(): int { return add(40, 2); }\n')
-        expect_success(args.compiler, args.clang, root / "main.ores")
+        expect_success(args.compiler, args.clang, root / "main.ores", required_calls=("add",))
         write(root / "extra.ores", 'pub fnc extra(int value): int { return value + 1; }\n')
         write(root / "reorder.ores", 'import "./extra";\nimport "./helper";\npub fnc main(): int { return extra(add(39, 2)); }\n')
-        expect_success(args.compiler, args.clang, root / "reorder.ores")
+        expect_success(args.compiler, args.clang, root / "reorder.ores", required_calls=("add", "extra"))
+        # A diamond graph must deduplicate the shared canonical .ores source.
+        write(root / "diamond" / "core.ores", "pub fnc core(): int { return 20; }\n")
+        write(root / "diamond" / "left.ores",
+              'import "./core";\npub fnc left(): int { return core(); }\n')
+        write(root / "diamond" / "right.ores",
+              'import "./core";\npub fnc right(): int { return core() + 2; }\n')
+        write(root / "diamond" / "main.ores",
+              'import "./left";\nimport "./right";\npub fnc main(): int { return left() + right(); }\n')
+        expect_success(args.compiler, args.clang, root / "diamond" / "main.ores",
+                       required_calls=("left", "right", "core"))
+
+        # Charge *unique* module count, not import directive count, and fail
+        # before source concatenation or code generation on oversized graphs.
+        wide_imports = []
+        for i in range(64):
+            write(root / "wide" / f"part_{i}.ores",
+                  f"pub fnc part_{i}(): int {{ return {i}; }}\\n")
+            wide_imports.append(f'import "./part_{i}";')
+        write(root / "wide" / "main.ores",
+              "\\n".join(wide_imports) + "\\npub fnc main(): int { return 42; }\\n")
+        expect_failure(args.compiler, root / "wide" / "main.ores",
+                       "native scalar import module count exceeded")
+
+        # Distinguish the graph-depth limit from the total-node limit.
+        for i in range(34):
+            preamble = f'import "./depth_{i+1}";\\n' if i < 33 else ""
+            write(root / "deep" / f"depth_{i}.ores",
+                  preamble + f"pub fnc depth_fn_{i}(): int {{ return 1; }}\\n")
+        write(root / "deep" / "main.ores",
+              'import "./depth_0";\npub fnc main(): int { return 42; }\n')
+        expect_failure(args.compiler, root / "deep" / "main.ores",
+                       "native scalar import depth exceeded")
         # Import closure is a source-concatenation experiment. Private
         # imported declarations must never be silently exposed to the caller.
         write(root / "private.ores", "fnc secret(): int { return 42; }\n")
@@ -84,7 +123,7 @@ def main():
         write(root / "package" / ".ores.pkg.toml", 'schema_version = "1"\n[source]\nroots = ["src"]\n')
         write(root / "package" / "src" / "main.ores", 'import "@/src/util";\npub fnc main(): int { return helper(40); }\n')
         write(root / "package" / "src" / "util.ores", 'pub fnc helper(int a): int {return a + 2;}\n')
-        expect_success(args.compiler, args.clang, root / "package" / "src" / "main.ores")
+        expect_success(args.compiler, args.clang, root / "package" / "src" / "main.ores", required_calls=("helper",))
         # One installed zed-pkg alias, with physical package metadata checked.
         write(root / "package" / ".ores.pkg.toml",
               'schema_version = "1"\n[source]\nroots = ["src"]\n[dependencies]\nmath = { zed = "acme/math" }\n')
@@ -94,7 +133,7 @@ def main():
               'pub fnc answer(): int { return 42; }\n')
         write(root / "package" / "src" / "pkg_main.ores",
               'import "pkg:math/src/answer";\npub fnc main(): int {return answer();}\n')
-        expect_success(args.compiler, args.clang, root / "package" / "src" / "pkg_main.ores")
+        expect_success(args.compiler, args.clang, root / "package" / "src" / "pkg_main.ores", required_calls=("answer",))
         write(root / "package" / "src" / "escape.ores", 'import "../../helper";\npub fnc main(): int {return add(40, 2);}\n')
         expect_failure(args.compiler, root / "package" / "src" / "escape.ores", "native import escapes physical search root")
     print("native scalar import execution gates passed")
