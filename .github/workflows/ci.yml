@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           ctest --test-dir build --output-on-failure --timeout 240 --no-tests=error \
             -R '^numeric_experimental_checked_(i64_status_abi|pure_function_graph|result_function_graph)$'
-      - name: Verify registered CTest inventory cannot silently skip native tests
+      - name: Verify checked-i64 CTest inventory before full native suite
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_ctest_manifest_gate.py -v
