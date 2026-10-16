@@ -37,6 +37,8 @@ int main() {
          "pkg:alias","pkg:/mod","pkg:alias/","pkg:_bad/mod",
          "pkg:bad.alias/mod","pkg:alias//file","pkg:alias/src/../a","pkg:alias/src/./a","pkg:alias/src/a/","file\nname",
          "C:relative.ores","D:source.ores","mod:stream",
+         "C:/tmp/source:stream.ores","C:\\tmp\\source:stream.ores",
+         "//server/share/source:alternate.ores",
          "./source.ores:stream","+/src/file.ores:alternate",
          "pkg:math/src/file.ores:alternate"})
          reject([&]{(void)classify(bad);},"invalid import accepted");
