@@ -23,7 +23,7 @@ with `verification/generate_numeric_overflow_cases.py` and
 isolated runtime in `tests/numeric-source-parity.test.mjs`.
 All reject or signal overflow; none may return a normal wrapped signed-i64
 value. The LLVM executable negative harness additionally requires, for
-runtime-trapped cases, that the exact emitted IR connect the appropriate
+runtime-trapped cases, that the actual `__oreslang_guest_main` body in the exact emitted IR connect the appropriate
 signed-overflow intrinsic through its SSA overflow flag to the matching
 conditional `llvm.trap` block. An unrelated signal, stray instruction,
 comment-only guard, or unused intrinsic is not accepted as evidence.
