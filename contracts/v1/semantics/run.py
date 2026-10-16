@@ -211,6 +211,9 @@ def main():
     pending = sum(x["status"] == "pending" for x in results)
     failed = sum(x["status"] == "fail" for x in results)
     print(f"SUMMARY pass={passed} pending={pending} fail={failed}; pending is NOT pass")
+    if passed == 0 and failed == 0:
+        print("INCOMPLETE: zero conformance cases passed; no execution proof", file=sys.stderr)
+        return 1
     return 1 if failed else 0
 
 if __name__ == "__main__":
