@@ -105,6 +105,7 @@ public:
         const auto charged_bytes = pending->payload.size();
         if (buffered && !try_reserve_buffered_bytes(charged_bytes))
             return failed_void("native actor pipe graph payload byte budget exceeded");
+        bool published = false;
         try {
             if (!buffered) {
                 auto recipient = std::move(link.readers.front());
@@ -113,14 +114,16 @@ public:
                 pending->promise.set_value();
             } else if (link.messages.size() < link.capacity) {
                 link.messages.push_back(std::move(pending->payload));
+                published = true;
                 pending->promise.set_value();
             } else {
                 link.writers.push_back(std::move(pending));
+                published = true;
             }
         } catch (...) {
-            // Roll back a not-yet-published reservation on failed admission.
-            // Once queued, no following operation may throw in normal flow.
-            if (buffered) buffered_payload_bytes_.fetch_sub(
+            // A queued message owns its credits even if future settlement
+            // throws; only an uncommitted admission can roll them back.
+            if (buffered && !published) buffered_payload_bytes_.fetch_sub(
                 charged_bytes, std::memory_order_acq_rel);
             throw;
         }
