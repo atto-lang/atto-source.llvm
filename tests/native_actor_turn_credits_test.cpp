@@ -60,10 +60,12 @@ int main() {
         std::atomic<unsigned> entrants{0};
         std::atomic<unsigned> high_water{0};
         std::atomic<bool> release{false};
+        std::atomic<unsigned> attempted{0};
         std::vector<std::thread> threads;
         for (unsigned i = 0; i < 12; ++i) {
             threads.emplace_back([&] {
                 auto claim = gate.try_acquire();
+                attempted.fetch_add(1, std::memory_order_acq_rel);
                 if (!claim) return;
                 auto value = entrants.fetch_add(1, std::memory_order_acq_rel) + 1;
                 auto peak = high_water.load(std::memory_order_relaxed);
@@ -75,6 +77,11 @@ int main() {
                 entrants.fetch_sub(1, std::memory_order_acq_rel);
             });
         }
+        // All contenders have attempted acquisition before retirement.
+        // Test-only coordination yields rather than consuming a reactor/carrier.
+        while (attempted.load(std::memory_order_acquire) != 12)
+            std::this_thread::yield();
+        check(gate.in_flight() <= 3);
         // Retirement must not revoke already-issued claims or create new ones.
         gate.retire();
         release.store(true, std::memory_order_release);
