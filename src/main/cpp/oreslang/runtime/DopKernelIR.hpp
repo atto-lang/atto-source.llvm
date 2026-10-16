@@ -299,6 +299,42 @@ inline void execute_cpu(const Kernel& kernel, const HostBuffer& input, HostBuffe
     }
 }
 
+
+/**
+ * Checked CPU region lowering for a single column / half-open row slice.
+ * The planner is advisory; actual isolation is enforced by whole-buffer loans.
+ * Until field-granular runtime loans exist, two writes to different fields of
+ * the SAME HostBuffer are intentionally serialized, even if logically disjoint.
+ */
+inline void execute_cpu_region(const Kernel& kernel,
+        const HostBuffer& input, HostBuffer& output,
+        const RegionAccess& source, const RegionAccess& destination) {
+    if (input.identical_storage(output))
+        throw std::invalid_argument("region input/output alias forbidden");
+    if (!matching_layout(kernel.layout, input.layout())
+            || !matching_layout(kernel.layout, output.layout()))
+        throw std::invalid_argument("region kernel layout mismatch");
+    if (source.mode != RegionMode::Read || destination.mode != RegionMode::Write
+            || source.field != destination.field || source.begin != destination.begin
+            || source.end != destination.end
+            || !source.root.same_root(input.region_root())
+            || !destination.root.same_root(output.region_root()))
+        throw std::invalid_argument("invalid CPU region owner, privilege or footprint");
+    RegionTask admitted("cpu-region", {source, destination});
+    require_live_owned(admitted);
+    // No write occurs unless BOTH loans have been acquired. Failed second
+    // admission unwinds the first RAII loan without changing output storage.
+    auto loan = input.borrow_read();
+    auto writer = output.borrow_write();
+    for (auto row = source.begin; row < source.end; ++row) {
+        const auto value = loan.read(row, source.field);
+        const auto result = kernel.operation == Op::Scale ? value * kernel.scale
+            : kernel.operation == Op::Bias ? value + kernel.bias
+            : (value * kernel.scale) + kernel.bias;
+        writer.write(row, destination.field, result);
+    }
+}
+
 inline std::string cl_float(float value) {
     std::ostringstream result;
     // Kernel source is a language artifact, not locale-sensitive UI text.
