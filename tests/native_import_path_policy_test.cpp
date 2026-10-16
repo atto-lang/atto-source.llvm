@@ -109,6 +109,17 @@ int main() {
     const std::vector<fs::path> expected={
         project/"src",project/"vendor","/tmp/ambient",cwd/"local","/tmp/legacy"};
     check(ordered==expected,"search-order dedup and empty components");
+    // ORES_PATHS and legacy PATH components are literal names. Spaces are
+    // not TOML-style formatting and must not be silently trimmed.
+    auto literal=search_roots(project,std::vector<std::string>{},{},
+        " left : :/tmp/trailing space ::", " legacy path ",':',cwd);
+    const std::vector<fs::path> literal_expected={
+        cwd/" left ",cwd/" ","/tmp/trailing space ",cwd/" legacy path "};
+    check(literal==literal_expected,"PATH component whitespace was discarded");
+    std::vector<fs::path> direct;
+    append_list(direct,"::",':',cwd);
+    check(direct.empty(),"empty PATH components must be ignored");
+
     reject([&]{(void)search_roots(project,std::vector<std::string>{" "},
        {},"","",':',cwd);},"blank manifest root accepted");
     reject([&]{(void)search_roots(project,
