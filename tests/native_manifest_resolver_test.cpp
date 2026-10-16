@@ -88,6 +88,23 @@ math = { zed = "acme/math" }
             require(resolve_source(config,app/"src/main.ores","+/src/internal")==
                     fs::canonical(app/"src/util.ores"),"in-root symlink rejected");
         require(resolve_source(config,app/"src/main.ores","+/src/util")==fs::canonical(app/"src/util.ores"),"+ root");
+        // Parent project authority must not tunnel into a nested package
+        // through relative, bare import-path or symlink-alias spellings.
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores",
+                                        "../packages/child/src/leaf");},
+                "relative import crossed independently declared child package");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores",
+                                        "child/src/leaf");},
+                "bare import crossed independently declared child package");
+        if(!nested_alias_error){
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores",
+                                            "../packages/child/parent-alias");},
+                    "relative child symlink alias bypassed package boundary");
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores",
+                                            "child/parent-alias");},
+                    "bare child symlink alias bypassed package boundary");
+        }
+
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/packages/child/src/leaf");},
                 "parent +/ crossed direct child package marker");
         // Canonical physical identity by itself misses this: a symlink
