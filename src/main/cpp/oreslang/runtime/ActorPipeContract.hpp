@@ -10,6 +10,37 @@
 
 namespace oreslang::runtime {
 
+/** Trusted graph strings have the same bounded strict UTF-8 representation as
+ * the Java admission plan. A graph identifier must never contain NUL, invalid
+ * UTF-8, surrogates, or a truncation ambiguity across the ABI boundary. */
+inline bool valid_pipe_component(const std::string& value,
+                                 bool optional = false) noexcept {
+    if (value.empty()) return optional;
+    if (value.size() > 256) return false;
+    for (std::size_t i = 0; i < value.size();) {
+        const auto lead = static_cast<unsigned char>(value[i]);
+        if (lead == 0) return false;
+        if (lead <= 0x7f) { ++i; continue; }
+        std::size_t width = 0;
+        if (lead >= 0xc2 && lead <= 0xdf) width = 2;
+        else if (lead >= 0xe0 && lead <= 0xef) width = 3;
+        else if (lead >= 0xf0 && lead <= 0xf4) width = 4;
+        else return false;
+        if (width > value.size() - i) return false;
+        for (std::size_t n = 1; n < width; ++n) {
+            const auto next = static_cast<unsigned char>(value[i + n]);
+            if ((next & 0xc0) != 0x80) return false;
+        }
+        const auto second = static_cast<unsigned char>(value[i + 1]);
+        if ((lead == 0xe0 && second < 0xa0)
+            || (lead == 0xed && second > 0x9f)
+            || (lead == 0xf0 && second < 0x90)
+            || (lead == 0xf4 && second > 0x8f)) return false;
+        i += width;
+    }
+    return true;
+}
+
 /** Nominal actor-pipeline admission; not an executable transport. */
 enum class PipeRole {
     readable, transform, writable, duplex, ordinary_actor, supervisor_actor
@@ -32,39 +63,6 @@ struct PipeConnection {
     std::string payload;
 };
 
-// Accept only shortest-form scalar-value UTF-8. This must match Java's
-// CharsetEncoder(REPORT) admission for graph IDs and nominal port/type tags.
-// UTF-8 keys use a separately bounded decoder in the native transport.
-inline bool valid_pipe_utf8(const std::string& value) noexcept {
-    const auto* b = reinterpret_cast<const unsigned char*>(value.data());
-    for (std::size_t i = 0; i < value.size();) {
-        const unsigned char lead = b[i];
-        if (lead == 0) return false;
-        if (lead < 0x80) { ++i; continue; }
-        std::size_t width = 0;
-        if (lead >= 0xC2 && lead <= 0xDF) width = 2;
-        else if (lead >= 0xE0 && lead <= 0xEF) width = 3;
-        else if (lead >= 0xF0 && lead <= 0xF4) width = 4;
-        else return false;
-        if (width > value.size() - i) return false;
-        for (std::size_t j = 1; j < width; ++j)
-            if ((b[i + j] & 0xC0u) != 0x80u) return false;
-        const unsigned char second = b[i + 1];
-        if ((lead == 0xE0 && second < 0xA0) ||
-                (lead == 0xED && second > 0x9F) ||
-                (lead == 0xF0 && second < 0x90) ||
-                (lead == 0xF4 && second > 0x8F)) return false;
-        i += width;
-    }
-    return true;
-}
-
-// Bound identity/type components in bytes, reject embedded NUL and malformed
-// UTF-8 consistently in the linear and DAG graph constructors.
-inline bool valid_pipe_component(const std::string& value) noexcept {
-    return value.size() <= 256 && valid_pipe_utf8(value);
-}
-
 inline std::vector<PipeConnection> check_actor_pipeline(
         const std::vector<PipeStage>& stages) {
     if (stages.size() < 2)
@@ -72,17 +70,10 @@ inline std::vector<PipeConnection> check_actor_pipeline(
     if (stages.size() > 1024)
         throw std::invalid_argument("actor pipeline exceeds stage budget");
     std::unordered_set<std::string> instance_ids;
-    instance_ids.reserve(stages.size());
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& stage = stages[i];
-        const auto& actor_id = stage.instance_id.empty()
-                ? stage.actor_type : stage.instance_id;
-        if (stage.actor_type.empty() || actor_id.empty() ||
-                !valid_pipe_component(stage.actor_type) ||
-                !valid_pipe_component(actor_id) ||
-                !valid_pipe_component(stage.inbound) ||
-                !valid_pipe_component(stage.outbound))
-            throw std::invalid_argument("pipeline actor identity or type invalid");
+        if (stage.actor_type.empty())
+            throw std::invalid_argument("pipeline actor type cannot be blank");
         if (stage.role == PipeRole::supervisor_actor)
             throw std::invalid_argument("supervisor actors cannot be pipeline stages");
         if (stage.role == PipeRole::ordinary_actor)
@@ -115,13 +106,17 @@ inline std::vector<PipeConnection> check_actor_pipeline(
                 && stage.role != PipeRole::duplex)
             throw std::invalid_argument("actor pipeline sink must be writable or duplex");
     }
-    // Match the updated parent: preserve role/port diagnostics before
-    // evaluating duplicate instance identity, while failing closed before
-    // constructing or publishing any graph edge.
+    // Do not mask established role/port diagnostics (e.g. an illegal
+    // source or middle stage) with a duplicate-ID error. Validate instance
+    // uniqueness only after all existing stage contracts have passed.
     for (const auto& stage : stages) {
-        const auto& actor_id = stage.instance_id.empty()
-                ? stage.actor_type : stage.instance_id;
-        if (!instance_ids.insert(actor_id).second)
+        const auto& actor_id =
+                stage.instance_id.empty() ? stage.actor_type : stage.instance_id;
+        if (!valid_pipe_component(stage.actor_type)
+                || !valid_pipe_component(actor_id)
+                || !valid_pipe_component(stage.inbound, true)
+                || !valid_pipe_component(stage.outbound, true)
+                || !instance_ids.insert(actor_id).second)
             throw std::invalid_argument(
                     "linear pipeline requires unique bounded actor instance IDs");
     }
@@ -135,10 +130,9 @@ inline std::vector<PipeConnection> check_actor_pipeline(
                     + source.actor_type + " emits " + source.outbound
                     + " but " + target.actor_type + " requires " + target.inbound);
         connections.push_back({
-            source.instance_id.empty() ? source.actor_type : source.instance_id,
-            target.instance_id.empty() ? target.actor_type : target.instance_id,
-            source.outbound
-        });
+                source.instance_id.empty() ? source.actor_type : source.instance_id,
+                target.instance_id.empty() ? target.actor_type : target.instance_id,
+                source.outbound});
     }
     return connections;
 }
@@ -160,12 +154,11 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& s = stages[i];
         const auto& actor_id = s.instance_id.empty() ? s.actor_type : s.instance_id;
-        if (s.actor_type.empty() || actor_id.empty() ||
-                !valid_pipe_component(s.actor_type) ||
-                !valid_pipe_component(actor_id) ||
-                !valid_pipe_component(s.inbound) ||
-                !valid_pipe_component(s.outbound) ||
-                !ids.emplace(actor_id, i).second)
+        if (!valid_pipe_component(s.actor_type)
+                || !valid_pipe_component(actor_id)
+                || !valid_pipe_component(s.inbound, true)
+                || !valid_pipe_component(s.outbound, true)
+                || !ids.emplace(actor_id, i).second)
             throw std::invalid_argument(
                 "pipeline graph requires distinct, bounded actor instance IDs");
         switch (s.role) {
@@ -193,12 +186,10 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
     std::vector<std::size_t> incoming_count(stages.size(), 0);
     std::vector<std::size_t> outgoing_count(stages.size(), 0);
     for (const auto& link : links) {
-        if (link.source.empty() || link.target.empty() ||
-                link.payload.empty() ||
-                !valid_pipe_component(link.source) ||
-                !valid_pipe_component(link.target) ||
-                !valid_pipe_component(link.payload))
-            throw std::invalid_argument("pipeline graph link component invalid");
+        if (!valid_pipe_component(link.source)
+                || !valid_pipe_component(link.target)
+                || !valid_pipe_component(link.payload))
+            throw std::invalid_argument("pipeline link has invalid UTF-8 component");
         const auto source = ids.find(link.source);
         const auto target = ids.find(link.target);
         if (source == ids.end() || target == ids.end() ||
