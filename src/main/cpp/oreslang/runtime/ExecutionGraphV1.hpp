@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <initializer_list>
 #include <future>
 #include <limits>
 #include <memory>
@@ -95,6 +96,41 @@ class Plan {
     std::size_t output_;
     Kind type_;
 
+    static void validate_ir(const std::vector<Node>& nodes, std::size_t output, Kind type) {
+        if (nodes.empty() || nodes.size() > 4096 || output >= nodes.size())
+            throw std::invalid_argument("invalid execution graph size or output");
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            const Node& n = nodes[i];
+            if (n.id != i) throw std::invalid_argument("invalid execution graph node ID");
+            for (std::size_t dep : n.inputs)
+                if (dep >= i) throw std::invalid_argument("invalid execution graph dependency");
+            auto signature = [&](Domain domain, Kind result, std::initializer_list<Kind> args) {
+                if (n.domain != domain || n.result != result || n.inputs.size() != args.size())
+                    throw std::invalid_argument("invalid execution graph operation signature");
+                std::size_t position = 0;
+                for (Kind expected : args) {
+                    if (nodes[n.inputs[position++]].result != expected)
+                        throw std::invalid_argument("invalid execution graph operand kind");
+                }
+            };
+            switch (n.operation) {
+                case Op::Unit: signature(Domain::Cpu, Kind::Unit, {}); break;
+                case Op::ConstantI64: signature(Domain::Cpu, Kind::HostI64, {}); break;
+                case Op::AddI64: signature(Domain::Cpu, Kind::HostI64,
+                                           {Kind::HostI64, Kind::HostI64}); break;
+                case Op::UploadI64: signature(Domain::Gpu, Kind::DeviceI64,
+                                              {Kind::HostI64}); break;
+                case Op::GpuAddI64: signature(Domain::Gpu, Kind::DeviceI64,
+                                              {Kind::DeviceI64, Kind::DeviceI64}); break;
+                case Op::DownloadI64: signature(Domain::Cpu, Kind::HostI64,
+                                                {Kind::DeviceI64}); break;
+                default: throw std::invalid_argument("invalid execution graph opcode");
+            }
+        }
+        if (nodes[output].result != type)
+            throw std::invalid_argument("invalid execution graph output kind");
+    }
+
     static std::int64_t checked_add(std::int64_t a, std::int64_t b) {
         if ((b > 0 && a > std::numeric_limits<std::int64_t>::max() - b) ||
             (b < 0 && a < std::numeric_limits<std::int64_t>::min() - b)) {
@@ -133,8 +169,7 @@ class Plan {
 public:
     Plan(std::vector<Node> nodes, std::size_t output, Kind type)
         : nodes_(std::move(nodes)), output_(output), type_(type) {
-        if (nodes_.empty() || nodes_.size() > 4096 || output_ >= nodes_.size())
-            throw std::invalid_argument("invalid execution graph plan");
+        validate_ir(nodes_, output_, type_);
     }
     const std::vector<Node>& nodes() const noexcept { return nodes_; }
     Kind result_type() const noexcept { return type_; }
