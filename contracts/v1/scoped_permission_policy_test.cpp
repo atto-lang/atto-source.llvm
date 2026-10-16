@@ -84,6 +84,17 @@ int main() {
     // broad allow-net must reject every noncanonical numeric/hex spelling.
     // This is a policy test, not an actual socket/connect-time DNS guard.
     auto numeric_wildcard = make(Permission::Net,{scope(Permission::Net,"*")});
+    // A direct grant/deny scope is a literal endpoint, not a CSV field:
+    // surrounding whitespace must never become a valid network grant.
+    for (const std::string padded : {" api.example.com:443", "api.example.com:443 ",
+                                     " 127.0.0.1:443", "127.0.0.1:443 "}) {
+        require(numeric_wildcard.allows(Permission::Net,padded),false,
+                "padded network resource must be rejected");
+        bool rejected_rule = false;
+        try { (void)make(Permission::Net,{scope(Permission::Net,padded)}); }
+        catch (const std::invalid_argument&) { rejected_rule = true; }
+        require(rejected_rule,true,"padded network rule must be rejected");
+    }
     const std::vector<std::string> numeric_parts = {
         "0","00","01","1","127","0x0","0x1","0x7f",
         "0X7F","0xFF","077","255","256"
