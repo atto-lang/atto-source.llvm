@@ -392,6 +392,50 @@ int main() {
               "post-STOP drain leaked aggregate byte credits");
     }
 
+
+    // Simultaneous producers on separate edge mutexes must never race past
+    // the shared graph quota. All successful admissions remain individually
+    // drainable; failures must not create invisible buffered messages.
+    {
+        auto stages = graph_stages();
+        stages.push_back({"ConsumerC", PipeRole::writable, "Event", ""});
+        auto connections = graph_edges();
+        connections.push_back({"Producer", "ConsumerC", "Event"});
+        NativeActorPipeTransport pipe(
+            registry, supervisor, stages, connections, 32, 4);
+        const std::string megabyte(1024 * 1024, 'T');
+        const char* targets[] = {"ConsumerA", "ConsumerB", "ConsumerC"};
+        std::atomic<int> accepted[3]{};
+        std::atomic<int> denied{0};
+        std::vector<std::thread> senders;
+        for (int i = 0; i < 3; ++i) {
+            senders.emplace_back([&, i] {
+                for (int n = 0; n < 16; ++n) {
+                    try {
+                        pipe.write_to_async("Producer", targets[i], megabyte).get();
+                        ++accepted[i];
+                    } catch (const std::logic_error&) {
+                        ++denied;
+                    }
+                }
+            });
+        }
+        for (auto& sender : senders) sender.join();
+        const auto total = accepted[0].load() + accepted[1].load() +
+                           accepted[2].load();
+        check(total == 32 && denied.load() == 16,
+              "concurrent edges overcommitted or lost aggregate quota");
+        check(pipe.buffered_payload_bytes() == 32ULL * 1024 * 1024,
+              "concurrent aggregate counter drifted");
+        pipe.close();
+        for (std::size_t i = 0; i < 3; ++i)
+            for (int n = 0; n < accepted[i].load(); ++n)
+                check(pipe.read_async(i).get() == megabyte,
+                      "STOP lost a successful concurrent admission");
+        check(pipe.buffered_payload_bytes() == 0,
+              "concurrent graph drain leaked aggregate credits");
+    }
+
     // Host-only concurrency: per-source selector mutex serializes selection,
     // while actual actor guest execution is outside this transport.
     {
