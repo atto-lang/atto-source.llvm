@@ -56,6 +56,8 @@ struct RegionMoveLowering {
     // Values exactly match OresNativeIntArrayStatus; not a guest Result yet.
     llvm::Value* array_failure_status = nullptr;
     const std::unordered_map<std::string, llvm::Value*>* owned_failure_handles = nullptr;
+    // Only pure host functions without owners/actors may trap on overflow.
+    llvm::Module* checked_scalar_module = nullptr;
 };
 
 // Only a lexical named array or a direct class-owned array field is legal.
@@ -74,6 +76,26 @@ llvm::Value* array_handle_address(const Expression& receiver,
         if (moves->array_fields->count(key)) return fields.at(key);
     }
     throw std::runtime_error("native Array<int> receiver is not an owned place");
+}
+
+// Real overflow intrinsics and terminal trap for an admitted pure call graph.
+// Never used where trapping would bypass actor supervision or owner cleanup.
+llvm::Value* checked_pure_i64(llvm::IRBuilder<>& builder, llvm::Module& module,
+                              llvm::Value* lhs, llvm::Value* rhs,
+                              llvm::Intrinsic::ID operation) {
+    auto* intrinsic = llvm::Intrinsic::getDeclaration(&module, operation, {lhs->getType()});
+    auto* pair = builder.CreateCall(intrinsic, {lhs, rhs}, "i64.checked.pair");
+    auto* value = builder.CreateExtractValue(pair, {0}, "i64.checked.value");
+    auto* overflow = builder.CreateExtractValue(pair, {1}, "i64.checked.overflow");
+    auto* current = builder.GetInsertBlock()->getParent();
+    auto* failure = llvm::BasicBlock::Create(builder.getContext(), "i64.overflow.trap", current);
+    auto* success = llvm::BasicBlock::Create(builder.getContext(), "i64.checked.continue", current);
+    builder.CreateCondBr(overflow, failure, success);
+    builder.SetInsertPoint(failure);
+    builder.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+    builder.CreateUnreachable();
+    builder.SetInsertPoint(success);
+    return value;
 }
 
 llvm::Value* lower(const Expression& expr,
@@ -170,8 +192,14 @@ llvm::Value* lower(const Expression& expr,
             }
             return storage.at(expr.left->name);
         }
-        case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
+        case Expression::Kind::Negate: {
+            llvm::Value* operand = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            if (moves && moves->checked_scalar_module)
+                return checked_pure_i64(builder, *moves->checked_scalar_module,
+                    llvm::ConstantInt::get(i64, 0), operand,
+                    llvm::Intrinsic::ssub_with_overflow);
+            return builder.CreateNeg(operand, "neg");
+        }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
@@ -204,16 +232,25 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (moves && moves->checked_scalar_module)
+                return checked_pure_i64(builder, *moves->checked_scalar_module,
+                    left, right, llvm::Intrinsic::sadd_with_overflow);
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (moves && moves->checked_scalar_module)
+                return checked_pure_i64(builder, *moves->checked_scalar_module,
+                    left, right, llvm::Intrinsic::ssub_with_overflow);
             return builder.CreateSub(left, right, "sub");
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (moves && moves->checked_scalar_module)
+                return checked_pure_i64(builder, *moves->checked_scalar_module,
+                    left, right, llvm::Intrinsic::smul_with_overflow);
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Call: {
@@ -279,6 +316,33 @@ llvm::Value* lower(const Expression& expr,
  * actors, allocations, callbacks or implicit source-level error claims.
  * This is a migration/conformance slice, NOT general numeric parity.
  */
+// Validate expressions without effects, owners, or borrowed places.
+bool checked_pure_function_tree(const Expression& expr,
+                                const std::unordered_set<std::string>& parameters,
+                                std::size_t depth = 0) {
+    if (depth >= 64) return false;
+    switch (expr.kind) {
+        case Expression::Kind::Integer: return true;
+        case Expression::Kind::Variable: return parameters.count(expr.name) == 1;
+        case Expression::Kind::Negate:
+            return expr.left && checked_pure_function_tree(*expr.left, parameters, depth + 1);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            return expr.left && expr.right &&
+                checked_pure_function_tree(*expr.left, parameters, depth + 1) &&
+                checked_pure_function_tree(*expr.right, parameters, depth + 1);
+        case Expression::Kind::Call:
+            if (expr.type_arguments_present || !expr.type_arguments.empty()) return false;
+            return std::all_of(expr.arguments.begin(), expr.arguments.end(),
+                [&](const std::unique_ptr<Expression>& argument) {
+                    return argument &&
+                        checked_pure_function_tree(*argument, parameters, depth + 1);
+                });
+        default: return false;
+    }
+}
+
 bool checked_scalar_tree(const Expression& expr,
                          const std::unordered_set<std::string>& parameters,
                          std::size_t depth = 0) {
@@ -336,7 +400,36 @@ llvm::Value* lower_checked_scalar(
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
-                                  bool cortex_m_target, bool experimental_checked_i64) {
+                                  bool cortex_m_target, bool experimental_checked_i64,
+                                   bool experimental_checked_functions) {
+    if (experimental_checked_functions) {
+        // A trapped callee cannot unwind another function's owner frames.
+        // Admit only an entirely pure same-module host call graph.
+        if (experimental_checked_i64 || wasm32_target || cortex_m_target ||
+                !source.module.empty() || !source.classes.empty() ||
+                !source.actors.empty() || !source.cooperative_loops.empty() ||
+                source.functions.empty() || source.functions.size() > 64)
+            throw std::runtime_error("checked native functions require host-only pure scalar module");
+        for (const auto& fn : source.functions) {
+            if (fn.returns_void || !fn.result || fn.parameters.size() > 8 ||
+                    !fn.generic_parameters.empty() || fn.scalar_while ||
+                    fn.has_declared_effects || !fn.locals.empty() ||
+                    !fn.statements.empty() || !fn.early_returns.empty() ||
+                    !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+                    !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+                    !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                    !fn.caught_throw_defers.empty())
+                throw std::runtime_error("checked native functions disallow effects, owners and cleanup");
+            std::unordered_set<std::string> parameters;
+            for (const auto& param : fn.parameters)
+                if (param.mode != Parameter::Mode::Value ||
+                        !param.class_name.empty() || !param.generic_type.empty() ||
+                        !parameters.insert(param.name).second)
+                    throw std::runtime_error("checked native functions require unique value int parameters");
+            if (!checked_pure_function_tree(*fn.result, parameters))
+                throw std::runtime_error("checked native function expression is not pure scalar");
+        }
+    }
     if (experimental_checked_i64) {
         // This opt-in companion ABI cannot bypass ownership cleanup because
         // it admits NO owner state, actor, calls, side effect, or suspension.
@@ -755,7 +848,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
-            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles};
+            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
+             experimental_checked_functions ? &module : nullptr};
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
