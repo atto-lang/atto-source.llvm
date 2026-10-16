@@ -132,7 +132,10 @@ class Plan {
     }
 public:
     Plan(std::vector<Node> nodes, std::size_t output, Kind type)
-        : nodes_(std::move(nodes)), output_(output), type_(type) {}
+        : nodes_(std::move(nodes)), output_(output), type_(type) {
+        if (nodes_.empty() || nodes_.size() > 4096 || output_ >= nodes_.size())
+            throw std::invalid_argument("invalid execution graph plan");
+    }
     const std::vector<Node>& nodes() const noexcept { return nodes_; }
     Kind result_type() const noexcept { return type_; }
     bool cpu_only() const noexcept {
