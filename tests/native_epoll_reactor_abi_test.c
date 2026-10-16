@@ -1,0 +1,52 @@
+#include "oreslang/runtime/NativeEpollReactorABI.h"
+#include <stdlib.h>
+#include <stdint.h>
+#include <time.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
+static void require(int condition) { if (!condition) abort(); }
+static int next_completion(OresNativeNio* runtime, OresNativeNioCompletion* out) {
+    struct timespec delay = {0, 1000000};
+    for (int i = 0; i < 3000; ++i) {
+        if (ores_native_nio_try_pop(runtime, out)) return 1;
+        nanosleep(&delay, NULL); /* test-only host timeout */
+    }
+    return 0;
+}
+int main(void) {
+    OresNativeNio* runtime = ores_native_nio_open(4, 0, 1);
+    require(runtime && ores_native_nio_started_reactors(runtime) == 1);
+    require(ores_native_nio_completion_fd(runtime, 0) >= 0);
+    int pipefd[2] = {-1, -1};
+    require(pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+    OresNativeNioWatch first = {0};
+    require(ores_native_nio_try_watch(runtime, pipefd[0], EPOLLIN, &first));
+    require(first.ticket != 0 && first.reactor == 0);
+    require(ores_native_nio_started_reactors(runtime) == 1);
+    require(write(pipefd[1], "!", 1) == 1);
+    OresNativeNioCompletion received = {0};
+    require(next_completion(runtime, &received));
+    require(received.outcome == ORES_NATIVE_NIO_READY);
+    require(received.watch.ticket == first.ticket);
+    require(received.fd == pipefd[0] && (received.events & EPOLLIN));
+    char c;
+    require(read(pipefd[0], &c, 1) == 1 && c == '!');
+    OresNativeNioWatch second = {0};
+    require(ores_native_nio_try_watch(runtime, pipefd[0], EPOLLIN, &second));
+    require(second.ticket != first.ticket);
+    require(!ores_native_nio_try_cancel(runtime, first));
+    require(ores_native_nio_try_cancel(runtime, second));
+    require(!ores_native_nio_try_cancel(runtime, second));
+    require(next_completion(runtime, &received));
+    require(received.outcome == ORES_NATIVE_NIO_CANCELLED);
+    require(received.watch.ticket == second.ticket);
+    close(pipefd[0]); close(pipefd[1]);
+    ores_native_nio_close(runtime);
+
+    OresNativeNio* realtime = ores_native_nio_open(3, 1, 3);
+    require(realtime != NULL && ores_native_nio_started_reactors(realtime) == 3);
+    ores_native_nio_close(realtime);
+    require(ores_native_nio_open(5, 1, 5) == NULL);
+    return 0;
+}
