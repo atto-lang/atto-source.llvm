@@ -21,6 +21,35 @@ class DiagnosticProof(unittest.TestCase):
         self.assertFalse(run.check_diagnostic(1, "partial IR", "unknown parameter", "unknown_name", "llvm"))
         self.assertTrue(run.check_diagnostic(1, "", "duplicate function", "duplicate_declaration", "llvm"))
 
+    def test_diagnostic_stdout_never_counts_as_semantic_rejection(self):
+        # This applies to *both* LLVM and Graal. A compiler that emits
+        # output on a failed diagnostic must not earn a conformance pass.
+        for backend, expected_error in (
+            ("llvm", "unknown parameter 'x'"),
+            ("graal", "unknown name 'x'"),
+        ):
+            with self.subTest(backend=backend):
+                self.assertTrue(run.check_diagnostic(
+                    1, "", expected_error, "unknown_name", backend))
+                self.assertTrue(run.check_diagnostic(
+                    1, "  \\n\\t", expected_error, "unknown_name", backend))
+                for output in ("42", "partial guest output", "; ModuleID = leaked"):
+                    self.assertFalse(run.check_diagnostic(
+                        1, output, expected_error, "unknown_name", backend))
+                for exit_code in (0, 2, -11):
+                    self.assertFalse(run.check_diagnostic(
+                        exit_code, "", expected_error, "unknown_name", backend))
+
+        case = {"id": "diagnostic.stdout-contamination",
+                "kind": "diagnostic", "source": "fixtures/unknown.ores",
+                "diagnostic_class": "unknown_name"}
+        rejected = CompletedProcess(args=[], returncode=1,
+                                    stdout="compiled guest output",
+                                    stderr="unknown name 'x'")
+        with patch.object(run.subprocess, "run", return_value=rejected):
+            result = run.run_case(case, "graal", ["compiler", "{source}"], "", 3)
+        self.assertEqual(result["status"], "fail")
+
     def test_command_requires_one_placeholder(self):
         for command in ("", "clang foo", "tool {source} {source}"):
             with self.subTest(command=command):
