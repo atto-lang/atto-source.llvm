@@ -500,6 +500,12 @@ if(BUILD_TESTING)
         --diagnostic "native floating division unsupported")
     oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
         --diagnostic "native floating division unsupported")
+    oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
+        --diagnostic "native floating-point/decimal literal unsupported")
+    oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
+        --diagnostic "native floating-point/decimal literal unsupported")
+    oreslang_contract_test(native_float_fraction_unavailable numeric-floating-fraction-reject.ores
+        --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
         --diagnostic "native integer remainder unsupported")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
