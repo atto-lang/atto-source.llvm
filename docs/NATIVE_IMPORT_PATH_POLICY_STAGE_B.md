@@ -129,3 +129,34 @@ Returning a .java path does not demonstrate native Java source islands.
 
 **This is a tested host-only Stage-B component, not completed native backend
 Stage-B/Stage-C import or runtime parity.**
+
+## Follow-up security audit (2026-10-16, additional hardening)
+
+Found and corrected **unverified-by-full-compiler** admission gaps:
+
+- Explicit source files outside a caller-provided discovery boundary must
+  fail instead of silently selecting the boundary's root manifest.
+- The native source resolver must fail closed on explicit and implicit Java
+  source imports, `java:` host imports and foreign `.c` files. A symlink
+  with an `.ores` filename pointing to a `.java` target is also rejected.
+  Returning a foreign path must not be mistaken for compiler parity.
+- Accepted descriptive TOML project/package metadata now requires actual
+  quoted basic-string values; malformed known fields are not silently ignored.
+- The source identity registry binds canonical `.ores` files to the
+  project's physical root, manifest and discovery boundary. A conflicting
+  second registration fails before a future linker can use that graph.
+
+Regression cases for all four areas were added to the host-only manifest
+resolver test. A **separate isolated C++17 identity-logic reproducer** with
+these source-context checks ran successfully under strict GCC, strict Clang,
+and GCC AddressSanitizer/UndefinedBehaviorSanitizer (3 executions).
+These runs test the extracted identity-check logic, **not the entire updated
+GitHub header, manifest resolver, LLVM compiler, or CTest**. Do not re-use
+the earlier 2/2 CTest evidence as proof of this newer branch head.
+
+The pre-approved destination's source-free CI job also executed five steps
+successfully on the latest retry of
+[private workflow run #38931969271](https://github.com/ores-dummy-org-oreslang-stack/ores-dummy-org-oreslang-stack-lambdas/actions/runs/38931969271).
+The compiler import-regression job remains **skipped**. The repository's
+private-source transfer approval PRs remain unmerged; no private Oreslang
+source was copied across organizations.
