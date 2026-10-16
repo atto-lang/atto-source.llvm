@@ -4,6 +4,7 @@
 // a device driver, or a GPU-on-CPU fallback. All GPU/transfer graphs reject
 // atomically before CPU execution or scheduling.
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <functional>
