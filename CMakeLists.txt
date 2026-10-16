@@ -126,6 +126,14 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_NATIVE_ARRAY_CLANG}")
     set_tests_properties(native_annotation_macro_aot_admission PROPERTIES TIMEOUT 180)
+    # Real-time v1 accepts typed soft scheduling intent but rejects every
+    # unverified bounded/hard claim before any native IR is emitted.
+    add_test(NAME native_realtime_contract_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/realtime_contract_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_realtime_contract_admission
+        PROPERTIES TIMEOUT 160)
     add_test(NAME native_annotation_macro_aot_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_annotation_macro_aot_harness.py")
