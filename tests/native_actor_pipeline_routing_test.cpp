@@ -521,21 +521,34 @@ int main() {
                   "saturated mailbox unexpectedly admitted pending writer");
             pending_writers.push_back(std::move(future));
         }
+        check(pipe.buffered_payload_bytes() == 16ULL * 1024 * 1024,
+              "pending writers were not charged against graph payload credit");
         bool denied_writer = false;
         try { pipe.write_to_async("Producer", "ConsumerB", megabyte).get(); }
         catch (const std::logic_error&) { denied_writer = true; }
         check(denied_writer, "pending writers bypassed resident byte cap");
         check(pipe.read_async(1).get() == megabyte,
               "byte-credit drain missed queued payload");
+        check(pipe.buffered_payload_bytes() == 15ULL * 1024 * 1024,
+              "promoting a pending writer duplicated or leaked byte credit");
         pending_writers[0].get();
         auto recovered = pipe.write_to_async("Producer", "ConsumerB", megabyte);
         check(recovered.wait_for(0ms) == std::future_status::timeout,
               "byte-credit recovery should still respect mailbox backpressure");
+        check(pipe.buffered_payload_bytes() == 16ULL * 1024 * 1024,
+              "recovered pending writer was not charged exactly once");
         pipe.close();
+        check(pipe.buffered_payload_bytes() == 10ULL * 1024 * 1024,
+              "STOP did not release credits for cancelled pending writers");
         bool cancelled = false;
         try { recovered.get(); }
         catch (const std::logic_error&) { cancelled = true; }
         check(cancelled, "STOP failed to cancel byte-accounted pending writer");
+        for (int i = 0; i < 10; ++i)
+            check(pipe.read_async(1).get() == megabyte,
+                  "post-STOP drain lost an already-admitted message");
+        check(pipe.buffered_payload_bytes() == 0,
+              "post-STOP drain leaked graph payload credit");
     }
 
     // Host-only concurrency: per-source selector mutex serializes selection,
