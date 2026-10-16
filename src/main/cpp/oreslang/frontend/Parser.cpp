@@ -116,6 +116,12 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // Value pipelines are a single adjacent token. Ordinary '|' is
+        // intentionally not accepted by this restricted scalar frontend.
+        if (source_.substr(at_, 2) == "|>") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -1145,7 +1151,28 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return additive(); }
+    std::unique_ptr<Expression> expression() {
+        // The native scalar subset forwards to *named* functions only.
+        // Option/Result transforms require tagged-value type checking and
+        // are rejected here rather than silently erasing error variants.
+        auto value = additive();
+        while (token_.text == "|>") {
+            advance();
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                fail("native pipeline stage requires a named scalar callable");
+            auto stage = primary();
+            if (stage->kind == Expression::Kind::Variable)
+                stage->kind = Expression::Kind::Call;
+            if (stage->kind != Expression::Kind::Call)
+                fail("native pipeline stage requires a named scalar callable");
+            if (stage->arguments.size() >= 64)
+                fail("native pipeline exceeds scalar callable arity budget");
+            stage->arguments.insert(stage->arguments.begin(), std::move(value));
+            stage->argument_names.insert(stage->argument_names.begin(), "");
+            value = std::move(stage);
+        }
+        return value;
+    }
 
     std::unique_ptr<Expression> additive() {
         auto left = product();
