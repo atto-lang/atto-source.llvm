@@ -121,6 +121,22 @@ These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
 isolate memory ownership, or guest compiler lowering.
 
+### Multiple instances of one actor class (host graph)
+
+`PipeStage.actor_type` identifies the **nominal actor class**, not a unique
+graph node. The optional `PipeStage.node_id` identifies an **instance in one
+published graph**. If omitted, `actor_type` is used as the legacy shorthand
+and duplicate identities are rejected. A graph may therefore contain several
+`Worker` instances named `worker-0`, `worker-1`, etc., all of the same
+nominal actor type but with separately bounded mailboxes and routing credits.
+Every `PipeConnection.source/target`, `write_to_async` target, and host
+`write_*_async` source refers to this exact node ID rather than a class name.
+
+This is a trusted **host graph** identity, not a live `ActorRef`, forgeable
+authority token or actor incarnation. Guest `self.forward_to(...)` must resolve
+an authorized, generation-fenced connection/port from the scheduler's current
+actor context; accepting a user-supplied string as authority is prohibited.
+
 ## Mandatory release gates
 
 - Compile and execute the new host graph/routing C++ CTests with both
