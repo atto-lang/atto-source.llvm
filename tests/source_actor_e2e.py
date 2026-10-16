@@ -60,6 +60,7 @@ def main():
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
         "source-actor-inline-self-duplicate.ores": "self is not an overload parameter",
+        "source-actor-inline-self-duplicate-reversed.ores": "self is not an overload parameter",
         "source-actor-inline-self-trailing.ores": "expected 'int'",
     }
     for name, diagnostic in negatives.items():
