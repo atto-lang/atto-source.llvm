@@ -42,6 +42,46 @@ int main() {
     NativeSupervisorRegistry registry(25, 25, 25);
     auto supervisor = registry.create_child(registry.root());
 
+    // Cross-backend v1 selector fixture: Java, .NET, WASM, Forge and LLVM
+    // share these unsigned UTF-8 FNV-1a64 modulo-3 expected destinations.
+    {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event", "source"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-b"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-c"}
+        };
+        std::vector<PipeConnection> edges = {
+            {"source","worker-a","Event"}, {"source","worker-b","Event"},
+            {"source","worker-c","Event"}
+        };
+        NativeActorPipeTransport pipe(registry, supervisor, stages, edges, 4, 4);
+        struct Vector { const char* key; std::size_t slot; };
+        const std::vector<Vector> keys = {
+            {"customer-7",0}, {"alpha",0}, {"beta",2},
+            {"\xf0\x9f\x8c\x8d",0}, {"",2}
+        };
+        for (const auto& item : keys) {
+            pipe.write_by_key_async("source", item.key, "v").get();
+            check(pipe.read_async(item.slot).get()=="v",
+                  "five-backend canonical keyed routing vector changed");
+        }
+        for (int i=0; i<999; ++i) {
+            pipe.write_round_robin_async("source","r").get();
+            check(pipe.read_async(static_cast<std::size_t>(i%3)).get()=="r",
+                  "five-backend three-consumer RR order changed");
+        }
+        auto broadcast=pipe.write_all_report_async("source","fanout");
+        check(broadcast.size()==3 && broadcast[0].target=="worker-a" &&
+              broadcast[1].target=="worker-b" && broadcast[2].target=="worker-c",
+              "five-backend three-consumer broadcast order changed");
+        for (std::size_t i=0; i<broadcast.size(); ++i) {
+            broadcast[i].admission.get();
+            check(pipe.read_async(i).get()=="fanout","fanout missing consumer");
+        }
+        pipe.close();
+    }
+
     // A real checked DAG, not a fictitious list of linear pipe edges.
     {
         auto links = check_actor_pipeline_graph(graph_stages(), graph_edges());
