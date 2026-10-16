@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
+#include "oreslang/imports/NativeScalarImportClosure.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
@@ -59,6 +60,7 @@ static void require_valid_source_utf8(std::string_view source) {
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool experimental_scalar_imports = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -70,6 +72,9 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-scalar-imports") {
+            if (experimental_scalar_imports) { std::cerr << "duplicate scalar imports option\n"; return 2; }
+            experimental_scalar_imports = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -99,16 +104,23 @@ int main(int argc, char** argv) {
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-scalar-imports] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
-        const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
-            ? "cortex-m source exceeds 128 KiB limit"
-            : "native source exceeds 8 MiB admission limit");
+        if (experimental_scalar_imports &&
+                (cortex_m_target || wasm32_target || experimental_owned_int ||
+                 experimental_rt_scalar_loop))
+            throw std::runtime_error("experimental scalar imports require host-only, plain int mode");
+        const auto text = experimental_scalar_imports
+            ? oreslang::imports::assemble_scalar_import_closure(
+                  path, require_valid_source_utf8)
+            : read_regular_source(path, kMaxSourceBytes, cortex_m_target
+                  ? "cortex-m source exceeds 128 KiB limit"
+                  : "native source exceeds 8 MiB admission limit");
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
@@ -122,6 +134,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
+        if (experimental_scalar_imports &&
+                (!ast.module.empty() || !ast.classes.empty() || !ast.actors.empty() ||
+                 !ast.cooperative_loops.empty()))
+            throw std::runtime_error("native scalar import slice rejects modules, classes and actors");
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls
