@@ -50,6 +50,22 @@ int main() {
     require(host.allows(Permission::Net,"API.EXAMPLE.COM.:0443"),true,"DNS canonical");
     require(host.allows(Permission::Net,"api.example.com:444"),false,"port separation");
     require(host.allows(Permission::Net,"api.example.com:0"),false,"invalid port");
+    // 2^32 + 443 wraps to 443 in an unchecked unsigned parser. The
+    // resource AND policy scope must reject long numeric port spellings.
+    for (const char* bad_port : {"4294967739", "4294967297", "000443", "9999999999"}) {
+        require(host.allows(Permission::Net,
+                std::string("api.example.com:") + bad_port), false,
+                "IPv4/DNS port length and overflow rejected");
+        bool bad_rule_rejected = false;
+        try {
+            (void)make(Permission::Net,
+                {scope(Permission::Net, std::string("api.example.com:") + bad_port)});
+        } catch (const std::invalid_argument&) { bad_rule_rejected = true; }
+        require(bad_rule_rejected, true,
+                "overflowed IPv4/DNS permission rule rejected before admission");
+    }
+    require(host.allows(Permission::Net,"api.example.com:0443"),true,
+            "valid zero-padded port within five digits");
     require(host.allows(Permission::Net,"127.1:443"),false,"numeric alias");
     require(host.allows(Permission::Net,"alice@api.example.com:443"),false,"url credentials");
     auto numeric_alias = make(Permission::Net,{scope(Permission::Net,"*"),
@@ -93,6 +109,20 @@ int main() {
         scope(Permission::Net,"[0:0:0:0:0:0:0:1]:443")});
     require(ipv6.allows(Permission::Net,"[::1]:443"),true,"IPv6 compression canonical");
     require(ipv6.allows(Permission::Net,"[::1]:444"),false,"IPv6 port isolation");
+    for (const char* bad_port : {"4294967739", "4294967297", "000443", "9999999999"}) {
+        require(ipv6.allows(Permission::Net,
+                std::string("[::1]:") + bad_port), false,
+                "IPv6 port length and overflow rejected");
+        bool bad_rule_rejected = false;
+        try {
+            (void)make(Permission::Net,
+                {scope(Permission::Net, std::string("[::1]:") + bad_port)});
+        } catch (const std::invalid_argument&) { bad_rule_rejected = true; }
+        require(bad_rule_rejected, true,
+                "overflowed IPv6 permission rule rejected before admission");
+    }
+    require(ipv6.allows(Permission::Net,"[::1]:0443"),true,
+            "valid IPv6 zero-padded port within five digits");
     auto ipv6deny = make(Permission::Net, {
         scope(Permission::Net,"*"),scope(Permission::Net,"[::1]:443",true)});
     require(ipv6deny.allows(Permission::Net,"[0:0:0:0:0:0:0:1]:443"),false,
