@@ -137,6 +137,17 @@ int main() {
             false,"pre-connect authorization requires explicit port");
     require(named.allows_network_connection("other.example.com:443","203.0.113.7:443"),
             false,"host permission still required");
+    auto allowed_literal = make(Permission::Net, {
+        scope(Permission::Net,"203.0.113.7:443")});
+    require(allowed_literal.allows_network_connection("203.0.113.7:443", "203.0.113.7:443"),
+            true,"numeric request bound to exact selected address");
+    require(allowed_literal.allows_network_connection("203.0.113.7:443", "198.51.100.8:443"),
+            false,"numeric request cannot authorize different selected IP");
+    auto broad_net = make(Permission::Net,{scope(Permission::Net,"*")});
+    require(broad_net.allows_network_connection("203.0.113.7:443", "198.51.100.8:443"),
+            false,"even wildcard grant cannot excuse numeric address mismatch");
+    require(broad_net.allows_network_connection("[::1]:443", "203.0.113.7:443"),
+            false,"IPv6 request cannot pass IPv4-only selected address check");
     auto allDeny = make(Permission::Net,{scope(Permission::Net,"*"),scope(Permission::Net,"*",true)});
     require(allDeny.allows(Permission::Net,"other.example.org:443"),false,"deny all");
     for (const char* bad : {"/workspace/../secret", "/workspace//secret", "relative/path"}) {
