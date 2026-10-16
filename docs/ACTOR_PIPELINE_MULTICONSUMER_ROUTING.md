@@ -189,7 +189,41 @@ These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
 isolate memory ownership, or guest compiler lowering.
 
-## Mandatory release gates
+## Native host route-correlation ledger (2026-10-16)
+
+`ActorPipeRouteLedger.hpp` adds a C++17 **host-only** immutable
+correlation frame ledger over the validated DAG, with supervisor-selected
+ingress roots, generation-scoped flow IDs, independent route IDs for each
+fan-out message, one-shot frame retirement and 1..65,536-frame capacity.
+The ledger checks every selected forward edge, rejects ambiguous forwarding,
+preserves the published edge order, uses per-source round-robin cursors,
+and rejects foreign/stale frames and graph reconfiguration with live frames.
+An explicit supervisor abort invalidates outstanding frames.
+
+A reverse `backward(frame)` selector creates exactly **one** new,
+immutable, VM-host frame pointing to the immediate previous actor instance
+in the verified original path. Both fan-in branches keep their distinct
+paths; the original frame is consumed exactly once, the flow ID stays
+constant, and the reverse hop has its own route ID. Reverse data cannot
+re-enter forward selection or route above the origin.
+
+**Important:** this ledger is NOT yet attached to native DATA mailbox
+envelopes and does not authenticate the current executing actor. It also
+does not lower any Oreslang source `self.forward_*`, `self.backward` or
+`self.reply` method. The Java/GraalVM draft contains a more integrated,
+real-mailbox SHARED host bridge, so this constitutes **correlation-substrate
+parity only, not executable backend parity**.
+
+`native_actor_pipe_route_ledger_test.cpp` is registered with CTest and
+the standalone GCC/Clang O0/O2/ASan/UBSan matrix. A local syntax and
+algorithm test of the **exact new header and test Git blobs**, using a
+type-compatible lightweight `ActorPipeContract.hpp` graph validator
+stub, passed GCC 14 and Clang 17 under ASan/UBSan with 2,000 parallel
+route selections. The production DAG validator, actual native transport,
+full repository CTest and compiled guest actor code were **not executed**
+by that isolated test and remain release blockers.
+
+## ## Mandatory release gates
 
 - Compile and execute the new host graph/routing C++ CTests with both
   GCC and Clang, in Debug/Release and sanitizers.
