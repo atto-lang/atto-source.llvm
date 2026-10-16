@@ -384,12 +384,16 @@ public:
             const std::string& source, std::string payload) {
         const auto& destinations = connected_outlets(source);
         std::lock_guard<std::mutex> selection(route_mutex_);
-        const auto cursor = next_outlet_[source];
+        // Every source cursor is installed while constructing the validated
+        // graph. Never allocate an unordered_map entry on an attempted turn:
+        // an allocation failure here would fail *before* the RR turn was
+        // consumed, unlike a mailbox admission failure.
+        auto& cursor = next_outlet_.at(source);
         const auto edge = destinations[cursor % destinations.size()];
         // An attempted turn counts even if write_async fails before it can
         // return a Future (for example, due to allocation failure). Advancing
         // after admission would violate the strict RR contract in that case.
-        next_outlet_[source] = (cursor + 1) % destinations.size();
+        cursor = (cursor + 1) % destinations.size();
         return write_async(edge, std::move(payload));
     }
 
@@ -510,6 +514,13 @@ private:
             edges_.push_back(std::make_unique<Edge>(edge_capacity));
             outgoing_[schema_[i].source].push_back(i);
         }
+        // Construct every RR cursor before publishing the supervised group.
+        // Allocation here can reject graph construction without publishing
+        // any routing state; attempts through write_round_robin_async()
+        // will then have a lookup-only path under route_mutex_.
+        next_outlet_.reserve(outgoing_.size());
+        for (const auto& outlet : outgoing_)
+            next_outlet_.emplace(outlet.first, std::size_t{0});
         group_ = registry.create_group(supervisor, worker_capacity);
     }
 
