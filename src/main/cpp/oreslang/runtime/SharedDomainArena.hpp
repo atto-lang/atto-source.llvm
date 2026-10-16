@@ -26,11 +26,11 @@ public:
         std::shared_lock<std::shared_mutex> read_;
         std::unique_lock<std::shared_mutex> write_;
         bool exclusive_;
-        Lease(SharedDomainArena& arena, Grant grant, bool exclusive)
+        Lease(SharedDomainArena& arena, std::uint64_t actor, Grant grant, bool exclusive)
             : arena_(&arena), exclusive_(exclusive) {
             if (exclusive_) write_ = std::unique_lock<std::shared_mutex>(arena.mutex_);
             else read_ = std::shared_lock<std::shared_mutex>(arena.mutex_);
-            arena.validate_grant(grant, exclusive_);
+            arena.validate_grant(grant, actor, exclusive_);
         }
         void require_live(bool write = false) const {
             if (!arena_ || arena_->closing_.load(std::memory_order_acquire) ||
@@ -117,7 +117,7 @@ public:
     }
     void revoke(Grant grant) {
         std::unique_lock lock(mutex_);
-        validate_grant(grant, false);
+        validate_grant(grant, 0, false);
         auto& m = members_[grant.member];
         m.active = false;
         m.actor = 0;
@@ -125,8 +125,8 @@ public:
         m.generation = m.generation == std::numeric_limits<std::uint64_t>::max()
             ? 0 : m.generation + 1;
     }
-    Lease read(Grant grant) { return Lease(*this, grant, false); }
-    Lease write(Grant grant) { return Lease(*this, grant, true); }
+    Lease read(std::uint64_t actor, Grant grant) { return Lease(*this, actor, grant, false); }
+    Lease write(std::uint64_t actor, Grant grant) { return Lease(*this, actor, grant, true); }
 
     // Supervisor CONTROL path only: never block a carrier waiting for loans.
     // Returning false means existing readers/writers have not yet quiesced.
@@ -166,13 +166,13 @@ private:
         volatile unsigned char* p = reinterpret_cast<volatile unsigned char*>(data.data());
         for (std::size_t i = 0; i < N; ++i) p[i] = 0;
     }
-    void validate_grant(Grant grant, bool writer) const {
+    void validate_grant(Grant grant, std::uint64_t actor, bool writer) const {
         if (closing_.load(std::memory_order_acquire) ||
             grant.domain != identity_ || grant.member >= Members)
             throw std::logic_error("foreign or retired shared region grant");
         const auto& m = members_[grant.member];
         if (!m.active || m.generation != grant.generation || !m.actor ||
-            !m.read || (writer && !m.write))
+            !m.read || (actor != 0 && m.actor != actor) || (writer && !m.write))
             throw std::logic_error("stale or insufficient shared region grant");
     }
 };
