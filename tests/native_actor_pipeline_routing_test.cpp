@@ -81,10 +81,35 @@ int main() {
         }, "supervisor actor in data pipeline permitted");
     }
 
+    // Legacy one-consumer source forward is explicit, not policy-dependent.
+    {
+        std::vector<PipeStage> linear = {
+            {"Producer", PipeRole::readable, "", "Event"},
+            {"ConsumerA", PipeRole::writable, "Event", ""}
+        };
+        NativeActorPipeTransport pipe(registry, supervisor, linear, 2, 4);
+        pipe.write_one_async("Producer", "single").get();
+        check(pipe.read_async(0).get() == "single",
+              "single-edge default forwarding failed");
+        rejected([&] { (void)pipe.write_one_async("ConsumerA", "bad"); },
+                 "unconnected actor was allowed to forward");
+        pipe.close();
+    }
+
     {
         NativeActorPipeTransport pipe(
             registry, supervisor, graph_stages(), graph_edges(), 2, 4);
         check(pipe.edge_count() == 2, "graph did not create two bounded edges");
+        rejected([&] { (void)pipe.write_one_async("Producer", "ambiguous"); },
+                 "ambiguous forward chose an arbitrary destination");
+        auto tagged = pipe.write_all_report_async("Producer", "tagged");
+        check(tagged.size() == 2 && tagged[0].edge_index == 0 &&
+              tagged[0].target == "ConsumerA" && tagged[1].edge_index == 1 &&
+              tagged[1].target == "ConsumerB",
+              "fanout reports lost stable edge identity");
+        for (auto& entry : tagged) entry.admission.get();
+        check(pipe.read_async(0).get() == "tagged", "tagged fanout first missing");
+        check(pipe.read_async(1).get() == "tagged", "tagged fanout second missing");
         auto ack = pipe.write_all_async("Producer", "broadcast");
         check(ack.size() == 2, "fan-out skipped a recipient");
         for (auto& result : ack) result.get();
@@ -118,6 +143,22 @@ int main() {
         rejected([&] {
             pipe.write_by_key_async("Producer", std::string(4097, 'x'), "bad").get();
         }, "unbounded route key permitted");
+        rejected([&] {
+            pipe.write_by_key_async("Producer", std::string("\\xc0\\xaf", 2), "bad").get();
+        }, "overlong UTF-8 routing key permitted");
+        rejected([&] {
+            pipe.write_by_key_async("Producer", std::string("\\xed\\xa0\\x80", 3), "bad").get();
+        }, "UTF-8 surrogate routing key permitted");
+        rejected([&] {
+            pipe.write_by_key_async("Producer", std::string("\\xf4\\x90\\x80\\x80", 4), "bad").get();
+        }, "UTF-8 out-of-range routing key permitted");
+        rejected([&] {
+            pipe.write_by_key_async("Producer", std::string("\\xe2\\x82", 2), "bad").get();
+        }, "truncated UTF-8 routing key permitted");
+        const std::string unicode_key("\\xf0\\x9f\\x8c\\x8d", 4);
+        pipe.write_by_key_async("Producer", unicode_key, "valid-unicode").get();
+        check(pipe.read_async(key_slot(unicode_key)).get() == "valid-unicode",
+              "valid non-ASCII UTF-8 key was misrouted");
         pipe.close();
         bool denied = false;
         try { pipe.write_round_robin_async("Producer", "after-close").get(); }
@@ -134,11 +175,13 @@ int main() {
         auto pending = pipe.write_to_async("Producer", "ConsumerB", "queued");
         check(pending.wait_for(0ms) == std::future_status::timeout,
               "expected destination pressure");
-        const auto receipts = pipe.write_all_async("Producer", "mixed");
-        check(receipts.size() == 2, "partial fanout lost receipt");
-        receipts[0].get();
+        const auto receipts = pipe.write_all_report_async("Producer", "mixed");
+        check(receipts.size() == 2 && receipts[0].target == "ConsumerA" &&
+              receipts[1].target == "ConsumerB",
+              "partial fanout lost target-labelled receipts");
+        receipts[0].admission.get();
         bool failed_second = false;
-        try { receipts[1].get(); }
+        try { receipts[1].admission.get(); }
         catch (const std::logic_error&) { failed_second = true; }
         check(failed_second, "fanout hid failed overloaded branch");
         check(pipe.read_async(0).get() == "mixed", "healthy branch not delivered");
