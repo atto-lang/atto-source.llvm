@@ -96,6 +96,32 @@ CASES = {
         "pub fnc main(): int { recover 42; return 0; }",
         "native exceptional-control boundary unsupported",
     ),
+    # Unlowered execution regions must fail before producing any native IR.
+    # This is rejection parity, not a claim of GPU or nested-graph execution.
+    "cpu-value": (
+        "pub fnc main():int{return cpu { 42 };}",
+        "native cpu execution block boundary unsupported",
+    ),
+    "cpu-function-name": (
+        "pub fnc cpu():int{return 42;}",
+        "native cpu execution block boundary unsupported",
+    ),
+    "cpu-gpu-nested": (
+        "pub fnc main():int{return cpu { gpu { 42 } };}",
+        "native cpu execution block boundary unsupported",
+    ),
+    "gpu-cpu-nested": (
+        "pub fnc main():int{return gpu { cpu { 42 } };}",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "gpu-cpu-gpu-nested": (
+        "pub fnc main():int{return gpu { cpu { gpu { 42 } } };}",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "gpu-value": (
+        "pub fnc main():int{return gpu { 42 };}",
+        "native gpu/quantum boundary unsupported",
+    ),
 }
 
 
@@ -103,6 +129,16 @@ def main():
     if len(sys.argv) != 2:
         raise ValueError("expected compiler executable argument")
     with tempfile.TemporaryDirectory(prefix="oreslang-native-keywords-") as tmp:
+        # A negative-only runner can pass when the compiler is broken and
+        # rejects everything; require a real positive source compilation.
+        control = pathlib.Path(tmp) / "control.ores"
+        control.write_text("pub fnc main():int{return 42;}\n", encoding="utf-8")
+        baseline = subprocess.run(
+            [sys.argv[1], str(control)], capture_output=True,
+            text=True, check=False, timeout=20,
+        )
+        if baseline.returncode != 0 or not baseline.stdout.strip() or baseline.stderr.strip():
+            raise AssertionError(f"native scalar positive control failed: {baseline!r}")
         for name, (source, diagnostic) in CASES.items():
             fixture = pathlib.Path(tmp) / (name + ".ores")
             fixture.write_text(source + "\n", encoding="utf-8")
