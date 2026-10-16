@@ -225,3 +225,30 @@ lowering, mutable filesystem races, or cross-backend parity.
 linked execution from this exact head.** The source GitHub Actions jobs have
 continued to fail before test steps; a source-free alternate organization
 canary does not count as evidence. No unapproved source mirror was created.
+
+## Additional Oct 16 audit: erased directives and host graph coverage
+
+The experimental preamble replaces leading `import "path";` source lines
+with same-length whitespace to preserve offsets. An unsupported `// ores:`
+target directive placed on one of those lines was erased before the original
+compiler's target-header admission check. This is now **rejected on every
+original source file before preamble stripping**, including transitively
+imported files. An entry-file and a dependency-file negative are in
+`tests/native_scalar_import_execution.py`.
+
+`native_scalar_import_closure_host_only` adds a separate, no-LLVM-library
+filesystem regression against the real assembled native import closure. It
+covers dependency-first ordering, physical path identities, diamond dedup,
+cycles, missing and foreign imports, retained target directives, installed
+zed-pkg aliases, lexical traversal and physical symlink escapes, depth and
+module-count caps. It is distinct from the required LLVM IR/Clang execution
+CTest. Tests have been **committed/registered, not executed** against the
+current source head. This is *not* evidence that the entire updated closure
+or compiler passes; do not promote the PR until an eligible runner executes
+its tests and records logs/results.
+
+Source organization Actions jobs continue failing with 0 executed steps;
+recent source-free alternate-private-org jobs demonstrate a working runner,
+but do not establish current paid minute balance or permission to transfer
+LLVM private code. Security authorization for any cross-organization source
+publication is tracked independently in LLVM issue #475.
