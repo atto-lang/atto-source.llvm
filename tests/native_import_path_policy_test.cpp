@@ -21,6 +21,9 @@ int main() {
         {".",Kind::Relative},{"..",Kind::Relative},
         {".hidden/util",Kind::Bare},{"..backup/util",Kind::Bare},
         {"lib/thing",Kind::Bare},{"/tmp/thing",Kind::Absolute},
+        {"C:/Windows/System32",Kind::Absolute},
+        {"C:\\Windows\\System32",Kind::Absolute},
+        {"//fileserver/share/source.ores",Kind::Absolute},
         {"java:java.util.ArrayList",Kind::HostJava},
         {"pkg:other_2/mod",Kind::Package},{"pkg:a-b/mod",Kind::Package},
         {".\\hidden",Kind::Relative}
@@ -32,7 +35,10 @@ int main() {
     check(classify("@/src\\util").suffix=="src/util","normalized slash");
     for(const std::string bad : {"","@","@/","@//src","@alias/x","pkg:",
          "pkg:alias","pkg:/mod","pkg:alias/","pkg:_bad/mod",
-         "pkg:bad.alias/mod","pkg:alias//file","file\nname"})
+         "pkg:bad.alias/mod","pkg:alias//file","file\nname",
+         "C:relative.ores","D:source.ores","mod:stream",
+         "./source.ores:stream","@/src/file.ores:alternate",
+         "pkg:math/src/file.ores:alternate"})
          reject([&]{(void)classify(bad);},"invalid import accepted");
     reject([&]{(void)classify(std::string(4097,'x'));},"length bound");
     for (int byte = 0; byte < 32; ++byte)
@@ -46,7 +52,9 @@ int main() {
     check(rooted_path(root,"src/../lib/util")==root/"lib/util","normalized rooted source");
     check(rooted_path(root,"..hidden/a")==root/"..hidden/a","hidden relative component");
     check(rooted_path(root/"./","src/a")==root/"src/a","trailing root separator");
-    for(const std::string bad: {"../other/file","..\\\\other/file","a/../../../other","/etc/passwd",""})
+    for(const std::string bad: {"../other/file","..\\\\other/file","a/../../../other","/etc/passwd","",
+         "C:/Windows/System32","C:relative.ores","a/b.ores:stream",
+         "nested\\folder:alternate"})
         reject([&]{(void)rooted_path(root,bad);},"root escape allowed");
     check(!beneath(root,"/tmp/ores-root/../outside"),"unnormalized ancestry escape");
     check(!beneath(root,"/tmp/ores-root/../../outside"),"multi-parent ancestry escape");
