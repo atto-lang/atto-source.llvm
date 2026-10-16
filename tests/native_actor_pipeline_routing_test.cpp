@@ -704,6 +704,35 @@ int main() {
         check(denied, "recovered edge exceeded its 16 MiB byte budget");
         pipe.close();
     }
+    // A fault exactly between graph-wide read credit reservation and deque
+    // append must return the reservation. A failed read may throw, but may
+    // never strand an invisible promise or poison other graph edges.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(),
+            2, 4, 1024, 16, 1);
+        pipe.fail_next_reader_enqueue_for_test();
+        bool injected = false;
+        try { (void)pipe.read_async(0); }
+        catch (const std::bad_alloc&) { injected = true; }
+        check(injected, "reader deque OOM fault injection was not exercised");
+        check(pipe.pending_reader_count() == 0,
+              "failed reader enqueue leaked graph-wide pending reader slot");
+        auto pending = pipe.read_async(0);
+        check(pipe.pending_reader_count() == 1,
+              "reader credit was not reusable after injected allocation failure");
+        bool denied_extra = false;
+        try { (void)pipe.read_async(1).get(); }
+        catch (const std::logic_error&) { denied_extra = true; }
+        check(denied_extra && pipe.pending_reader_count() == 1,
+              "allocation failure allowed over-admission of pending readers");
+        pipe.write_to_async("Producer", "ConsumerA", "after-OOM").get();
+        check(pending.get() == "after-OOM" && pipe.pending_reader_count() == 0,
+              "handoff after injected reader OOM lost DATA or reader credit");
+        pipe.close();
+        check(pipe.pending_reader_count() == 0,
+              "STOP leaked pending-reader credits after fault recovery");
+    }
 #endif
 
     // Pending writers consume the SAME byte credit as accepted messages.
