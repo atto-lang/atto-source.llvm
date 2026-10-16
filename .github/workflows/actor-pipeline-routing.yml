@@ -4,9 +4,11 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/ActorPipeContract.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorPipeRouteLedger.hpp'
       - 'tests/native_actor_pipe_contract_test.cpp'
       - 'tests/native_actor_pipe_graph_contract_test.cpp'
       - 'tests/native_actor_pipeline_routing_test.cpp'
+      - 'tests/native_actor_pipe_route_ledger_test.cpp'
       - 'scripts/test-actor-pipeline-routing.sh'
       - '.github/workflows/actor-pipeline-routing.yml'
   push:
@@ -14,9 +16,11 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/ActorPipeContract.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorPipeRouteLedger.hpp'
       - 'tests/native_actor_pipe_contract_test.cpp'
       - 'tests/native_actor_pipe_graph_contract_test.cpp'
       - 'tests/native_actor_pipeline_routing_test.cpp'
+      - 'tests/native_actor_pipe_route_ledger_test.cpp'
       - 'scripts/test-actor-pipeline-routing.sh'
       - '.github/workflows/actor-pipeline-routing.yml'
 permissions:
