@@ -129,6 +129,17 @@ public:
         return child(frame, selected);
     }
 
+    /** Same v1 key/UTF-8 algorithm as NativeActorPipeTransport; selection
+     * is scoped to the authenticated graph edge order, never a global actor
+     * name and never an authorization mechanism. */
+    Handle forward_by_key(const Handle& frame, const std::string& key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        require_forward(frame);
+        const auto& out = connected(frame->receiver());
+        const auto slot = actor_pipe_key_slot(key, out.size());
+        return child(frame, out[slot]);
+    }
+
     Handle forward_to(const Handle& frame, const std::string& target) {
         std::lock_guard<std::mutex> lock(mutex_);
         require_forward(frame);
