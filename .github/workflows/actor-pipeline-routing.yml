@@ -1,0 +1,37 @@
+name: LLVM actor pipeline host routing proof
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorPipeContract.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp'
+      - 'tests/native_actor_pipe_graph_contract_test.cpp'
+      - 'tests/native_actor_pipeline_routing_test.cpp'
+      - 'scripts/test-actor-pipeline-routing.sh'
+      - '.github/workflows/actor-pipeline-routing.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorPipeContract.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp'
+      - 'tests/native_actor_pipe_graph_contract_test.cpp'
+      - 'tests/native_actor_pipeline_routing_test.cpp'
+      - 'scripts/test-actor-pipeline-routing.sh'
+      - '.github/workflows/actor-pipeline-routing.yml'
+permissions:
+  contents: read
+jobs:
+  exact-source-native-host-routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Record complete source identity
+        run: |
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+          git hash-object src/main/cpp/oreslang/runtime/ActorPipeContract.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp
+      - name: Run full GCC/Clang and sanitizer matrix
+        run: sh scripts/test-actor-pipeline-routing.sh
