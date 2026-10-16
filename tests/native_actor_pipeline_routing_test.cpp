@@ -522,6 +522,38 @@ int main() {
     }
 
 
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // Deterministic bad_alloc at the deque-promotion boundary. A reader has
+    // already consumed an admitted payload; the failed pending writer must
+    // receive a terminal exception and release both its byte reservations.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4);
+        pipe.write_to_async("Producer", "ConsumerB", "ready").get();
+        auto pending = pipe.write_to_async("Producer", "ConsumerB", "queued");
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "promotion fault fixture did not create a pending writer");
+        check(pipe.buffered_payload_bytes() == 11,
+              "promotion fault fixture charged wrong initial bytes");
+        pipe.fail_next_writer_promotion_for_test();
+        check(pipe.read_async(1).get() == "ready",
+              "promotion allocation failure lost an admitted reader message");
+        bool promotion_failed = false;
+        try { pending.get(); }
+        catch (const std::bad_alloc&) { promotion_failed = true; }
+        check(promotion_failed,
+              "pending writer did not receive its promotion allocation failure");
+        check(pipe.buffered_payload_bytes() == 0,
+              "failed promotion leaked graph buffered-byte reservation");
+        pipe.write_to_async("Producer", "ConsumerB", "reuse").get();
+        check(pipe.read_async(1).get() == "reuse",
+              "failed promotion poisoned subsequent edge admissions");
+        check(pipe.buffered_payload_bytes() == 0,
+              "reused mailbox did not release its charged payload");
+        pipe.close();
+    }
+#endif
+
     // Pending writers consume the SAME byte credit as accepted messages.
     // Promotion from a pending writer to the mailbox transfers (rather
     // than duplicates) that credit, and the read frees one message's bytes.
