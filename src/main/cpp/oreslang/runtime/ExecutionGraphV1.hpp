@@ -55,6 +55,7 @@ class CpuFuture {
     struct State {
         std::mutex mu;
         std::atomic<bool> cancelled{false};
+        std::atomic<bool> started{false};
         bool settled = false;
         std::promise<Value> promise;
         std::shared_future<Value> value = promise.get_future().share();
@@ -199,7 +200,8 @@ public:
             if (!schedule) throw std::invalid_argument("missing trusted CPU executor");
             Plan copy = *this;
             schedule([state, copy = std::move(copy)] {
-                if (state->cancelled.load(std::memory_order_acquire)) return;
+                if (state->started.exchange(true, std::memory_order_acq_rel) ||
+                    state->cancelled.load(std::memory_order_acquire)) return;
                 try {
                     state->complete(copy.evaluate(state->cancelled));
                 } catch (...) {
