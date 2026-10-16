@@ -2,8 +2,9 @@
 """Run the common signed-i64 corpus through the *real* native LLVM compiler.
 
 Unlike the reference-only oracle, this compiles Oreslang source to LLVM IR,
-links a C launcher, executes the native binary, and compares the full 64-bit
-signed result (not its truncated shell exit status). No stub compiler passes.
+renames only LLVM's checked C `main` wrapper and directly invokes the exported
+`__oreslang_guest_main(): i64` from a C launcher. This compares the full 64-bit
+signed result rather than the truncated shell exit status. No stub passes.
 """
 import argparse
 import json
@@ -14,7 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "contracts/v1/numeric-parity/source-i64-cases.json"
-ENTRY = re.compile(r"define\s+i64\s+@main\s*\(\s*\)")
+ENTRY = re.compile(r"define\s+i64\s+@__oreslang_guest_main\s*\(\s*\)")
 CALL = re.compile(r"@main(?=\s*\()")
 
 
@@ -34,8 +35,8 @@ def check_positive(compiler, clang, source, expected, folder, label):
     emitted = run([compiler, "--target=host", str(file)])
     ir = emitted.stdout
     if not ENTRY.search(ir):
-        raise AssertionError(label + ": real compiler did not emit define i64 @main()")
-    renamed = CALL.sub("@oreslang_guest_main", ir)
+        raise AssertionError(label + ": real compiler did not emit define i64 @__oreslang_guest_main()")
+    renamed = CALL.sub("@oreslang_os_main", ir)
     object_file = folder / "case.o"
     object_result = run([clang, "-x", "ir", "-c", "-o", str(object_file), "-"], input=renamed)
     if object_result.returncode:
@@ -43,8 +44,8 @@ def check_positive(compiler, clang, source, expected, folder, label):
     host = folder / "host.c"
     host.write_text(
         '#include <stdint.h>\n#include <stdio.h>\n'
-        'extern int64_t oreslang_guest_main(void);\n'
-        'int main(void) { printf("%lld\\n", (long long)oreslang_guest_main()); return 0; }\n',
+        'extern int64_t __oreslang_guest_main(void);\n'
+        'int main(void) { printf("%lld\\n", (long long)__oreslang_guest_main()); return 0; }\n',
         encoding="utf-8")
     exe = folder / "numeric-guest"
     run([clang, str(host), str(object_file), "-o", str(exe)])
