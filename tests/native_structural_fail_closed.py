@@ -43,6 +43,21 @@ def main():
         raise SystemExit("usage: native_structural_fail_closed.py <oreslang-llvmc>")
     compiler = pathlib.Path(sys.argv[1]).resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="ores-structural-fail-closed-") as root:
+        # Positive control is mandatory. An unavailable, broken, or always-
+        # rejecting compiler must NEVER make negative-only tests pass.
+        good = pathlib.Path(root) / "supported-scalar.ores"
+        good.write_text("pub fnc main(): int { return 42; }\n", encoding="utf-8")
+        control = subprocess.run(
+            [str(compiler), str(good)], capture_output=True, text=True,
+            cwd=root, timeout=15, check=False)
+        if control.returncode != 0 or "define i64 @__oreslang_guest_main(" not in control.stdout:
+            raise RuntimeError(
+                "native structural test has no real working scalar compiler: "
+                + control.stderr[:500])
+        if {p.name for p in pathlib.Path(root).iterdir()} != {good.name}:
+            raise RuntimeError("positive scalar control unexpectedly published a file")
+        good.unlink()
+
         for name, source in PROGRAMS.items():
             path = pathlib.Path(root) / (name.replace(" ", "-") + ".ores")
             path.write_text(source, encoding="utf-8")
