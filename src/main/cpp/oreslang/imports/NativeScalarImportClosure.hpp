@@ -6,12 +6,24 @@
 #include <functional>
 #include <map>
 #include <stdexcept>
+#include <vector>
+#include <utility>
 #include <string>
 #include <string_view>
 
 namespace oreslang::imports {
 
-inline std::string assemble_scalar_import_closure(
+struct ScalarImportUnit {
+    fs::path file;
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    bool entry = false;
+};
+struct ScalarImportClosure {
+    std::string source;
+    std::vector<ScalarImportUnit> units;
+};
+inline ScalarImportClosure assemble_scalar_import_closure(
     const fs::path& entry,
     const std::function<void(std::string_view)>& validate_utf8) {
     constexpr std::size_t max_modules = 64;
@@ -20,6 +32,8 @@ inline std::string assemble_scalar_import_closure(
     std::map<fs::path, unsigned> states;
     SourceIdentityRegistry identities;
     std::string combined;
+    std::vector<ScalarImportUnit> units;
+    const auto physical_entry = fs::canonical(entry);
     std::size_t total_bytes = 0;
 
     std::function<void(const fs::path&, const fs::path&, std::size_t)> visit;
@@ -71,13 +85,17 @@ inline std::string assemble_scalar_import_closure(
         // Dependency-first assembly allows the existing parser to perform
         // name/arity/ownership validation across the combined scalar program.
         // This intentionally does NOT implement namespaces, exports or cycles.
-        if (preamble.stripped_source.size() > max_total_bytes - combined.size())
+        if (combined.size() >= max_total_bytes ||
+            preamble.stripped_source.size() >= max_total_bytes - combined.size())
             throw std::invalid_argument("assembled native scalar source too large");
+        const auto begin = combined.size();
         combined += preamble.stripped_source;
         combined.push_back('\n');
+        units.push_back(ScalarImportUnit{physical,begin,combined.size(),
+                                         physical==physical_entry});
         states.at(physical) = 2;
     };
-    visit(entry, {}, 0);
-    return combined;
+    visit(physical_entry, {}, 0);
+    return {std::move(combined),std::move(units)};
 }
 } // namespace oreslang::imports
