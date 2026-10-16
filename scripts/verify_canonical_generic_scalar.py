@@ -9,6 +9,7 @@ import argparse
 from pathlib import Path
 import subprocess
 import sys
+from pinned_generic_worktree import attest_pinned_worktree
 
 COMMON_ROOT_TREE = "858c37d48a4c3a886260b26320bb0dd931b228ab"
 COMMON_CONTRACT_TREE = "fd5301ebd354049917e2ecaf1da920b661d6d829"
@@ -39,6 +40,7 @@ def prove_canonical_source(common_root):
     rev = call(["git", "-C", str(git_root), "rev-parse", "HEAD:" + rel.as_posix()])
     if rev.returncode or rev.stdout.strip() != COMMON_CONTRACT_TREE:
         raise ValueError("canonical common-source contract tree SHA mismatch")
+    attest_pinned_worktree(git_root, common_root, COMMON_ROOT_TREE)
     dirty = call(["git", "-C", str(git_root), "status", "--porcelain=v1",
                   "--untracked-files=all", "--", full_source_rel.as_posix() if full_source_rel.parts else "."])
     if dirty.returncode or dirty.stdout.strip():
