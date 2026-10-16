@@ -1,0 +1,6 @@
+// Source lifecycle startup must run from the hidden actor runtime.
+define actor Worker as
+  on_start(self): void { return; }
+  receive(self, ActorMail<int> mail): void { return; }
+end
+pub fnc main(): int { return 0; }
