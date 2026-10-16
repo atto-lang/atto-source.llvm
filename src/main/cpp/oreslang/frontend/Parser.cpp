@@ -1156,7 +1156,10 @@ private:
         // Option/Result transforms require tagged-value type checking and
         // are rejected here rather than silently erasing error variants.
         auto value = additive();
+        std::size_t pipeline_stages = 0;
         while (token_.text == "|>") {
+            if (++pipeline_stages > 128)
+                fail("native pipeline exceeds 128 stages");
             advance();
             if (token_.kind != Kind::Identifier || reserved(token_.text))
                 fail("native pipeline stage requires a named scalar callable");
