@@ -306,6 +306,13 @@ private:
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
+        // The explicitly spelled receiver is a marker for the already
+        // existing actor instance, not a user argument or a separate function.
+        // The native bootstrap currently admits only on_message(int), so
+        // this is receiver-spelling parity within that limited actor subset.
+        if (accept("self")) {
+            require(",");
+        }
         require("int");
         Parameter param;
         param.name = identifier();
