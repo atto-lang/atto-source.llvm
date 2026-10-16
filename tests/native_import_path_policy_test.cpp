@@ -16,7 +16,7 @@ static void reject(const std::function<void()>& f, const char* label) {
 int main() {
   try {
     const std::vector<std::pair<std::string,Kind>> cases = {
-        {"@/src/main",Kind::Root},{"pkg:math/lib/answer",Kind::Package},
+        {"+/src/main",Kind::Root},{"pkg:math/lib/answer",Kind::Package},
         {"./foo",Kind::Relative},{"../foo",Kind::Relative},
         {".",Kind::Relative},{"..",Kind::Relative},
         {".hidden/util",Kind::Bare},{"..backup/util",Kind::Bare},
@@ -32,12 +32,12 @@ int main() {
         check(classify(input).kind==kind,"misclassified import");
     check(classify("pkg:math/lib").alias=="math","alias identity");
     check(classify("pkg:math/lib").suffix=="lib","package suffix");
-    check(classify("@/src\\util").suffix=="src/util","normalized slash");
-    for(const std::string bad : {"","@","@/","@//src","@alias/x","pkg:",
+    reject([&]{(void)classify("+/src\\util");},"rooted backslashes admitted");
+    for(const std::string bad : {"","@","@/src","@alias/x","+","+src","+/","+//src","+/src//a","+/src/./a","+/src/../a","pkg:",
          "pkg:alias","pkg:/mod","pkg:alias/","pkg:_bad/mod",
-         "pkg:bad.alias/mod","pkg:alias//file","file\nname",
+         "pkg:bad.alias/mod","pkg:alias//file","pkg:alias/src/../a","pkg:alias/src/./a","pkg:alias/src/a/","file\nname",
          "C:relative.ores","D:source.ores","mod:stream",
-         "./source.ores:stream","@/src/file.ores:alternate",
+         "./source.ores:stream","+/src/file.ores:alternate",
          "pkg:math/src/file.ores:alternate"})
          reject([&]{(void)classify(bad);},"invalid import accepted");
     reject([&]{(void)classify(std::string(4097,'x'));},"length bound");
@@ -52,6 +52,7 @@ int main() {
     check(rooted_path(root,"src/../lib/util")==root/"lib/util","normalized rooted source");
     check(rooted_path(root,"..hidden/a")==root/"..hidden/a","hidden relative component");
     check(rooted_path(root/"./","src/a")==root/"src/a","trailing root separator");
+    reject([&]{(void)classify("pkg:math\\\\src\\\\a");},"pkg backslashes admitted");
     for(const std::string bad: {"../other/file","..\\\\other/file","a/../../../other","/etc/passwd","",
          "C:/Windows/System32","C:relative.ores","a/b.ores:stream",
          "nested\\folder:alternate"})
