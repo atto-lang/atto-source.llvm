@@ -1972,3 +1972,27 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-epoll-reactor-abi-test)
     set_tests_properties(native_epoll_reactor_c_abi PROPERTIES TIMEOUT 25)
 endif()
+
+# Host VM ↔ epoll integration. C-only actor/scheduler paths remain linkable
+# without NIO C++ objects; only this opt-in Linux target links the bridge.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-vm-nio-lifecycle-test
+        tests/native_vm_nio_lifecycle_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-vm-nio-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-vm-nio-lifecycle-test PROPERTIES
+        LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-vm-nio-lifecycle-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-nio-lifecycle-test PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_vm_nio_lifecycle_and_rt_prestart
+        COMMAND oreslang-native-vm-nio-lifecycle-test)
+    set_tests_properties(native_vm_nio_lifecycle_and_rt_prestart
+        PROPERTIES TIMEOUT 30)
+endif()
