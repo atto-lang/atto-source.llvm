@@ -58,6 +58,13 @@ inline ScalarImportClosure assemble_scalar_import_closure(
         const auto source = read_regular_source(path.c_str(), max_total_bytes,
             "native scalar source byte limit exceeded");
         validate_utf8(source);
+        // Check target/admission directives on the *original* bytes.
+        // The preamble scanner deliberately replaces import lines with spaces;
+        // an unsupported // ores: directive on one of those lines must not
+        // disappear before main.cpp's standard admission check.
+        if (source.find("// ores:") != std::string::npos)
+            throw std::invalid_argument(
+                "native target admission unsupported: ores environment headers require compiler verification");
         if (source.size() > max_total_bytes - total_bytes)
             throw std::invalid_argument("native scalar import closure exceeds 8 MiB");
         total_bytes += source.size();
