@@ -339,10 +339,57 @@ int main() {
         check(recovered.wait_for(0ms) == std::future_status::timeout,
               "byte-credit recovery should still respect mailbox backpressure");
         pipe.close();
+        check(pipe.buffered_payload_bytes() == 10ULL * 1024 * 1024,
+              "STOP failed to refund byte credit for pending writers");
         bool cancelled = false;
         try { recovered.get(); }
         catch (const std::logic_error&) { cancelled = true; }
         check(cancelled, "STOP failed to cancel byte-accounted pending writer");
+    }
+
+    // Aggregate byte credit closes the loophole in which 4,096 allowed
+    // edges could each retain 16 MiB. Concurrent edges share one budget;
+    // a drain on one edge makes room for a different edge.
+    {
+        auto stages = graph_stages();
+        stages.push_back({"ConsumerC", PipeRole::writable, "Event", ""});
+        auto connections = graph_edges();
+        connections.push_back({"Producer", "ConsumerC", "Event"});
+        NativeActorPipeTransport pipe(
+            registry, supervisor, stages, connections, 32, 4);
+        const std::string megabyte(1024 * 1024, 'G');
+        for (int i = 0; i < 16; ++i) {
+            pipe.write_to_async("Producer", "ConsumerA", megabyte).get();
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        }
+        check(pipe.buffered_payload_bytes() == 32ULL * 1024 * 1024,
+              "aggregate byte credit failed to count multiple edges");
+        bool aggregate_denied = false;
+        try { pipe.write_to_async("Producer", "ConsumerC", megabyte).get(); }
+        catch (const std::logic_error&) { aggregate_denied = true; }
+        check(aggregate_denied,
+              "additional edge bypassed aggregate payload memory bound");
+        check(pipe.read_async(0).get() == megabyte,
+              "failed to drain payload from aggregate-limited graph");
+        check(pipe.buffered_payload_bytes() == 31ULL * 1024 * 1024,
+              "read did not release aggregate byte credit");
+        pipe.write_to_async("Producer", "ConsumerC", megabyte).get();
+        check(pipe.buffered_payload_bytes() == 32ULL * 1024 * 1024,
+              "recovered aggregate credit did not transfer across edges");
+        check(pipe.read_async(2).get() == megabyte,
+              "recovered aggregate credit was misrouted");
+        pipe.close();
+        // Buffered admitted payloads are allowed to drain after STOP.
+        check(pipe.buffered_payload_bytes() == 31ULL * 1024 * 1024,
+              "STOP dropped previously admitted mailbox payloads");
+        for (int i = 0; i < 15; ++i)
+            check(pipe.read_async(0).get() == megabyte,
+                  "post-STOP drain lost producer A messages");
+        for (int i = 0; i < 16; ++i)
+            check(pipe.read_async(1).get() == megabyte,
+                  "post-STOP drain lost producer B messages");
+        check(pipe.buffered_payload_bytes() == 0,
+              "post-STOP drain leaked aggregate byte credits");
     }
 
     // Host-only concurrency: per-source selector mutex serializes selection,
