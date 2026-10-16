@@ -88,6 +88,16 @@ math = { zed = "acme/math" }
             require(resolve_source(config,app/"src/main.ores","+/src/internal")==
                     fs::canonical(app/"src/util.ores"),"in-root symlink rejected");
         require(resolve_source(config,app/"src/main.ores","+/src/util")==fs::canonical(app/"src/util.ores"),"+ root");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/packages/child/src/leaf");},
+                "parent +/ crossed direct child package marker");
+        // Canonical physical identity by itself misses this: a symlink
+        // spelled through the child package points to a parent-owned file.
+        // Lexical traversal must retain the child's package boundary.
+        std::error_code nested_alias_error;
+        fs::create_symlink(app/"src/util.ores",nested/"parent-alias.ores",nested_alias_error);
+        if(!nested_alias_error)
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/packages/child/parent-alias");},
+                    "child package symlink laundered parent +/ authority");
         require(resolve_source(config,app/"src/main.ores","pkg:math/src/add")==fs::canonical(app/"zed_modules/acme/math/src/add.ores"),"pkg alias");
         write(app/"zed_modules/acme/math/.zpkg.toml", "[package]\norg=\"acme\"\nname=\"wrong\"\n");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:math/src/add");},"mismatched dependency metadata");
