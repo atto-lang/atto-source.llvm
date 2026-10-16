@@ -24,7 +24,8 @@ namespace oreslang::runtime {
  */
 template <typename T>
 class BoundedActorPort final {
-    static_assert(std::is_move_constructible_v<T>, "actor payload must be movable");
+    static_assert(std::is_nothrow_move_constructible_v<T>,
+                  "actor payload must have a nonthrowing ownership transfer");
 
     struct Envelope {
         std::uint64_t id;
@@ -106,8 +107,18 @@ public:
         if (state_->used_frames >= state_->max_frames ||
             bytes > state_->max_bytes - state_->used_bytes)
             return false;
-        auto owned = std::make_unique<T>(std::move(payload));
-        state_->queue.push_back(Envelope{state_->next_id++, bytes, std::move(owned)});
+        // Reserve the queue slot before moving from the sender. Either the
+        // slot allocation or payload allocation may throw; neither may
+        // consume the sender's ownership or a byte/frame credit.
+        state_->queue.push_back(Envelope{state_->next_id, bytes, nullptr});
+        try {
+            state_->queue.back().payload = std::make_unique<T>(std::move(payload));
+        } catch (...) {
+            state_->queue.pop_back();
+            throw;
+        }
+        // The move is noexcept, and publication/counter updates cannot throw.
+        ++state_->next_id;
         ++state_->used_frames;
         state_->used_bytes += bytes;
         return true;
