@@ -406,6 +406,56 @@ int main() {
         check(stopped, "STOP reopened global byte credit for new writes");
     }
 
+    // Stress concurrent graph-global credit reservations. Even if all
+    // producers race to different edges, at most 64 * 1 MiB may be retained.
+    {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event"}
+        };
+        std::vector<PipeConnection> links;
+        for (int i = 0; i < 5; ++i) {
+            const std::string target = "race-" + std::to_string(i);
+            stages.push_back({"Worker", PipeRole::writable, "Event", "", target});
+            links.push_back({"Producer", target, "Event"});
+        }
+        NativeActorPipeTransport pipe(registry, supervisor, stages, links, 32, 4);
+        const std::string megabyte(1024 * 1024, 'R');
+        std::atomic<int> success{0};
+        std::atomic<int> failures{0};
+        std::atomic<int> edge_success[5] = {};
+        std::vector<std::thread> senders;
+        for (int worker = 0; worker < 8; ++worker) {
+            senders.emplace_back([&, worker] {
+                for (int i = 0; i < 25; ++i) {
+                    const int target = (worker * 25 + i) % 5;
+                    try {
+                        pipe.write_to_async("Producer",
+                            "race-" + std::to_string(target), megabyte).get();
+                        ++success;
+                        ++edge_success[target];
+                    } catch (const std::logic_error&) {
+                        ++failures;
+                    }
+                }
+            });
+        }
+        for (auto& sender : senders) sender.join();
+        check(success.load() == 64 && failures.load() == 136,
+              "racing writers bypassed or prematurely exhausted graph credits");
+        for (int edge = 0; edge < 5; ++edge) {
+            for (int i = 0; i < edge_success[edge].load(); ++i)
+                check(pipe.read_async(static_cast<std::size_t>(edge)).get() == megabyte,
+                      "concurrent global-credit delivery dropped payload");
+        }
+        // Refill to prove every drained reservation becomes available again.
+        for (int i = 0; i < 16; ++i)
+            pipe.write_to_async("Producer", "race-0", megabyte).get();
+        for (int i = 0; i < 16; ++i)
+            check(pipe.read_async(0).get() == megabyte,
+                  "global-credit race left leaked reservations after draining");
+        pipe.close();
+    }
+
     // Per-edge byte credit applies to accepted messages and to pending
     // writes, not just to the maximum size of one individual payload.
     // Exhausting one branch must not consume another branch's byte credit.
