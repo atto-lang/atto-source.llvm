@@ -17,7 +17,7 @@ inline ImportPreamble split_import_preamble(std::string_view source) {
     bool declarations_started = false;
     std::size_t at = 0;
     while (at < source.size()) {
-        const auto eol = source.find('\n', at);
+        const auto eol = source.find_first_of("\r\n", at);
         const auto length = (eol == std::string_view::npos ? source.size() : eol) - at;
         const auto line = source.substr(at, length);
         std::size_t first = 0;
@@ -58,7 +58,7 @@ inline ImportPreamble split_import_preamble(std::string_view source) {
             if (!text.empty() && text.substr(0, 2) != "//") declarations_started = true;
             output.stripped_source.append(line);
         }
-        if (eol != std::string_view::npos) output.stripped_source.push_back('\n');
+        if (eol != std::string_view::npos) output.stripped_source.push_back(source[eol]);
         at = eol == std::string_view::npos ? source.size() : eol + 1;
     }
     return output;
