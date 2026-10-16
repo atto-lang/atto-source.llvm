@@ -43,6 +43,20 @@ int main() {
                                    "closed owner unexpectedly admitted a read");
         }
 
+        // Dropping the final owner without an explicit close also retires the
+        // physical identity. A copied RegionRoot must not retain host bytes.
+        {
+            RegionRoot escaped;
+            {
+                HostBuffer transient(shape);
+                escaped = transient.region_root();
+                check(escaped.is_live_owned(),
+                      "transient owner did not create a live region");
+            }
+            check(!escaped.is_live_owned(),
+                  "owner destructor failed to retire escaped region identity");
+        }
+
         // A failed close must preserve storage and keep active readers valid.
         {
             HostBuffer owner(shape);
