@@ -78,17 +78,24 @@ def main():
     # private abstract vtable, and ActorMail lowering is implemented.
     # A nonzero exit without a compiler diagnostic or with emitted LLVM IR
     # must not count as correct rejection.
-    unsupported_capture_and_hooks = (
-        "source-lex-allow-unsupported.ores",
-        "source-nlex-deny-unsupported.ores",
-        "source-nlex-critical-unsupported.ores",
-        "source-private-abstract-unsupported.ores",
-        "source-sealed-actor-receive-unsupported.ores",
-    )
-    for name in unsupported_capture_and_hooks:
+    unsupported_capture_and_hooks = {
+        "source-lex-allow-unsupported.ores": None,
+        "source-nlex-deny-unsupported.ores": None,
+        "source-nlex-critical-unsupported.ores": None,
+        "source-private-abstract-unsupported.ores":
+            "private abstract class hooks require typed virtual dispatch",
+        "source-sealed-actor-receive-unsupported.ores":
+            "ActorMail receive/on_start requires runtime-owned mailbox",
+        "source-actor-on-start-unsupported.ores":
+            "ActorMail receive/on_start requires runtime-owned mailbox",
+    }
+    for name, expected_diagnostic in unsupported_capture_and_hooks.items():
         result = run([args.compiler, str(fixtures / name)])
         assert result.returncode == 1, (name, result.returncode, result.stderr)
         assert "oreslang-llvmc:" in result.stderr, (name, result.stderr)
+        if expected_diagnostic:
+            assert expected_diagnostic in result.stderr, (
+                name, expected_diagnostic, result.stderr)
         assert not result.stdout.strip(), (
             "unimplemented capture or hook emitted partial LLVM IR", name, result.stdout)
     print(f"PASS {len(unsupported_capture_and_hooks)} scoped-capture / sealed-hook "
