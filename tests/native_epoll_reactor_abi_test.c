@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "oreslang/runtime/NativeEpollReactorABI.h"
 #include <stdlib.h>
 #include <stdint.h>
