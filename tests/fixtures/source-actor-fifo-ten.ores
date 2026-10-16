@@ -1,8 +1,9 @@
-// Executed native guest regression: FIFO message order and completion-before-STOP.
+// Executed native guest regression: order-sensitive FIFO and drain-before-STOP.
+// Rolling base-3 digest distinguishes permutations that share the same sum.
 define actor Worker as {
   let total: int = 0;
   pub fnc on_message(int n): int {
-    total = total + n;
+    total = total * 3 + n;
     return total;
   }
 }
