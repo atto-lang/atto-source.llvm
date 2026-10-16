@@ -148,24 +148,34 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
 // Compile-time rejection is independent of runtime error/actor cleanup.
 // It proves that a *known* overflowing arithmetic subtree cannot silently
 // wrap in LLVM. Dynamic arithmetic still needs checked lowering.
-std::optional<std::int64_t> checked_constant_i64(const Expression& expr) {
+std::optional<std::int64_t> checked_constant_i64(
+        const Expression& expr,
+        std::unordered_map<const Expression*, std::optional<std::int64_t>>& cache) {
+    // Memoize each AST node once. Revalidating an expanding left-associative
+    // chain at every operator would be quadratic in source expression length.
+    if (const auto found = cache.find(&expr); found != cache.end())
+        return found->second;
+    const auto save = [&](std::optional<std::int64_t> result) {
+        cache.emplace(&expr, result);
+        return result;
+    };
     using Kind = Expression::Kind;
-    if (expr.kind == Kind::Integer) return expr.integer;
+    if (expr.kind == Kind::Integer) return save(expr.integer);
     if (expr.kind == Kind::Negate) {
-        if (!expr.left) return std::nullopt;
-        const auto operand = checked_constant_i64(*expr.left);
-        if (!operand) return std::nullopt;
+        if (!expr.left) return save(std::nullopt);
+        const auto operand = checked_constant_i64(*expr.left, cache);
+        if (!operand) return save(std::nullopt);
         if (*operand == std::numeric_limits<std::int64_t>::min())
             throw std::runtime_error("native signed i64 constant negation overflow at byte "
                                      + std::to_string(expr.offset));
-        return -*operand;
+        return save(-*operand);
     }
     if (expr.kind != Kind::Add && expr.kind != Kind::Subtract &&
-            expr.kind != Kind::Multiply) return std::nullopt;
-    if (!expr.left || !expr.right) return std::nullopt;
-    const auto left = checked_constant_i64(*expr.left);
-    const auto right = checked_constant_i64(*expr.right);
-    if (!left || !right) return std::nullopt;
+            expr.kind != Kind::Multiply) return save(std::nullopt);
+    if (!expr.left || !expr.right) return save(std::nullopt);
+    const auto left = checked_constant_i64(*expr.left, cache);
+    const auto right = checked_constant_i64(*expr.right, cache);
+    if (!left || !right) return save(std::nullopt);
     std::int64_t result = 0;
     const bool overflow =
         expr.kind == Kind::Add ? __builtin_add_overflow(*left, *right, &result) :
@@ -174,7 +184,7 @@ std::optional<std::int64_t> checked_constant_i64(const Expression& expr) {
     if (overflow)
         throw std::runtime_error("native signed i64 constant arithmetic overflow at byte "
                                  + std::to_string(expr.offset));
-    return result;
+    return save(result);
 }
 
 // The first native terminal-try slice has no exceptional CFG. Restrict
@@ -1192,7 +1202,7 @@ private:
                                                  : Expression::Kind::Subtract, offset);
             expr->left = std::move(left);
             expr->right = product();
-            (void)checked_constant_i64(*expr);
+            (void)checked_constant_i64(*expr, numeric_constants_);
             left = std::move(expr);
         }
         return left;
@@ -1215,7 +1225,7 @@ private:
             auto expr = make_expression(Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = unary();
-            (void)checked_constant_i64(*expr);
+            (void)checked_constant_i64(*expr, numeric_constants_);
             left = std::move(expr);
         }
         return left;
@@ -1284,7 +1294,7 @@ private:
             }
             auto expr = make_expression(Expression::Kind::Negate, offset);
             expr->left = unary();
-            (void)checked_constant_i64(*expr);
+            (void)checked_constant_i64(*expr, numeric_constants_);
             return expr;
         }
         return primary();
@@ -1887,6 +1897,10 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // AST node addresses stay stable under unique_ptr moves; this cache is
+    // scoped to one parse and never shared across source files or actors.
+    std::unordered_map<const Expression*, std::optional<std::int64_t>>
+        numeric_constants_;
 };
 
 } // namespace
