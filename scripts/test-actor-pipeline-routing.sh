@@ -28,6 +28,19 @@ for compiler in g++ clang++; do
   done
 done
 
+# Run the same real host transport test WITHOUT test-only allocator seams.
+# Test executables with fault injection enabled are not proof that the
+# production build compiles or that normal STOP/admission paths work.
+for compiler in g++ clang++; do
+  for opt in 0 2; do
+    "$compiler" -std=c++17 "-O$opt" -g -Wall -Wextra -Wpedantic -Werror \
+      -pthread -Isrc/main/cpp tests/native_actor_pipeline_routing_test.cpp \
+      -o "$work/native-routing-production-$compiler-O$opt"
+    "$work/native-routing-production-$compiler-O$opt"
+    echo "ORES_ACTOR_PIPELINE_PRODUCTION_PASS compiler=$compiler opt=$opt"
+  done
+done
+
 if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   for compiler in g++ clang++; do
     for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_route_ledger_test native_actor_pipe_writer_promotion_fault_test; do
@@ -41,6 +54,18 @@ if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
       ASAN_OPTIONS=detect_leaks=1 "$work/$test-$compiler-sanitize"
       echo "ORES_ACTOR_PIPELINE_SANITIZER_PASS compiler=$compiler test=$test"
     done
+  done
+fi
+
+if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
+  for compiler in g++ clang++; do
+    "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+      -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -pthread -Isrc/main/cpp tests/native_actor_pipeline_routing_test.cpp \
+      -o "$work/native-routing-production-$compiler-sanitize"
+    ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+      "$work/native-routing-production-$compiler-sanitize"
+    echo "ORES_ACTOR_PIPELINE_PRODUCTION_SANITIZER_PASS compiler=$compiler"
   done
 fi
 
