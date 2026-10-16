@@ -23,6 +23,7 @@ int main() {
     auto foreignGrant=other.grant(104,true,false);
     reject([&] { (void)a.read(104, foreignGrant); });
     reject([&] { (void)a.write(102, writerGrant); }); // wrong actor, valid grant
+    reject([&] { (void)a.read(0, writerGrant); }); // supervisor sentinel cannot bypass actor lease
     SharedDomainArena::Handle h{};
     {
         auto writer=a.write(101, writerGrant);
