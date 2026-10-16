@@ -15,7 +15,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 for compiler in g++ clang++; do
   for opt in 0 2; do
-    for test in native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test; do
+    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test; do
       "$compiler" -std=c++17 "-O$opt" -g -Wall -Wextra -Wpedantic -Werror \
         -pthread -Isrc/main/cpp "tests/$test.cpp" -o "$work/$test-$compiler-O$opt"
       "$work/$test-$compiler-O$opt"
@@ -26,7 +26,7 @@ done
 
 if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   for compiler in g++ clang++; do
-    for test in native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test; do
+    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test; do
       "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
         -fsanitize=address,undefined -fno-omit-frame-pointer \
         -pthread -Isrc/main/cpp "tests/$test.cpp" -o "$work/$test-$compiler-sanitize"
