@@ -49,7 +49,11 @@ int main() {
                (void)check_actor_pipeline_graph(stages,wrong); });
     deny([&] { auto wrong=links;wrong.push_back(wrong[0]);
                (void)check_actor_pipeline_graph(stages,wrong); });
-    deny([&] { auto wrong=links;wrong.push_back({"Right","Left","Payload"});
+    // Right -> Left by itself is acyclic (both branches only join Sink).
+    // Close an actual two-node cycle with Left -> Right -> Left.
+    deny([&] { auto wrong=links;
+               wrong.push_back({"Left","Right","Payload"});
+               wrong.push_back({"Right","Left","Payload"});
                (void)check_actor_pipeline_graph(stages,wrong); });
     deny([&] { auto wrong=links;wrong[0].target="Missing";
                (void)check_actor_pipeline_graph(stages,wrong); });
