@@ -1915,4 +1915,11 @@ if(BUILD_TESTING)
           --clang "${ORE_NUMERIC_CLANG}")
     set_tests_properties(numeric_portable_i64_actual_source_execution
         PROPERTIES TIMEOUT 240)
+    add_test(NAME numeric_experimental_checked_i64_status_abi
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_checked_scalar_experimental.py"
+          --compiler "$<TARGET_FILE:oreslang-llvmc>"
+          --clang "${ORE_NUMERIC_CLANG}")
+    set_tests_properties(numeric_experimental_checked_i64_status_abi
+        PROPERTIES TIMEOUT 240)
 endif()
