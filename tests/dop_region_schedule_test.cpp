@@ -55,4 +55,31 @@ int main() {
     check((batches[0] == std::vector<std::size_t>{0,2}));
     check((batches[1] == std::vector<std::size_t>{1}));
     check(dependency_levels({}).empty());
+    // Exhaustive oracle: two effects conflict iff a physical logical cell
+    // overlaps and either side can mutate it; no optimistic alias proofs.
+    auto grid = RegionRoot::trusted_create(5, 2);
+    for (int fa = 0; fa < 2; ++fa)
+    for (int fb = 0; fb < 2; ++fb)
+    for (int aa = 0; aa <= 5; ++aa)
+    for (int az = aa; az <= 5; ++az)
+    for (int ba = 0; ba <= 5; ++ba)
+    for (int bz = ba; bz <= 5; ++bz)
+    for (int ma = 0; ma < 5; ++ma)
+    for (int mb = 0; mb < 5; ++mb) {
+        auto left_mode = static_cast<RegionMode>(ma);
+        auto right_mode = static_cast<RegionMode>(mb);
+        RegionAccess a(grid, static_cast<std::uint32_t>(fa), aa, az-aa,
+                       left_mode, left_mode == RegionMode::Reduce ? "sum" : "");
+        RegionAccess b(grid, static_cast<std::uint32_t>(fb), ba, bz-ba,
+                       right_mode, right_mode == RegionMode::Reduce ? "sum" : "");
+        bool overlap = false;
+        for (int row = 0; row < 5; ++row)
+            if (fa == fb && row >= aa && row < az && row >= ba && row < bz)
+                overlap = true;
+        const bool expected = !overlap
+            || (left_mode == RegionMode::Read && right_mode == RegionMode::Read);
+        check(independent(a, b) == expected);
+        check(independent(b, a) == expected);
+    }
+
 }
