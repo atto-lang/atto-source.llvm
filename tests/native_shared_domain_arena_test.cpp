@@ -5,6 +5,7 @@
 #include <future>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <iostream>
 using oreslang::runtime::SharedDomainArena;
 void require(bool cond) { if (!cond) throw std::runtime_error("shared domain test failed"); }
@@ -14,6 +15,7 @@ template<typename F> void reject(F&& f) {
     require(denied);
 }
 int main() {
+    static_assert(!std::is_move_constructible_v<SharedDomainArena::Lease>);
     SharedDomainArena a;
     auto writerGrant=a.grant(101, true, true);
     auto readerGrant=a.grant(102, true, false);
