@@ -160,3 +160,36 @@ successfully on the latest retry of
 The compiler import-regression job remains **skipped**. The repository's
 private-source transfer approval PRs remain unmerged; no private Oreslang
 source was copied across organizations.
+
+
+## Physical-path containment follow-up (2026-10-16)
+
+LLVM PR #466 now additionally rejects physical symlink-target escapes for:
+- rooted `@/`, `pkg:` imports, and bare names under configured search roots;
+- existing package entrypoints, manifests and installed-package metadata;
+- the zed installation directory and installed package directory.
+
+The containment check is applied **after** discovering and canonicalizing the
+actual `.ores` file. A symlink to another physical file *inside* the allowed
+root remains supported; a symlink to a valid `.ores` file *outside* the root
+is rejected instead of silently accepted. Regression cases were added for
+escaped file and directory symlinks and for in-root aliases.
+
+Local isolated C++17 reproduction of the physical-root predicate and source
+lookup: GCC 14.2 strict warnings PASS; Clang 17 strict warnings PASS; GCC
+ASan + UBSan with leak detection PASS (3 executions). This independently
+constructed reproducer **does not compile the latest repository headers**.
+New exact-head full-repository CTest, LLVM codegen, linked .ores import
+execution and sanitizer CI remain **UNVERIFIED**. Latest source-workflow
+jobs examined had zero executed steps.
+
+This policy relies on path canonicalization, not descriptor-relative `openat`
+or immutable snapshots: hostile concurrent symlink/path replacement is still
+a TOCTOU risk. Treat filesystem trees and manifests as trusted/mutation-
+restricted until descriptor-based loading is implemented and tested.
+
+**Private source isolation:** Existing Java origin approval PR #1062 and
+destination PR #5 remain open. An approval for Java source transfer would not
+automatically authorize LLVM source publication. Do not publish LLVM private
+source to an alternate organization without a separately reviewed LLVM-source
+origin policy and destination allowlist.
