@@ -44,7 +44,8 @@ def main():
         for name, source in corpus.items():
             path.write_text(source + "\n", encoding="utf-8")
             failed = run(compiler, path)
-            if failed.returncode == 0 or failed.stdout.strip() or not failed.stderr.strip():
+            if (failed.returncode != 1 or failed.stdout != "" or
+                    not failed.stderr.startswith("oreslang-llvmc: ")):
                 raise RuntimeError(f"{name}: unsupported domain did not fail closed "
                                    f"(status={failed.returncode}, stdout={failed.stdout!r}, "
                                    f"stderr={failed.stderr!r})")
