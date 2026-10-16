@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -160,8 +161,16 @@ public:
             results.push_back({edge, schema_[edge].target, {}});
         // A closed/saturated edge returns a failed admission Future, not a
         // missing entry. Every attempted destination remains identifiable.
-        for (auto& result : results)
-            result.admission = write_async(result.edge_index, payload);
+        for (auto& result : results) {
+            // Individual admission may throw (e.g. allocation failure) after
+            // earlier destinations have already accepted the payload. Never
+            // discard their receipts or hide partial publication from callers.
+            try {
+                result.admission = write_async(result.edge_index, payload);
+            } catch (...) {
+                result.admission = failed_exception(std::current_exception());
+            }
+        }
         return results;
     }
 
@@ -195,9 +204,11 @@ public:
         std::lock_guard<std::mutex> selection(route_mutex_);
         const auto cursor = next_outlet_[source];
         const auto edge = destinations[cursor % destinations.size()];
-        auto completion = write_async(edge, std::move(payload));
+        // An attempted turn counts even if write_async fails before it can
+        // return a Future (for example, due to allocation failure). Advancing
+        // after admission would violate the strict RR contract in that case.
         next_outlet_[source] = (cursor + 1) % destinations.size();
-        return completion;
+        return write_async(edge, std::move(payload));
     }
 
     /** Named destination selection is restricted to an existing source edge;
@@ -332,6 +343,12 @@ private:
     Edge& at(std::size_t index) {
         if (index >= edges_.size()) throw std::out_of_range("native actor pipe edge");
         return *edges_[index];
+    }
+
+    static std::shared_future<void> failed_exception(std::exception_ptr error) {
+        std::promise<void> promise;
+        promise.set_exception(std::move(error));
+        return promise.get_future().share();
     }
 
     static std::shared_future<void> failed_void(const char* why) {
