@@ -50,6 +50,22 @@ class WorkflowSecurityProof(unittest.TestCase):
                 self.assertTrue(problems(clean.replace(immutable,
                     immutable.split("@")[0] + "@v4")))
 
+    def test_all_120_single_character_action_pin_mutations_are_rejected(self):
+        # An attacker must not change even one nibble of a reviewed Action.
+        clean = WORKFLOW.read_text()
+        mutations = 0
+        for immutable in ACTIONS:
+            prefix, sha = immutable.split("@")
+            self.assertEqual(len(sha), 40)
+            for pos, letter in enumerate(sha):
+                substitute = "0" if letter != "0" else "1"
+                changed = sha[:pos] + substitute + sha[pos + 1:]
+                with self.subTest(action=prefix, position=pos):
+                    self.assertTrue(problems(clean.replace(
+                        immutable, prefix + "@" + changed)))
+                mutations += 1
+        self.assertEqual(mutations, 120)
+
     def test_missing_and_enabled_checkout_credentials_are_rejected(self):
         clean = WORKFLOW.read_text()
         self.assertTrue(problems(clean.replace(
