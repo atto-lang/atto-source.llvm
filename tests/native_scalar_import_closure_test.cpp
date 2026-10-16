@@ -96,6 +96,24 @@ int main() {
               "import \"pkg:math/src/num\";\npub fnc main(): int {return number();}\n");
         auto packaged = closure(dir/"pkg"/"src"/"main.ores");
         check(packaged.units.size() == 2, "declared pkg alias unresolved");
+        write(dir/"pkg"/"src"/"helper.ores",
+              "pub fnc helper(): int {return 42;}\n");
+        write(dir/"pkg"/"src"/"rooted.ores",
+              "import \"+/src/helper\";\npub fnc main(): int {return helper();}\n");
+        auto rooted = closure(dir/"pkg"/"src"/"rooted.ores");
+        check(rooted.units.size() == 2, "canonical +/ import did not link scalar graph");
+        write(dir/"pkg"/"src"/"legacy-root.ores",
+              "import \"@/src/helper\";\npub fnc main(): int {return helper();}\n");
+        reject([&] { (void)closure(dir/"pkg"/"src"/"legacy-root.ores"); },
+               "invalid project-root import prefix");
+        for (const std::string& bad : {"+/src/./helper", "+/src//helper",
+                                       "+/src/../src/helper", "pkg:math/src/./num"}) {
+            write(dir/"pkg"/"src"/"noncanonical.ores",
+                  "import \"" + bad + "\";\npub fnc main(): int {return 0;}\n");
+            reject([&] { (void)closure(dir/"pkg"/"src"/"noncanonical.ores"); },
+                   "noncanonical rooted import component");
+        }
+
         write(dir/"pkg"/"src"/"escape.ores", "import \"../../helper\";\n");
         reject([&] { (void)closure(dir/"pkg"/"src"/"escape.ores"); },
                "escapes physical search root");
