@@ -287,7 +287,7 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/messagepack_wire_v2_matrix.py"
                 --binary "$<TARGET_FILE:oreslang-messagepack-wire-v2-test>"
-                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/messagepack_collection_vectors.json")
+                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/messagepack_collection_vectors.json")
         set_tests_properties(native_messagepack_wire_v2_java_parity PROPERTIES TIMEOUT 30)
         add_executable(oreslang-tagged-message-wire-v2-test
             tests/tagged_message_wire_v2_test.cpp)
