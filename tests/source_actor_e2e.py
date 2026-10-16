@@ -5,6 +5,10 @@ import pathlib
 import subprocess
 import tempfile
 
+# Every safety assertion below is part of the CI gate: never silently remove it.
+if not __debug__:
+    raise SystemExit("source actor execution gate forbids optimized Python (-O)")
+
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
 
@@ -28,6 +32,7 @@ def main():
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
+        ("source-actor-fifo-ten.ores", 1, 10, 55),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
