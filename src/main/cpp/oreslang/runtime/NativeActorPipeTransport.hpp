@@ -109,22 +109,18 @@ public:
             return failed_void("native actor pipe graph byte credit exhausted");
         // Queued payloads and pending writers both own one reservation.
         // A deque allocation failure must not leak credit or a hidden Future.
+        const bool queued = link.messages.size() < link.capacity;
         try {
-            if (link.messages.size() < link.capacity) {
+            if (queued)
                 link.messages.push_back(std::move(pending->payload));
-            } else {
+            else
                 link.writers.push_back(std::move(pending));
-            }
         } catch (...) {
             graph_buffered_bytes_.fetch_sub(bytes, std::memory_order_acq_rel);
             throw;
         }
         link.buffered_bytes += bytes;
-        if (link.messages.size() <= link.capacity &&
-                // The pending object is only retained in the writers deque
-                // when the mailbox was saturated.
-                pending != nullptr)
-            pending->promise.set_value();
+        if (queued) pending->promise.set_value();
         return future;
     }
 
