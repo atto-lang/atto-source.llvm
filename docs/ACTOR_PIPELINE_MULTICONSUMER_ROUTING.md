@@ -151,6 +151,15 @@ constructor with independent bounded mailboxes and implements:
 - Each edge enforces a 16 MiB buffered-payload byte credit across already
   admitted messages AND suspended writers, in addition to the existing
   1 MiB individual payload and message/pending-writer count limits.
+- The **graph** also enforces a 64 MiB aggregate buffered-payload
+  credit across all edges (queued messages plus pending writers). This
+  prevents many individually bounded edges from multiplying retained payloads
+  into an unbounded process-memory load. Credits are reserved atomically
+  before storing a payload and returned when read/cancelled on STOP; moving
+  a pending writer into the queue must **not** double-charge its bytes.
+  Direct handoff to a waiting reader does not consume buffered credit.
+  Graph-wide admission failures are independently reported per fanout edge,
+  never mistaken for successful target execution.
 - Empty-message/host metadata safety: the trusted transport constructor
   rejects edge queue capacity outside **1..4096**, worker capacity outside
   **1..4096**, or more than **65,536 configured edge queue slots** in total
