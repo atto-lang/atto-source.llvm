@@ -122,6 +122,20 @@ int ores_native_vm_control_notify(
 unsigned ores_native_vm_control_pending(OresNativeVM* vm);
 unsigned ores_native_vm_control_pump(OresNativeVM* vm);
 
+/* Trusted host-only optional NIO backend ownership. Pure-C scheduler users
+ * do not require C++ linkage; the separately compiled native NIO adapter
+ * supplies a destructor callback. Attach once before guest admission.
+ *
+ * Every caller must externally fence VM producers before final close.
+ * VM retirement blocks further backend access. The destructor may join
+ * reactor threads and is invoked ONLY during external vm_close(), never from
+ * a guest actor callback or on a reactor thread.
+ */
+typedef void (*OresNativeVMNioDestroy)(void* opaque_backend);
+int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
+                              OresNativeVMNioDestroy destroy);
+void* ores_native_vm_nio_backend(OresNativeVM* vm);
+
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call
  * close from a carrier callback. Returns 0 if a carrier calls close (VM remains
