@@ -1309,22 +1309,25 @@ int main() {
 #else
     constexpr int stop_exception_modes = 1;
 #endif
+    constexpr int stop_waiter_stress = 128;
     for (int fault_mode = 0; fault_mode < stop_exception_modes; ++fault_mode) {
         NativeActorPipeTransport pipe(
-            registry, supervisor, graph_stages(), graph_edges(), 4, 4,
-            128, 32, 16);
-        for (int n = 0; n < 4; ++n)
+            registry, supervisor, graph_stages(), graph_edges(),
+            stop_waiter_stress, 4, 1024, 512, stop_waiter_stress);
+        for (int n = 0; n < stop_waiter_stress; ++n)
             pipe.write_to_async("Producer", "ConsumerA", "x").get();
         std::vector<std::shared_future<void>> writers;
         std::vector<std::shared_future<std::string>> readers;
-        for (int n = 0; n < 4; ++n) {
+        writers.reserve(stop_waiter_stress);
+        readers.reserve(stop_waiter_stress);
+        for (int n = 0; n < stop_waiter_stress; ++n) {
             writers.push_back(
                 pipe.write_to_async("Producer", "ConsumerA", "x"));
             readers.push_back(pipe.read_async(1));
         }
-        check(pipe.buffered_payload_bytes() == 8 &&
-              pipe.buffered_message_count() == 8 &&
-              pipe.pending_reader_count() == 4,
+        check(pipe.buffered_payload_bytes() == 2 * stop_waiter_stress &&
+              pipe.buffered_message_count() == 2 * stop_waiter_stress &&
+              pipe.pending_reader_count() == stop_waiter_stress,
               "pre-STOP waiters were not charged correctly");
         for (const auto& waiting : writers)
             check(waiting.wait_for(0ms) == std::future_status::timeout,
@@ -1338,8 +1341,9 @@ int main() {
         pipe.close();
         // A second close is idempotent and may not refund credits again.
         pipe.close();
-        check(pipe.closed() && pipe.buffered_payload_bytes() == 4 &&
-              pipe.buffered_message_count() == 4 &&
+        check(pipe.closed() &&
+              pipe.buffered_payload_bytes() == stop_waiter_stress &&
+              pipe.buffered_message_count() == stop_waiter_stress &&
               pipe.pending_reader_count() == 0,
               "STOP exception fault leaked or double-refunded graph credits");
         for (auto& waiting : writers) {
@@ -1358,7 +1362,7 @@ int main() {
             check(terminal,
                   "STOP pending reader returned wrong exception or broken_promise");
         }
-        for (int n = 0; n < 4; ++n)
+        for (int n = 0; n < stop_waiter_stress; ++n)
             check(pipe.read_async(0).get() == "x",
                   "STOP lost previously acknowledged buffered DATA");
         check(pipe.buffered_payload_bytes() == 0 &&
