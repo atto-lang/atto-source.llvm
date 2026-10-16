@@ -121,7 +121,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@#").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -233,6 +233,14 @@ public:
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
                 } else fail("expected 'class' or 'actor'");
+            } else if (token_.text == "@") {
+                auto contract = realtime_contract();
+                require("define");
+                if (!accept("actor"))
+                    fail("@realtime applies only to a native actor declaration");
+                auto actor = actor_declaration();
+                actor.realtime = std::move(contract);
+                program.actors.push_back(std::move(actor));
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
@@ -254,6 +262,57 @@ public:
     }
 
 private:
+    std::unique_ptr<RealtimeContract> realtime_contract() {
+        require("@");
+        if (!accept("realtime"))
+            fail("unknown native attribute (only @realtime is recognized)");
+        require("(");
+        auto contract = std::make_unique<RealtimeContract>();
+        std::unordered_set<std::string> seen;
+        do {
+            const std::string key = identifier();
+            if (!seen.insert(key).second)
+                fail("duplicate @realtime field '" + key + "'");
+            require(":");
+            if (key == "mode") {
+                require("#");
+                const std::string value = identifier();
+                if (value == "soft") contract->mode = RealtimeContract::Mode::Soft;
+                else if (value == "bounded") contract->mode = RealtimeContract::Mode::Bounded;
+                else if (value == "hard") contract->mode = RealtimeContract::Mode::Hard;
+                else fail("unknown @realtime mode '" + value + "'");
+            } else if (key == "period_us") {
+                contract->period_us = integer_literal();
+            } else if (key == "deadline_us") {
+                contract->deadline_us = integer_literal();
+            } else if (key == "budget_us") {
+                contract->budget_us = integer_literal();
+            } else if (key == "mailbox") {
+                contract->mailbox = integer_literal();
+            } else {
+                fail("unknown @realtime field '" + key + "'");
+            }
+        } while (accept(","));
+        require(")");
+        if (seen.size() != 5 || !seen.count("mode") || !seen.count("period_us") ||
+                !seen.count("deadline_us") || !seen.count("budget_us") ||
+                !seen.count("mailbox"))
+            fail("@realtime requires mode, period_us, deadline_us, budget_us and mailbox");
+        // Restrict unrealistic values before runtime-specific clock arithmetic.
+        constexpr std::int64_t kMaxPeriodUs = 86400000000LL; // 24 hours
+        if (contract->period_us <= 0 || contract->period_us > kMaxPeriodUs ||
+                contract->deadline_us <= 0 || contract->deadline_us > contract->period_us ||
+                contract->budget_us <= 0 || contract->budget_us > contract->deadline_us ||
+                contract->mailbox < 1 || contract->mailbox > 16)
+            fail("@realtime requires 0 < budget_us <= deadline_us <= period_us <= 24h"
+                 " and 1 <= mailbox <= 16");
+        if (contract->mode == RealtimeContract::Mode::Bounded)
+            fail("@realtime #bounded requires verified allocation, call-graph and runtime bounds");
+        if (contract->mode == RealtimeContract::Mode::Hard)
+            fail("@realtime #hard requires certified WCET, scheduler admission and target proof");
+        return contract;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
