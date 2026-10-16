@@ -190,10 +190,26 @@ inline std::size_t selectResolved(
         throw std::invalid_argument("resolved argument arity mismatch");
 
     std::unordered_set<std::size_t> discriminators;
+    if (arguments.size() > MaxOverloadArity)
+        throw std::invalid_argument("nominal overload arity bound exceeded");
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         if (candidates[i].arity() != arguments.size()
-            || candidates[i].name != candidates.front().name)
+            || candidates[i].name != candidates.front().name
+            || candidates[i].name.empty())
             throw std::invalid_argument("mixed-name/arity overload family");
+        // Signature is a public aggregate, not an unforgeable symbol handle.
+        // Revalidate all positions rather than trusting only factory users.
+        for (const Position& declared : candidates[i].positions) {
+            if (declared.kind == Kind::Enum) {
+                if (verifiedEligibleEnumIds.find(declared.id)
+                    == verifiedEligibleEnumIds.end())
+                    throw std::invalid_argument(
+                        "candidate contains unverified enum identity");
+            } else if (!isPrimitive(declared.id) || declared.id == "String") {
+                throw std::invalid_argument(
+                    "candidate contains invalid or noncanonical primitive identity");
+            }
+        }
         for (std::size_t j = i + 1; j < candidates.size(); ++j) {
             if (compare(candidates[i], candidates[j]) != PairStatus::DistinctEnums)
                 throw std::invalid_argument("ambiguous same-arity overload family");
