@@ -57,6 +57,9 @@ extern "C" int ores_native_nio_try_pop(OresNativeNio* runtime, OresNativeNioComp
 extern "C" int ores_native_nio_completion_fd(const OresNativeNio* runtime, size_t reactor) {
     return runtime ? runtime->manager.completion_fd(reactor) : -1;
 }
+extern "C" void ores_native_nio_drain_completion_signal(OresNativeNio* runtime, size_t reactor) {
+    if (runtime) runtime->manager.drain_completion_signal(reactor);
+}
 extern "C" void ores_native_nio_close(OresNativeNio* runtime) {
     if (runtime) {
         runtime->manager.stop();
