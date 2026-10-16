@@ -353,6 +353,52 @@ class ComparatorParityProof(unittest.TestCase):
                        "detail": case["pending_reason"]})
         return record
 
+    def test_common_verified_excludes_malformed_native_pass_evidence(self):
+        # A native PASS string with the wrong observed exit must never be
+        # included in the COMMON_VERIFIED metric, even in incremental mode.
+        all_common = sum(
+            all(c["backends"][backend] == "required" for backend in ("llvm", "graal"))
+            for c in self.suite["cases"]
+        )
+        native = next(c for c in self.suite["cases"]
+                      if c["kind"] == "native_exit" and
+                      all(c["backends"][backend] == "required"
+                          for backend in ("llvm", "graal")))
+        for backend in ("llvm", "graal"):
+            with self.subTest(backend=backend):
+                record = next(item for item in self.reports[backend]["results"]
+                              if item["id"] == native["id"])
+                previous = record["observed_exit"]
+                try:
+                    record["observed_exit"] = native["expected_exit"] + 1
+                    status, summary = self.compare()
+                    self.assertEqual(status, 1)
+                    self.assertIn(f"COMMON_VERIFIED={all_common - 1} ", summary)
+                    self.assertIn("SUITE_COMPLETE=no", summary)
+                finally:
+                    record["observed_exit"] = previous
+
+    def test_common_verified_excludes_malformed_diagnostic_pass_evidence(self):
+        all_common = sum(
+            all(c["backends"][backend] == "required" for backend in ("llvm", "graal"))
+            for c in self.suite["cases"]
+        )
+        diagnostic = next(c for c in self.suite["cases"]
+                          if c["kind"] == "diagnostic" and
+                          all(c["backends"][backend] == "required"
+                              for backend in ("llvm", "graal")))
+        record = next(item for item in self.reports["graal"]["results"]
+                      if item["id"] == diagnostic["id"])
+        previous = record["diagnostic_class"]
+        try:
+            record["diagnostic_class"] = "wrong_category"
+            status, summary = self.compare()
+            self.assertEqual(status, 1)
+            self.assertIn(f"COMMON_VERIFIED={all_common - 1} ", summary)
+            self.assertIn("SUITE_COMPLETE=no", summary)
+        finally:
+            record["diagnostic_class"] = previous
+
     def test_incremental_mode_is_explicitly_incomplete(self):
         self.synthetic_pending()
         status, summary = self.compare()
