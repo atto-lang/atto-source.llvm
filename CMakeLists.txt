@@ -1923,4 +1923,15 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME native_epoll_reactor_generation_completion
         COMMAND oreslang-native-epoll-reactor-test)
     set_tests_properties(native_epoll_reactor_generation_completion PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-epoll-reactor-manager-test
+        tests/native_epoll_reactor_manager_test.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-manager-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-reactor-manager-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-manager-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_manager_rt_preallocated
+        COMMAND oreslang-native-epoll-reactor-manager-test)
+    set_tests_properties(native_epoll_reactor_manager_rt_preallocated PROPERTIES TIMEOUT 20)
 endif()
