@@ -43,12 +43,20 @@ def problems(text):
         errors.append("unreviewed workflow trigger or top-level permissions")
     if len(re.findall(r"(?m)^\s*permissions\s*:", text)) != 1:
         errors.append("job-scoped or duplicate permissions must not override read-only policy")
+    if len(re.findall(r"(?m)^on\s*:", text)) != 1:
+        errors.append("duplicate or unreviewed workflow event declaration")
     if len(re.findall(r"(?m)^jobs\s*:", text)) != 1:
         errors.append("unexpected jobs mapping")
     else:
-        names = re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", text.split("\njobs:\n", 1)[-1])
+        # Include one-line YAML mappings, not only `job:` on its own line.
+        # Otherwise `extra: {runs-on: ...}` evades the job-name gate.
+        names = re.findall(r"(?m)^  ([a-z][a-z0-9-]*):(?:[ \t]|$)",
+                           text.split("\njobs:\n", 1)[-1])
         if names != ["conformance"]:
             errors.append("unreviewed additional or renamed CI job")
+    runners = re.findall(r"(?m)^    runs-on:\s*(\S.*?)\s*$", text)
+    if runners != ["ubuntu-24.04"]:
+        errors.append("the conformance job must use the reviewed GitHub-hosted runner")
     if text.count(APPROVED_SELF_CHECK) != 1:
         errors.append("workflow must execute the security guard after checkout")
     found = re.findall(r"(?m)^\s*- uses:\s*(\S+)", text)
@@ -93,6 +101,11 @@ class WorkflowSecurityProof(unittest.TestCase):
             clean + "\n  unrestricted:\n    runs-on: ubuntu-latest\n"
                     "    steps:\n      - run: echo unreviewed\n",
             clean.replace(APPROVED_SELF_CHECK, ""),
+            clean + "\n  smuggled: {runs-on: ubuntu-24.04, steps: [{run: echo bad}]}\n",
+            clean + "\non: {workflow_run: {types: [completed]}}\n",
+            clean.replace("    runs-on: ubuntu-24.04", "    runs-on: self-hosted"),
+            clean.replace("    timeout-minutes: 20\n",
+                          "    runs-on: self-hosted\n    timeout-minutes: 20\n"),
         ):
             with self.subTest(fragment=mutated[:120]):
                 self.assertTrue(problems(mutated))
