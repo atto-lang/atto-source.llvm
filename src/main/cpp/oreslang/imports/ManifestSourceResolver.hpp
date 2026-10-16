@@ -300,14 +300,24 @@ inline void verify_installed_package(const fs::path& directory) {
 // A single physical file may not be silently imported under two package
 // contexts. The future graph linker must register every resolved source.
 struct SourceIdentityRegistry {
-    std::map<fs::path,fs::path> contexts;
+    struct Context {
+        fs::path project, manifest, boundary;
+        bool operator==(const Context& other) const {
+            return project==other.project && manifest==other.manifest &&
+                   boundary==other.boundary;
+        }
+    };
+    std::map<fs::path,Context> contexts;
     fs::path register_source(const SourceConfig& config,const fs::path& source){
-        auto physical=fs::canonical(source);
+        const auto physical=fs::canonical(source);
         if(physical.extension()!=".ores")
             throw std::invalid_argument("native source graph requires .ores files");
-        auto project=fs::canonical(config.root);
-        const auto [it,inserted]=contexts.emplace(physical,project);
-        if(!inserted && it->second!=project)
+        const auto canon=[](const fs::path& path)->fs::path {
+            return path.empty()?fs::path{}:fs::canonical(path);
+        };
+        Context context{canon(config.root),canon(config.manifest),canon(config.boundary)};
+        const auto [it,inserted]=contexts.emplace(physical,context);
+        if(!inserted && !(it->second==context))
             throw std::invalid_argument("same source resolved under conflicting package contexts");
         return physical;
     }
