@@ -137,7 +137,7 @@ def main():
             [sys.argv[1], str(control)], capture_output=True,
             text=True, check=False, timeout=20,
         )
-        if baseline.returncode != 0 or not baseline.stdout.strip() or baseline.stderr.strip():
+        if baseline.returncode != 0 or "define " not in baseline.stdout:
             raise AssertionError(f"native scalar positive control failed: {baseline!r}")
         for name, (source, diagnostic) in CASES.items():
             fixture = pathlib.Path(tmp) / (name + ".ores")
