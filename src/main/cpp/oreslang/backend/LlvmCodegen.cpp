@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -343,6 +344,18 @@ bool checked_pure_function_tree(const Expression& expr,
     }
 }
 
+// Extract all call edges after the pure-expression admission check.
+// This graph must be closed and acyclic: no missing callee, overload typo,
+// recursive native stack growth, or unresolved external symbol is permitted.
+void collect_checked_calls(const Expression& expr, std::vector<std::string>& edges) {
+    if (expr.kind == Expression::Kind::Call)
+        edges.push_back(native_function_slot(expr.name, expr.arguments.size()));
+    if (expr.left) collect_checked_calls(*expr.left, edges);
+    if (expr.right) collect_checked_calls(*expr.right, edges);
+    for (const auto& arg : expr.arguments)
+        collect_checked_calls(*arg, edges);
+}
+
 bool checked_scalar_tree(const Expression& expr,
                          const std::unordered_set<std::string>& parameters,
                          std::size_t depth = 0) {
@@ -429,6 +442,37 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (!checked_pure_function_tree(*fn.result, parameters))
                 throw std::runtime_error("checked native function expression is not pure scalar");
         }
+        std::unordered_map<std::string, std::vector<std::string>> graph;
+        for (const auto& fn : source.functions) {
+            std::string key = native_function_slot(fn.name, fn.parameters.size());
+            std::vector<std::string> edges;
+            collect_checked_calls(*fn.result, edges);
+            if (!graph.emplace(std::move(key), std::move(edges)).second)
+                throw std::runtime_error("checked native function overload/arity collision");
+        }
+        // Fail before emitting IR if any call target is missing or a caller
+        // can recurse indefinitely. Bound depth for predictable host stack.
+        std::unordered_map<std::string, std::size_t> depths;
+        std::unordered_set<std::string> visiting;
+        std::function<std::size_t(const std::string&)> visit =
+            [&](const std::string& key) -> std::size_t {
+                if (auto found = depths.find(key); found != depths.end())
+                    return found->second;
+                const auto it = graph.find(key);
+                if (it == graph.end())
+                    throw std::runtime_error("checked native function has unknown call target");
+                if (!visiting.insert(key).second)
+                    throw std::runtime_error("checked native recursive call graph unsupported");
+                std::size_t depth = 1;
+                for (const auto& callee : it->second)
+                    depth = std::max(depth, visit(callee) + 1);
+                visiting.erase(key);
+                if (depth > 32)
+                    throw std::runtime_error("checked native function call depth exceeds 32");
+                depths.emplace(key, depth);
+                return depth;
+            };
+        for (const auto& edge : graph) (void)visit(edge.first);
     }
     if (experimental_checked_i64) {
         // This opt-in companion ABI cannot bypass ownership cleanup because
