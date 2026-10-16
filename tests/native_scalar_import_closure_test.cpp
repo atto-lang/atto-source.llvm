@@ -96,7 +96,7 @@ int main() {
               "import \"pkg:math/src/num\";\npub fnc main(): int {return number();}\n");
         auto packaged = closure(dir/"pkg"/"src"/"main.ores");
         check(packaged.units.size() == 2, "declared pkg alias unresolved");
-        write(dir/"pkg"/"src"/"escape.ores", "import \"../../../helper\";\n");
+        write(dir/"pkg"/"src"/"escape.ores", "import \"../../helper\";\n");
         reject([&] { (void)closure(dir/"pkg"/"src"/"escape.ores"); },
                "escapes physical search root");
 
