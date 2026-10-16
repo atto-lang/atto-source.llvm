@@ -28,6 +28,33 @@ class DiagnosticProof(unittest.TestCase):
                     run.validate_command(command)
         self.assertEqual(run.validate_command("compiler {source}"), ["compiler", "{source}"])
 
+    def test_validate_mode_rejects_every_execution_option_even_empty(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        flags = (
+            ("--backend", "llvm"),
+            ("--command", "compiler {source}"),
+            ("--run-command", "guest {source}"),
+            ("--revision", "a" * 40),
+            ("--report", "out.json"),
+            ("--clang", "clang"),
+            ("--clang", ""),
+            ("--timeout", "30"),
+        )
+        with patch.object(sys, "argv", ["run.py", "--validate"]):
+            with redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(run.main(), 0)
+            self.assertIn("Validated ", output.getvalue())
+        for flag in flags:
+            with self.subTest(flag=flag):
+                stderr = io.StringIO()
+                with patch.object(sys, "argv", ["run.py", "--validate", *flag]):
+                    with redirect_stderr(stderr):
+                        with self.assertRaises(SystemExit) as result:
+                            run.main()
+                self.assertEqual(result.exception.code, 2)
+                self.assertIn("--validate cannot be combined", stderr.getvalue())
+
     def test_validates_strict_schema_fixture_inventory(self):
         suite, digest = run.validate_suite()
         self.assertGreaterEqual(len(suite["cases"]), 10)
