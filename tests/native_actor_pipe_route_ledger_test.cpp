@@ -66,6 +66,21 @@ int main() {
                  "zero downstream slot count accepted");
         check(keyed.outstanding() == before,
               "invalid routing key consumed or leaked route frame credit");
+        // Authorization and freshness MUST take precedence over untrusted
+        // malformed affinity keys. A writable worker is an authenticated
+        // graph receiver but not an authorized forward source.
+        const auto sink_frame = keyed.forward_to(root, "worker-a");
+        bool source_first = false;
+        try { (void)keyed.forward_by_key(sink_frame, "\xc0\xaf"); }
+        catch (const std::invalid_argument& error) {
+            source_first = std::string(error.what()).find(
+                "source has no outbound route") != std::string::npos;
+        }
+        check(source_first,
+              "malformed key masked unauthorized downstream source");
+        keyed.complete(sink_frame);
+        check(keyed.outstanding() == before,
+              "unauthorized keyed route consumed correlation frame credit");
         keyed.complete(root);
         keyed.advance_generation(12);
         rejected([&] { (void)keyed.forward_by_key(root, "alpha"); },
