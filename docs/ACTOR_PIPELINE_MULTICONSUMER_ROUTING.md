@@ -41,6 +41,11 @@ into current round-robin semantics.
    edge before publishing the pipeline. Source and destination IDs/epochs are
    authenticated, every link has an exact nominal payload type, no duplicate
    links or dangling ports are allowed, and every graph is bounded/acyclic.
+   **An actor instance ID is not its actor class/type**: multiple Worker
+   instances can subscribe to the same Producer. Native `PipeStage.instance_id`
+   identifies graph vertices; an omitted instance ID uses the nominal type
+   only for backward compatibility. In production the supervisor must bind
+   these identifiers to authenticated runtime actor identities/epochs.
    No caller-supplied actor name grants authority to another actor's port.
 2. **Single physical execution.** Routing-policy mutation (RR cursor,
    subscription membership, reply correlation) belongs to the VM scheduler,
