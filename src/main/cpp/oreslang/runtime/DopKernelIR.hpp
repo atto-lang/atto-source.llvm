@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/DopLayout.hpp"
+#include "oreslang/runtime/DopRegionSchedule.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include <climits>
 #include <cmath>
@@ -63,6 +64,7 @@ struct OpenClArtifact {
 class HostBuffer {
     struct State {
         Plan layout;
+        RegionRoot region_root;
         std::vector<unsigned char> bytes;
         mutable std::mutex lock;
         std::size_t loans = 0;
@@ -83,7 +85,8 @@ class HostBuffer {
             return oreslang::TargetAbi::checked_host_bytes(layout.byte_length());
         }
         explicit State(Plan value)
-            : layout(value), bytes(checked_host_size(value), 0) { }
+            : layout(value), region_root(RegionRoot::create_bound(value.rows(), value.fields())),
+              bytes(checked_host_size(value), 0) { }
     };
 public:
     class ReadLoan {
@@ -188,6 +191,15 @@ public:
         if (state_->closed) throw std::logic_error("buffer moved or closed");
         return state_->layout;
     }
+    // Region identity is anchored in the actual storage State, not in a
+    // caller-minted planning token. take()/native moves preserve this identity.
+    RegionRoot region_root() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
+        active();
+        std::lock_guard<std::mutex> guard(state_->lock);
+        if (state_->closed) throw std::logic_error("closed region owner");
+        return state_->region_root;
+    }
     bool identical_storage(const HostBuffer& other) const noexcept {
         if (this == &other) {
             std::lock_guard<std::mutex> owner(owner_lock_);
@@ -247,6 +259,7 @@ public:
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->loans != 0 || state_->writer) throw std::logic_error("outstanding host buffer loan");
         state_->closed = true;
+        state_->region_root.retire_bound();
     }
 
 private:
