@@ -84,6 +84,13 @@ public:
             return failed_void("native actor pipe is closed");
         if (payload.size() > max_payload_bytes)
             return failed_void("native actor pipe payload exceeds byte budget");
+        // Enforce bytes across BOTH admitted mailbox entries and pending
+        // writers. Message-count limits alone can retain gigabytes when
+        // every individual payload is within the one-message cap.
+        // Direct handoff to an already-waiting reader buffers no bytes.
+        if (link.readers.empty() &&
+                payload.size() > max_edge_buffered_bytes - link.buffered_bytes)
+            return failed_void("native actor pipe edge byte credit exhausted");
         if (link.messages.size() == link.capacity
                 && link.readers.empty()
                 && link.writers.size() >= link.capacity)
@@ -96,10 +103,14 @@ public:
             recipient->set_value(std::move(pending->payload));
             pending->promise.set_value();
         } else if (link.messages.size() < link.capacity) {
+            const auto bytes = pending->payload.size();
             link.messages.push_back(std::move(pending->payload));
+            link.buffered_bytes += bytes;
             pending->promise.set_value();
         } else {
+            const auto bytes = pending->payload.size();
             link.writers.push_back(std::move(pending));
+            link.buffered_bytes += bytes;
         }
         return future;
     }
@@ -116,6 +127,7 @@ public:
         if (!link.messages.empty()) {
             auto payload = std::move(link.messages.front());
             link.messages.pop_front();
+            link.buffered_bytes -= payload.size();
             receiver->set_value(std::move(payload));
             // close() publishes cancellation before visiting every edge. An
             // overlapping read may still drain already-admitted data, but
@@ -177,9 +189,11 @@ public:
     /** Compatibility host entry point: report futures in approved edge order. */
     std::vector<std::shared_future<void>> write_all_async(
             const std::string& source, const std::string& payload) {
-        auto report = write_all_report_async(source, payload);
         std::vector<std::shared_future<void>> results;
-        results.reserve(report.size());
+        // Allocate receipt slots BEFORE any admission. Preserve the report
+        // path's per-edge exception-to-Future conversion on partial failure.
+        results.reserve(connected_outlets(source).size());
+        auto report = write_all_report_async(source, payload);
         for (auto& entry : report)
             results.push_back(std::move(entry.admission));
         return results;
@@ -253,6 +267,7 @@ public:
                 edge->closed = true;
                 // Buffered admitted payloads remain readable after closure.
                 for (auto& waiting : edge->writers) {
+                    edge->buffered_bytes -= waiting->payload.size();
                     try { waiting->promise.set_exception(std::make_exception_ptr(
                             std::logic_error("native actor pipe is closed"))); }
                     catch (...) { }
@@ -297,6 +312,9 @@ private:
     }
 
     static constexpr std::size_t max_payload_bytes = 1024 * 1024;
+    // Per-edge resident byte bound, in addition to capacity for queued
+    // messages and pending writers. This is not a whole-graph memory quota.
+    static constexpr std::size_t max_edge_buffered_bytes = 16 * 1024 * 1024;
 
     /** Reject overlong encodings, surrogate code points, truncated sequences
      * and out-of-range Unicode before hashing. Key byte identity remains
@@ -335,6 +353,8 @@ private:
         const std::size_t capacity;
         std::mutex mutex;
         bool closed = false;
+        // Protected by mutex; includes queued messages + pending writes.
+        std::size_t buffered_bytes = 0;
         std::deque<std::string> messages;
         std::deque<std::shared_ptr<PendingWrite>> writers;
         std::deque<std::shared_ptr<std::promise<std::string>>> readers;
