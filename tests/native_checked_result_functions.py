@@ -8,7 +8,6 @@ output; 2 = null output pointer. Nested failures do not trap or publish values.
 This is NOT actor/owner cleanup evidence or an approved cross-org mirror.
 """
 import argparse
-from itertools import product
 from pathlib import Path
 import re
 import subprocess
@@ -103,8 +102,54 @@ static int bulk_check(void) {
     return 0;
 }
 
+
+/* This entire matrix is checked inside one guest-host process per optimization.
+   The exact-width oracle uses signed 128-bit values, never wrapped i64 math. */
+static int boundary_check(void) {
+    static const int64_t values[] = {
+        INT64_MIN, INT64_MIN+1, INT64_C(-3037000500), INT64_C(-2),
+        INT64_C(-1), INT64_C(0), INT64_C(1), INT64_C(2),
+        INT64_C(3037000500), INT64_MAX-1, INT64_MAX
+    };
+    int cases = 0;
+    for (size_t i = 0; i < sizeof(values)/sizeof(values[0]); ++i) {
+        int64_t a = values[i];
+        if (!verify_unary(__oreslang_checked_v2_neg_1,a,-(__int128)a)) return 21;
+        if (!verify_unary(__oreslang_checked_v2_twice_1,a,(__int128)a+2)) return 22;
+        cases += 2;
+        for (size_t j = 0; j < sizeof(values)/sizeof(values[0]); ++j) {
+            int64_t b = values[j];
+            if (!verify_binary(__oreslang_checked_v2_add_2,a,b,(__int128)a+b)) return 23;
+            if (!verify_binary(__oreslang_checked_v2_sub_2,a,b,(__int128)a-b)) return 24;
+            if (!verify_binary(__oreslang_checked_v2_mul_2,a,b,(__int128)a*b)) return 25;
+            __int128 x = (__int128)a+1;
+            __int128 y = (__int128)b+1;
+            __int128 intermediate = (__int128)a+b;
+            int64_t out = INT64_C(987654321);
+            int32_t status = __oreslang_checked_v2_nested_2(a,b,&out);
+            int nested_ok = within_i64(x) && within_i64(y) && within_i64(x+y);
+            if (status != (nested_ok ? 0 : 1) ||
+                out != (nested_ok ? (int64_t)(x+y) : INT64_C(987654321))) return 26;
+            if (__oreslang_checked_v2_nested_2(a,b,NULL) != 2) return 27;
+            out = INT64_C(987654321);
+            status = __oreslang_checked_v2_intermediate_2(a,b,&out);
+            int intermediate_ok = within_i64(intermediate) &&
+                                  within_i64(intermediate*3);
+            if (status != (intermediate_ok ? 0 : 1) ||
+                out != (intermediate_ok ? (int64_t)(intermediate*3) :
+                       INT64_C(987654321))) return 28;
+            if (__oreslang_checked_v2_intermediate_2(a,b,NULL) != 2) return 29;
+            cases += 5;
+        }
+    }
+    if (cases != 627) return 30;
+    printf("CHECKED_RESULT_BOUNDARIES=%d_PASS\n", cases);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc == 2 && !strcmp(argv[1], "bulk")) return bulk_check();
+    if (argc == 2 && !strcmp(argv[1], "boundary")) return boundary_check();
     if (argc != 4) return 99;
     int64_t a = (int64_t)strtoll(argv[2], NULL, 10);
     int64_t b = (int64_t)strtoll(argv[3], NULL, 10);
@@ -201,35 +246,18 @@ def main():
             if stress.returncode or stress.stdout != "CHECKED_RESULT_BULK=10240_PASS\n" or stress.stderr:
                 raise AssertionError("checked-result bulk differential failed: " + repr(stress))
             passed += 10240
+            # One compiled guest executable per optimization: no shell
+            # process per arithmetic input, including overflowing boundaries.
+            boundaries = run([str(exe), "boundary"])
+            if boundaries.returncode or boundaries.stdout != (
+                    "CHECKED_RESULT_BOUNDARIES=627_PASS\n") or boundaries.stderr:
+                raise AssertionError("real guest boundary differential failed: " + repr(boundaries))
+            passed += 627
             # NULL first: no arithmetic, callee or output publication.
             p = run([str(exe), "null", str(HI), "1"])
             if p.returncode or p.stdout != "2 987654321\n" or p.stderr:
                 raise AssertionError("null output contract failed: " + repr(p))
             passed += 1
-            for name, op in (("add", lambda a,b: a+b),
-                             ("sub", lambda a,b: a-b),
-                             ("mul", lambda a,b: a*b)):
-                for a, b in product(BOUNDS, repeat=2):
-                    exact = op(a, b)
-                    executable_case(exe, name, a, b, exact if LO <= exact <= HI else None)
-                    passed += 1
-            for name, a, b, result in (
-                ("neg", LO, 0, None),
-                ("neg", LO+1, 0, HI),
-                ("neg", HI, 0, -HI),
-                ("twice", 2, 0, 4),
-                ("twice", HI-2, 0, HI),
-                ("twice", HI-1, 0, None), # inner success, outer failure
-                ("twice", HI, 0, None), # inner failure
-                ("nested", 2, 3, 7),
-                ("nested", HI, 2, None), # first argument fails
-                ("nested", 2, HI, None), # second argument fails
-                ("intermediate", 2, 3, 15),
-                ("intermediate", HI, 1, None),
-                ("intermediate", HI, -1, None),
-            ):
-                executable_case(exe, name, a, b, result)
-                passed += 1
         negatives = {
             "owner": "fnc bad(int a):int{val x:int=a;return x;}",
             "borrow": "fnc bad(int a):int{return rt borrow(a);}",
