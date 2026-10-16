@@ -116,6 +116,13 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    // These ABI experiments have no owners or resumable frames. Reject
+    // conflicting experimental parser modes before reading source bytes.
+    if ((experimental_checked_functions || experimental_checked_result_functions) &&
+            (experimental_owned_int || experimental_rt_scalar_loop)) {
+        std::cerr << "checked scalar function modes cannot combine with owned-int or scalar-loop\n";
+        return 2;
+    }
     if (path == nullptr) {
         std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-checked-i64] [--experimental-checked-i64-functions] [--experimental-checked-i64-result-functions] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
