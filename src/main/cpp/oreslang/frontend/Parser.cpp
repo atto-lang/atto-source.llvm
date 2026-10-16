@@ -1161,6 +1161,16 @@ private:
             if (++pipeline_stages > 128)
                 fail("native pipeline exceeds 128 stages");
             advance();
+            // Tagged combinators require representation, effect and ownership
+            // lowering. Detect namespace.member even across whitespace and
+            // comments; do not synthesize a scalar call for it.
+            if (token_.kind == Kind::Identifier &&
+                    (token_.text == "Option" || token_.text == "Result")) {
+                Lexer lookahead = lexer_;
+                if (lookahead.next().text == ".")
+                    fail("native tagged Option/Result pipeline unsupported: "
+                         "typed variants and callbacks required");
+            }
             if (token_.kind != Kind::Identifier || reserved(token_.text))
                 fail("native pipeline stage requires a named scalar callable");
             auto stage = primary();
