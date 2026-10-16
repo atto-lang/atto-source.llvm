@@ -359,6 +359,20 @@ void collect_checked_calls(const Expression& expr, std::vector<std::string>& edg
         collect_checked_calls(*arg, edges);
 }
 
+// Result v2 currently has a positional-only C ABI. Check this before LLVM
+// emission (not halfway through constructing an unverifiable module).
+bool has_checked_named_call(const Expression& expr) {
+    if (expr.kind == Expression::Kind::Call &&
+            std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
+                [](const std::string& label) { return !label.empty(); }))
+        return true;
+    if (expr.left && has_checked_named_call(*expr.left)) return true;
+    if (expr.right && has_checked_named_call(*expr.right)) return true;
+    for (const auto& arg : expr.arguments)
+        if (arg && has_checked_named_call(*arg)) return true;
+    return false;
+}
+
 bool checked_scalar_tree(const Expression& expr,
                          const std::unordered_set<std::string>& parameters,
                          std::size_t depth = 0) {
@@ -538,6 +552,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             std::size_t remaining_nodes = 2048;
             if (!checked_pure_function_tree(*fn.result, parameters, remaining_nodes))
                 throw std::runtime_error("checked native function expression not pure or exceeds 2048-node/64-depth budget");
+            if (experimental_checked_result_functions && has_checked_named_call(*fn.result))
+                throw std::runtime_error("checked result ABI v2 requires positional-only calls");
         }
         std::unordered_map<std::string, std::vector<std::string>> graph;
         for (const auto& fn : source.functions) {
