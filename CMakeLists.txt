@@ -1892,3 +1892,14 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# HOST-ONLY Option<T> recursive flatten substrate. Source-language admission,
+# Future<T> scheduler integration, and guest execution remain independent gates.
+if(BUILD_TESTING)
+  add_executable(oreslang_wrapper_flatten_option_host tests/wrapper_flatten_option_host_test.cpp)
+  target_include_directories(oreslang_wrapper_flatten_option_host PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+  target_compile_options(oreslang_wrapper_flatten_option_host PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  add_test(NAME llvm_wrapper_option_host_conformance COMMAND oreslang_wrapper_flatten_option_host)
+  set_tests_properties(llvm_wrapper_option_host_conformance PROPERTIES TIMEOUT 20)
+endif()
