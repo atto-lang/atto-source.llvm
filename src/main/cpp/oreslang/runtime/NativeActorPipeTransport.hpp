@@ -115,9 +115,10 @@ public:
             return failed_void("native actor pipe is closed");
         if (payload.size() > max_payload_bytes)
             return failed_void("native actor pipe payload exceeds byte budget");
-        if (link.messages.size() == link.capacity
-                && link.readers.empty()
-                && link.writers.size() >= link.capacity)
+        // A failed writer promotion can leave an empty buffer slot while
+        // older writers remain pending. Preserve their admission order and
+        // enforce the writer bound regardless of buffer occupancy.
+        if (link.readers.empty() && link.writers.size() >= link.capacity)
             return failed_void("native actor pipe pending-write budget exceeded");
         // Construct promise/future before charging. An OOM during creation
         // must not leak graph credits. Direct reader handoff is not buffered.
@@ -143,7 +144,9 @@ public:
                 pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
                 recipient->set_value(std::move(pending->payload));
                 pending->promise.set_value();
-            } else if (link.messages.size() < link.capacity) {
+            } else if (link.writers.empty() && link.messages.size() < link.capacity) {
+                // Never let a new write leapfrog an older pending writer
+                // after allocation failure created a temporary buffer gap.
                 link.messages.push_back(std::move(pending->payload));
                 published = true;
                 pending->promise.set_value();
@@ -207,6 +210,17 @@ public:
         } else if (closed_.load(std::memory_order_acquire) || link.closed) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe is closed")));
+        } else if (!link.writers.empty()) {
+            // Repeated promotion failures can drain all buffered DATA while
+            // charged writers remain queued. Deliver the oldest writer
+            // directly instead of registering a reader behind it forever.
+            auto waiting = std::move(link.writers.front());
+            link.writers.pop_front();
+            buffered_payload_bytes_.fetch_sub(
+                waiting->payload.size(), std::memory_order_acq_rel);
+            buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
+            receiver->set_value(std::move(waiting->payload));
+            waiting->promise.set_value();
         } else if (link.readers.size() >= link.capacity) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe pending-read budget exceeded")));
