@@ -384,12 +384,13 @@ public:
             const std::string& source, std::string payload) {
         const auto& destinations = connected_outlets(source);
         std::lock_guard<std::mutex> selection(route_mutex_);
-        const auto cursor = next_outlet_[source];
+        // The cursor was preallocated with the trusted graph at initialize().
+        // Never allocate a selector map entry on the first actor message:
+        // that could fail before a strictly counted attempted turn advances.
+        auto& cursor = next_outlet_.at(source);
         const auto edge = destinations[cursor % destinations.size()];
-        // An attempted turn counts even if write_async fails before it can
-        // return a Future (for example, due to allocation failure). Advancing
-        // after admission would violate the strict RR contract in that case.
-        next_outlet_[source] = (cursor + 1) % destinations.size();
+        // Attempted turns count even when write_async later fails or throws.
+        cursor = (cursor + 1) % destinations.size();
         return write_async(edge, std::move(payload));
     }
 
@@ -510,6 +511,12 @@ private:
             edges_.push_back(std::make_unique<Edge>(edge_capacity));
             outgoing_[schema_[i].source].push_back(i);
         }
+        // Preallocate RR state for every source during trusted graph setup,
+        // before exposing a supervised group or admitting actor messages.
+        // Routing a first message must not allocate selector bookkeeping.
+        next_outlet_.reserve(outgoing_.size());
+        for (const auto& item : outgoing_)
+            next_outlet_.emplace(item.first, 0);
         group_ = registry.create_group(supervisor, worker_capacity);
     }
 
