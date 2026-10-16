@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <future>
 #include <memory>
@@ -11,6 +12,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -33,12 +35,22 @@ public:
             std::vector<PipeStage> stages, std::size_t edge_capacity,
             std::size_t worker_capacity)
         : schema_(check_actor_pipeline(stages)) {
-        if (edge_capacity == 0)
-            throw std::invalid_argument("native pipeline edge capacity must be positive");
-        // Allocate all edges before publishing the supervised group.
-        for (std::size_t i = 0; i < schema_.size(); ++i)
-            edges_.push_back(std::make_unique<Edge>(edge_capacity));
-        group_ = registry.create_group(supervisor, worker_capacity);
+        initialize(registry, supervisor, edge_capacity, worker_capacity);
+    }
+
+    /**
+     * Fan-out DAG constructor. Every edge is nominally typed, unique, directed
+     * and cycle-free. This remains a trusted host transport; guest method
+     * lowering must additionally enforce ownership and actor-context rules.
+     */
+    NativeActorPipeTransport(
+            NativeSupervisorRegistry& registry,
+            const NativeSupervisorRegistry::SupervisorRef& supervisor,
+            std::vector<PipeStage> stages,
+            std::vector<PipeConnection> connections,
+            std::size_t edge_capacity, std::size_t worker_capacity)
+        : schema_(check_actor_pipeline_graph(stages, connections)) {
+        initialize(registry, supervisor, edge_capacity, worker_capacity);
     }
 
     NativeActorPipeTransport(const NativeActorPipeTransport&) = delete;
@@ -119,6 +131,68 @@ public:
         return future;
     }
 
+    /**
+     * Transport realization of prospective self.forward_all(value):
+     * deliver one independent immutable/copyable payload to each connected
+     * consumer. Results are in validated graph-edge order and acknowledge
+     * only mailbox admission, NEVER consumer execution.
+     *
+     * IMPORTANT: This is NOT a transaction. A full/closed edge can fail
+     * after other edges accepted a copy. Callers must examine every Future
+     * and implement application-level deduplication/compensation as needed.
+     */
+    std::vector<std::shared_future<void>> write_all_async(
+            const std::string& source, const std::string& payload) {
+        const auto& destinations = connected_outlets(source);
+        std::vector<std::shared_future<void>> results;
+        results.reserve(destinations.size());
+        for (const auto edge : destinations)
+            results.push_back(write_async(edge, payload));
+        return results;
+    }
+
+    /** Strict per-source round robin, including routes whose write later
+     * blocks or fails. No skip-on-backpressure and no hidden retry. */
+    std::shared_future<void> write_round_robin_async(
+            const std::string& source, std::string payload) {
+        const auto& destinations = connected_outlets(source);
+        std::lock_guard<std::mutex> selection(route_mutex_);
+        const auto cursor = next_outlet_[source];
+        const auto edge = destinations[cursor % destinations.size()];
+        auto completion = write_async(edge, std::move(payload));
+        next_outlet_[source] = (cursor + 1) % destinations.size();
+        return completion;
+    }
+
+    /** Named destination selection is restricted to an existing source edge;
+     * a caller cannot use another actor's outbound port by guessing a name. */
+    std::shared_future<void> write_to_async(
+            const std::string& source, const std::string& target,
+            std::string payload) {
+        const auto& destinations = connected_outlets(source);
+        for (const auto edge : destinations)
+            if (schema_[edge].target == target)
+                return write_async(edge, std::move(payload));
+        throw std::invalid_argument("native actor pipe target is not connected to source");
+    }
+
+    /** Stable FNV-1a routing for key affinity across process restarts.
+     * Not cryptographic: never use key hashing as authorization. */
+    std::shared_future<void> write_by_key_async(
+            const std::string& source, const std::string& key,
+            std::string payload) {
+        if (key.size() > 4096)
+            throw std::invalid_argument("native actor pipe route key too large");
+        const auto& destinations = connected_outlets(source);
+        std::uint64_t digest = UINT64_C(14695981039346656037);
+        for (const unsigned char byte : key) {
+            digest ^= byte;
+            digest *= UINT64_C(1099511628211);
+        }
+        return write_async(destinations[digest % destinations.size()],
+                           std::move(payload));
+    }
+
     void close() noexcept {
         {
             // Serialize terminal publication with ALL admissions, not just
@@ -150,6 +224,30 @@ public:
     }
 
 private:
+    void initialize(
+            NativeSupervisorRegistry& registry,
+            const NativeSupervisorRegistry::SupervisorRef& supervisor,
+            std::size_t edge_capacity, std::size_t worker_capacity) {
+        if (edge_capacity == 0)
+            throw std::invalid_argument("native pipeline edge capacity must be positive");
+        // Allocate all independently bounded edges before publishing the
+        // supervised group. Outbound order is caller-defined graph order.
+        edges_.reserve(schema_.size());
+        for (std::size_t i = 0; i < schema_.size(); ++i) {
+            edges_.push_back(std::make_unique<Edge>(edge_capacity));
+            outgoing_[schema_[i].source].push_back(i);
+        }
+        group_ = registry.create_group(supervisor, worker_capacity);
+    }
+
+    const std::vector<std::size_t>& connected_outlets(
+            const std::string& source) const {
+        const auto it = outgoing_.find(source);
+        if (it == outgoing_.end() || it->second.empty())
+            throw std::invalid_argument("native actor pipe source has no downstream consumers");
+        return it->second;
+    }
+
     static constexpr std::size_t max_payload_bytes = 1024 * 1024;
 
     struct PendingWrite {
@@ -180,6 +278,11 @@ private:
 
     const std::vector<PipeConnection> schema_;
     std::vector<std::unique_ptr<Edge>> edges_;
+    std::unordered_map<std::string, std::vector<std::size_t>> outgoing_;
+    // Held only for deterministic round-robin selection, never on guest
+    // execution or across a blocking wait on a Future.
+    std::mutex route_mutex_;
+    std::unordered_map<std::string, std::size_t> next_outlet_;
     std::shared_ptr<NativeActorGroup> group_;
     // Readers/writers on separate edges run in parallel; only closure gets
     // the exclusive terminal publication barrier. Never held for host STOP.
