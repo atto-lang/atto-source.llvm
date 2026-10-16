@@ -59,6 +59,9 @@ class NativeNumericHarnessSelfTest(unittest.TestCase):
             (valid.replace("call void @llvm.trap()", "call void @other()"), "sadd"),
             (valid.replace("br i1 %i64.checked.overflow",
                            "br i1 %unrelated.condition"), "sadd"),
+            (valid.replace("  br i1 %i64.checked.overflow",
+                           "  %unused = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 2,i64 3)\\n"
+                           "  br i1 %i64.checked.overflow"), "smul"),
             (valid.replace("extractvalue { i64, i1 } %i64.checked.pair, 1",
                            "extractvalue { i64, i1 } %unrelated.pair, 1"), "sadd"),
             (valid.replace("  ret i64 %i64.checked.value",
