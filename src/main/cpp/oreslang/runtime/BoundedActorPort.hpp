@@ -67,13 +67,21 @@ public:
          * ownership/borrow fences have acknowledged quiescence. */
         bool acknowledge_released() {
             if (acknowledged_ || !state_) return false;
-            std::lock_guard<std::mutex> guard(state_->mutex);
-            if (!state_->used_frames || state_->used_bytes < bytes_)
-                throw std::logic_error("actor port accounting corrupted");
-            acknowledged_ = true;
-            --state_->used_frames;
-            state_->used_bytes -= bytes_;
-            payload_.reset();
+            // An actor payload may have a destructor that re-enters port
+            // observability or publishes independent scheduler callbacks.
+            // Settle credits under the lock, but run arbitrary payload
+            // destruction only AFTER releasing the non-recursive mutex.
+            std::unique_ptr<T> retired;
+            {
+                std::lock_guard<std::mutex> guard(state_->mutex);
+                if (!state_->used_frames || state_->used_bytes < bytes_)
+                    throw std::logic_error("actor port accounting corrupted");
+                acknowledged_ = true;
+                --state_->used_frames;
+                state_->used_bytes -= bytes_;
+                retired = std::move(payload_); // noexcept ownership transfer
+            }
+            retired.reset(); // may invoke T::~T and re-enter port APIs
             return true;
         }
 
