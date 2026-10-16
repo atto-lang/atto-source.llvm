@@ -15,9 +15,9 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 for compiler in g++ clang++; do
   for opt in 0 2; do
-    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_route_ledger_test; do
+    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_route_ledger_test native_actor_pipe_writer_promotion_fault_test; do
       # The OOM seam exists in native routing TEST binaries only.
-      if [ "$test" = native_actor_pipeline_routing_test ]; then
+      if [ "$test" = native_actor_pipeline_routing_test ] || [ "$test" = native_actor_pipe_writer_promotion_fault_test ]; then
         set -- -DORESLANG_ACTOR_PIPE_FAULT_TESTS=1
       else
         set --
@@ -32,9 +32,9 @@ done
 
 if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   for compiler in g++ clang++; do
-    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_route_ledger_test; do
+    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_route_ledger_test native_actor_pipe_writer_promotion_fault_test; do
       # The OOM seam exists in native routing TEST binaries only.
-      if [ "$test" = native_actor_pipeline_routing_test ]; then
+      if [ "$test" = native_actor_pipeline_routing_test ] || [ "$test" = native_actor_pipe_writer_promotion_fault_test ]; then
         set -- -DORESLANG_ACTOR_PIPE_FAULT_TESTS=1
       else
         set --
