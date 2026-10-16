@@ -91,6 +91,23 @@ int main() {
     }
     destination.close();
 
+    // Fail before the first output write if another CPU task holds the region;
+    // its input read loan must unwind on failed output admission.
+    HostBuffer source(batch_plan), result(batch_plan);
+    Kernel kernel(batch_plan, Element::F32, Op::ScaleBias, 2.0f, 1.0f);
+    source.write(0, 0, 7.0f);
+    result.write(0, 0, 101.0f);
+    {
+        auto reserved = result.borrow_write();
+        must_reject_loan([&] { execute_cpu(kernel, source, result); });
+        must_reject_loan([&] { (void)result.read(0, 0); });
+    }
+    auto source_successor = source.take(); // source read loan was released
+    source_successor.close();
+    if (result.read(0, 0) != 101.0f)
+        throw std::runtime_error("rejected CPU kernel partially modified destination");
+    result.close();
+
     // Direct C++ move/assignment must enforce the same active-loan
     // exclusion as the explicit take() method, without consuming the
     // source on a rejected transfer.
