@@ -96,6 +96,28 @@ int main() {
     auto denied = make(Permission::Net,{scope(Permission::Net,"*"),scope(Permission::Net,"api.example.com:443",true)});
     require(denied.allows(Permission::Net,"api.example.com:443"),false,"net explicit deny");
     require(denied.allows(Permission::Net,"api.example.com"),false,"portless deny");
+    const auto named = make(Permission::Net, {
+        scope(Permission::Net,"api.example.com:443"),
+        scope(Permission::Net,"127.0.0.1",true)
+    });
+    require(named.allows(Permission::Net,"api.example.com:443"),true,
+            "host allowed before resolution");
+    require(named.allows_network_connection("api.example.com:443","127.0.0.1:443"),
+            false,"resolved denied loopback");
+    require(named.allows_network_connection("api.example.com:443","203.0.113.7:443"),
+            true,"selected unblocked canonical IPv4");
+    require(named.allows_network_connection("api.example.com:443","203.0.113.7:444"),
+            false,"selected port must match requested port");
+    require(named.allows_network_connection("api.example.com:443","evil.example:443"),
+            false,"only numeric IP as resolved identity");
+    require(named.allows_network_connection("api.example.com:443","127.1:443"),
+            false,"no abbreviated numeric alias");
+    require(named.allows_network_connection("api.example.com:443","[::1]:443"),
+            false,"IPv6 unavailable, fail closed");
+    require(named.allows_network_connection("api.example.com","203.0.113.7:443"),
+            false,"pre-connect authorization requires explicit port");
+    require(named.allows_network_connection("other.example.com:443","203.0.113.7:443"),
+            false,"host permission still required");
     auto allDeny = make(Permission::Net,{scope(Permission::Net,"*"),scope(Permission::Net,"*",true)});
     require(allDeny.allows(Permission::Net,"other.example.org:443"),false,"deny all");
     for (const char* bad : {"/workspace/../secret", "/workspace//secret", "relative/path"}) {
