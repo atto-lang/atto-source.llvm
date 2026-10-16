@@ -208,6 +208,18 @@ private:
                 events_processed_.fetch_add(1, std::memory_order_relaxed);
             }
         }
+        // A terminal epoll failure must not strand accepted operations.
+        // Publish exactly one stopped result for each outstanding ticket even
+        // when no external host subsequently calls stop().
+        closed_.store(true, std::memory_order_release);
+        std::lock_guard<std::mutex> terminal_lock(mu_);
+        for (std::size_t i = 0; i < capacity; ++i) {
+            auto& item = slots_[i];
+            if (item.state != State::active) continue;
+            (void)::epoll_ctl(epoll_, EPOLL_CTL_DEL, item.fd, nullptr);
+            item.state = State::completed;
+            emit_locked({Ticket{encode(i, item.generation)}, item.fd, 0, Outcome::stopped});
+        }
     }
     void cleanup() noexcept {
         if (completion_signal_ >= 0) { ::close(completion_signal_); completion_signal_ = -1; }
