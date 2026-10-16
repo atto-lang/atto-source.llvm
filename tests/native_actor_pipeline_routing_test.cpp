@@ -122,6 +122,16 @@ int main() {
         rejected([&] { pipe.write_to_async("source-1", "Worker", "bad"); },
                  "nominal class name bypassed instance connection authority");
         pipe.close();
+        bool denied_after_close_first = false;
+        try {
+            pipe.write_by_key_async("source-1",
+                    std::string(1, char(0x80)), "after-close").get();
+        } catch (const std::logic_error& stopped) {
+            denied_after_close_first =
+                    std::string(stopped.what()).find("closed") != std::string::npos;
+        }
+        check(denied_after_close_first,
+              "retired native graph key was parsed before stop barrier");
     }
 
     // Five-backend v1 conformance fixture: one source with three separate
