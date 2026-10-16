@@ -1892,3 +1892,21 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# True compiler/guest numerical gate. Distinct from the source-free Python
+# reference oracle: compile each versioned i64 fixture through the real
+# oreslang-llvmc, link with Clang, and execute the full-width signed result.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_NUMERIC_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    if(NOT ORE_NUMERIC_CLANG)
+        set(ORE_NUMERIC_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang")
+    endif()
+    add_test(NAME numeric_portable_i64_actual_source_execution
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_numeric_portable_i64_source.py"
+          --compiler "$<TARGET_FILE:oreslang-llvmc>"
+          --clang "${ORE_NUMERIC_CLANG}")
+    set_tests_properties(numeric_portable_i64_actual_source_execution
+        PROPERTIES TIMEOUT 240)
+endif()
