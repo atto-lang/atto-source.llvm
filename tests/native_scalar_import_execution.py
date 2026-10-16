@@ -51,6 +51,10 @@ def main():
               'import "./private";\npub fnc main(): int { return secret(); }\n')
         expect_failure(args.compiler, root / "private_caller.ores",
                        "native scalar imported function must be pub")
+        write(root / "private_entry.ores",
+              'import "./helper";\nfnc local(): int { return 2; }\npub fnc main(): int { return add(40, local()); }\n')
+        expect_failure(args.compiler, root / "private_entry.ores",
+                       "native scalar import closure requires pub on all functions")
         write(root / "foreign_main.ores", "pub fnc main(): int { return 42; }\n")
         write(root / "imported_entry.ores",
               'import "./foreign_main";\nfnc helper(): int { return 1; }\n')
