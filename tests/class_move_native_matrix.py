@@ -23,6 +23,12 @@ def invoke(args):
     return subprocess.run(args, capture_output=True, text=True, timeout=75)
 
 
+def require(condition, *details):
+    """Assertions must remain effective under python -O in CI."""
+    if not condition:
+        raise AssertionError(details)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -31,6 +37,21 @@ def main():
     opts = parser.parse_args()
 
     successes = {
+        "independent-owner-survives-move": PAIR + """
+pub fnc main(): int {
+  let mut Pair source = new Pair();
+  let mut Pair independent = new Pair();
+  let mut Pair dest = rt take(source);
+  return dest.a + independent.b;
+}
+""",
+        "partial-field-move-keeps-sibling": PAIR + """
+pub fnc main(): int {
+  let mut Pair source = new Pair();
+  const moved: int = rt take source.a;
+  return moved + source.b;
+}
+""",
         "move-parenthesized": PAIR + """
 pub fnc main(): int {
   let mut Pair source = new Pair();
@@ -92,6 +113,32 @@ pub fnc main(): int {
 """,
     }
     rejections = {
+        "whole-move-after-partial-field-take": (PAIR + """
+pub fnc main(): int {
+  let mut Pair source = new Pair();
+  const moved: int = rt take source.a;
+  let Pair dest = rt take(source);
+  return dest.b + moved;
+}
+""", "ownership violation"),
+        "borrow-after-whole-move": (PAIR + """
+fnc view(borrow Pair candidate): int {
+  return candidate.a;
+}
+pub fnc main(): int {
+  let mut Pair source = new Pair();
+  let Pair dest = rt take(source);
+  return view(rt borrow source) + dest.b;
+}
+""", "ownership violation"),
+        "guard-read-after-whole-move": (PAIR + """
+pub fnc main(): int {
+  let mut Pair source = new Pair();
+  let Pair dest = rt take(source);
+  if (source.a eq 13) { return 0; } fi
+  return dest.a + dest.b;
+}
+""", "ownership violation"),
         "use-after-move": (PAIR + """
 pub fnc main(): int {
   let mut Pair source = new Pair();
@@ -145,9 +192,11 @@ pub fnc main(): int {
             path = root / (name + ".ores")
             path.write_text(source, encoding="utf-8")
             compiled = invoke([opts.compiler, str(path)])
-            assert compiled.returncode == 0 and compiled.stdout, (
-                name, compiled.returncode, compiled.stderr)
-            assert "gc.statepoint" not in compiled.stdout and "gc.root" not in compiled.stdout
+            require(compiled.returncode == 0 and bool(compiled.stdout),
+                    name, compiled.returncode, compiled.stderr)
+            require("gc.statepoint" not in compiled.stdout and
+                    "gc.root" not in compiled.stdout,
+                    name, "unexpected GC IR")
             ll = root / (name + ".ll")
             ll.write_text(compiled.stdout, encoding="utf-8")
             executable = root / name
@@ -155,16 +204,18 @@ pub fnc main(): int {
             if opts.sanitize:
                 clang_args[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
             built = invoke(clang_args)
-            assert built.returncode == 0, (name, built.stderr)
+            require(built.returncode == 0, name, built.stderr)
             ran = invoke([str(executable)])
-            assert ran.returncode == 42, (name, ran.returncode, ran.stderr)
+            require(ran.returncode == 42, name, ran.returncode, ran.stderr)
         for name, (source, diagnostic) in rejections.items():
             path = root / (name + ".ores")
             path.write_text(source, encoding="utf-8")
             rejected = invoke([opts.compiler, str(path)])
-            assert rejected.returncode != 0 and not rejected.stdout, (
-                name, "invalid source emitted partial LLVM IR", rejected.stdout)
-            assert diagnostic in rejected.stderr, (name, diagnostic, rejected.stderr)
+            require(rejected.returncode != 0 and not rejected.stdout,
+                    name, "invalid source emitted partial LLVM IR",
+                    rejected.returncode, rejected.stdout, rejected.stderr)
+            require(diagnostic in rejected.stderr,
+                    name, diagnostic, rejected.stderr)
     print(f"PASS: {len(successes)} native class moves, {len(rejections)} no-IR rejections"
           + (" with ASan/UBSan" if opts.sanitize else ""))
 
