@@ -22,7 +22,7 @@ def expect_success(compiler, clang, source, exit_code=42, required_calls=()):
     # A correct exit status alone cannot prove an imported call was lowered.
     # Require a direct call in emitted, linker-accepted LLVM IR.
     for symbol in required_calls:
-        pattern = r"\\bcall\\s+i64\\s+@" + re.escape(symbol) + r"\\s*\\("
+        pattern = r"\bcall\s+i64\s+@" + re.escape(symbol) + r"\s*\("
         if not re.search(pattern, produced.stdout):
             raise AssertionError(f"missing imported call to {symbol}: " + produced.stdout[:4000])
     binary = source.parent / "compiled-scalar-import"
@@ -67,18 +67,18 @@ def main():
         wide_imports = []
         for i in range(64):
             write(root / "wide" / f"part_{i}.ores",
-                  f"pub fnc part_{i}(): int {{ return {i}; }}\\n")
+                  f"pub fnc part_{i}(): int {{ return {i}; }}\n")
             wide_imports.append(f'import "./part_{i}";')
         write(root / "wide" / "main.ores",
-              "\\n".join(wide_imports) + "\\npub fnc main(): int { return 42; }\\n")
+              "\n".join(wide_imports) + "\npub fnc main(): int { return 42; }\n")
         expect_failure(args.compiler, root / "wide" / "main.ores",
                        "native scalar import module count exceeded")
 
         # Distinguish the graph-depth limit from the total-node limit.
         for i in range(34):
-            preamble = f'import "./depth_{i+1}";\\n' if i < 33 else ""
+            preamble = f'import "./depth_{i+1}";\n' if i < 33 else ""
             write(root / "deep" / f"depth_{i}.ores",
-                  preamble + f"pub fnc depth_fn_{i}(): int {{ return 1; }}\\n")
+                  preamble + f"pub fnc depth_fn_{i}(): int {{ return 1; }}\n")
         write(root / "deep" / "main.ores",
               'import "./depth_0";\npub fnc main(): int { return 42; }\n')
         expect_failure(args.compiler, root / "deep" / "main.ores",
