@@ -271,6 +271,20 @@ All fault-injection controls require
 None of these host tests establishes scheduler-authenticated guest
 `self.forward_*`, `self.backward`, or `self.reply` execution.
 
+### FIFO after writer-promotion allocation failure
+
+A failed allocation while promoting an older pending writer may leave an
+unoccupied buffered slot. A new write **must not** enter that slot ahead
+of older queued writers, and the per-edge pending-writer capacity applies
+regardless of the currently buffered-message count. Once the buffer
+drains, the next reader receives the oldest charged pending writer
+directly rather than suspending indefinitely behind an empty queue.
+Both paths return the exact graph-wide byte/message credits and preserve
+per-edge FIFO admission ordering. A dedicated native regression covers
+single and repeated injected failures, pending-writer quota enforcement,
+stranded-read recovery, and post-recovery reuse in GCC/Clang and sanitizer
+test builds.
+
 ## Mandatory release gates
 
 - Compile and execute the new host graph/routing C++ CTests with both
