@@ -2,6 +2,7 @@
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
 import pathlib
+import re
 import subprocess
 import tempfile
 
@@ -72,6 +73,14 @@ def main():
             guest = run([args.compiler, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
+            # Multiple actors of one class must share exactly one compiled
+            # native on_message implementation, irrespective of receiver syntax.
+            handlers = re.findall(
+                r"(?m)^define\\s+[^\\n]*@oreslang_actor_Worker_on_message\\(",
+                guest.stdout)
+            assert len(handlers) == 1, (
+                "instance count or self spelling duplicated method code", name,
+                len(handlers))
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
             if name not in {
