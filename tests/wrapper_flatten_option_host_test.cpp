@@ -9,6 +9,24 @@ using oreslang::runtime::flattened_option_t;
 
 static void require(bool condition) { if (!condition) std::abort(); }
 
+// Tracks ownership, not moved-from destructors. Only the final live payload
+// may release the affine resource, including after multiple Option moves.
+struct AffineDropProbe {
+    int* releases;
+    bool owns;
+    explicit AffineDropProbe(int* target) : releases(target), owns(true) { }
+    AffineDropProbe(const AffineDropProbe&) = delete;
+    AffineDropProbe& operator=(const AffineDropProbe&) = delete;
+    AffineDropProbe(AffineDropProbe&& other) noexcept
+        : releases(other.releases), owns(other.owns) {
+        other.owns = false;
+    }
+    AffineDropProbe& operator=(AffineDropProbe&&) = delete;
+    ~AffineDropProbe() {
+        if (owns) ++*releases;
+    }
+};
+
 int main() {
     using I = std::optional<int>;
     using II = std::optional<I>;
@@ -35,5 +53,18 @@ int main() {
     require(flattened.has_value());
     require(**flattened == 99);
     require(flattened_option_t<std::optional<Owned>>{} == std::nullopt);
+
+    int releases = 0;
+    {
+        using P = std::optional<AffineDropProbe>;
+        using PP = std::optional<P>;
+        using PPP = std::optional<PP>;
+        PPP deep{PP{P{std::in_place, &releases}}};
+        require(deep.has_value());
+        auto extracted = flatten_option(std::move(deep));
+        require(extracted.has_value());
+        require(releases == 0);
+    }
+    require(releases == 1);  // Exactly one owned resource release.
     return 0;
 }
