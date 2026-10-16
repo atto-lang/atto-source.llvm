@@ -483,6 +483,11 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-dop-owned-region-lifetime-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-owned-region-lifetime-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_owned_region_final_lifetime COMMAND oreslang-dop-owned-region-lifetime-test)
+    add_executable(oreslang-dop-owner-race-test tests/dop_hostbuffer_owner_race_test.cpp)
+    target_include_directories(oreslang-dop-owner-race-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-dop-owner-race-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME dop_hostbuffer_owner_close_races COMMAND oreslang-dop-owner-race-test)
+
     add_executable(oreslang-dop-region-schedule-test tests/dop_region_schedule_test.cpp)
     target_include_directories(oreslang-dop-region-schedule-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
