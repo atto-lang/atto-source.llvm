@@ -214,6 +214,20 @@ def main():
     if passed == 0 and failed == 0:
         print("INCOMPLETE: zero conformance cases passed; no execution proof", file=sys.stderr)
         return 1
+    # Diagnostic-only success is not evidence that any compiled guest ran.
+    # A backend with every native_exit feature still pending must fail closed,
+    # even if all of its required rejection/diagnostic checks passed.
+    native_verified = sum(
+        case["kind"] == "native_exit" and
+        case["backends"][args.backend] == "required" and
+        result["status"] == "pass" and
+        result.get("observed_exit") == case["expected_exit"]
+        for case, result in zip(suite["cases"], results)
+    )
+    if native_verified == 0:
+        print("INCOMPLETE: no required native_exit case verified by guest execution",
+              file=sys.stderr)
+        return 1
     return 1 if failed else 0
 
 if __name__ == "__main__":
