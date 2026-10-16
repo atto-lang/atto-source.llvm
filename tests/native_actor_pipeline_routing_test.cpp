@@ -1300,6 +1300,89 @@ int main() {
         pipe.close();
     }
 
+    // Concurrent STOP publication must be a barrier for writers on every
+    // edge, not merely for the edge currently closing. Buffered admissions
+    // predating STOP stay readable; unresolved writers settle with errors.
+    // Competing close() calls must be idempotent and never leak credits.
+    for (int trial = 0; trial < 24; ++trial) {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4,
+            64, 12, 12);
+        pipe.write_to_async("Producer", "ConsumerA", "x").get();
+        pipe.write_to_async("Producer", "ConsumerB", "x").get();
+        std::atomic<bool> start{false};
+        std::atomic<int> accepted_a{0};
+        std::atomic<int> accepted_b{0};
+        std::atomic<int> rejected{0};
+        std::atomic<int> unexpected{0};
+        std::vector<std::thread> senders;
+        for (int sender = 0; sender < 6; ++sender) {
+            senders.emplace_back([&, sender] {
+                const bool to_a = sender % 2 == 0;
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (int n = 0; n < 48; ++n) {
+                    try {
+                        pipe.write_to_async("Producer",
+                            to_a ? "ConsumerA" : "ConsumerB", "x").get();
+                        if (to_a) ++accepted_a;
+                        else ++accepted_b;
+                    } catch (const std::logic_error&) {
+                        ++rejected;
+                    } catch (...) {
+                        ++unexpected;
+                    }
+                }
+            });
+        }
+        std::thread closer_a([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            pipe.close();
+        });
+        std::thread closer_b([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            pipe.close();
+        });
+        start.store(true, std::memory_order_release);
+        for (auto& sender : senders) sender.join();
+        closer_a.join();
+        closer_b.join();
+
+        const int total_accepted = 2 + accepted_a.load() + accepted_b.load();
+        check(pipe.closed() && unexpected.load() == 0 &&
+              total_accepted >= 2 && total_accepted <= 4 &&
+              rejected.load() == 288 - (total_accepted - 2),
+              "racing STOP/write produced an impossible admission ledger");
+        check(pipe.buffered_message_count() ==
+                  static_cast<std::size_t>(total_accepted) &&
+              pipe.buffered_payload_bytes() ==
+                  static_cast<std::size_t>(total_accepted) &&
+              pipe.pending_reader_count() == 0,
+              "STOP lost or double-released cross-edge buffered credits");
+        for (int edge = 0; edge < 2; ++edge) {
+            const int admitted = 1 + (edge == 0 ?
+                accepted_a.load() : accepted_b.load());
+            for (int n = 0; n < admitted; ++n)
+                check(pipe.read_async(static_cast<std::size_t>(edge)).get() == "x",
+                      "STOP lost admitted DATA while draining mailbox");
+            bool read_closed = false;
+            try { (void)pipe.read_async(static_cast<std::size_t>(edge)).get(); }
+            catch (const std::logic_error&) { read_closed = true; }
+            check(read_closed, "drained edge registered a reader after STOP");
+        }
+        check(pipe.buffered_message_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.pending_reader_count() == 0,
+              "STOP race leaked credits after all admitted DATA was drained");
+        bool late_write_denied = false;
+        try { pipe.write_to_async("Producer", "ConsumerA", "too-late").get(); }
+        catch (const std::logic_error&) { late_write_denied = true; }
+        check(late_write_denied,
+              "late DATA accepted after STOP publication completed");
+    }
+
     // Host-only concurrency: per-source selector mutex serializes selection,
     // while actual actor guest execution is outside this transport.
     {
