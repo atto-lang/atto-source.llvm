@@ -71,13 +71,13 @@ def check_positive(compiler, clang, source, expected, folder, label,
 # signed-i64 overflow: the actual compiler IR must connect an overflow-flag
 # extraction to the conditional trap block before that signal can count.
 _OVERFLOW_PAIR = re.compile(
-    r"(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*=\s*call\s+\{\s*i64\s*,\s*i1\s*\}"
+    r"(?m)^\s*(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*=\s*call\s+\{\s*i64\s*,\s*i1\s*\}"
     r"\s+@llvm\.(sadd|ssub|smul)\.with\.overflow\.i64\s*\(")
 _OVERFLOW_FLAG = re.compile(
-    r"(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*=\s*extractvalue\s+\{\s*i64\s*,\s*i1\s*\}"
+    r"(?m)^\s*(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*=\s*extractvalue\s+\{\s*i64\s*,\s*i1\s*\}"
     r"\s+(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*,\s*1\b")
 _OVERFLOW_GUARD = re.compile(
-    r"\bbr\s+i1\s+(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*,\s*label"
+    r"(?m)^\s*br\s+i1\s+(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*,\s*label"
     r"\s+%(i64\.overflow\.trap(?:\.\d+)?)\s*,\s*label"
     r"\s+%i64\.checked\.continue(?:\.\d+)?\b")
 _OVERFLOW_FAILURE = re.compile(
