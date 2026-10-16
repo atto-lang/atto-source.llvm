@@ -274,6 +274,64 @@ int main() {
         pipe.close();
     }
 
+    // Graph-wide byte credits count BOTH buffered messages and suspended
+    // writers. Exhausting one edge must not steal bytes from another; STOP
+    // releases only pending writes, while already-admitted buffered DATA can
+    // still be drained after close.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4, 12);
+        check(pipe.buffered_payload_bytes() == 0,
+              "new graph started with charged bytes");
+        pipe.write_to_async("Producer", "ConsumerA", "12345678").get();
+        check(pipe.buffered_payload_bytes() == 8,
+              "buffered admission did not consume graph credits");
+        bool byte_denied = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", "12345").get(); }
+        catch (const std::logic_error&) { byte_denied = true; }
+        check(byte_denied && pipe.buffered_payload_bytes() == 8,
+              "cross-edge payload byte limit was bypassed or charged on failure");
+        check(pipe.read_async(0).get() == "12345678" &&
+              pipe.buffered_payload_bytes() == 0,
+              "consuming a payload did not return graph credits");
+
+        pipe.write_to_async("Producer", "ConsumerB", "12345").get();
+        auto waiting = pipe.write_to_async("Producer", "ConsumerB", "ab");
+        check(waiting.wait_for(0ms) == std::future_status::timeout &&
+              pipe.buffered_payload_bytes() == 7,
+              "pending writer must be charged before admission completion");
+        pipe.close();
+        check(pipe.buffered_payload_bytes() == 5,
+              "STOP failed to release cancelled pending-writer credits");
+        bool stopped = false;
+        try { waiting.get(); } catch (const std::logic_error&) { stopped = true; }
+        check(stopped && pipe.read_async(1).get() == "12345" &&
+              pipe.buffered_payload_bytes() == 0,
+              "STOP failed to preserve admitted DATA or release read credits");
+    }
+
+    // Invalid capacities must fail before group publication, including the
+    // caller-specified byte budget and unbounded per-edge/per-worker quotas.
+    {
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 1, 4, 0);
+        }, "zero graph payload budget was permitted");
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+                64 * 1024 * 1024 + 1);
+        }, "oversized graph payload budget was permitted");
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 4097, 4);
+        }, "unbounded per-edge queue was permitted");
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 1, 4097);
+        }, "unbounded worker queue was permitted");
+    }
+
     // Host-only concurrency: per-source selector mutex serializes selection,
     // while actual actor guest execution is outside this transport.
     {
