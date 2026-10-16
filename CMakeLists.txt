@@ -108,6 +108,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Structural tuple v2 is fail-closed until the typed LLVM frontend can lower it.
+    add_test(NAME native_structural_tuple_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_fail_closed.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_structural_tuple_fail_closed PROPERTIES TIMEOUT 65)
+
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
