@@ -820,6 +820,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-resource-registry-test)
     set_tests_properties(native_actor_resource_registry_quiescence PROPERTIES TIMEOUT 15)
 
+    add_executable(oreslang-native-pipeline-graph-contract-test
+        tests/native_actor_pipe_graph_contract_test.cpp)
+    target_include_directories(oreslang-native-pipeline-graph-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-pipeline-graph-contract-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_typed_multiconsumer_graph_contract
+        COMMAND oreslang-native-pipeline-graph-contract-test)
+    set_tests_properties(native_actor_typed_multiconsumer_graph_contract
+        PROPERTIES TIMEOUT 15)
+
     # Real bounded host pipeline routing: DAG fan-out, strict per-source RR,
     # explicit destinations and key affinity. NOT guest self.* lowering.
     add_executable(oreslang-native-actor-pipeline-routing-test
