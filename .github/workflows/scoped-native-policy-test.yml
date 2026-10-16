@@ -6,8 +6,6 @@ on:
       - "contracts/v1/scoped_permission_policy_test.cpp"
       - "contracts/v1/scoped_tcp_boundary.hpp"
       - "contracts/v1/scoped_tcp_boundary_test.cpp"
-      - "contracts/v1/scoped_tcp_boundary.hpp"
-      - "contracts/v1/scoped_tcp_boundary_test.cpp"
       - ".github/workflows/scoped-native-policy-test.yml"
   workflow_dispatch:
 permissions:
@@ -24,8 +22,6 @@ jobs:
         run: |
           c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_permission_policy_test.cpp -o /tmp/ores-native-policy-gcc
           /tmp/ores-native-policy-gcc
-          c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-gcc
-          /tmp/ores-native-tcp-gcc
       - name: Compile with strict Clang warnings
         run: |
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_permission_policy_test.cpp -o /tmp/ores-native-policy-clang
@@ -36,7 +32,5 @@ jobs:
           /tmp/ores-native-tcp-gcc
       - name: Compile and exercise pinned TCP host boundary with Clang
         run: |
-          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-clang
-          /tmp/ores-native-tcp-clang
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-clang
           /tmp/ores-native-tcp-clang
