@@ -3,6 +3,8 @@
 #include <memory>
 #include <iostream>
 #include <new>
+#include <functional>
+#include <utility>
 #include <stdexcept>
 
 using oreslang::runtime::BoundedActorPort;
@@ -28,6 +30,16 @@ struct AllocFaultMoveOnly {
         return ::operator new(size);
     }
     static void operator delete(void* ptr) noexcept { ::operator delete(ptr); }
+};
+
+// A payload destructor is arbitrary host code and may re-enter port
+// observability. It must never execute under the non-recursive port mutex.
+struct ReentrantPayload {
+    std::function<void()> cleanup;
+    explicit ReentrantPayload(std::function<void()> fn) : cleanup(std::move(fn)) {}
+    ReentrantPayload(ReentrantPayload&&) noexcept = default;
+    ReentrantPayload(const ReentrantPayload&) = delete;
+    ~ReentrantPayload() { if (cleanup) cleanup(); }
 };
 
 static void check(bool ok) { if (!ok) throw std::runtime_error("port invariant broken"); }
@@ -95,5 +107,18 @@ int main() {
     check(faultDelivery->acknowledge_released());
     check(faultPort.used_frames() == 0 && faultPort.used_bytes() == 0);
     faultPort.close();
+    BoundedActorPort<ReentrantPayload> reentrant(1, 32);
+    int cleanup_calls = 0;
+    ReentrantPayload callback([&] {
+        ++cleanup_calls;
+        if (reentrant.used_frames() != 0 || reentrant.used_bytes() != 0)
+            throw std::logic_error("reentrant cleanup observed unreleased credits");
+    });
+    check(reentrant.offer(std::move(callback), 8));
+    auto reentrantDelivery = reentrant.try_receive();
+    check(reentrantDelivery && reentrantDelivery->acknowledge_released());
+    check(cleanup_calls == 1 && !reentrantDelivery->acknowledge_released());
+    reentrant.close();
+
     std::cout << "PASS native owned actor port allocation rollback and acknowledged transfer\\n";
 }
