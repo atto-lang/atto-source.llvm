@@ -615,6 +615,109 @@ int main() {
 
 
 #if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // Allocation failure at FIRST admission: both graph-wide byte and
+    // message reservations must roll back before any payload is published.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 12, 2);
+        pipe.fail_next_buffered_enqueue_for_test();
+        bool failed = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "payload"); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "enqueue allocation fault was not surfaced");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "failed initial enqueue leaked payload or message credits");
+        pipe.write_to_async("Producer", "ConsumerB", "normal").get();
+        check(pipe.buffered_payload_bytes() == 6 &&
+              pipe.buffered_message_count() == 1,
+              "failed enqueue corrupted later admissions");
+        check(pipe.read_async(1).get() == "normal",
+              "reused graph lost admitted payload after enqueue fault");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "post-fault drain leaked reservations");
+        pipe.close();
+    }
+
+    // Non-transactional fanout must preserve BOTH target-labelled receipts
+    // when the first branch throws during its reserved enqueue. Subsequent
+    // healthy edges still admit, and the first edge stays completely unused.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 12, 2);
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto report = pipe.write_all_report_async("Producer", "abc");
+        check(report.size() == 2 &&
+              report[0].target == "ConsumerA" &&
+              report[1].target == "ConsumerB",
+              "OOM fanout discarded or mislabelled destination receipts");
+        bool failed = false;
+        try { report[0].admission.get(); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "OOM was not represented by first admission future");
+        report[1].admission.get();
+        check(pipe.buffered_payload_bytes() == 3 &&
+              pipe.buffered_message_count() == 1,
+              "partial fanout overcharged or undercharged graph credits");
+        check(pipe.read_async(1).get() == "abc",
+              "healthy fanout branch lost delivery after peer allocation fault");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "partial fanout allocation fault leaked graph credits");
+        pipe.close();
+    }
+
+    // Compatibility vector API must likewise preserve stable outcome slots
+    // despite allocation fault on the first edge.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 12, 2);
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto futures = pipe.write_all_async("Producer", "compat");
+        check(futures.size() == 2, "legacy fanout lost the first failure slot");
+        bool failed = false;
+        try { futures[0].get(); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "legacy fanout swallowed first branch allocation failure");
+        futures[1].get();
+        check(pipe.read_async(1).get() == "compat",
+              "legacy fanout lost healthy branch following OOM");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "legacy partial-failure compatibility leaked graph credits");
+        pipe.close();
+    }
+
+    // When a mailbox is full, the same rollback guarantees apply to
+    // *pending-writer* deque insertion rather than only queued messages.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4, 12, 2);
+        pipe.write_to_async("Producer", "ConsumerB", "one").get();
+        pipe.fail_next_buffered_enqueue_for_test();
+        bool failed = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerB", "two"); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed && pipe.buffered_payload_bytes() == 3 &&
+              pipe.buffered_message_count() == 1,
+              "failed pending-writer insertion leaked credits");
+        auto pending = pipe.write_to_async("Producer", "ConsumerB", "two");
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "pending admission unexpectedly completed");
+        check(pipe.read_async(1).get() == "one",
+              "pending writer fault corrupted already admitted FIFO");
+        pending.get();
+        check(pipe.read_async(1).get() == "two",
+              "subsequent pending write never promoted");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "pending writer insertion rollback failed to recover");
+        pipe.close();
+    }
+#endif
+
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
     // Deterministic bad_alloc at the deque-promotion boundary. A reader has
     // already consumed an admitted payload; the failed pending writer must
     // receive a terminal exception and release both its byte reservations.
