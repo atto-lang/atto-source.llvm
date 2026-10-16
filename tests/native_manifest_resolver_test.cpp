@@ -51,6 +51,10 @@ math = { zed = "acme/math" }
                 fs::canonical(app/"src/main.ores"),"canonical source identity");
         require(identities.register_source(config,app/"src/main.ores")==
                 fs::canonical(app/"src/main.ores"),"repeat physical source identity");
+        auto altered_context=config;
+        altered_context.boundary=app/"src";
+        rejects([&]{(void)identities.register_source(altered_context,app/"src/main.ores");},
+                "same physical source with different discovery boundary");
         require(resolve_source(config,app/"src/main.ores","@/src/util")==fs::canonical(app/"src/util.ores"),"@ root");
         require(resolve_source(config,app/"src/main.ores","pkg:math/src/add")==fs::canonical(app/"zed_modules/acme/math/src/add.ores"),"pkg alias");
         write(app/"zed_modules/acme/math/.zpkg.toml", "[package]\norg=\"acme\"\nname=\"wrong\"\n");
