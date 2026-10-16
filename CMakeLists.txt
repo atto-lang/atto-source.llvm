@@ -845,6 +845,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_pipeline_multiconsumer_host_routing
         PROPERTIES TIMEOUT 25)
 
+    # Sealed correlation frame model: bounded flow/branch IDs, one-shot
+    # reverse hops and generation retirement. Host metadata only; source
+    # self.backward/self.reply still require scheduler/compiler lowering.
+    add_executable(oreslang-native-actor-pipe-route-ledger-test
+        tests/native_actor_pipe_route_ledger_test.cpp)
+    target_include_directories(oreslang-native-actor-pipe-route-ledger-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pipe-route-ledger-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-pipe-route-ledger-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_pipeline_correlation_host_ledger
+        COMMAND oreslang-native-actor-pipe-route-ledger-test)
+    set_tests_properties(native_actor_pipeline_correlation_host_ledger
+        PROPERTIES TIMEOUT 25)
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
