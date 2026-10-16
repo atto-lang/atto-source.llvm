@@ -1,5 +1,8 @@
 #pragma once
 #include <cstddef>
+#include <deque>
+#include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -77,6 +80,98 @@ inline std::vector<PipeConnection> check_actor_pipeline(
         connections.push_back({source.actor_type, target.actor_type, source.outbound});
     }
     return connections;
+}
+
+
+/**
+ * Checked, acyclic, multi-consumer graph. The runtime still owns edge
+ * admission, backpressure and SourceTask suspension; this validates only
+ * host graph topology and nominal payload contracts, not guest lowering.
+ */
+inline std::vector<PipeConnection> check_actor_pipeline_graph(
+        const std::vector<PipeStage>& stages,
+        const std::vector<PipeConnection>& links) {
+    if (stages.size() < 2 || stages.size() > 1024 ||
+            links.empty() || links.size() > 4096)
+        throw std::invalid_argument("pipeline graph stage/edge budget invalid");
+    std::unordered_map<std::string, std::size_t> ids;
+    ids.reserve(stages.size());
+    for (std::size_t i = 0; i < stages.size(); ++i) {
+        const auto& s = stages[i];
+        if (s.actor_type.empty() || !ids.emplace(s.actor_type, i).second)
+            throw std::invalid_argument("pipeline graph actor types must be unique and nonempty");
+        switch (s.role) {
+        case PipeRole::readable:
+            if (!s.inbound.empty() || s.outbound.empty())
+                throw std::invalid_argument("readable pipeline stage must only emit");
+            break;
+        case PipeRole::writable:
+            if (s.inbound.empty() || !s.outbound.empty())
+                throw std::invalid_argument("writable pipeline stage must only receive");
+            break;
+        case PipeRole::transform:
+        case PipeRole::duplex:
+            if (s.inbound.empty() || s.outbound.empty())
+                throw std::invalid_argument("pipeline transform requires input and output");
+            break;
+        default:
+            throw std::invalid_argument("pipeline graph requires an explicit pipe actor role");
+        }
+    }
+
+    std::unordered_set<std::string> pairs;
+    std::vector<std::vector<std::size_t>> outgoing(stages.size());
+    std::vector<std::size_t> indegree(stages.size(), 0);
+    std::vector<std::size_t> incoming_count(stages.size(), 0);
+    std::vector<std::size_t> outgoing_count(stages.size(), 0);
+    for (const auto& link : links) {
+        const auto source = ids.find(link.source);
+        const auto target = ids.find(link.target);
+        if (source == ids.end() || target == ids.end() ||
+                source->second == target->second)
+            throw std::invalid_argument("pipeline graph link has unknown or self endpoint");
+        const auto& from = stages[source->second];
+        const auto& to = stages[target->second];
+        if (from.role == PipeRole::writable || to.role == PipeRole::readable ||
+                link.payload.empty() || link.payload != from.outbound ||
+                link.payload != to.inbound)
+            throw std::invalid_argument("pipeline graph link violates typed direction");
+        // Use the internal numeric IDs, so even a delimiter inside an actor
+        // name cannot cause a false duplicate or an edge-key collision.
+        const std::string pair = std::to_string(source->second) + ":" +
+                                 std::to_string(target->second);
+        if (!pairs.insert(pair).second)
+            throw std::invalid_argument("pipeline graph contains a duplicate edge");
+        outgoing[source->second].push_back(target->second);
+        ++outgoing_count[source->second];
+        ++incoming_count[target->second];
+        ++indegree[target->second];
+    }
+
+    for (std::size_t i = 0; i < stages.size(); ++i) {
+        const auto& stage = stages[i];
+        if (incoming_count[i] == 0 && outgoing_count[i] == 0)
+            throw std::invalid_argument("pipeline graph contains an isolated actor");
+        if ((stage.role == PipeRole::readable && outgoing_count[i] == 0) ||
+            (stage.role == PipeRole::writable && incoming_count[i] == 0) ||
+            (stage.role == PipeRole::transform &&
+              (incoming_count[i] == 0 || outgoing_count[i] == 0)))
+            throw std::invalid_argument("pipeline graph lacks a required actor port");
+    }
+    std::deque<std::size_t> ready;
+    for (std::size_t i = 0; i < indegree.size(); ++i)
+        if (indegree[i] == 0) ready.push_back(i);
+    std::size_t visited = 0;
+    while (!ready.empty()) {
+        const auto current = ready.front();
+        ready.pop_front();
+        ++visited;
+        for (const auto target : outgoing[current])
+            if (--indegree[target] == 0) ready.push_back(target);
+    }
+    if (visited != stages.size())
+        throw std::invalid_argument("pipeline graph contains a cycle");
+    return links;
 }
 
 } // namespace oreslang::runtime
