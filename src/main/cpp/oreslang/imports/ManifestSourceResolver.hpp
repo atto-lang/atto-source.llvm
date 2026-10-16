@@ -365,7 +365,7 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
         case Kind::HostJava:
             throw std::invalid_argument("native Java host imports require unsupported backend lowering");
         case Kind::Root:
-            if(!config.package_manifest)throw std::invalid_argument("@/ requires .ores.pkg.toml");
+            if(!config.package_manifest)throw std::invalid_argument("+/ requires .ores.pkg.toml");
             return existing_source_under(config.root,rooted_path(config.root,input.suffix));
         case Kind::Package:{
             auto it=config.dependencies.find(input.alias);
