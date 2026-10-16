@@ -43,7 +43,11 @@ int main() {
     otherCarrier.join();
     require(observed == 0x1234567890abcdefull);
     reject([&] { (void)a.write(102, readerGrant); });
-    a.revoke(readerGrant);
+    {
+        auto outstanding = a.read(101, writerGrant);
+        require(!a.try_revoke(readerGrant));  // must not block on a live reader
+    }
+    require(a.try_revoke(readerGrant));
     reject([&] { (void)a.read(102, readerGrant); });
     // Retirement is nonblocking and does not free underneath an active lease.
     {
@@ -56,5 +60,53 @@ int main() {
     require(a.try_retire());
     reject([&] { (void)a.read(101, writerGrant); });
     reject([&] { (void)a.grant(3,true,true); });
-    std::cout << "shared domain arena tests passed\n";
+    require(other.try_retire());
+    // Reader/writer contention and a 4,096-generation ABA regression. This
+    // exercises real OS threads and checks every observed value is fully read.
+    SharedDomainArena concurrent;
+    auto wg = concurrent.grant(201, true, true);
+    auto rg = concurrent.grant(202, true, false);
+    SharedDomainArena::Handle ch{};
+    {
+        auto writer = concurrent.write(201, wg);
+        ch = writer.allocate(sizeof(std::uint64_t));
+        std::uint64_t value = 0;
+        writer.write(ch, &value, sizeof(value));
+        for (int i = 0; i < 4096; ++i) {
+            auto transient = writer.allocate(4);
+            const auto stale = transient;
+            writer.drop(transient);
+            reject([&] { std::uint32_t tmp; writer.read(stale, &tmp, sizeof(tmp)); });
+            transient = writer.allocate(4);
+            reject([&] { std::uint32_t tmp; writer.read(stale, &tmp, sizeof(tmp)); });
+            writer.drop(transient);
+        }
+    }
+    std::atomic<bool> start{false};
+    std::atomic<bool> correct{true};
+    std::thread writerThread([&] {
+        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        for (std::uint64_t i = 1; i <= 1500; ++i) {
+            auto lease = concurrent.write(201, wg);
+            lease.write(ch, &i, sizeof(i));
+        }
+    });
+    std::array<std::thread,4> readers;
+    for (auto& thread : readers) thread = std::thread([&] {
+        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        for (int i = 0; i < 1500; ++i) {
+            auto lease = concurrent.read(202, rg);
+            std::uint64_t value = 0;
+            lease.read(ch, &value, sizeof(value));
+            if (value > 1500) correct.store(false);
+        }
+    });
+    start.store(true, std::memory_order_release);
+    writerThread.join();
+    for (auto& reader : readers) reader.join();
+    require(correct.load());
+    require(concurrent.try_revoke(rg));
+    reject([&] { (void)concurrent.read(202, rg); });
+    require(concurrent.try_retire());
+        std::cout << "shared domain arena tests passed\n";
 }
