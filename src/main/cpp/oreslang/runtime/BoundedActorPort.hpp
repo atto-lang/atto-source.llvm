@@ -51,7 +51,10 @@ public:
         Delivery(const Delivery&) = delete;
         Delivery& operator=(const Delivery&) = delete;
         Delivery(Delivery&&) noexcept = default;
-        Delivery& operator=(Delivery&&) noexcept = default;
+        // Replacing a live delivery would destroy its owned payload while
+        // silently orphaning its outstanding frame/byte credits. Require
+        // explicit acknowledgement instead of move-assigning over a lease.
+        Delivery& operator=(Delivery&&) = delete;
         T& value() {
             if (acknowledged_ || !payload_) throw std::logic_error("stale owned actor payload");
             return *payload_;
