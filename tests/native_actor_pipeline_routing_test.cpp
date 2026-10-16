@@ -332,6 +332,47 @@ int main() {
         }, "unbounded worker queue was permitted");
     }
 
+    // Graph credits are atomic across simultaneous writers to different
+    // edges. This regression must accept exactly the 64 four-byte payloads
+    // covered by the 256-byte graph-wide budget, never one byte more.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 128, 4, 256);
+        std::atomic<int> admitted{0};
+        std::atomic<int> rejected_budget{0};
+        std::atomic<int> unexpected{0};
+        std::vector<std::thread> senders;
+        for (int p = 0; p < 8; ++p) {
+            senders.emplace_back([&, p] {
+                const char* target = p % 2 == 0 ? "ConsumerA" : "ConsumerB";
+                for (int n = 0; n < 100; ++n) {
+                    try {
+                        pipe.write_to_async("Producer", target, "four").get();
+                        admitted.fetch_add(1);
+                    } catch (const std::logic_error&) {
+                        rejected_budget.fetch_add(1);
+                    } catch (...) {
+                        unexpected.fetch_add(1);
+                    }
+                }
+            });
+        }
+        for (auto& sender : senders) sender.join();
+        check(unexpected.load() == 0 && admitted.load() == 64 &&
+              rejected_budget.load() == 736 &&
+              pipe.buffered_payload_bytes() == 256,
+              "concurrent graph quota allowed overcommit or lost credit");
+        for (int e = 0; e < 2; ++e) {
+            for (int i = 0; i < 32; ++i) {
+                check(pipe.read_async(e).get() == "four",
+                      "concurrent credit accounting lost admitted payload");
+            }
+        }
+        check(pipe.buffered_payload_bytes() == 0,
+              "concurrent buffer drain leaked graph byte credits");
+        pipe.close();
+    }
+
     // Host-only concurrency: per-source selector mutex serializes selection,
     // while actual actor guest execution is outside this transport.
     {
