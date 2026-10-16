@@ -646,6 +646,51 @@ int main() {
 
 
 #if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // The second of three recipients fails after the first is already
+    // admitted by direct handoff. The third must still succeed and the
+    // caller must retain every receipt; no Future may be missing.
+    {
+        const std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Payload", "producer"},
+            {"Worker", PipeRole::writable, "Payload", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Payload", "", "worker-b"},
+            {"Worker", PipeRole::writable, "Payload", "", "worker-c"}
+        };
+        const std::vector<PipeConnection> links = {
+            {"producer", "worker-a", "Payload"},
+            {"producer", "worker-b", "Payload"},
+            {"producer", "worker-c", "Payload"}
+        };
+        NativeActorPipeTransport pipe(
+            registry, supervisor, stages, links, 2, 4, 16, 2);
+        auto first_reader = pipe.read_async(0);
+        check(pipe.pending_reader_count() == 1,
+              "fanout OOM fixture failed to reserve first direct reader");
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto report = pipe.write_all_report_async("producer", "xyz");
+        check(report.size() == 3 &&
+              report[0].target == "worker-a" &&
+              report[1].target == "worker-b" &&
+              report[2].target == "worker-c",
+              "three-way fault fanout discarded or reordered receipt slots");
+        report[0].admission.get();
+        bool rejected_second = false;
+        try { report[1].admission.get(); }
+        catch (const std::bad_alloc&) { rejected_second = true; }
+        check(rejected_second, "second branch allocation fault lost its exception");
+        report[2].admission.get();
+        check(first_reader.get() == "xyz" &&
+              pipe.pending_reader_count() == 0 &&
+              pipe.read_async(2).get() == "xyz",
+              "partial fanout lost prior direct delivery or later healthy branch");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "three-way fanout OOM leaked graph credits");
+        pipe.close();
+    }
+#endif
+
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
     // Buffered insertion can fail after credit reservation. The queue and
     // pending-writer paths must both roll back graph bytes/message credits,
     // and a subsequent write must use the same mailbox successfully.
