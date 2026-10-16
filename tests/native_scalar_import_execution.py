@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """End-to-end native scalar imports: actual compiler IR, Clang, and process exit."""
 import argparse
+import os
 import re
 from pathlib import Path
 import subprocess
 import tempfile
 
-def run(*args, input=None):
-    return subprocess.run(args, input=input, text=True, capture_output=True, timeout=45)
+def run(*args, input=None, env=None):
+    # Prevent the developer/runner's ambient paths from changing test results.
+    clean = dict(os.environ)
+    clean.pop("ORES_PATHS", None)
+    clean.pop("ORESLANG_PATH", None)
+    if env:
+        clean.update(env)
+    return subprocess.run(args, input=input, env=clean, text=True,
+                          capture_output=True, timeout=45)
 
 def write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
-def expect_success(compiler, clang, source, exit_code=42, required_calls=()):
-    produced = run(compiler, "--experimental-scalar-imports", str(source))
+def expect_success(compiler, clang, source, exit_code=42, required_calls=(), env=None):
+    produced = run(compiler, "--experimental-scalar-imports", str(source), env=env)
     if produced.returncode != 0:
         raise AssertionError("scalar import compilation failed: " + produced.stderr)
     if "define" not in produced.stdout:
@@ -33,8 +41,8 @@ def expect_success(compiler, clang, source, exit_code=42, required_calls=()):
     if executed.returncode != exit_code:
         raise AssertionError(f"imported program exited {executed.returncode}, wanted {exit_code}: " + executed.stderr)
 
-def expect_failure(compiler, source, diagnostic):
-    result = run(compiler, "--experimental-scalar-imports", str(source))
+def expect_failure(compiler, source, diagnostic, env=None):
+    result = run(compiler, "--experimental-scalar-imports", str(source), env=env)
     if result.returncode == 0 or diagnostic not in result.stderr:
         raise AssertionError(f"expected rejection containing {diagnostic!r}: {result.returncode} {result.stderr}")
 
@@ -149,6 +157,43 @@ def main():
         expect_success(args.compiler, args.clang, root / "package" / "src" / "pkg_main.ores", required_calls=("answer",))
         write(root / "package" / "src" / "escape.ores", 'import "../../helper";\npub fnc main(): int {return add(40, 2);}\n')
         expect_failure(args.compiler, root / "package" / "src" / "escape.ores", "native import escapes physical search root")
+        # Canonical search precedence: source.roots > source.import_paths
+        # > ORES_PATHS > legacy ORESLANG_PATH. This uses real compiler IR.
+        search = root / "search"
+        write(search / ".ores.pkg.toml",
+              'schema_version = "1"\n[source]\nroots = ["src"]\nimport_paths = ["vendor"]\n')
+        write(search / "src" / "main.ores",
+              'import "priority";\npub fnc main(): int {return priority();}\n')
+        write(search / "src" / "priority.ores",
+              'pub fnc priority(): int {return 42;}\n')
+        write(search / "vendor" / "priority.ores",
+              'pub fnc priority(): int {return 41;}\n')
+        write(root / "ambient" / "priority.ores",
+              'pub fnc priority(): int {return 40;}\n')
+        write(root / "legacy" / "priority.ores",
+              'pub fnc priority(): int {return 39;}\n')
+        env = {"ORES_PATHS": str(root / "ambient"),
+               "ORESLANG_PATH": str(root / "legacy")}
+        entry = search / "src" / "main.ores"
+        expect_success(args.compiler, args.clang, entry, 42, ("priority",), env)
+        (search / "src" / "priority.ores").unlink()
+        expect_success(args.compiler, args.clang, entry, 41, ("priority",), env)
+        (search / "vendor" / "priority.ores").unlink()
+        expect_success(args.compiler, args.clang, entry, 40, ("priority",), env)
+        (root / "ambient" / "priority.ores").unlink()
+        expect_success(args.compiler, args.clang, entry, 39, ("priority",), env)
+
+        # A manifest's explicit roots=[] never silently adds its directory.
+        write(search / "priority.ores",
+              'pub fnc priority(): int {return 42;}\n')
+        write(search / ".ores.pkg.toml",
+              'schema_version = "1"\n[source]\nroots = []\nimport_paths = []\n')
+        expect_failure(args.compiler, entry, "native scalar import source not found")
+        expect_success(args.compiler, args.clang, entry, 42, ("priority",),
+                       {"ORES_PATHS": str(search)})
+        expect_failure(args.compiler, entry, "ORES_PATHS exceeds 64 KiB",
+                       {"ORES_PATHS": "x" * 65537})
+
     print("native scalar import execution gates passed")
 
 if __name__ == "__main__":
