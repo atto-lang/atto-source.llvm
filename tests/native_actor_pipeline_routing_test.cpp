@@ -380,6 +380,8 @@ int main() {
                 pipe.write_to_async("Producer",
                     "consumer-" + std::to_string(e), megabyte).get();
         }
+        check(pipe.buffered_payload_bytes() == 64ULL * 1024 * 1024,
+              "graph payload telemetry did not reflect full budget");
         // Every individual edge still has credits, but the graph has none.
         auto receipts = pipe.write_all_report_async("Producer", megabyte);
         check(receipts.size() == 5, "graph-credit fanout dropped a receipt");
@@ -395,9 +397,13 @@ int main() {
         check(graph_full, "healthy edge bypassed global byte budget");
         // Consuming one queued message returns its graph-wide credit.
         check(pipe.read_async(0).get() == megabyte, "graph credit drain lost data");
+        check(pipe.buffered_payload_bytes() == 63ULL * 1024 * 1024,
+              "cross-edge read did not return graph credit");
         pipe.write_to_async("Producer", "consumer-4", megabyte).get();
         check(pipe.read_async(4).get() == megabyte,
               "global byte credit was not returned to another edge");
+        check(pipe.buffered_payload_bytes() == 63ULL * 1024 * 1024,
+              "global credit was double-charged across edge transfer");
         // After STOP, admitted messages remain readable but new writes fail.
         pipe.close();
         bool stopped = false;
@@ -442,17 +448,23 @@ int main() {
         for (auto& sender : senders) sender.join();
         check(success.load() == 64 && failures.load() == 136,
               "racing writers bypassed or prematurely exhausted graph credits");
+        check(pipe.buffered_payload_bytes() == 64ULL * 1024 * 1024,
+              "racing admissions did not reserve exactly one global byte credit");
         for (int edge = 0; edge < 5; ++edge) {
             for (int i = 0; i < edge_success[edge].load(); ++i)
                 check(pipe.read_async(static_cast<std::size_t>(edge)).get() == megabyte,
                       "concurrent global-credit delivery dropped payload");
         }
+        check(pipe.buffered_payload_bytes() == 0,
+              "concurrent graph-credit read path leaked reservations");
         // Refill to prove every drained reservation becomes available again.
         for (int i = 0; i < 16; ++i)
             pipe.write_to_async("Producer", "race-0", megabyte).get();
         for (int i = 0; i < 16; ++i)
             check(pipe.read_async(0).get() == megabyte,
                   "global-credit race left leaked reservations after draining");
+        check(pipe.buffered_payload_bytes() == 0,
+              "refilled queue did not return all graph reservations");
         pipe.close();
     }
 
