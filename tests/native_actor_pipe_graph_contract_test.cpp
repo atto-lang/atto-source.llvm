@@ -120,6 +120,16 @@ int main() {
                         std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
                    (void)check_actor_pipeline_graph(over,upper_edges); });
     }
+    // A TRANSFORM with declared output type but no actual outgoing edge
+    // must not be admitted as a terminal writable sink.
+    deny([&] {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event", "src"},
+            {"Worker", PipeRole::transform, "Event", "Event", "worker"}
+        };
+        std::vector<PipeConnection> edges = {{"src", "worker", "Event"}};
+        (void)check_actor_pipeline_graph(stages, edges);
+    });
     // Budget checks operate before graph allocation and fail closed.
     deny([&] { auto wrong=links;wrong.clear();
                (void)check_actor_pipeline_graph(stages,wrong); });
