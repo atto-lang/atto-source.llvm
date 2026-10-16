@@ -1897,3 +1897,19 @@ if(BUILD_TESTING)
       --compiler "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(cpu_gpu_nb_source_fail_closed PROPERTIES TIMEOUT 150)
 endif()
+
+# Host-only typed CPU/GPU execution-graph contract. GPU provider stays closed.
+if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
+  add_executable(oreslang-execution-graph-v1-test
+    tests/execution_graph_v1_test.cpp)
+  target_include_directories(oreslang-execution-graph-v1-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(oreslang-execution-graph-v1-test PRIVATE cxx_std_17)
+  target_compile_options(oreslang-execution-graph-v1-test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  target_link_libraries(oreslang-execution-graph-v1-test PRIVATE Threads::Threads)
+  add_test(NAME native_execution_graph_v1_host_only
+    COMMAND oreslang-execution-graph-v1-test)
+  set_tests_properties(native_execution_graph_v1_host_only PROPERTIES TIMEOUT 45)
+endif()
