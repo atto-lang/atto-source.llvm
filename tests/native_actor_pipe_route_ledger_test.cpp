@@ -28,6 +28,50 @@ static std::vector<PipeConnection> edges() {
             {"worker-b", "sink", "Event"}};
 }
 int main() {
+    // This exercises the ACTUAL native correlation ledger's key routing,
+    // not an independently copied hashing function or only the transport.
+    {
+        const std::vector<PipeStage> key_stages = {
+            {"Producer", PipeRole::readable, "", "Event", "source"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-b"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-c"}
+        };
+        const std::vector<PipeConnection> key_edges = {
+            {"source", "worker-a", "Event"},
+            {"source", "worker-b", "Event"},
+            {"source", "worker-c", "Event"}
+        };
+        ActorPipeRouteLedger keyed(key_stages, key_edges, 11, 16);
+        const auto root = keyed.ingress("source");
+        const std::vector<std::pair<std::string, std::string>> vectors = {
+            {"customer-7", "worker-a"}, {"alpha", "worker-a"},
+            {"beta", "worker-c"}, {"\xf0\x9f\x8c\x8d", "worker-a"},
+            {"", "worker-c"}, {std::string(1, '\0'), "worker-a"}
+        };
+        for (const auto& [key, target] : vectors) {
+            const auto frame = keyed.forward_by_key(root, key);
+            check(frame->receiver() == target && frame->flow_id() == root->flow_id(),
+                  "canonical six-key FNV routing or correlation drift");
+            keyed.complete(frame);
+        }
+        const auto before = keyed.outstanding();
+        rejected([&] { (void)keyed.forward_by_key(root, "\xc0\xaf"); },
+                 "overlong UTF-8 route key accepted");
+        rejected([&] { (void)keyed.forward_by_key(root, "\xed\xa0\x80"); },
+                 "surrogate route key accepted");
+        rejected([&] { (void)keyed.forward_by_key(root, std::string(4097, 'x')); },
+                 "over-budget key accepted");
+        rejected([&] { (void)actor_pipe_key_slot("x", 0); },
+                 "zero downstream slot count accepted");
+        check(keyed.outstanding() == before,
+              "invalid routing key consumed or leaked route frame credit");
+        keyed.complete(root);
+        keyed.advance_generation(12);
+        rejected([&] { (void)keyed.forward_by_key(root, "alpha"); },
+                 "stale keyed source survived epoch advance");
+        keyed.close();
+    }
     ActorPipeRouteLedger ledger(stages(), edges(), 7, 5);
     rejected([&] { (void)ledger.ingress("worker-a"); },
              "a middle worker originated a flow");
