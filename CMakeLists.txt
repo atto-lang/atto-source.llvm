@@ -554,6 +554,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     oreslang_contract_test(native_scalar_value_pipeline value-pipe-scalar-main.ores
         --ir "call i64 @plus")
+    oreslang_contract_test(native_pipeline_depth_128_accepted value-pipe-depth-128.ores
+        --ir "call i64 @next")
+    oreslang_contract_test(native_pipeline_depth_129_rejected value-pipe-depth-129-reject.ores
+        --diagnostic "native pipeline exceeds 128 stages")
     oreslang_contract_test(native_value_pipeline_noncall_rejected value-pipe-noncall-reject.ores
         --diagnostic "native pipeline stage requires a named scalar callable")
     oreslang_contract_test(native_result_pipeline_requires_tagged_values value-pipe-result-unsupported.ores
@@ -561,6 +565,8 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_scalar_value_pipeline_executed value-pipe-scalar-main.ores
             --run 7 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_pipeline_depth_128_executed value-pipe-depth-128.ores
+            --run 129 --clang "${ORE_CLANG}")
     endif()
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
