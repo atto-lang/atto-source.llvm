@@ -5,6 +5,7 @@
 #include <thread>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 using namespace oreslang::runtime;
 static void check(bool good) { if (!good) throw std::runtime_error("reactor manager test failed"); }
 int main() {
@@ -39,6 +40,14 @@ int main() {
             }
         }
         check(done == 5);
+        // Completion eventfd is a notification, not the queue itself. An
+        // undrained eventfd would remain readable and spin an outer poll loop.
+        struct pollfd notification{manager.completion_fd(0), POLLIN, 0};
+        check(notification.fd >= 0);
+        check(::poll(&notification, 1, 0) == 1);
+        manager.drain_completion_signal(0);
+        notification.revents = 0;
+        check(::poll(&notification, 1, 0) == 0);
         manager.stop();
         check(!manager.try_watch(fds[0][0], EPOLLIN).has_value());
         for (auto& p : fds) { ::close(p[0]); ::close(p[1]); }
