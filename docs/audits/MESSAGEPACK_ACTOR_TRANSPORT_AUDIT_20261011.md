@@ -7,8 +7,13 @@ Neither draft certifies end-to-end actor-message wire transport.
 
 ## Invariants
 
-- Source-level `ActorRef.send(value)` requires (a) a declared actor message
-  domain and (b) a recursively proven Oreslang `Serializable` codec.
+- Future portable source-level `ActorRef.send(value)` requires (a) a
+  declared receiver-bound actor DATA schema, (b) compiler-sealed, recursively
+  proven `Sendable<T>` ownership/lifetime evidence, and (c) a registered,
+  runtime-verified `ActorMessageCodec<T>` for the pinned MessagePack v2
+  DATA profile. `Serializable<T, Format>` on its own does **not** authorize
+  actor movement, runtime privilege, or mailbox admission. Current native
+  i64 actor send is not a claim of full typed portable transport support.
 - Every actor uses the same observable serialization semantics whether SHARED,
   PRIVATE, UNTRUSTED, same-process, subprocess, or remote.
 - Never transfer a raw host object, writable sender reference, closure, borrow,
