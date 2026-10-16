@@ -1,0 +1,11 @@
+// Receiver marker is an alias for the existing actor-owned on_message/1 slot.
+define actor Worker as {
+  const base: int = 40;
+  let total: int = 0;
+  pub method on_message(self, int n): int { return base + n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  return 43;
+}
