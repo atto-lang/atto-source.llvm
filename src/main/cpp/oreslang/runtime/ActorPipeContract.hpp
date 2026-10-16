@@ -20,7 +20,14 @@ struct PipeStage {
     PipeRole role;
     std::string inbound;
     std::string outbound;
+    // Logical instance ID in this graph; different consumers may use the
+    // same actor class. Empty retains actor_type as the legacy shorthand.
+    std::string node_id{};
 };
+
+inline const std::string& pipe_node_id(const PipeStage& stage) noexcept {
+    return stage.node_id.empty() ? stage.actor_type : stage.node_id;
+}
 
 struct PipeConnection {
     std::string source;
@@ -32,10 +39,13 @@ inline std::vector<PipeConnection> check_actor_pipeline(
         const std::vector<PipeStage>& stages) {
     if (stages.size() < 2)
         throw std::invalid_argument("actor pipeline requires at least two stages");
+    std::unordered_set<std::string> node_ids;
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& stage = stages[i];
         if (stage.actor_type.empty())
             throw std::invalid_argument("pipeline actor type cannot be blank");
+        if (!node_ids.insert(pipe_node_id(stage)).second)
+            throw std::invalid_argument("pipeline node ids must be unique");
         if (stage.role == PipeRole::supervisor_actor)
             throw std::invalid_argument("supervisor actors cannot be pipeline stages");
         if (stage.role == PipeRole::ordinary_actor)
@@ -77,7 +87,7 @@ inline std::vector<PipeConnection> check_actor_pipeline(
             throw std::invalid_argument("actor pipe payload mismatch: "
                     + source.actor_type + " emits " + source.outbound
                     + " but " + target.actor_type + " requires " + target.inbound);
-        connections.push_back({source.actor_type, target.actor_type, source.outbound});
+        connections.push_back({pipe_node_id(source), pipe_node_id(target), source.outbound});
     }
     return connections;
 }
@@ -98,8 +108,8 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
     ids.reserve(stages.size());
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& s = stages[i];
-        if (s.actor_type.empty() || !ids.emplace(s.actor_type, i).second)
-            throw std::invalid_argument("pipeline graph actor types must be unique and nonempty");
+        if (s.actor_type.empty() || !ids.emplace(pipe_node_id(s), i).second)
+            throw std::invalid_argument("pipeline graph node ids must be unique and actor types nonempty");
         switch (s.role) {
         case PipeRole::readable:
             if (!s.inbound.empty() || s.outbound.empty())
