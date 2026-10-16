@@ -156,6 +156,12 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("native scalar function lost source provenance");
                 if (!unit->entry && !fn.exported)
                     throw std::runtime_error("native scalar imported function must be pub");
+                // Without a qualified symbol linker, imported code could
+                // otherwise call private declarations in the entry unit too.
+                // Until source-local call-graph visibility is enforced, all
+                // declarations in a multi-source scalar closure must be pub.
+                if (units.size() > 1 && !fn.exported)
+                    throw std::runtime_error("native scalar import closure requires pub on all functions");
                 if (!unit->entry && fn.name == "main")
                     throw std::runtime_error("native scalar imported source cannot define main");
             }
