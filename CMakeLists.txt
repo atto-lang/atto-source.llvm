@@ -1315,6 +1315,15 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_projection_two_shared_clang
             class-projection-two-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
 
+        add_test(NAME native_projection_borrow_compiler_to_clang_matrix
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_projected_field_borrow_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        set_tests_properties(native_projection_borrow_compiler_to_clang_matrix
+            PROPERTIES TIMEOUT 120)
+
         oreslang_contract_test(class_exec_shared_read class-shared-read-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_mut_to_shared_reborrow class-reborrow-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_owned_stack_field class-owned-field-native.ores --run 42 --clang "${ORE_CLANG}")
