@@ -281,32 +281,39 @@ int main() {
     {
         NativeActorPipeTransport pipe(
             registry, supervisor, graph_stages(), graph_edges(), 1, 4, 12);
-        check(pipe.buffered_payload_bytes() == 0,
-              "new graph started with charged bytes");
+        check(pipe.buffered_payload_bytes() == 0
+              && pipe.buffered_message_count() == 0,
+              "new graph started with charged credits");
         pipe.write_to_async("Producer", "ConsumerA", "12345678").get();
-        check(pipe.buffered_payload_bytes() == 8,
+        check(pipe.buffered_payload_bytes() == 8
+              && pipe.buffered_message_count() == 1,
               "buffered admission did not consume graph credits");
         bool byte_denied = false;
         try { pipe.write_to_async("Producer", "ConsumerB", "12345").get(); }
         catch (const std::logic_error&) { byte_denied = true; }
-        check(byte_denied && pipe.buffered_payload_bytes() == 8,
+        check(byte_denied && pipe.buffered_payload_bytes() == 8
+              && pipe.buffered_message_count() == 1,
               "cross-edge payload byte limit was bypassed or charged on failure");
         check(pipe.read_async(0).get() == "12345678" &&
-              pipe.buffered_payload_bytes() == 0,
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
               "consuming a payload did not return graph credits");
 
         pipe.write_to_async("Producer", "ConsumerB", "12345").get();
         auto waiting = pipe.write_to_async("Producer", "ConsumerB", "ab");
         check(waiting.wait_for(0ms) == std::future_status::timeout &&
-              pipe.buffered_payload_bytes() == 7,
+              pipe.buffered_payload_bytes() == 7 &&
+              pipe.buffered_message_count() == 2,
               "pending writer must be charged before admission completion");
         pipe.close();
-        check(pipe.buffered_payload_bytes() == 5,
+        check(pipe.buffered_payload_bytes() == 5
+              && pipe.buffered_message_count() == 1,
               "STOP failed to release cancelled pending-writer credits");
         bool stopped = false;
         try { waiting.get(); } catch (const std::logic_error&) { stopped = true; }
         check(stopped && pipe.read_async(1).get() == "12345" &&
-              pipe.buffered_payload_bytes() == 0,
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
               "STOP failed to preserve admitted DATA or release read credits");
     }
 
@@ -330,6 +337,43 @@ int main() {
             NativeActorPipeTransport invalid(
                 registry, supervisor, graph_stages(), graph_edges(), 1, 4097);
         }, "unbounded worker queue was permitted");
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+                12, 0);
+        }, "zero graph message budget was permitted");
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+                12, 65537);
+        }, "oversized graph message budget was permitted");
+    }
+
+    // Even zero-byte DATA must consume aggregate message slots.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 8, 4, 12, 2);
+        pipe.write_to_async("Producer", "ConsumerA", "").get();
+        pipe.write_to_async("Producer", "ConsumerB", "").get();
+        check(pipe.buffered_message_count() == 2 &&
+              pipe.buffered_payload_bytes() == 0,
+              "empty payloads evaded aggregate message slots");
+        bool no_slot = false;
+        try { pipe.write_to_async("Producer", "ConsumerA", "").get(); }
+        catch (const std::logic_error&) { no_slot = true; }
+        check(no_slot && pipe.buffered_message_count() == 2,
+              "zero-byte messages bypassed the graph-wide count budget");
+        check(pipe.read_async(1).get().empty() &&
+              pipe.buffered_message_count() == 1,
+              "empty payload read did not return message slot");
+        pipe.write_to_async("Producer", "ConsumerA", "").get();
+        check(pipe.buffered_message_count() == 2,
+              "recovered message slot could not be reused");
+        pipe.close();
+        check(pipe.read_async(0).get().empty() &&
+              pipe.read_async(0).get().empty() &&
+              pipe.buffered_message_count() == 0,
+              "empty DATA failed to drain after STOP");
     }
 
     // Graph credits are atomic across simultaneous writers to different
@@ -364,7 +408,8 @@ int main() {
         for (auto& sender : senders) sender.join();
         check(unexpected.load() == 0 && admitted.load() == 64 &&
               rejected_budget.load() == 736 &&
-              pipe.buffered_payload_bytes() == 256,
+              pipe.buffered_payload_bytes() == 256 &&
+              pipe.buffered_message_count() == 64,
               "concurrent graph quota allowed overcommit or lost credit");
         for (int e = 0; e < 2; ++e) {
             const int count = e == 0 ? admitted_a.load() : admitted_b.load();
@@ -373,8 +418,9 @@ int main() {
                       "concurrent credit accounting lost admitted payload");
             }
         }
-        check(pipe.buffered_payload_bytes() == 0,
-              "concurrent buffer drain leaked graph byte credits");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "concurrent buffer drain leaked graph credits");
         pipe.close();
     }
 
