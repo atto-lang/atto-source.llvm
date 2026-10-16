@@ -73,6 +73,25 @@ def main():
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
+    # Admission is intentionally negative until genuine native closure,
+    # private abstract vtable, and ActorMail lowering is implemented.
+    # A nonzero exit without a compiler diagnostic or with emitted LLVM IR
+    # must not count as correct rejection.
+    unsupported_capture_and_hooks = (
+        "source-lex-allow-unsupported.ores",
+        "source-nlex-deny-unsupported.ores",
+        "source-nlex-critical-unsupported.ores",
+        "source-private-abstract-unsupported.ores",
+        "source-sealed-actor-receive-unsupported.ores",
+    )
+    for name in unsupported_capture_and_hooks:
+        result = run([args.compiler, str(fixtures / name)])
+        assert result.returncode == 1, (name, result.returncode, result.stderr)
+        assert "oreslang-llvmc:" in result.stderr, (name, result.stderr)
+        assert not result.stdout.strip(), (
+            "unimplemented capture or hook emitted partial LLVM IR", name, result.stdout)
+    print(f"PASS {len(unsupported_capture_and_hooks)} scoped-capture / sealed-hook "
+          "fail-closed source cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
             guest = run([args.compiler, str(fixtures / name)])
