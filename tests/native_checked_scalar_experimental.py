@@ -116,7 +116,7 @@ def main():
         for args in suites:
             run_case(compiler, clang, folder, *args)
         for name, source in [
-            ("unsupported-locals", "fnc checked(int a):int{val int x:a;return x;}"),
+            ("unsupported-locals", "fnc checked(int a):int{val x:int=a;return x;}"),
             ("unsupported-calls", "fnc checked(int a):int{return other(a);}"),
             ("wrong-function", "fnc nonchecked(int a):int{return a;}"),
         ]:
