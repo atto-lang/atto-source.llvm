@@ -40,7 +40,29 @@ def main():
           lambda x: x["graph"]["stages"][1].update(role="transform", outbound="Event"))
     check("unknown destination", lambda x: x["graph"]["connections"][0].update(target="missing"))
     check("wrong RR order", lambda x: x["operations"]["forward_round_robin"].reverse())
-    print("ORES_ACTOR_PIPELINE_CONTRACT_NEGATIVE_PASS cases=11")
+    check("altered schema", lambda x: x.update(schema="unknown"))
+    check("wrong default forward", lambda x: x["operations"]["forward"].update(error="route-first"))
+    check("changed named destination", lambda x: x["operations"]["forward_to"].update(target="missing"))
+    check("invalid target made valid", lambda x: x["operations"]["invalid_target"].update(target="worker-a"))
+    check("duplicate directed edge", lambda x: x["graph"]["connections"].append(
+        copy.deepcopy(x["graph"]["connections"][0])))
+    check("invalid supervisor role", lambda x: x["graph"]["stages"][1].update(role="supervisor"))
+    check("oversized graph identifier", lambda x: x["graph"]["stages"][1].update(id="🌍"*65))
+    check("isolated extra actor", lambda x: x["graph"]["stages"].append(
+        {"id":"orphan","actor_type":"T","role":"readable","inbound":"","outbound":"Event"}))
+    check("graph stage quota exceeded", lambda x: x["graph"]["stages"].extend(
+        copy.deepcopy(x["graph"]["stages"][0]) for _ in range(1022)))
+    check("graph edge quota exceeded", lambda x: x["graph"]["connections"].extend(
+        copy.deepcopy(x["graph"]["connections"][0]) for _ in range(4094)))
+    def cycle(x):
+        for i in (1, 2):
+            x["graph"]["stages"][i].update(role="transform", outbound="Event")
+        x["graph"]["connections"].extend([
+            {"source":"worker-a","target":"worker-b","payload":"Event"},
+            {"source":"worker-b","target":"worker-a","payload":"Event"}])
+    check("cyclic transform edges", cycle)
+    check("invalid self edge", lambda x: x["graph"]["connections"][0].update(target="producer-1"))
+    print("ORES_ACTOR_PIPELINE_CONTRACT_NEGATIVE_PASS cases=23")
 
 if __name__ == "__main__":
     main()
