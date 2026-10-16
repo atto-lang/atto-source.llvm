@@ -395,6 +395,23 @@ int main() {
         try { pipe.write_to_async("Producer", "consumer-4", megabyte).get(); }
         catch (const std::logic_error&) { graph_full = true; }
         check(graph_full, "healthy edge bypassed global byte budget");
+        // Direct handoff retains no bytes: a ready consumer can still
+        // receive even when every buffer credit is exhausted. Fanout must
+        // report the one success and four failures independently.
+        auto waiting = pipe.read_async(4);
+        auto partial = pipe.write_all_report_async("Producer", megabyte);
+        check(partial.size() == 5,
+              "graph-exhausted direct-handoff fanout lost receipt labels");
+        for (std::size_t i = 0; i < partial.size(); ++i) {
+            bool admitted = true;
+            try { partial[i].admission.get(); }
+            catch (const std::logic_error&) { admitted = false; }
+            check(admitted == (i == 4),
+                  "graph-wide pressure misreported independently admitted fanout");
+        }
+        check(waiting.get() == megabyte &&
+              pipe.buffered_payload_bytes() == 64ULL * 1024 * 1024,
+              "zero-buffer direct delivery consumed graph payload credits");
         // Consuming one queued message returns its graph-wide credit.
         check(pipe.read_async(0).get() == megabyte, "graph credit drain lost data");
         check(pipe.buffered_payload_bytes() == 63ULL * 1024 * 1024,
