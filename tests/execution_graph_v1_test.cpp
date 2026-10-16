@@ -107,6 +107,23 @@ int main() {
                 require(racing.ready(), "racing cancellation settled");
             }
         }
+        // The executor is an external trust boundary: even if it mistakenly
+        // dispatches the same one-shot task twice on competing threads, there
+        // must be exactly one permitted evaluation/terminal publication.
+        for (int i = 0; i < 128; ++i) {
+            std::function<void()> duplicate;
+            auto single = plan.submit_cpu(
+                [&](std::function<void()> task) { duplicate = std::move(task); });
+            require(static_cast<bool>(duplicate), "executor dropped duplicate test job");
+            std::thread first(duplicate);
+            std::thread second(duplicate);
+            first.join();
+            second.join();
+            require(single.ready() &&
+                    std::get<std::int64_t>(single.get()) == 42,
+                    "duplicate executor dispatch broke one-shot result");
+        }
+
         std::cout << "typed native CPU/GPU graph host contract: PASS\n";
         return 0;
     } catch (const std::exception& ex) {
