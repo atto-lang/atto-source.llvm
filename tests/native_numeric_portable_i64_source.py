@@ -30,9 +30,12 @@ def run(argv, **kwargs):
     return result
 
 
-def check_positive(compiler, clang, source, expected, folder, label):
+def check_positive(compiler, clang, source, expected, folder, label,
+                   full_source=False):
     file = folder / "case.ores"
-    file.write_text("pub fnc main():int{return " + source + ";}\n", encoding="utf-8")
+    file.write_text(source if full_source else
+                    "pub fnc main():int{return " + source + ";}\n",
+                    encoding="utf-8")
     emitted = run([compiler, "--target=host", str(file)])
     ir = emitted.stdout
     if not ENTRY.search(ir):
@@ -102,6 +105,18 @@ def main():
         for case in corpus["cases"]:
             check_positive(compiler, clang, case["expression"],
                            int(case["expected"]), folder, case["id"])
+        # The same exact file bytes are executed by the Java/Graal test and
+        # by the LLVM-to-Wasm scalar parity gate. This test uses the native
+        # compiler and a full-width i64 host launcher, not a Python oracle.
+        shared = (ROOT / "contracts/v1/numeric-parity/i64-max-minus-one.ores").read_bytes()
+        git_blob = hashlib.sha1(
+            b"blob " + str(len(shared)).encode("ascii") + b"\0" + shared
+        ).hexdigest()
+        if git_blob != "c400f440fde2fbc10514ab7cfd2ffe3d19729ee1":
+            raise AssertionError("cross-backend exact i64 source fixture drift")
+        check_positive(compiler, clang, shared.decode("utf-8"),
+                       9223372036854775806, folder, "shared-max-minus-one",
+                       full_source=True)
         unsupported_sources = [
             "fnc main():int{return 9223372036854775808;}",
             "fnc main():int{return -9223372036854775809;}",
@@ -161,7 +176,7 @@ def main():
                 raise AssertionError(case["id"] +
                     ": emitted guest arithmetic did not trap; wrapped value or unrelated error")
             runtime_traps += 1
-    print(f"NATIVE_NUMERIC_I64_POSITIVE=7 UNSUPPORTED=6 OVERFLOW_REJECTED={rejection_count}"
+    print(f"NATIVE_NUMERIC_I64_POSITIVE=8 UNSUPPORTED=6 OVERFLOW_REJECTED={rejection_count}"
           f" OVERFLOW_TRAPPED={runtime_traps}; dynamic arithmetic still unverified")
 
 
