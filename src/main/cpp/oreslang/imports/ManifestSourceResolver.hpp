@@ -170,8 +170,17 @@ inline std::optional<fs::path> find_manifest(const fs::path& start,
     std::optional<fs::path> legacy;
     while(!cursor.empty() && (physical_boundary.empty()||beneath(physical_boundary,cursor))){
         auto pkg=cursor/".ores.pkg.toml", old=cursor/".oreslangc.cfg.toml";
-        if(fs::is_regular_file(pkg))return pkg;
-        if(!legacy && fs::is_regular_file(old))legacy=old;
+        if(fs::is_regular_file(pkg)){
+            // A manifest symlink may not inherit authority from a different tree.
+            if(!beneath(cursor,fs::canonical(pkg)))
+                throw std::invalid_argument("package manifest escapes discovery directory");
+            return pkg;
+        }
+        if(!legacy && fs::is_regular_file(old)){
+            if(!beneath(cursor,fs::canonical(old)))
+                throw std::invalid_argument("legacy manifest escapes discovery directory");
+            legacy=old;
+        }
         auto parent=cursor.parent_path();
         if(parent==cursor)break;
         cursor=parent;
@@ -232,12 +241,17 @@ inline SourceConfig read_project(const fs::path& source,
         auto entry=normalized_absolute(path.is_absolute()?path:result.root/path);
         if(result.package_manifest&&!beneath(result.root,entry))
             throw std::invalid_argument("package main escapes project root");
+        if(result.package_manifest && fs::exists(entry) &&
+           !beneath(fs::canonical(result.root),fs::canonical(entry)))
+            throw std::invalid_argument("package main escapes physical project root");
         result.main_entry=entry;
     }
     if(result.package_manifest){
         std::string install_dir="zed_modules";
         auto zed=result.root/".zpkg.toml";
         if(fs::is_regular_file(zed)){
+            if(!beneath(fs::canonical(result.root),fs::canonical(zed)))
+                throw std::invalid_argument("zed metadata escapes physical project root");
             // Installer metadata may have additional tables. For now admit only
             // the restricted subset; reject rather than silently misparse it.
             auto z=restricted_manifest_fields(zed);
@@ -248,6 +262,9 @@ inline SourceConfig read_project(const fs::path& source,
             throw std::invalid_argument("zed install.dir must be project-relative");
         const auto install_root=normalized_absolute(result.root/relative);
         if(!beneath(result.root,install_root))throw std::invalid_argument("zed install.dir escapes project");
+        if(fs::exists(install_root) &&
+           !beneath(fs::canonical(result.root),fs::canonical(install_root)))
+            throw std::invalid_argument("zed install.dir escapes physical project root");
         for(const auto& [key,value]:fields){
             if(!starts(key,"dependencies."))continue;
             const auto alias=key.substr(std::string("dependencies.").size());
@@ -286,6 +303,8 @@ inline std::optional<fs::path> existing_source(const fs::path& candidate){
 inline void verify_installed_package(const fs::path& directory) {
     auto metadata=directory/".zpkg.toml";
     if(!fs::is_regular_file(metadata))return;
+    if(!beneath(fs::canonical(directory),fs::canonical(metadata)))
+        throw std::invalid_argument("installed metadata escapes physical package root");
     const auto fields=restricted_manifest_fields(metadata);
     auto org=fields.find("package.org"),name=fields.find("package.name");
     if(org==fields.end()||name==fields.end())
@@ -295,6 +314,18 @@ inline void verify_installed_package(const fs::path& directory) {
                                directory.filename().string();
     if(identity!=expected)
         throw std::invalid_argument("installed zed package identity mismatch");
+}
+
+// For rooted/package/bare searches, lexical containment alone is insufficient:
+// canonical targets must remain under the physical search root. This still
+// requires trusted filesystem ownership against concurrent path replacement.
+inline std::optional<fs::path> existing_source_under(const fs::path& root,
+                                                       const fs::path& candidate) {
+    auto source=existing_source(candidate);
+    if(!source)return std::nullopt;
+    if(!beneath(fs::canonical(root),*source))
+        throw std::invalid_argument("native import escapes physical search root");
+    return source;
 }
 
 // A single physical file may not be silently imported under two package
@@ -335,12 +366,15 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             throw std::invalid_argument("native Java host imports require unsupported backend lowering");
         case Kind::Root:
             if(!config.package_manifest)throw std::invalid_argument("@/ requires .ores.pkg.toml");
-            return existing_source(rooted_path(config.root,input.suffix));
+            return existing_source_under(config.root,rooted_path(config.root,input.suffix));
         case Kind::Package:{
             auto it=config.dependencies.find(input.alias);
             if(it==config.dependencies.end())throw std::invalid_argument("undeclared dependency alias");
             verify_installed_package(it->second);
-            return existing_source(rooted_path(it->second,input.suffix));
+            if(fs::exists(it->second) &&
+               !beneath(fs::canonical(config.root),fs::canonical(it->second)))
+                throw std::invalid_argument("installed package escapes physical project root");
+            return existing_source_under(it->second,rooted_path(it->second,input.suffix));
         }
         case Kind::Absolute:return existing_source(input.path);
         case Kind::Relative:return existing_source(normalized_absolute(importer.parent_path()/input.path));
@@ -352,7 +386,7 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             append_list(roots,legacy_paths,legacy_separator,cwd);
             for(const auto& root:roots){
                 auto path=rooted_path(root,input.path);
-                if(auto match=existing_source(path))return match;
+                if(auto match=existing_source_under(root,path))return match;
             }
             return std::nullopt;
         }
