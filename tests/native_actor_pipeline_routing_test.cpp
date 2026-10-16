@@ -361,6 +361,51 @@ int main() {
         }
     }
 
+    // Graph-wide resident-payload budget is shared across otherwise healthy
+    // edges. Per-edge limits alone would permit 4096 * 16 MiB = 64 GiB.
+    {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event"}
+        };
+        std::vector<PipeConnection> links;
+        for (int i = 0; i < 5; ++i) {
+            const std::string name = "consumer-" + std::to_string(i);
+            stages.push_back({"Worker", PipeRole::writable, "Event", "", name});
+            links.push_back({"Producer", name, "Event"});
+        }
+        NativeActorPipeTransport pipe(registry, supervisor, stages, links, 32, 4);
+        const std::string megabyte(1024 * 1024, 'G');
+        for (int e = 0; e < 4; ++e) {
+            for (int i = 0; i < 16; ++i)
+                pipe.write_to_async("Producer",
+                    "consumer-" + std::to_string(e), megabyte).get();
+        }
+        // Every individual edge still has credits, but the graph has none.
+        auto receipts = pipe.write_all_report_async("Producer", megabyte);
+        check(receipts.size() == 5, "graph-credit fanout dropped a receipt");
+        for (auto& entry : receipts) {
+            bool exhausted = false;
+            try { entry.admission.get(); }
+            catch (const std::logic_error&) { exhausted = true; }
+            check(exhausted, "global credit was bypassed by fanout");
+        }
+        bool graph_full = false;
+        try { pipe.write_to_async("Producer", "consumer-4", megabyte).get(); }
+        catch (const std::logic_error&) { graph_full = true; }
+        check(graph_full, "healthy edge bypassed global byte budget");
+        // Consuming one queued message returns its graph-wide credit.
+        check(pipe.read_async(0).get() == megabyte, "graph credit drain lost data");
+        pipe.write_to_async("Producer", "consumer-4", megabyte).get();
+        check(pipe.read_async(4).get() == megabyte,
+              "global byte credit was not returned to another edge");
+        // After STOP, admitted messages remain readable but new writes fail.
+        pipe.close();
+        bool stopped = false;
+        try { pipe.write_to_async("Producer", "consumer-4", "late").get(); }
+        catch (const std::logic_error&) { stopped = true; }
+        check(stopped, "STOP reopened global byte credit for new writes");
+    }
+
     // Per-edge byte credit applies to accepted messages and to pending
     // writes, not just to the maximum size of one individual payload.
     // Exhausting one branch must not consume another branch's byte credit.
