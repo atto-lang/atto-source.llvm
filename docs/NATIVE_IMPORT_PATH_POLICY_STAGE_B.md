@@ -82,3 +82,50 @@ fixture only**, proving runner execution and policy-fixture behavior, **not**
 this C++ code or compiler tests. The Java source-export approval PR #1062 and
 destination PR #5 remain unmerged, so **no private Java or LLVM source** was
 mirrored into another organization.
+
+
+## Stage-B manifest discovery and filesystem resolution (2026-10-16)
+
+Added ManifestSourceResolver.hpp and the native_manifest_resolver_host_only CTest.
+They operate against real on-disk temporary project manifests, zed manifests and
+Oreslang fixtures, but are **not yet called by oreslang-llvmc or its parser**.
+
+Implemented in this standalone host library:
+
+- Nearest .ores.pkg.toml wins over an inner legacy compiler config, including
+  a distinct root for a nested package.
+- Canonical package discovery boundaries prevent manifest-less installed
+  dependencies from inheriting consumer project-root authority.
+- Parse a bounded, **restricted TOML subset** of schema_version, [package],
+  [project], [source], [entrypoints], [dependencies] and zed [install].dir;
+  duplicate/unknown project fields, malformed syntax, oversized manifests
+  and unsupported TOML constructs fail closed. This is **NOT a complete
+  TOML 1.0 parser**: multiline values, dotted/quoted keys, literal strings
+  and several valid TOML forms remain unsupported. Production compatibility
+  with Java/Graal tomlj has NOT been demonstrated.
+- Source roots and import paths with explicit empty roots=[]; declarative
+  package-alias resolution into zed-pkg org/name roots; optional installed
+  zed metadata identity validation; importer-relative and ordered bare
+  resolution; canonical physical source identity and .ores/.java lookup.
+- Package entrypoints cannot lexically escape the project root.
+  Installed metadata comparison does not prove lockfile provenance.
+- Ambient ORES_PATHS and ORESLANG_PATH values must be passed by future
+  compiler integration; this helper does not automatically read process env.
+
+Executed local host-only test evidence from exact committed source blobs:
+
+- ManifestSourceResolver.hpp: 2fe8d39ab77900fc136633a8add7f53981cdbb92
+- tests/native_manifest_resolver_test.cpp: b088b24e082ea57f3f35f6b48947c5dac60ad782
+- GCC 14.2 and Clang 17 strict C++17 builds: PASS
+- GCC ASan + UBSan with leak detection: PASS
+- Isolated CMake/CTest of both policy and manifest resolver: 2/2 PASS
+
+Promotion gates: use a complete reviewed TOML implementation or reconcile
+the restricted syntax contract explicitly with the language; integrate import
+AST/lexer with these APIs; add a cycle-safe multi-file linker and startup;
+and execute real Oreslang source -> LLVM IR -> Clang binaries under CI.
+Unsupported/foreign imports must remain rejected until supported.
+Returning a .java path does not demonstrate native Java source islands.
+
+**This is a tested host-only Stage-B component, not completed native backend
+Stage-B/Stage-C import or runtime parity.**
