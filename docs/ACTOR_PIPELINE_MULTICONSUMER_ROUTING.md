@@ -164,6 +164,12 @@ constructor with independent bounded mailboxes and implements:
   This is a transport instance budget, not a process-wide or heap-object
   accounting guarantee; live payload copies and metadata still require
   separate resource limits.
+- Pending-writer promotion must preserve its Future and byte credits on an
+  allocation failure. A subsequent read can directly consume the oldest
+  pending writer if the mailbox has no queued messages; it cannot strand
+  the writer or invent a second credit charge. Admission receipts still mean
+  mailbox delivery, not actor execution. The runtime also tests oversized
+  failed direct handoffs without consuming already-waiting readers.
 
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
