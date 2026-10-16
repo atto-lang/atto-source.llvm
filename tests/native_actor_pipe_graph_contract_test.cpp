@@ -24,6 +24,27 @@ int main() {
         {"Left","Sink","Payload"}, {"Right","Sink","Payload"}
     };
     expect(check_actor_pipeline_graph(stages, links).size() == 4);
+    // Two worker *instances* of one nominal actor type are legal. Graph
+    // endpoints resolve instance IDs, not nominal class names.
+    std::vector<PipeStage> identical_workers = {
+        {"Producer", PipeRole::readable, "", "Payload", "source-1"},
+        {"Worker", PipeRole::writable, "Payload", "", "worker-a"},
+        {"Worker", PipeRole::writable, "Payload", "", "worker-b"}
+    };
+    std::vector<PipeConnection> worker_edges = {
+        {"source-1", "worker-a", "Payload"},
+        {"source-1", "worker-b", "Payload"}
+    };
+    expect(check_actor_pipeline_graph(identical_workers, worker_edges).size() == 2);
+    deny([&] { auto wrong = identical_workers;
+               wrong[2].instance_id = "worker-a";
+               (void)check_actor_pipeline_graph(wrong, worker_edges); });
+    deny([&] { auto wrong = identical_workers;
+               wrong[2].actor_type = "";
+               (void)check_actor_pipeline_graph(wrong, worker_edges); });
+    deny([&] { auto wrong = identical_workers;
+               wrong[2].instance_id = std::string(257, 'x');
+               (void)check_actor_pipeline_graph(wrong, worker_edges); });
     deny([&] { auto wrong=links;wrong[0].payload="Other";
                (void)check_actor_pipeline_graph(stages,wrong); });
     deny([&] { auto wrong=links;wrong.push_back(wrong[0]);
