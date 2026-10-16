@@ -144,18 +144,18 @@ int main() {
             pipe.write_by_key_async("Producer", std::string(4097, 'x'), "bad").get();
         }, "unbounded route key permitted");
         rejected([&] {
-            pipe.write_by_key_async("Producer", std::string("\\xc0\\xaf", 2), "bad").get();
+            pipe.write_by_key_async("Producer", std::string("\xc0\xaf", 2), "bad").get();
         }, "overlong UTF-8 routing key permitted");
         rejected([&] {
-            pipe.write_by_key_async("Producer", std::string("\\xed\\xa0\\x80", 3), "bad").get();
+            pipe.write_by_key_async("Producer", std::string("\xed\xa0\x80", 3), "bad").get();
         }, "UTF-8 surrogate routing key permitted");
         rejected([&] {
-            pipe.write_by_key_async("Producer", std::string("\\xf4\\x90\\x80\\x80", 4), "bad").get();
+            pipe.write_by_key_async("Producer", std::string("\xf4\x90\x80\x80", 4), "bad").get();
         }, "UTF-8 out-of-range routing key permitted");
         rejected([&] {
-            pipe.write_by_key_async("Producer", std::string("\\xe2\\x82", 2), "bad").get();
+            pipe.write_by_key_async("Producer", std::string("\xe2\x82", 2), "bad").get();
         }, "truncated UTF-8 routing key permitted");
-        const std::string unicode_key("\\xf0\\x9f\\x8c\\x8d", 4);
+        const std::string unicode_key("\xf0\x9f\x8c\x8d", 4);
         pipe.write_by_key_async("Producer", unicode_key, "valid-unicode").get();
         check(pipe.read_async(key_slot(unicode_key)).get() == "valid-unicode",
               "valid non-ASCII UTF-8 key was misrouted");
