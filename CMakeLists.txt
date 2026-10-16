@@ -39,6 +39,15 @@ if(BUILD_TESTING)
     add_test(NAME scoped_permission_host_policy_substrate
         COMMAND oreslang-native-scoped-policy-test)
     set_tests_properties(scoped_permission_host_policy_substrate PROPERTIES TIMEOUT 15)
+    add_executable(oreslang-native-pinned-tcp-test
+        contracts/v1/scoped_tcp_boundary_test.cpp)
+    target_include_directories(oreslang-native-pinned-tcp-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1")
+    target_compile_options(oreslang-native-pinned-tcp-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_pinned_tcp_host_boundary COMMAND oreslang-native-pinned-tcp-test)
+    set_tests_properties(native_pinned_tcp_host_boundary PROPERTIES TIMEOUT 15)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
