@@ -95,17 +95,25 @@ def assert_checked_overflow_path(ir, operation):
         raise AssertionError("invalid checked overflow IR")
     if operation not in ("sadd", "ssub", "smul"):
         raise AssertionError("unsupported checked overflow operation")
-    pairs = list(_OVERFLOW_PAIR.finditer(ir))
+    # Validate the real entrypoint. A checked helper in an unrelated
+    # function must not be accepted as proof that guest main overflows.
+    entries = re.findall(
+        r"(?ms)^define[ \\t]+i64[ \\t]+@__oreslang_guest_main[ \\t]*"
+        r"\\([ \\t]*\\)[^\\n{]*\\{[^\\n]*\\n([\\s\\S]*?)^\\}[ \\t]*$", ir)
+    if len(entries) != 1:
+        raise AssertionError("overflow IR requires exactly one guest main body")
+    body = entries[0]
+    pairs = list(_OVERFLOW_PAIR.finditer(body))
     pair_ops = {x.group(1): x.group(2) for x in pairs}
     if operation not in pair_ops.values():
         raise AssertionError("signed-i64 overflow intrinsic absent: " + operation)
-    flags = {x.group(1): x.group(2) for x in _OVERFLOW_FLAG.finditer(ir)
+    flags = {x.group(1): x.group(2) for x in _OVERFLOW_FLAG.finditer(body)
              if x.group(2) in pair_ops}
-    guards = list(_OVERFLOW_GUARD.finditer(ir))
-    traps = re.findall(r"\bcall\s+void\s+@llvm\.trap\s*\(\s*\)", ir)
-    failures = list(_OVERFLOW_FAILURE.finditer(ir))
+    guards = list(_OVERFLOW_GUARD.finditer(body))
+    traps = re.findall(r"\bcall\s+void\s+@llvm\.trap\s*\(\s*\)", body)
+    failures = list(_OVERFLOW_FAILURE.finditer(body))
     labels = {x.group(1) for x in failures}
-    unreachable = re.findall(r"(?m)^\s*unreachable\b", ir)
+    unreachable = re.findall(r"(?m)^\s*unreachable\b", body)
     if (not flags or not guards or not traps
             or len(guards) != len(traps) or len(failures) != len(traps)
             or len(unreachable) != len(failures)
