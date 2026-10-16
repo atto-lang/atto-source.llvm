@@ -1,6 +1,7 @@
 #include "oreslang/runtime/BoundedActorPort.hpp"
 
 #include <memory>
+#include <new>
 #include <stdexcept>
 
 using oreslang::runtime::BoundedActorPort;
@@ -12,6 +13,22 @@ struct MoveOnly {
     MoveOnly(const MoveOnly&) = delete;
     MoveOnly& operator=(const MoveOnly&) = delete;
 };
+
+struct AllocFaultMoveOnly {
+    std::unique_ptr<int> item;
+    static inline bool fail_next_allocation = false;
+    explicit AllocFaultMoveOnly(int value) : item(std::make_unique<int>(value)) {}
+    AllocFaultMoveOnly(AllocFaultMoveOnly&&) noexcept = default;
+    AllocFaultMoveOnly& operator=(AllocFaultMoveOnly&&) noexcept = default;
+    AllocFaultMoveOnly(const AllocFaultMoveOnly&) = delete;
+    AllocFaultMoveOnly& operator=(const AllocFaultMoveOnly&) = delete;
+    static void* operator new(std::size_t size) {
+        if (fail_next_allocation) throw std::bad_alloc();
+        return ::operator new(size);
+    }
+    static void operator delete(void* ptr) noexcept { ::operator delete(ptr); }
+};
+
 static void check(bool ok) { if (!ok) throw std::runtime_error("port invariant broken"); }
 template<class F> void rejected(F f) {
     try { f(); } catch (const std::exception&) { return; }
@@ -52,4 +69,29 @@ int main() {
     check(x->id() != y->id());
     check(x->acknowledge_released() && y->acknowledge_released());
     clean.close();
+
+    // Force the owned-envelope allocation to fail after queue slot
+    // reservation. No byte credit, frame ID, or sender ownership is lost.
+    BoundedActorPort<AllocFaultMoveOnly> faultPort(1, 16);
+    AllocFaultMoveOnly failSender(61);
+    AllocFaultMoveOnly::fail_next_allocation = true;
+    bool allocationFailed = false;
+    try {
+        (void)faultPort.offer(std::move(failSender), 8);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    AllocFaultMoveOnly::fail_next_allocation = false;
+    check(allocationFailed);
+    check(failSender.item && *failSender.item == 61);
+    check(faultPort.used_frames() == 0 && faultPort.used_bytes() == 0);
+    check(!faultPort.try_receive().has_value());
+    check(faultPort.offer(std::move(failSender), 8));
+    check(!failSender.item);
+    auto faultDelivery = faultPort.try_receive();
+    check(faultDelivery && faultDelivery->id() == 1);
+    check(*faultDelivery->value().item == 61);
+    check(faultDelivery->acknowledge_released());
+    check(faultPort.used_frames() == 0 && faultPort.used_bytes() == 0);
+    faultPort.close();
 }
