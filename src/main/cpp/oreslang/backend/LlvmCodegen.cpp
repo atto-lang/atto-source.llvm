@@ -471,9 +471,13 @@ std::string emit_checked_result_function_ir(const Program& source) {
     for (const auto& fn : source.functions) {
         std::vector<llvm::Type*> signature(fn.parameters.size(), i64);
         signature.push_back(i64->getPointerTo());
+        // Respect source visibility. Only explicit 'pub' functions are
+        // callable through the experimental C ABI. Private helpers retain
+        // their callable IR bodies for transitive in-module checked calls.
         auto* f = llvm::Function::Create(
             llvm::FunctionType::get(i32, signature, false),
-            llvm::Function::ExternalLinkage,
+            fn.exported ? llvm::Function::ExternalLinkage
+                        : llvm::Function::PrivateLinkage,
             "__oreslang_checked_v2_" + fn.name + "_" +
                 std::to_string(fn.parameters.size()), module);
         if (!functions.emplace(native_function_slot(fn.name, fn.parameters.size()), f).second)
