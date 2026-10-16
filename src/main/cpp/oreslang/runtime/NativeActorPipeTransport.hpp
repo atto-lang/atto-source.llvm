@@ -126,8 +126,10 @@ public:
         if (buffered &&
                 payload.size() > max_edge_buffered_bytes - link.buffered_bytes)
             return failed_void("native actor pipe edge byte credit exhausted");
-        if (link.messages.size() == link.capacity && buffered
-                && link.writers.size() >= link.capacity)
+        // Failed promotion can leave a vacant buffer slot behind older
+        // pending writers. Pending-writer quota and FIFO priority do not
+        // depend on current mailbox occupancy.
+        if (buffered && link.writers.size() >= link.capacity)
             return failed_void("native actor pipe pending-write budget exceeded");
         auto pending = std::make_shared<PendingWrite>(std::move(payload));
         auto future = pending->promise.get_future().share();
@@ -148,7 +150,8 @@ public:
         }
         // Queued payloads and pending writers both own one reservation.
         // A deque allocation failure must not leak credit or a hidden Future.
-        const bool queued = link.messages.size() < link.capacity;
+        const bool queued =
+                link.writers.empty() && link.messages.size() < link.capacity;
         try {
             if (queued)
                 link.messages.push_back(std::move(pending->payload));
@@ -215,6 +218,19 @@ public:
         } else if (closed_.load(std::memory_order_acquire) || link.closed) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe is closed")));
+        } else if (!link.writers.empty()) {
+            // A sequence of writer-promotion allocation failures can empty
+            // the buffered deque while pending writers still hold charged
+            // admissions. Deliver its oldest writer rather than park this
+            // reader forever behind an empty mailbox.
+            auto waiting = std::move(link.writers.front());
+            link.writers.pop_front();
+            const auto bytes = waiting->payload.size();
+            link.buffered_bytes -= bytes;
+            graph_buffered_bytes_.fetch_sub(bytes, std::memory_order_acq_rel);
+            buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
+            receiver->set_value(std::move(waiting->payload));
+            waiting->promise.set_value();
         } else if (link.readers.size() >= link.capacity) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe pending-read budget exceeded")));
