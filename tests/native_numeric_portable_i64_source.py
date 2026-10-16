@@ -76,8 +76,8 @@ def main():
     if actual != "bbc319c19ecd007109d33592e210091eb267e5a2":
         raise AssertionError("native guest corpus differs from reviewed Git blob")
     corpus = json.loads(raw)
-    assert corpus["schema_version"] == "1.0.0"
-    assert len(corpus["cases"]) == 7
+    if corpus.get("schema_version") != "1.0.0" or len(corpus.get("cases", [])) != 7:
+        raise AssertionError("invalid or incomplete native guest signed-i64 corpus")
     # The same four negative source expressions must be checked in every
     # backend. Pin the exact reviewed Git blob before using its source bytes.
     overflow_raw = (ROOT / "contracts/v1/numeric-parity/source-i64-overflow-cases.json").read_bytes()
@@ -102,7 +102,7 @@ def main():
         for case in corpus["cases"]:
             check_positive(compiler, clang, case["expression"],
                            int(case["expected"]), folder, case["id"])
-        negative_sources = [
+        unsupported_sources = [
             "fnc main():int{return 9223372036854775808;}",
             "fnc main():int{return -9223372036854775809;}",
             "fnc main():int{return 3/2;}",
@@ -110,19 +110,59 @@ def main():
             "fnc main():decimal{return 1;}",
             "fnc main():int{return 1.25;}",
         ]
-        negative_sources += [
-            "fnc main():int{return " + c["source"] + ";}"
-            for c in overflow["cases"]
-        ]
-        for code in negative_sources:
+        for code in unsupported_sources:
             path = folder / "unsupported.ores"
             path.write_text(code, encoding="utf-8")
             negative = subprocess.run([compiler, "--target=host", str(path)],
                                       text=True, capture_output=True, timeout=20, check=False)
             if (negative.returncode != 1 or negative.stdout.strip()
                     or not re.search(r"^oreslang-llvmc:\s+\S+", negative.stderr, re.M)):
-                raise AssertionError("unsupported precision source was not diagnosed by frontend")
-    print("NATIVE_NUMERIC_I64_POSITIVE=7 REJECTED=10; dynamic arithmetic still unverified")
+                raise AssertionError("unsupported numeric syntax was not rejected by frontend")
+        # The shared overflow contract permits a diagnosed compile-time
+        # refusal OR an actual signed-overflow runtime trap, but NEVER a
+        # successful/wrapped i64 result. Check which outcome occurred rather
+        # than mistakenly requiring all four to fail during parsing.
+        import signal
+        rejection_count = 0
+        runtime_traps = 0
+        for case in overflow["cases"]:
+            path = folder / "checked-overflow.ores"
+            path.write_text("pub fnc main():int{return " + case["source"] + ";}",
+                            encoding="utf-8")
+            attempt = subprocess.run([compiler, "--target=host", str(path)],
+                                     text=True, capture_output=True, timeout=20, check=False)
+            if attempt.returncode != 0:
+                if (attempt.returncode != 1 or attempt.stdout.strip()
+                        or not re.search(r"^oreslang-llvmc:\s+\S+", attempt.stderr, re.M)
+                        or not re.search(r"overflow|out.of.range|out.of.bounds|invalid i64",
+                                         attempt.stderr, re.I)):
+                    raise AssertionError(case["id"] + ": unrelated compiler error is not an overflow pass")
+                rejection_count += 1
+                continue
+            if attempt.stderr.strip() or not ENTRY.search(attempt.stdout):
+                raise AssertionError(case["id"] + ": malformed compiler-success IR")
+            ir, count = HOST_WRAPPER.subn(r"\1@oreslang_os_main", attempt.stdout)
+            if count != 1:
+                raise AssertionError(case["id"] + ": unexpected host wrapper inventory")
+            object_file = folder / "checked-overflow.o"
+            run([clang, "-x", "ir", "-c", "-o", str(object_file), "-"], input=ir)
+            launcher = folder / "checked-overflow-host.c"
+            launcher.write_text(
+                '#include <stdint.h>\n'
+                'extern int64_t __oreslang_guest_main(void);\n'
+                'int main(void) { volatile int64_t value = __oreslang_guest_main();'
+                ' (void)value; return 0; }\n', encoding="utf-8")
+            executable = folder / "checked-overflow-host"
+            run([clang, str(launcher), str(object_file), "-o", str(executable)])
+            execution = subprocess.run([str(executable)], text=True,
+                                       capture_output=True, timeout=10, check=False)
+            if (execution.returncode not in (-signal.SIGILL, -signal.SIGTRAP)
+                    or execution.stdout or execution.stderr):
+                raise AssertionError(case["id"] +
+                    ": emitted guest arithmetic did not trap; wrapped value or unrelated error")
+            runtime_traps += 1
+    print(f"NATIVE_NUMERIC_I64_POSITIVE=7 UNSUPPORTED=6 OVERFLOW_REJECTED={rejection_count}"
+          f" OVERFLOW_TRAPPED={runtime_traps}; dynamic arithmetic still unverified")
 
 
 if __name__ == "__main__":
