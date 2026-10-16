@@ -438,6 +438,34 @@ int main() {
               "STOP failed to preserve admitted DATA or release read credits");
     }
 
+    // Promotion credit recovery, including a deterministic test-only bad_alloc.
+    {
+        NativeActorPipeTransport pipe(registry, supervisor,
+                                      graph_stages(), graph_edges(), 1, 4);
+        pipe.write_to_async("Producer", "ConsumerA", "front").get();
+        auto pending = pipe.write_to_async("Producer", "ConsumerA", "back");
+        check(pipe.buffered_message_count() == 2
+                && pipe.buffered_payload_bytes() == 9,
+              "writer pending credits were not charged");
+#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+        pipe.test_fail_next_writer_promotion();
+#endif
+        check(pipe.read_async(0).get() == "front", "reader lost admitted DATA");
+#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+        bool failed = false;
+        try { pending.get(); } catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "injected bad_alloc did not settle pending Future");
+#else
+        pending.get();
+        check(pipe.read_async(0).get() == "back",
+              "promoted writer DATA was lost");
+#endif
+        check(pipe.buffered_message_count() == 0
+                && pipe.buffered_payload_bytes() == 0,
+              "promotion leaked graph-wide credits");
+        pipe.close();
+    }
+
     // Invalid capacities must fail before group publication, including the
     // caller-specified byte budget and unbounded per-edge/per-worker quotas.
     {
