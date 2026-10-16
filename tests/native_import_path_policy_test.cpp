@@ -38,7 +38,8 @@ int main() {
     const fs::path root("/tmp/ores-root");
     check(rooted_path(root,"src/../lib/util")==root/"lib/util","normalized rooted source");
     check(rooted_path(root,"..hidden/a")==root/"..hidden/a","hidden relative component");
-    for(const std::string bad: {"../other/file","a/../../../other","/etc/passwd",""})
+    check(rooted_path(root/"./","src/a")==root/"src/a","trailing root separator");
+    for(const std::string bad: {"../other/file","..\\\\other/file","a/../../../other","/etc/passwd",""})
         reject([&]{(void)rooted_path(root,bad);},"root escape allowed");
     check(!beneath(root,"/tmp/ores-root-evil/file"),"text-prefix escape");
     check(beneath(root,"/tmp/ores-root/file"),"valid descendant");
