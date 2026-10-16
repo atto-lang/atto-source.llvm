@@ -1,0 +1,6 @@
+// Blacklists must never silently lower as unrestricted capture.
+pub fnc main(): int {
+  const outer: int = 5;
+  const closure = nlex[self] || -> outer + 1;
+  return closure();
+}
