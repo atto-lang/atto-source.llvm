@@ -77,11 +77,25 @@ cross-backend public function ABI. Named call labels are not accepted in v2.
 
 The CTest `numeric_experimental_checked_result_function_graph` compiles
 the guest source through the actual Oreslang LLVM compiler, links the IR using
-Clang at `-O0` and `-O2`, exercises 363 signed boundary pairs per optimization
-level plus nested call propagation, null pointers and error-atomic output, and
-tests invalid source admission. Until the exact-source compiler test actually
-executes, the new mode remains `implemented_unverified` and must not
-advance the global default `checked_i64_overflow` capability.
+Clang at `-O0`, `-O2`, and `-O3`, exercises 363 signed boundary pairs per
+optimization level plus nested call propagation, null pointers and
+error-atomic output, and performs **30,720** additional guest-function checks
+from 2,048 deterministic full-width input pairs per optimization level.
+The bulk differential oracle uses signed `__int128` arithmetic to avoid
+signed-i64 overflow in the test itself, and validates output immutability on
+failure. Unsupported named-call lowering is denied before IR emission;
+incompatible owned-int/scalar-loop flags are denied before reading source.
+
+Independent source-free LLVM intrinsic/trap CI passed at all three
+optimization levels: [run #38945879779](https://github.com/cliptown/cliptown-e2e/actions/runs/38945879779),
+273 boundary cases per level (including ten isolated overflow signal checks),
+819 cases total. This was **not** an Oreslang source compilation or permission
+to copy private source. The slow old subprocess-per-overflow workflow was
+replaced with bounded signal-fork tests and switched to manual invocation to
+avoid wasting GitHub Actions minutes. Until the actual Oreslang compiler CTest
+runs on an authorized runner, the new mode remains
+`implemented_unverified` and must not advance the global default
+`checked_i64_overflow` capability.
 
 ## Evidence is tiered
 
