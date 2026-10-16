@@ -127,6 +127,12 @@ public:
     void fail_next_reader_enqueue_for_test() noexcept {
         fail_next_reader_enqueue_.store(true, std::memory_order_release);
     }
+
+    // Simulate failure while preparing the single terminal STOP exception.
+    // This seam is not present in production binaries or guest code.
+    void fail_next_close_exception_for_test() noexcept {
+        fail_next_close_exception_.store(true, std::memory_order_release);
+    }
 #endif
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
@@ -415,6 +421,23 @@ public:
     }
 
     void close() noexcept {
+        // Prepare the terminal error once before publishing STOP. Constructing
+        // an exception for each pending Future may allocate and fail after
+        // closure is visible, leaving broken_promise instead of a terminal
+        // failure. Reuse the same exception_ptr for every pending waiter.
+        // If allocation fails here, current_exception() is still a valid
+        // nonallocating failure result for all the already-created promises.
+        std::exception_ptr terminal_error;
+        try {
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+            if (fail_next_close_exception_.exchange(false, std::memory_order_acq_rel))
+                throw std::bad_alloc();
+#endif
+            terminal_error = std::make_exception_ptr(
+                std::logic_error("native actor pipe is closed"));
+        } catch (...) {
+            terminal_error = std::current_exception();
+        }
         {
             // Serialize terminal publication with ALL admissions, not just
             // per-edge closure. A concurrent close() cannot return before
@@ -430,15 +453,13 @@ public:
                     graph_buffered_bytes_.fetch_sub(
                         waiting->payload.size(), std::memory_order_acq_rel);
                     buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
-                    try { waiting->promise.set_exception(std::make_exception_ptr(
-                            std::logic_error("native actor pipe is closed"))); }
+                    try { waiting->promise.set_exception(terminal_error); }
                     catch (...) { }
                 }
                 edge->writers.clear();
                 for (auto& waiting : edge->readers) {
                     pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
-                    try { waiting->set_exception(std::make_exception_ptr(
-                            std::logic_error("native actor pipe is closed"))); }
+                    try { waiting->set_exception(terminal_error); }
                     catch (...) { }
                 }
                 edge->readers.clear();
@@ -614,6 +635,7 @@ private:
     std::atomic<bool> fail_next_enqueue_{false};
     std::atomic<bool> fail_next_pending_allocation_{false};
     std::atomic<bool> fail_next_reader_enqueue_{false};
+    std::atomic<bool> fail_next_close_exception_{false};
 #endif
 };
 
