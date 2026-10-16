@@ -83,3 +83,31 @@ Before changing the default arithmetic contract, design a typed failure
 channel through all native call frames, integration with actor supervisors,
 owned arena cleanup across unwind, and deterministic error serialization.
 The experimental status ABI cannot simply be substituted for that work.
+
+## Whole-module checked-function graph work admission
+
+The separate `--experimental-checked-i64-functions` (trapping) and
+`--experimental-checked-i64-result-functions` (recoverable result-v2)
+profiles admit a host-only acyclic graph of pure signed-i64 functions.
+Each function is limited to 2,048 expression AST nodes and 64 expression
+levels, and the graph to 32 call levels and 64 definitions.
+
+**Additional denial-of-service limit:** for each possible entrypoint,
+the compiler now computes a conservative *transitive expression-work*
+count across the entire call graph. Its cost is the number of nodes in
+the caller expression plus the cost of every nested call occurrence,
+including repeated calls to the same callee. Any entrypoint requiring
+more than **65,536 expanded expression-node evaluations** is rejected
+before LLVM IR is emitted, using subtraction-guarded accounting that
+cannot overflow `size_t`. This addresses acyclic graphs like
+`f0(a) = f1(a) + f1(a)`, ..., whose cost doubles at every level while
+every individual expression and the maximum stack depth stay small.
+
+This is a static admission bound **for the experimental pure-function
+subset**, not a CPU time quota or watchdog, and does not cover the
+default compiler. The compiler does not charge host/LLVM overhead,
+cancellation, scheduler work or resource-owning native execution against
+this estimate. Both profiles include positive bounded-fanout and
+negative exponential-fanout real-compiler regression fixtures.
+A green fixture/reference oracle by itself does not prove that the
+compiler/guest tests have run or that actor cleanup is safe.
