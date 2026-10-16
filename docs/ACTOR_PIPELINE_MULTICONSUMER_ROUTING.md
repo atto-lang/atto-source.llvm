@@ -155,7 +155,15 @@ constructor with independent bounded mailboxes and implements:
   draining a message or cancelling a pending writer returns its credit.
   Exhaustion yields a failed per-edge admission Future and does not
   block or consume other edges' byte credits. This is a per-edge limit,
-  NOT a whole-graph or actor-process memory limit.
+  NOT an actor-process memory limit.
+- All edges in one native transport additionally share a **32 MiB aggregate
+  retained-payload byte quota**. Each enqueue reserves byte credits with an
+  atomic CAS before retaining payloads; allocation/insertion failure refunds
+  the reservation. Reading an admitted message or cancelling a pending writer
+  returns its credits. A direct handoff to a waiting reader consumes none.
+  This is a transport instance budget, not a process-wide or heap-object
+  accounting guarantee; live payload copies and metadata still require
+  separate resource limits.
 
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
