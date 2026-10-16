@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -521,8 +521,8 @@ private:
         }
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            fail("native accelerator lowering unsupported");
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
@@ -1793,10 +1793,16 @@ private:
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            throw std::runtime_error("native gpu/quantum boundary unsupported: "
-                    "validated effects, ownership, device lowering and explicit "
-                    "backend admission required; no implicit CPU fallback at byte "
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            // Preserve the GPU/quantum diagnostic contract; CPU has a separate
+            // admission diagnostic until typed region graph lowering exists.
+            const char* domain = token_.text == "cpu"
+                    ? "native cpu execution block boundary unsupported: "
+                    : "native gpu/quantum boundary unsupported: ";
+            throw std::runtime_error(std::string(domain)
+                    + "validated effects, ownership, host/device lowering and explicit "
+                    "backend admission required; nested cpu/gpu blocks cannot "
+                    "silently execute on the host; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
         }
         if (token_.text == "throw" || token_.text == "raise" ||
