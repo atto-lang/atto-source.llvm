@@ -88,6 +88,7 @@ class ScopedPolicy final {
             const auto closing = s.find(']');
             if (closing == s.npos || closing <= 1) return false;
             const std::string literal = s.substr(1, closing - 1);
+            if (literal.find('.') != std::string::npos) return false; // No embedded IPv4.
             std::array<unsigned char, 16> addr{};
             if (inet_pton(AF_INET6, literal.c_str(), addr.data()) != 1)
                 return false;
