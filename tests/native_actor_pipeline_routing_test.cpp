@@ -357,6 +357,31 @@ int main() {
         check(pending_cancelled, "pending branch was not cancelled on STOP");
     }
 
+    // First-use RR cursor bookkeeping is allocated at graph construction,
+    // not on an actor's message path. A fault AFTER selecting the first edge
+    // consumes exactly that attempted turn; the next try selects edge 1.
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 4, 4);
+        pipe.fail_next_pending_allocation_for_test();
+        bool first_fault = false;
+        try { pipe.write_round_robin_async("Producer", "oom-first").get(); }
+        catch (const std::bad_alloc&) { first_fault = true; }
+        check(first_fault &&
+              pipe.buffered_message_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0,
+              "first RR attempt fault retained graph credits");
+        pipe.write_round_robin_async("Producer", "after-fault-b").get();
+        check(pipe.read_async(1).get() == "after-fault-b",
+              "first RR fault failed to advance cursor to second consumer");
+        pipe.write_round_robin_async("Producer", "after-fault-a").get();
+        check(pipe.read_async(0).get() == "after-fault-a",
+              "first RR fault poisoned subsequent cursor rotation");
+        pipe.close();
+    }
+#endif
+
     // Every RR attempt consumes its turn, including an overloaded edge.
     // Pending admission must not silently skip to a healthier consumer.
     {
