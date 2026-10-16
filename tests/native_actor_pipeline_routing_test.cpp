@@ -188,10 +188,10 @@ int main() {
                   "second RR sweep wrong");
         }
         const std::string keys[] = {
-            "customer-7", "alpha", "beta", "\xf0\x9f\x8c\x8d", ""
+            "customer-7", "alpha", "beta", "\xf0\x9f\x8c\x8d", "", std::string(1, '\0')
         };
-        const std::size_t slots[] = {0, 0, 2, 0, 2};
-        for (std::size_t i = 0; i < 5; ++i) {
+        const std::size_t slots[] = {0, 0, 2, 0, 2, 0};
+        for (std::size_t i = 0; i < 6; ++i) {
             pipe.write_by_key_async("producer-1", keys[i], "key").get();
             check(pipe.read_async(slots[i]).get() == "key",
                   "five-backend FNV key destination mismatch");
