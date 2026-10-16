@@ -92,6 +92,16 @@ def checked_run(binary, operation, a, b, expected):
                process.stdout[:150], process.stderr[:150]))
 
 
+def fanout_source(depth):
+    """Acyclic, tiny-AST graph with 2**depth nested calls at runtime."""
+    lines = ["pub fnc entry(int a):int{return f0(a);}"]
+    for i in range(depth):
+        lines.append("fnc f%d(int a):int{return f%d(a)+f%d(a);}" %
+                     (i, i + 1, i + 1))
+    lines.append("fnc f%d(int a):int{return a;}" % depth)
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -159,6 +169,9 @@ def main():
                       for i in range(0, len(leaves) - 1, 2)] + (
                           leaves[-1:] if len(leaves) % 2 else [])
         negatives.append("fnc huge(int a):int{return " + leaves[0] + ";}")
+        # Acyclic and shallow (20 frames), but exponentially many calls;
+        # must fail at admission rather than burn CPU or hit overflow.
+        negatives.append(fanout_source(18))
         for i, code in enumerate(negatives):
             invalid = root / ("invalid-%d.ores" % i)
             invalid.write_text(code + "\n", encoding="utf-8")
@@ -167,6 +180,17 @@ def main():
                 capture_output=True, text=True, timeout=15, check=False)
             if attempted.returncode != 1 or not attempted.stderr.startswith("oreslang-llvmc:"):
                 raise AssertionError("effectful checked source was not rejected")
+            if i == len(negatives) - 1 and (
+                    "evaluation work exceeds 65536-node call budget" not in attempted.stderr):
+                raise AssertionError("exponential work rejected for wrong reason: " + repr(attempted))
+        # Small fanout graphs must remain valid in trap-only mode as well.
+        bounded = root / "bounded-fanout.ores"
+        bounded.write_text(fanout_source(8), encoding="utf-8")
+        allowed = subprocess.run(
+            [compiler, "--experimental-checked-i64-functions", str(bounded)],
+            capture_output=True, text=True, timeout=15, check=False)
+        if allowed.returncode or allowed.stderr or "define i64 @entry(" not in allowed.stdout:
+            raise AssertionError("safe bounded fanout graph was rejected: " + repr(allowed))
         # The opt-in modes have intentionally incompatible output ABIs.
         mixed = subprocess.run(
             [compiler, "--experimental-checked-i64",
