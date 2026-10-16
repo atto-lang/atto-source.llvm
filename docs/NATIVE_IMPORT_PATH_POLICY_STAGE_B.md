@@ -9,7 +9,7 @@ The new compiler execution regressions have been committed but not verified
 on an exact-head compiler runner.
 
 The component provides:
-- Namespace classification: `@/` root, `pkg:` alias, explicit `./` /
+- Namespace classification: `+/` root, `pkg:` alias, explicit `./` /
   `../`, bare dot-prefixed and ordinary names, absolute paths, and
   `java:` (classified only; native host interop is unsupported).
 - Strict alias syntax and a 4,096-byte import path limit.
@@ -168,7 +168,7 @@ source was copied across organizations.
 ## Physical-path containment follow-up (2026-10-16)
 
 LLVM PR #466 now additionally rejects physical symlink-target escapes for:
-- rooted `@/`, `pkg:` imports, and bare names under configured search roots;
+- rooted `+/`, `pkg:` imports, and bare names under configured search roots;
 - existing package entrypoints, manifests and installed-package metadata;
 - the zed installation directory and installed package directory.
 
