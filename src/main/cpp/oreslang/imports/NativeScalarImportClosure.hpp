@@ -25,7 +25,11 @@ struct ScalarImportClosure {
 };
 inline ScalarImportClosure assemble_scalar_import_closure(
     const fs::path& entry,
-    const std::function<void(std::string_view)>& validate_utf8) {
+    const std::function<void(std::string_view)>& validate_utf8,
+    std::string_view ores_paths = {},
+    std::string_view legacy_paths = {},
+    char legacy_separator = ':',
+    const fs::path& cwd = fs::current_path()) {
     constexpr std::size_t max_modules = 64;
     constexpr std::size_t max_depth = 32;
     constexpr std::size_t max_total_bytes = 8u * 1024u * 1024u;
@@ -73,7 +77,8 @@ inline ScalarImportClosure assemble_scalar_import_closure(
             const auto input = classify(raw);
             if (input.kind == Kind::Absolute)
                 throw std::invalid_argument("absolute native scalar imports are unsupported");
-            const auto target = resolve_source(project, physical, raw);
+            const auto target = resolve_source(project, physical, raw,
+                ores_paths, legacy_paths, legacy_separator, cwd);
             if (!target)
                 throw std::invalid_argument("native scalar import source not found: " + raw);
             fs::path next_boundary = project.boundary;
