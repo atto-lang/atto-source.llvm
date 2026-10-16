@@ -56,10 +56,10 @@ int main() {
             {"source","worker-c","Event"}
         };
         NativeActorPipeTransport pipe(registry, supervisor, stages, edges, 4, 4);
-        struct Vector { const char* key; std::size_t slot; };
+        struct Vector { std::string key; std::size_t slot; };
         const std::vector<Vector> keys = {
             {"customer-7",0}, {"alpha",0}, {"beta",2},
-            {"\xf0\x9f\x8c\x8d",0}, {"",2}
+            {"\xf0\x9f\x8c\x8d",0}, {"",2}, {std::string(1, '\0'),0}
         };
         for (const auto& item : keys) {
             pipe.write_by_key_async("source", item.key, "v").get();
