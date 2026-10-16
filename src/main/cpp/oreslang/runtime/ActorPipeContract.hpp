@@ -20,6 +20,10 @@ struct PipeStage {
     PipeRole role;
     std::string inbound;
     std::string outbound;
+    // Optional supervisor-assigned instance identity for a graph. This is
+    // NOT a capability. Legacy 4-field stages use actor_type as their ID.
+    // Multiple instances can share one nominal actor_type but not an ID.
+    std::string instance_id{};
 };
 
 struct PipeConnection {
@@ -98,8 +102,12 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
     ids.reserve(stages.size());
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& s = stages[i];
-        if (s.actor_type.empty() || !ids.emplace(s.actor_type, i).second)
-            throw std::invalid_argument("pipeline graph actor types must be unique and nonempty");
+        const auto& actor_id = s.instance_id.empty() ? s.actor_type : s.instance_id;
+        if (s.actor_type.empty() || actor_id.empty() ||
+                s.actor_type.size() > 256 || actor_id.size() > 256 ||
+                !ids.emplace(actor_id, i).second)
+            throw std::invalid_argument(
+                "pipeline graph requires distinct, bounded actor instance IDs");
         switch (s.role) {
         case PipeRole::readable:
             if (!s.inbound.empty() || s.outbound.empty())
