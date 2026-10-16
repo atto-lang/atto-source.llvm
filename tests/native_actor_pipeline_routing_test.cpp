@@ -436,6 +436,57 @@ int main() {
               "concurrent graph drain leaked aggregate credits");
     }
 
+
+    // Every pending byte must eventually become a queued delivery or be
+    // released. Promotion is a transfer of existing credit, not a fresh
+    // allocation of graph credit. After STOP the drain reaches zero.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4);
+        const std::string first(1024 * 1024, '1');
+        const std::string second(1024 * 1024, '2');
+        pipe.write_to_async("Producer", "ConsumerA", first).get();
+        auto pending = pipe.write_to_async("Producer", "ConsumerA", second);
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "second write did not wait behind full mailbox");
+        check(pipe.buffered_payload_bytes() == 2ULL * 1024 * 1024,
+              "queued and pending byte credits not combined");
+        check(pipe.read_async(0).get() == first,
+              "pending-writer promotion changed FIFO head");
+        pending.get();
+        check(pipe.buffered_payload_bytes() == 1024ULL * 1024,
+              "pending-writer promotion duplicated or lost byte credit");
+        pipe.close();
+        check(pipe.read_async(0).get() == second,
+              "promoted writer lost after STOP");
+        check(pipe.buffered_payload_bytes() == 0,
+              "draining promoted message leaked graph bytes");
+    }
+
+    // A waiting receiver is a direct handoff, never counted as resident
+    // queue bytes. An oversized rejected write must not consume that reader.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4);
+        auto reader = pipe.read_async(0);
+        check(reader.wait_for(0ms) == std::future_status::timeout,
+              "reader failed to wait for direct delivery");
+        bool oversized = false;
+        try {
+            pipe.write_to_async("Producer", "ConsumerA",
+                                std::string(1024 * 1024 + 1, 'X')).get();
+        } catch (const std::logic_error&) { oversized = true; }
+        check(oversized, "oversized direct handoff bypassed admission");
+        check(reader.wait_for(0ms) == std::future_status::timeout,
+              "failed direct handoff consumed pending reader");
+        auto delivered = pipe.write_to_async("Producer", "ConsumerA", "ok");
+        delivered.get();
+        check(reader.get() == "ok", "direct reader received wrong payload");
+        check(pipe.buffered_payload_bytes() == 0,
+              "direct reader handoff incorrectly charged graph bytes");
+        pipe.close();
+    }
+
     // Host-only concurrency: per-source selector mutex serializes selection,
     // while actual actor guest execution is outside this transport.
     {
