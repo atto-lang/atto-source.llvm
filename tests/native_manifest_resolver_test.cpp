@@ -96,6 +96,15 @@ math = { zed = "acme/math" }
         require(resolve_source(config,app/"src/main.ores",".hidden/code")==fs::canonical(app/"src/.hidden/code.ores"),"bare hidden");
         require(resolve_source(config,app/"src/main.ores","util",shared.string())==fs::canonical(app/"src/util.ores"),"project precedence");
         require(resolve_source(config,app/"src/main.ores","leaf",shared.string())==std::nullopt,"undeclared bare file");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","@/src/util.ores:stream");},
+                "rooted alternate data stream must reject");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:math/src/add.ores:stream");},
+                "package alternate data stream must reject");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","C:relative.ores");},
+                "drive-relative import must reject");
+        if(!fs::path("C:/foreign/source.ores").is_absolute())
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","C:/foreign/source.ores");},
+                    "cross-host drive path must never become a relative source");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","@/../../other");},"root escape");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:unknown/foo");},"unknown alias");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","java:java.util.List");},
