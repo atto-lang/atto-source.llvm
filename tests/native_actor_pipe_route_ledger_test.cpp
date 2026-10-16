@@ -102,5 +102,51 @@ int main() {
     check(completed == 2000 && parallel.outstanding() == 1,
           "concurrent route IDs or frame retirement raced");
     parallel.complete(parent);
-    std::cout << "ORES_NATIVE_ACTOR_ROUTE_LEDGER_OK branches=2000" << std::endl;
+
+    // Parent + child frames cannot acquire new authority after a concurrent
+    // supervisor close barrier. Requests that raced *before* close may
+    // complete or fail; requests made after close returns must always fail.
+    ActorPipeRouteLedger retiring(stages(), edges(), 11, 4096);
+    const auto root = retiring.ingress("source");
+    std::atomic<bool> begin{false}, after_stop{false};
+    std::atomic<int> ready{0}, early{0}, denied{0}, unexpected{0};
+    std::vector<std::thread> contenders;
+    for (int t=0; t<8; ++t) {
+        contenders.emplace_back([&] {
+            ++ready;
+            while (!begin.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            while (!after_stop.load(std::memory_order_acquire)) {
+                try {
+                    const auto child = retiring.round_robin(root);
+                    retiring.complete(child);
+                } catch (const std::logic_error&) {
+                    // STOP may have linearized between select and complete.
+                }
+                ++early;
+            }
+            for (int i=0; i<1000; ++i) {
+                try {
+                    const auto child = retiring.round_robin(root);
+                    retiring.complete(child);
+                    ++unexpected;
+                } catch (const std::logic_error&) {
+                    ++denied;
+                }
+            }
+        });
+    }
+    while (ready.load() < 8) std::this_thread::yield();
+    begin.store(true, std::memory_order_release);
+    while (early.load() < 800) std::this_thread::yield();
+    retiring.close();
+    after_stop.store(true, std::memory_order_release);
+    for (auto& contender : contenders) contender.join();
+    check(denied == 8000 && unexpected == 0 && retiring.outstanding() == 0,
+          "post-STOP ledger selection admitted a stale route frame");
+    rejected([&] { retiring.advance_generation(12); },
+             "closed correlation ledger reopened through generation bump");
+    retiring.close();
+    std::cout << "ORES_NATIVE_ACTOR_ROUTE_LEDGER_OK branches=2000"
+              << " post_stop_denials=8000" << std::endl;
 }
