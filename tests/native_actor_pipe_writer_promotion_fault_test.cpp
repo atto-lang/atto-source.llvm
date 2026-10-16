@@ -13,7 +13,7 @@ static void require(bool condition, const char* why) {
 }
 
 int main() {
-    NativeSupervisorRegistry registry(25, 25, 25);
+    NativeSupervisorRegistry registry(128, 128, 128);
     auto supervisor = registry.create_child(registry.root());
     std::vector<PipeStage> stages{
         {"Producer", PipeRole::readable, "", "Event"},
