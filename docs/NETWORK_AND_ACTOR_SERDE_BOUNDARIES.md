@@ -4,11 +4,14 @@ Status: **shared-language contract and native admission audit**, 2026-10-15.
 The canonical Oreslang declarations are in
 `oreslang-serialization-and-validation/src/schema/transport_interfaces.ores`:
 
-- `NetworkCodec<T>`: encode/decode untrusted bytes for HTTP/TCP/WS/RPC.
+- `NetworkCodec<T, F>`: encode/decode untrusted bytes for HTTP/TCP/WS/RPC.
 - `ActorMessageCodec<T>`: encode/decode typed, immutable actor **DATA**
   messages, including supervisor→actor and actor→actor.
 
-There is **no** automatic `Serializable` bridge between them. Encoding
+`F` identifies an explicitly selected JSON/MessagePack/Protobuf external
+wire profile; the native LLVM compiler does not yet enforce or lower this
+generic. `Sendable<T>` is a compiler-owned transitive ownership proof, not a
+user-implementable marker. There is **no** automatic `Serializable` bridge between them. Encoding
 primitives may be shared, but no untrusted network bytes may select a
 supervisor/actor codec or mint an actor capability. Supervisor CONTROL
 (`on_panic`, `on_raise`, `on_throw`, teardown) remains a third, sealed
@@ -20,7 +23,7 @@ runtime-only lane and does NOT expose a user-implementable source interface.
   components: schema ID, type-shape digest and canonical payload shape.
   Its digests provide **shape commitment**, not sender authentication.
 - The LLVM source compiler currently supports only a small i64 actor-send
-  payload subset. It does not lower generic `NetworkCodec<T>` or
+  payload subset. It does not lower generic `NetworkCodec<T, F>` or
   `ActorMessageCodec<T>` implementations or implement a general
   source-level `Serializable` registry.
 - Source-level `Pointer<T>` remains fail closed (see pointer PR #416).
