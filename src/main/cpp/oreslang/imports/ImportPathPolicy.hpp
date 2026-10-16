@@ -59,9 +59,16 @@ inline Import classify(std::string_view raw) {
     // C:foo and NTFS alternate-data-stream suffixes are deliberately denied.
     const auto is_drive = s.size() >= 2 &&
         ((s[0]>='A'&&s[0]<='Z')||(s[0]>='a'&&s[0]<='z')) && s[1]==':';
-    if (is_drive && s.size() >= 3 && s[2]=='/')
+    if (is_drive && s.size() >= 3 && s[2]=='/') {
+        if (s.find(':', 2) != std::string::npos)
+            throw std::invalid_argument("NTFS stream suffix in absolute import path");
         return {Kind::Absolute,s,{},{}};
-    if (starts(s,"//")) return {Kind::Absolute,s,{},{}};
+    }
+    if (starts(s,"//")) {
+        if (s.find(':') != std::string::npos)
+            throw std::invalid_argument("stream suffix in UNC import path");
+        return {Kind::Absolute,s,{},{}};
+    }
     if (starts(s,"+/")) {
         if (s.find(':', 2) != std::string::npos)
             throw std::invalid_argument("colon in rooted import suffix");
