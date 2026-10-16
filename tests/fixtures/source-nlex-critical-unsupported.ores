@@ -1,0 +1,5 @@
+// Critical state callbacks cannot be lowered without sealed state grants.
+pub fnc main(): int {
+  const closure = nlex[self] critical |state| -> { state.count = 4; };
+  return 0;
+}
