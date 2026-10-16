@@ -156,6 +156,16 @@ atomic pressure gates shared across *all* graph edges. A zero-byte DATA
 message still consumes one message slot, so empty messages cannot evade
 the resource bound.
 
+Pending **reader** promises have a separate graph-wide cap, defaulting to
+65,536 and configurable over 1..65,536. This closes the multiplicative
+allocation gap of up to 4,096 edges with 4,096 pending readers each.
+Each accepted pending read takes one global credit. A direct write handoff
+releases the reader credit, and STOP releases all remaining pending reader
+credits while failing their Futures. Per-edge reader bounds still apply.
+The host exposes `pending_reader_count()` for accounting diagnostics.
+Native regressions cover cross-edge saturation, credit reuse after handoff,
+STOP cancellation, and invalid global reader limits.
+
 Bytes are charged only for a buffered message or pending writer, before
 publication; a failed reservation never consumes credits. Reading a queued
 message releases its bytes. Promoting an already charged writer preserves
@@ -191,6 +201,15 @@ in the verified original path. Both fan-in branches keep their distinct
 paths; the original frame is consumed exactly once, the flow ID stays
 constant, and the reverse hop has its own route ID. Reverse data cannot
 re-enter forward selection or route above the origin.
+
+**Frame lifetime hardening:** the ledger retains owning references
+to active route frames until completion, STOP or generation abort.
+Dropping the final external handle cannot leave a dangling pointer or
+allow an allocator-reused address to authenticate a different frame (ABA).
+The updated exact C++ header and test blobs were compiled and run locally
+with GCC and Clang in C++17 ASan+UBSan mode (2,000 concurrent selections).
+Those local runs still used a lightweight graph-contract stub, not the
+production native graph validator or entire CTest matrix.
 
 **Important:** this ledger is NOT yet attached to native DATA mailbox
 envelopes and does not authenticate the current executing actor. It also
