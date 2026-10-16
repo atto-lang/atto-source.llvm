@@ -10,6 +10,37 @@
 
 namespace oreslang::runtime {
 
+/** Trusted graph strings have the same bounded strict UTF-8 representation as
+ * the Java admission plan. A graph identifier must never contain NUL, invalid
+ * UTF-8, surrogates, or a truncation ambiguity across the ABI boundary. */
+inline bool valid_pipe_component(const std::string& value,
+                                 bool optional = false) noexcept {
+    if (value.empty()) return optional;
+    if (value.size() > 256) return false;
+    for (std::size_t i = 0; i < value.size();) {
+        const auto lead = static_cast<unsigned char>(value[i]);
+        if (lead == 0) return false;
+        if (lead <= 0x7f) { ++i; continue; }
+        std::size_t width = 0;
+        if (lead >= 0xc2 && lead <= 0xdf) width = 2;
+        else if (lead >= 0xe0 && lead <= 0xef) width = 3;
+        else if (lead >= 0xf0 && lead <= 0xf4) width = 4;
+        else return false;
+        if (width > value.size() - i) return false;
+        for (std::size_t n = 1; n < width; ++n) {
+            const auto next = static_cast<unsigned char>(value[i + n]);
+            if ((next & 0xc0) != 0x80) return false;
+        }
+        const auto second = static_cast<unsigned char>(value[i + 1]);
+        if ((lead == 0xe0 && second < 0xa0)
+            || (lead == 0xed && second > 0x9f)
+            || (lead == 0xf0 && second < 0x90)
+            || (lead == 0xf4 && second > 0x8f)) return false;
+        i += width;
+    }
+    return true;
+}
+
 /** Nominal actor-pipeline admission; not an executable transport. */
 enum class PipeRole {
     readable, transform, writable, duplex, ordinary_actor, supervisor_actor
@@ -81,8 +112,11 @@ inline std::vector<PipeConnection> check_actor_pipeline(
     for (const auto& stage : stages) {
         const auto& actor_id =
                 stage.instance_id.empty() ? stage.actor_type : stage.instance_id;
-        if (actor_id.empty() || stage.actor_type.size() > 256
-                || actor_id.size() > 256 || !instance_ids.insert(actor_id).second)
+        if (!valid_pipe_component(stage.actor_type)
+                || !valid_pipe_component(actor_id)
+                || !valid_pipe_component(stage.inbound, true)
+                || !valid_pipe_component(stage.outbound, true)
+                || !instance_ids.insert(actor_id).second)
             throw std::invalid_argument(
                     "linear pipeline requires unique bounded actor instance IDs");
     }
@@ -120,9 +154,11 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& s = stages[i];
         const auto& actor_id = s.instance_id.empty() ? s.actor_type : s.instance_id;
-        if (s.actor_type.empty() || actor_id.empty() ||
-                s.actor_type.size() > 256 || actor_id.size() > 256 ||
-                !ids.emplace(actor_id, i).second)
+        if (!valid_pipe_component(s.actor_type)
+                || !valid_pipe_component(actor_id)
+                || !valid_pipe_component(s.inbound, true)
+                || !valid_pipe_component(s.outbound, true)
+                || !ids.emplace(actor_id, i).second)
             throw std::invalid_argument(
                 "pipeline graph requires distinct, bounded actor instance IDs");
         switch (s.role) {
@@ -150,6 +186,10 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
     std::vector<std::size_t> incoming_count(stages.size(), 0);
     std::vector<std::size_t> outgoing_count(stages.size(), 0);
     for (const auto& link : links) {
+        if (!valid_pipe_component(link.source)
+                || !valid_pipe_component(link.target)
+                || !valid_pipe_component(link.payload))
+            throw std::invalid_argument("pipeline link has invalid UTF-8 component");
         const auto source = ids.find(link.source);
         const auto target = ids.find(link.target);
         if (source == ids.end() || target == ids.end() ||
