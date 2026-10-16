@@ -180,8 +180,21 @@ struct Function {
     bool has_declared_effects = false;
 };
 
+// A soft real-time declaration is a typed scheduling *request*, not a
+// latency, schedulability, or hard-deadline certificate. Hard/bounded modes
+// are syntactically recognized but fail closed until admission is implemented.
+struct RealtimeContract {
+    enum class Mode { Soft, Bounded, Hard };
+    Mode mode = Mode::Soft;
+    std::int64_t period_us = 0;
+    std::int64_t deadline_us = 0;
+    std::int64_t budget_us = 0;
+    std::int64_t mailbox = 0;
+};
+
 struct ActorDecl {
     std::string name;
+    std::unique_ptr<RealtimeContract> realtime;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
