@@ -4,12 +4,16 @@
 This verifies workflow configuration; it is not native compiler evidence and
 does not authorize private source transfer or cross-organization checkout.
 """
+import hashlib
 import re
 from pathlib import Path
 import unittest
 
 WORKFLOW = (Path(__file__).resolve().parents[1] /
             ".github/workflows/llvm-conformance.yml")
+# The reviewed exact workflow revision. Deliberate workflow edits must update
+# this pin in a security-reviewed change; branch protection must enforce review.
+APPROVED_WORKFLOW_SHA256 = "4bef04bf64bbd26a97fcc855c4108c3b36e91466105611dd813d971fb5a14f88"
 ACTIONS = (
     "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
     "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
@@ -39,6 +43,8 @@ APPROVED_SELF_CHECK = (
 
 def problems(text):
     errors = []
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != APPROVED_WORKFLOW_SHA256:
+        errors.append("workflow content differs from the reviewed immutable digest")
     if not text.startswith(APPROVED_PREFIX):
         errors.append("unreviewed workflow trigger or top-level permissions")
     if len(re.findall(r"(?m)^\s*permissions\s*:", text)) != 1:
@@ -89,6 +95,32 @@ class WorkflowSecurityProof(unittest.TestCase):
             with self.subTest(action=immutable):
                 self.assertTrue(problems(clean.replace(immutable,
                     immutable.split("@")[0] + "@v4")))
+
+    def test_reviewed_workflow_digest_and_quoted_yaml_mutations(self):
+        clean = WORKFLOW.read_text()
+        self.assertEqual(
+            hashlib.sha256(clean.encode("utf-8")).hexdigest(),
+            APPROVED_WORKFLOW_SHA256)
+        for mutated in (
+            clean + '\n  "new-job": {runs-on: ubuntu-latest, steps: [{run: echo bad}]}\n',
+            clean + '\n"on": {workflow_run: {types: [completed]}}\n',
+            clean.replace(APPROVED_SELF_CHECK,
+                          "      - name: Unreviewed execution before guard\n"
+                          "        run: echo bad\n" + APPROVED_SELF_CHECK),
+            clean.replace("run: python3 scripts/test_ai_conformance_smoke.py",
+                          "run: echo suspicious"),
+        ):
+            with self.subTest(case=mutated[:75]):
+                self.assertTrue(problems(mutated))
+
+    def test_each_workflow_byte_mutation_invalidates_reviewed_digest(self):
+        approved = bytearray(WORKFLOW.read_bytes())
+        self.assertEqual(len(approved), 4502)
+        for index in range(len(approved)):
+            mutated = bytearray(approved)
+            mutated[index] ^= 1
+            self.assertNotEqual(hashlib.sha256(mutated).hexdigest(),
+                                APPROVED_WORKFLOW_SHA256)
 
     def test_event_scope_and_security_guard_bypasses_are_rejected(self):
         clean = WORKFLOW.read_text()
