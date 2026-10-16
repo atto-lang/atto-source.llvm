@@ -25,6 +25,7 @@ struct ScopeRule {
 
 class ScopedPolicy final {
     static constexpr std::size_t count = 8;
+    static constexpr std::size_t max_rules = 512;
     std::array<bool, count> ceiling_{};
     std::array<std::vector<std::string>, count> allowed_{};
     std::array<std::vector<std::string>, count> denied_{};
@@ -41,7 +42,7 @@ class ScopedPolicy final {
     }
 
     static bool path_valid(std::string_view s) {
-        if (s.empty() || s[0] != '/' || control(s)) return false;
+        if (s.empty() || s.size() > 4096 || s[0] != '/' || control(s)) return false;
         if (s.size() > 1 && s.back() == '/') return false;
         std::size_t begin = 1;
         while (begin < s.size()) {
@@ -55,7 +56,7 @@ class ScopedPolicy final {
     }
 
     static bool token_valid(std::string_view s, bool scope) {
-        if (s.empty() || control(s)) return false;
+        if (s.empty() || s.size() > 1024 || control(s)) return false;
         auto star = s.find('*');
         if (star == s.npos) return true;
         return scope && (s == "*" || (star == s.size() - 1 && s.find('*', star + 1) == s.npos));
@@ -69,7 +70,8 @@ class ScopedPolicy final {
     };
 
     static bool network_parse(std::string_view raw, bool scope, Endpoint& out) {
-        if (raw.empty() || control(raw) || raw.find_first_of(" \t\n\r/@\\") != raw.npos)
+        if (raw.empty() || raw.size() > 320 || control(raw) ||
+            raw.find_first_of(" \t\n\r/@\\") != raw.npos)
             return false;
         std::string s(raw);
         for (auto& c : s) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
@@ -183,6 +185,8 @@ public:
     // Only the trusted host supplies the ceiling. Rules can never widen it.
     static ScopedPolicy from_host(std::vector<Permission> capabilities,
                                   std::vector<ScopeRule> rules) {
+        if (capabilities.size() > count || rules.size() > max_rules)
+            throw std::invalid_argument("oversized permission policy");
         ScopedPolicy result;
         for (auto capability : capabilities) result.ceiling_[index(capability)] = true;
         for (const auto& rule : rules) {
