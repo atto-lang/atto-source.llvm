@@ -1,9 +1,11 @@
-name: Native scoped permission host-policy unit tests (not guest I/O parity)
+name: Native scoped policy and pinned TCP host tests (not guest parity)
 on:
   pull_request:
     paths:
       - "contracts/v1/scoped_permission_policy.hpp"
       - "contracts/v1/scoped_permission_policy_test.cpp"
+      - "contracts/v1/scoped_tcp_boundary.hpp"
+      - "contracts/v1/scoped_tcp_boundary_test.cpp"
       - "contracts/v1/scoped_tcp_boundary.hpp"
       - "contracts/v1/scoped_tcp_boundary_test.cpp"
       - ".github/workflows/scoped-native-policy-test.yml"
@@ -28,5 +30,13 @@ jobs:
         run: |
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_permission_policy_test.cpp -o /tmp/ores-native-policy-clang
           /tmp/ores-native-policy-clang
+      - name: Compile and exercise pinned TCP host boundary with GCC
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-gcc
+          /tmp/ores-native-tcp-gcc
+      - name: Compile and exercise pinned TCP host boundary with Clang
+        run: |
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-clang
+          /tmp/ores-native-tcp-clang
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-clang
           /tmp/ores-native-tcp-clang
