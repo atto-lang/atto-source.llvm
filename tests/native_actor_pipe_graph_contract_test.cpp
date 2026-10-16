@@ -203,6 +203,18 @@ int main() {
                         std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
                    (void)check_actor_pipeline_graph(over,upper_edges); });
     }
+    // An actor declared TRANSFORM is not a terminal writable sink.
+    // Both typed ports require ACTUAL graph connections.
+    deny([&] {
+        std::vector<PipeStage> partial = {
+            {"Producer", PipeRole::readable, "", "Event", "src"},
+            {"Worker", PipeRole::transform, "Event", "Event", "worker"}
+        };
+        std::vector<PipeConnection> connections = {
+            {"src", "worker", "Event"}
+        };
+        (void)check_actor_pipeline_graph(partial, connections);
+    });
     // Budget checks operate before graph allocation and fail closed.
     deny([&] { auto wrong=links;wrong.clear();
                (void)check_actor_pipeline_graph(stages,wrong); });
