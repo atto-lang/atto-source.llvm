@@ -223,7 +223,30 @@ route selections. The production DAG validator, actual native transport,
 full repository CTest and compiled guest actor code were **not executed**
 by that isolated test and remain release blockers.
 
-## ## Mandatory release gates
+## ## Canonical keyed correlation parity (2026-10-16)
+
+The native `ActorPipeRouteLedger::forward_by_key` now selects a child
+correlation frame using the **same** `actor_pipe_key_slot` helper called by
+`NativeActorPipeTransport::write_by_key_async`. The common helper lives
+in `ActorPipeContract.hpp` and enforces strict UTF-8, a 4,096-byte
+maximum, unsigned FNV-1a64, and modulo the checked outgoing-edge order.
+An empty key and an embedded NUL are legal UTF-8 keys; NUL remains
+prohibited in graph stage/edge identity strings.
+
+The dedicated native ledger test now uses the six canonical key
+fixtures (including U+0000) with verified receiver and flow ID, rejects
+overlong/surrogate/over-budget keys, and checks that rejection does not
+consume route frame credits. This still proves **host correlation
+selection only**. It does not authenticate a native executing actor
+against its current scheduler-owned DATA envelope, deliver a correlated
+guest DATA message, or lower guest `self.forward_by_key` calls.
+
+A local extracted-implementation probe passed GCC and Clang optimized
+and ASan/UBSan builds (six key vectors and every key length 0..4096).
+That probe is *not* an execution of the full production header/CTest
+suite, which remains blocked on a runnable approved CI environment.
+
+## Mandatory release gates
 
 - Compile and execute the new host graph/routing C++ CTests with both
   GCC and Clang, in Debug/Release and sanitizers.
