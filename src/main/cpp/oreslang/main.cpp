@@ -2,8 +2,10 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/CoreLog.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -63,9 +65,16 @@ int main(int argc, char** argv) {
     bool cortex_m_target = false;
     bool target_seen = false;
     const char* path = nullptr;
+    // Host-only severity policy: last CLI flag overrides the environment.
+    const char* envLevel = std::getenv("ORES_CORE_LOG_LEVEL");
+    std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--experimental-rt-scalar-loop") {
+        if (arg.rfind("--core-log-level=", 0) == 0) {
+            coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
+        } else if (arg == "--no-core-log") {
+            coreLogLevel = "off";
+        } else if (arg == "--experimental-rt-scalar-loop") {
             if (experimental_rt_scalar_loop) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
@@ -98,8 +107,14 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    oreslang::CoreLog::Level admittedLevel = oreslang::CoreLog::Level::Off;
+    if (!oreslang::CoreLog::parse_level(coreLogLevel, admittedLevel)) {
+        std::cerr << "invalid core log level (off|error|warn|info|debug|trace)\n";
+        return 2;
+    }
+    oreslang::CoreLog coreLog(admittedLevel);
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -293,9 +308,14 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
         std::cout.flush();
+        coreLog.dump(stderr);
         return 0;
     } catch (const std::exception& error) {
+        // No guest payload, exception message or source path enters CoreLog.
+        coreLog.record(oreslang::CoreLog::Level::Error,
+                       oreslang::CoreLog::EventId::CompileFailed, 1);
         std::cerr << "oreslang-llvmc: " << error.what() << '\n';
+        coreLog.dump(stderr);
         return 1;
     }
 }
