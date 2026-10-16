@@ -1902,6 +1902,12 @@ if(BUILD_TESTING)
     if(NOT ORE_NUMERIC_CLANG)
         set(ORE_NUMERIC_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang")
     endif()
+    add_test(NAME numeric_native_ir_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+          -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+          -p "test_numeric_native_ir_harness.py" -v)
+    set_tests_properties(numeric_native_ir_harness_selftest
+        PROPERTIES TIMEOUT 30)
     add_test(NAME numeric_portable_i64_actual_source_execution
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_numeric_portable_i64_source.py"
