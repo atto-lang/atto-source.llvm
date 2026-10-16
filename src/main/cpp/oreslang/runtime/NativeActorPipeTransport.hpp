@@ -94,6 +94,11 @@ public:
     void fail_next_writer_promotion_for_test() noexcept {
         fail_next_promotion_.store(true, std::memory_order_release);
     }
+    // Inject one allocation failure after admission credits have been
+    // reserved but before an outgoing payload becomes publicly queued.
+    void fail_next_buffered_enqueue_for_test() noexcept {
+        fail_next_enqueue_.store(true, std::memory_order_release);
+    }
 #endif
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
@@ -139,6 +144,11 @@ public:
         // A deque allocation failure must not leak credit or a hidden Future.
         const bool queued = link.messages.size() < link.capacity;
         try {
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+            if (fail_next_enqueue_.exchange(
+                    false, std::memory_order_acq_rel))
+                throw std::bad_alloc();
+#endif
             if (queued)
                 link.messages.push_back(std::move(pending->payload));
             else
@@ -497,6 +507,7 @@ private:
     std::atomic<std::size_t> graph_buffered_bytes_{0};
 #if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
     std::atomic<bool> fail_next_promotion_{false};
+    std::atomic<bool> fail_next_enqueue_{false};
 #endif
 };
 
