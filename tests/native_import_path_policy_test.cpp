@@ -35,14 +35,57 @@ int main() {
          "pkg:bad.alias/mod","pkg:alias//file","file\nname"})
          reject([&]{(void)classify(bad);},"invalid import accepted");
     reject([&]{(void)classify(std::string(4097,'x'));},"length bound");
+    for (int byte = 0; byte < 32; ++byte)
+        reject([&]{ (void)classify(std::string("safe") + static_cast<char>(byte) + "path"); },
+               "ASCII import control byte accepted");
+    reject([&]{ (void)classify(std::string("safe") + static_cast<char>(127) + "path"); },
+           "DEL import byte accepted");
+    check(classify(std::string(4096, 'a')).kind == Kind::Bare,
+          "maximum allowed import length rejected");
     const fs::path root("/tmp/ores-root");
     check(rooted_path(root,"src/../lib/util")==root/"lib/util","normalized rooted source");
     check(rooted_path(root,"..hidden/a")==root/"..hidden/a","hidden relative component");
     check(rooted_path(root/"./","src/a")==root/"src/a","trailing root separator");
     for(const std::string bad: {"../other/file","..\\\\other/file","a/../../../other","/etc/passwd",""})
         reject([&]{(void)rooted_path(root,bad);},"root escape allowed");
+    check(!beneath(root,"/tmp/ores-root/../outside"),"unnormalized ancestry escape");
+    check(!beneath(root,"/tmp/ores-root/../../outside"),"multi-parent ancestry escape");
+    check(beneath(root/"./","/tmp/ores-root/lib/../src"),"normalized ancestry");
+    reject([&]{ (void)rooted_path(root,std::string_view("src\0outside",11)); },
+           "embedded NUL rooted path");
+    reject([&]{ (void)rooted_path(root,"src\nother"); },
+           "line-break rooted path");
+    reject([&]{ (void)rooted_path(root,std::string(4097,'a')); },
+           "rooted path length");
+    for (int byte = 0; byte < 32; ++byte)
+        reject([&]{ (void)rooted_path(root,std::string("a") + static_cast<char>(byte) + "b"); },
+               "control byte in rooted source path");
+    reject([&]{(void)rooted_path(root,std::string("a") + static_cast<char>(127) + "b");},
+           "DEL in rooted source path");
+    check(rooted_path(root,std::string(4096, 'a')).string().size() > 0,
+          "maximum allowed rooted length rejected");
     check(!beneath(root,"/tmp/ores-root-evil/file"),"text-prefix escape");
     check(beneath(root,"/tmp/ores-root/file"),"valid descendant");
+    check(beneath(root,root),"root equality");
+    check(!beneath(root,"/tmp/ores-rootish"),"sibling text-prefix");
+    check(!beneath(root,"/tmp/ores-root/../../ores-rootish"),"normalized sibling escape");
+    for (int n=0; n<729; ++n) {
+        int v=n;
+        std::string path;
+        for (int depth=0; depth<6; ++depth) {
+            const char* component = (v%3==0 ? "src" : v%3==1 ? ".." : ".");
+            v/=3;
+            if (!path.empty()) path += '/';
+            path += component;
+        }
+        fs::path expected=(root/fs::path(path)).lexically_normal();
+        const bool stays_inside = expected==root ||
+            (expected.string().size()>root.string().size() &&
+             expected.string().compare(0, root.string().size(), root.string())==0 &&
+             expected.string()[root.string().size()]=='/');
+        if(stays_inside) check(rooted_path(root,path)==expected,"enumerated rooted path mismatch");
+        else reject([&]{(void)rooted_path(root,path);},"enumerated rooted path escape");
+    }
 
     const fs::path cwd("/tmp/work"),project("/tmp/work/project");
     auto defaults=search_roots(project,std::nullopt,{},"","",':',cwd);
@@ -57,6 +100,13 @@ int main() {
     check(ordered==expected,"search-order dedup and empty components");
     reject([&]{(void)search_roots(project,std::vector<std::string>{" "},
        {},"","",':',cwd);},"blank manifest root accepted");
+    reject([&]{(void)search_roots(project,
+        std::vector<std::string>{std::string("src\0outside",11)},
+        {},"","",':',cwd);},"embedded NUL manifest root");
+    reject([&]{(void)search_roots(project,std::nullopt,{},
+        std::string_view("/tmp/ok\0evil",12),"",':',cwd);},"embedded NUL env root");
+    reject([&]{(void)search_roots(project,std::nullopt,{},
+        "/tmp/ok\n/malicious","",':',cwd);},"newline env root");
     reject([&]{std::vector<fs::path> tmp;append_list(tmp,"path",'\0',cwd);},
            "NUL separator");
     std::cout<<"Native import-path policy: host-only cases passed\n";
