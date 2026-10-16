@@ -25,8 +25,28 @@ inline bool valid_alias(std::string_view s) {
             return false;
     return true;
 }
+// +/ and pkg: namespace suffixes are canonical across host platforms.
+// Dot, parent and empty components must never acquire authority via cleanup.
+inline void validate_package_suffix(std::string_view suffix) {
+    if (suffix.empty()) throw std::invalid_argument("empty rooted import suffix");
+    std::size_t start = 0;
+    while (true) {
+        const auto slash = suffix.find('/', start);
+        const auto part = suffix.substr(start, slash == std::string_view::npos
+            ? suffix.size() - start : slash - start);
+        if (part.empty() || part == "." || part == "..")
+            throw std::invalid_argument("noncanonical rooted import component");
+        if (slash == std::string_view::npos) break;
+        start = slash + 1;
+    }
+}
 inline Import classify(std::string_view raw) {
     if (raw.empty() || raw.size()>4096) throw std::invalid_argument("invalid import length");
+    // The Java resolver and shared import contract require forward slashes
+    // for explicit package-root and dependency namespace spellings.
+    if ((starts(raw, "+") || starts(raw, "pkg:")) &&
+        raw.find('\\') != std::string_view::npos)
+        throw std::invalid_argument("rooted import requires forward-slash separators");
     std::string s(raw);
     for (char &c:s) {
         auto b=static_cast<unsigned char>(c);
@@ -42,10 +62,10 @@ inline Import classify(std::string_view raw) {
     if (is_drive && s.size() >= 3 && s[2]=='/')
         return {Kind::Absolute,s,{},{}};
     if (starts(s,"//")) return {Kind::Absolute,s,{},{}};
-    if (starts(s,"@/")) {
-        if (s.size()==2 || s[2]=='/') throw std::invalid_argument("invalid @/ path");
+    if (starts(s,"+/")) {
         if (s.find(':', 2) != std::string::npos)
             throw std::invalid_argument("colon in rooted import suffix");
+        validate_package_suffix(std::string_view(s).substr(2));
         return {Kind::Root,s,{},s.substr(2)};
     }
     if (starts(s,"pkg:")) {
@@ -55,9 +75,10 @@ inline Import classify(std::string_view raw) {
             throw std::invalid_argument("expected pkg:<alias>/<source>");
         if (s.find(':', slash + 1) != std::string::npos)
             throw std::invalid_argument("colon in package import suffix");
+        validate_package_suffix(std::string_view(s).substr(slash + 1));
         return {Kind::Package,s,s.substr(4,slash-4),s.substr(slash+1)};
     }
-    if (s[0]=='@') throw std::invalid_argument("invalid @ prefix");
+    if (s[0]=='@' || s[0]=='+') throw std::invalid_argument("invalid project-root import prefix");
     if (s.find(':') != std::string::npos)
         throw std::invalid_argument("unsupported colon or drive-relative import path");
     if (fs::path(s).is_absolute()) return {Kind::Absolute,s,{},{}};
