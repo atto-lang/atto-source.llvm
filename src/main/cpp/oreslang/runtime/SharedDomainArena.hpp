@@ -116,8 +116,11 @@ public:
         }
         throw std::out_of_range("shared region membership quota");
     }
-    void revoke(Grant grant) {
-        std::unique_lock lock(mutex_);
+    // CONTROL never waits on a guest-held reader/writer lease. The caller may
+    // retry after actor lease quiescence; no state is mutated on contention.
+    bool try_revoke(Grant grant) {
+        std::unique_lock lock(mutex_, std::try_to_lock);
+        if (!lock.owns_lock()) return false;
         validate_grant(grant, 0, false);
         auto& m = members_[grant.member];
         m.active = false;
@@ -125,6 +128,7 @@ public:
         m.read = m.write = false;
         m.generation = m.generation == std::numeric_limits<std::uint64_t>::max()
             ? 0 : m.generation + 1;
+        return true;
     }
     Lease read(std::uint64_t actor, Grant grant) { return Lease(*this, actor, grant, false); }
     Lease write(std::uint64_t actor, Grant grant) { return Lease(*this, actor, grant, true); }
