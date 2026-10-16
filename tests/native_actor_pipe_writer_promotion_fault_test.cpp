@@ -82,6 +82,15 @@ int main() {
         require(pipe.buffered_payload_bytes() == 7
                 && pipe.buffered_message_count() == 3,
                 "new pending writer did not charge credits");
+        // The buffer has a free slot, but both pending-writer slots are
+        // occupied. A third pending write must not bypass the edge quota.
+        bool rejected_overflow = false;
+        try { pipe.write_one_async("Producer", "EXTRA").get(); }
+        catch (const std::logic_error&) { rejected_overflow = true; }
+        require(rejected_overflow
+                && pipe.buffered_payload_bytes() == 7
+                && pipe.buffered_message_count() == 3,
+                "pending-writer edge quota bypassed after promotion failure");
 
         if (scenario == 1)
             pipe.test_fail_next_writer_promotion();
