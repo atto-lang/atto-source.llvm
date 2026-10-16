@@ -201,6 +201,10 @@ inline SourceConfig read_project(const fs::path& source,
     };
     const auto schema=one("schema_version");
     if(!schema||*schema!="1")throw std::invalid_argument("requires schema_version = \"1\"");
+    // Do not silently accept arbitrary types for known-but-unused metadata.
+    // Even metadata not yet needed by the linker is part of admission.
+    for(const auto& name:{"package.name","package.version","project.name","project.version"})
+        (void)one(name);
     if(auto explicit_root=one("project.root")){
         if(result.package_manifest && *explicit_root!=".")
             throw std::invalid_argument("package project.root cannot override manifest root");
@@ -272,9 +276,10 @@ inline std::optional<fs::path> existing_source(const fs::path& candidate){
     }
     for(const auto& path:candidates){
         if(!fs::is_regular_file(path))continue;
-        if(path.extension()!=".ores")
+        const auto physical=fs::canonical(path);
+        if(path.extension()!=".ores" || physical.extension()!=".ores")
             throw std::invalid_argument("native imports support only .ores sources");
-        return fs::canonical(path);
+        return physical;
     }
     return std::nullopt;
 }
@@ -298,6 +303,8 @@ struct SourceIdentityRegistry {
     std::map<fs::path,fs::path> contexts;
     fs::path register_source(const SourceConfig& config,const fs::path& source){
         auto physical=fs::canonical(source);
+        if(physical.extension()!=".ores")
+            throw std::invalid_argument("native source graph requires .ores files");
         auto project=fs::canonical(config.root);
         const auto [it,inserted]=contexts.emplace(physical,project);
         if(!inserted && it->second!=project)
