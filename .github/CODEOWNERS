@@ -1,0 +1,4 @@
+# Proposed security review ownership for LLVM conformance CI.
+# CODEOWNERS is not enforcement without GitHub branch protection and required reviews.
+/.github/workflows/llvm-conformance.yml @ORESoftware
+/scripts/test_llvm_conformance_workflow_security.py @ORESoftware
