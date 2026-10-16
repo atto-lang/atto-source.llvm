@@ -16,7 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "contracts/v1/numeric-parity/source-i64-cases.json"
-ENTRY = re.compile(r"define\s+i64\s+@__oreslang_guest_main\s*\(\s*\)")
+ENTRY = re.compile(r"(?m)^define\s+i64\s+@__oreslang_guest_main\s*\(\s*\)")
 HOST_WRAPPER = re.compile(r"(?m)^(define\s+i32\s+)@main(?=\s*\()")
 
 
