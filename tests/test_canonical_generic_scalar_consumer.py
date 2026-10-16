@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Fail-closed canonical LLVM contract consumer smoke tests (offline)."""
 import importlib.util
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/verify_canonical_generic_scalar.py"
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location("pinned_generic_gate_llvm", SCRIPT)
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
