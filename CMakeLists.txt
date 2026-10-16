@@ -852,6 +852,21 @@ if(BUILD_TESTING)
     # Sealed correlation frame model: bounded flow/branch IDs, one-shot
     # reverse hops and generation retirement. Host metadata only; source
     # self.backward/self.reply still require scheduler/compiler lowering.
+    # Deterministic writer-promotion allocation failure is compiled ONLY
+    # into this native host verification target, never production binaries.
+    add_executable(oreslang-native-actor-pipe-writer-promotion-test
+        tests/native_actor_pipe_writer_promotion_fault_test.cpp)
+    target_include_directories(oreslang-native-actor-pipe-writer-promotion-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pipe-writer-promotion-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_compile_definitions(oreslang-native-actor-pipe-writer-promotion-test PRIVATE
+        ORESLANG_ACTOR_PIPE_FAULT_TESTS=1)
+    target_link_libraries(oreslang-native-actor-pipe-writer-promotion-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_pipeline_writer_promotion_fault
+        COMMAND oreslang-native-actor-pipe-writer-promotion-test)
+    set_tests_properties(native_actor_pipeline_writer_promotion_fault PROPERTIES TIMEOUT 25)
+
     add_executable(oreslang-native-actor-pipe-route-ledger-test
         tests/native_actor_pipe_route_ledger_test.cpp)
     target_include_directories(oreslang-native-actor-pipe-route-ledger-test PRIVATE
