@@ -81,6 +81,37 @@ int main() {
         }, "supervisor actor in data pipeline permitted");
     }
 
+    // Distinct instances of the SAME worker class are separate connected
+    // consumers. Both multicast and deterministic load spread must work.
+    {
+        std::vector<PipeStage> stages = {
+            {"SourceType", PipeRole::readable, "", "Event", "source-1"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-b"}
+        };
+        std::vector<PipeConnection> edges = {
+            {"source-1", "worker-a", "Event"},
+            {"source-1", "worker-b", "Event"}
+        };
+        NativeActorPipeTransport pipe(registry, supervisor, stages, edges, 2, 4);
+        auto batch = pipe.write_all_report_async("source-1", "fanout");
+        check(batch.size() == 2 && batch[0].target == "worker-a" &&
+              batch[1].target == "worker-b",
+              "same-type worker identities were lost");
+        for (auto& item : batch) item.admission.get();
+        check(pipe.read_async(0).get() == "fanout", "worker-a missed fanout");
+        check(pipe.read_async(1).get() == "fanout", "worker-b missed fanout");
+        pipe.write_round_robin_async("source-1", "first").get();
+        pipe.write_round_robin_async("source-1", "second").get();
+        check(pipe.read_async(0).get() == "first", "same-type RR first wrong");
+        check(pipe.read_async(1).get() == "second", "same-type RR second wrong");
+        pipe.write_to_async("source-1", "worker-b", "direct").get();
+        check(pipe.read_async(1).get() == "direct", "instance target misrouted");
+        rejected([&] { pipe.write_to_async("source-1", "Worker", "bad"); },
+                 "nominal class name bypassed instance connection authority");
+        pipe.close();
+    }
+
     // Legacy one-consumer source forward is explicit, not policy-dependent.
     {
         std::vector<PipeStage> linear = {
