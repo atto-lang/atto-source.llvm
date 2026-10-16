@@ -834,6 +834,60 @@ int main() {
         pipe.close();
     }
 
+    // Concurrency regression: a single admission-allocation fault amid
+    // graph quota contention must neither over-admit nor strand a slot.
+    // Every later rejected write must fail without allocating PendingWrite.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 16, 4, 4, 4);
+        pipe.fail_next_pending_allocation_for_test();
+        std::atomic<int> admitted{0};
+        std::atomic<int> first_a{0};
+        std::atomic<int> second_b{0};
+        std::atomic<int> oom{0};
+        std::atomic<int> denied{0};
+        std::atomic<int> unexpected{0};
+        std::vector<std::thread> writers;
+        for (int producer = 0; producer < 8; ++producer) {
+            writers.emplace_back([&, producer] {
+                const bool a = producer % 2 == 0;
+                for (int msg = 0; msg < 80; ++msg) {
+                    try {
+                        pipe.write_to_async("Producer",
+                            a ? "ConsumerA" : "ConsumerB", "x").get();
+                        ++admitted;
+                        if (a) ++first_a;
+                        else ++second_b;
+                    } catch (const std::bad_alloc&) {
+                        ++oom;
+                    } catch (const std::logic_error&) {
+                        ++denied;
+                    } catch (...) {
+                        ++unexpected;
+                    }
+                }
+            });
+        }
+        for (auto& writer : writers) writer.join();
+        check(unexpected.load() == 0 &&
+              oom.load() == 1 &&
+              admitted.load() == 4 &&
+              denied.load() == 635 &&
+              pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 4,
+              "racing pending allocation OOM overcommitted or leaked graph quotas");
+        for (int edge = 0; edge < 2; ++edge) {
+            const int accepted = edge == 0 ? first_a.load() : second_b.load();
+            for (int msg = 0; msg < accepted; ++msg)
+                check(pipe.read_async(static_cast<std::size_t>(edge)).get() == "x",
+                      "concurrent OOM recovery lost admitted DATA");
+        }
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "racing allocation fault failed to reclaim drained credits");
+        pipe.close();
+    }
+
     // Buffered insertion can fail after credit reservation. The queue and
     // pending-writer paths must both roll back graph bytes/message credits,
     // and a subsequent write must use the same mailbox successfully.
