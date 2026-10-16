@@ -25,6 +25,20 @@ int main() {
     require(file.allows(Permission::Read,"/workspace/data "),false,"whitespace");
     require(file.allows(Permission::Read,"/workspace/data/../secret"),false,"dot traversal");
     require(file.allows(Permission::Write,"/workspace/data/file"),false,"no write ceiling");
+    require(file.allows(Permission::Read,"/workspace/" + std::string(5000, 'x')),
+            false, "oversized path resource rejected");
+    bool rejected_oversized_path = false;
+    try { (void)make(Permission::Read,{scope(Permission::Read,"/" + std::string(5000, 'x'))}); }
+    catch (const std::invalid_argument&) { rejected_oversized_path = true; }
+    require(rejected_oversized_path,true,"oversized path scope rejected");
+    bool rejected_oversized_rules = false;
+    try { (void)make(Permission::Env,std::vector<ScopeRule>(513,scope(Permission::Env,"KEY"))); }
+    catch (const std::invalid_argument&) { rejected_oversized_rules = true; }
+    require(rejected_oversized_rules,true,"oversized policy rule vector rejected");
+    bool rejected_oversized_token = false;
+    try { (void)make(Permission::Env,{scope(Permission::Env,std::string(1025, 'a'))}); }
+    catch (const std::invalid_argument&) { rejected_oversized_token = true; }
+    require(rejected_oversized_token,true,"oversized token rejected");
     auto env = make(Permission::Env,{scope(Permission::Env,"*"),scope(Permission::Env,"API_KEY",true)});
     require(env.allows(Permission::Env,"API_KEY"),false,"deny precedence");
     require(env.allows(Permission::Env,"API_KEY "),true,"preserve literal env resource");
@@ -71,6 +85,8 @@ int main() {
                             canonical_octet(third),
                         "noncanonical numeric address matrix");
             }
+    require(host.allows(Permission::Net,std::string(321, 'a')),false,
+            "oversized endpoint rejected before allocating parser state");
     auto sub = make(Permission::Net,{scope(Permission::Net,"*.example.com:443")});
     require(sub.allows(Permission::Net,"a.example.com:443"),true,"wildcard subdomain");
     require(sub.allows(Permission::Net,"example.com:443"),false,"no apex");
