@@ -4,6 +4,7 @@ Status: **host-only credit proof plus architectural contract**. This document do
 
 ## Implementation status on this draft branch (October 16)
 
+- `NativeEpollReactorABI.h/.cpp`: narrow C-callable interface to the C++ reactor manager. It conveys only generation-tagged tickets, FD readiness, terminal status and a completion eventfd to host code. It does not hold or invoke an actor callback; the C VM must still connect these records to protected Future/continuation identities. ABI CTest added; complete-source CI has not executed.
 - `NativeEpollReactor.hpp`: Linux-only dedicated `epoll_wait` thread with 64 fixed operation slots, generation-tagged one-shot tickets, nonparking `try_watch/try_cancel/try_pop`, eventfd completion signal and terminal records. No guest callback or trace GC in the reactor.
 - `NativeEpollReactorManager.hpp`: default one reactor and capacity four. The ordinary throughput profile permits additional reactors only after sustained ready-event processing and pressure; the `preallocated_rt` profile establishes the requested fixed reactor-thread population before any guest work.
 - `NativeActorScheduler.c` now has explicit `ores_native_actor_scheduler_prestart_realtime()`, which prestarts all configured carriers before admission and irrevocably disables runtime pthread creation for that scheduler. `NativeOresVM` exposes `open_realtime(config)` and cold-VM `prepare_realtime(vm)`. The original default `open` still creates **zero carrier threads** until runnable work. No change to actor physical single-flight authority.
