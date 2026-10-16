@@ -10,6 +10,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
@@ -75,6 +76,14 @@ public:
     std::size_t buffered_payload_bytes() const noexcept {
         return graph_buffered_bytes_.load(std::memory_order_acquire);
     }
+
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // Build-time test seam only. Cannot be invoked from production binaries
+    // or from guest Oreslang code; the native scheduler remains authoritative.
+    void fail_next_writer_promotion_for_test() noexcept {
+        fail_next_promotion_.store(true, std::memory_order_release);
+    }
+#endif
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
     std::shared_future<void> write_async(std::size_t edge, std::string payload) {
@@ -157,6 +166,11 @@ public:
                 // strand its admission Future. The consumed reader still
                 // receives its previously-admitted message.
                 try {
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+                    if (fail_next_promotion_.exchange(
+                            false, std::memory_order_acq_rel))
+                        throw std::bad_alloc();
+#endif
                     link.messages.push_back(std::move(waiting->payload));
                 } catch (...) {
                     link.buffered_bytes -= bytes;
@@ -447,6 +461,9 @@ private:
     std::shared_mutex publication_mutex_;
     std::atomic<bool> closed_{false};
     std::atomic<std::size_t> graph_buffered_bytes_{0};
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    std::atomic<bool> fail_next_promotion_{false};
+#endif
 };
 
 } // namespace oreslang::runtime
