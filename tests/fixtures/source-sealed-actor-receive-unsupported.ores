@@ -1,0 +1,5 @@
+// Native bootstrap on_message is not yet a sealed ActorMail receive ABI.
+define actor Worker as
+  receive(self, ActorMail<int> mail): void { return; }
+end
+pub fnc main(): int { return 0; }
