@@ -274,21 +274,26 @@ public:
             const std::string& source, const std::string& payload) {
         const auto& destinations = connected_outlets(source);
         std::vector<RouteEdgeReceipt> results;
+        std::vector<std::promise<void>> failure_slots;
         results.reserve(destinations.size());
-        // Materialize metadata BEFORE any admission: no allocation of a
-        // destination label can interrupt an already-started fan-out batch.
-        for (const auto edge : destinations)
-            results.push_back({edge, schema_[edge].target, {}});
-        // A closed/saturated edge returns a failed admission Future, not a
-        // missing entry. Every attempted destination remains identifiable.
-        for (auto& result : results) {
-            // Individual admission may throw (e.g. allocation failure) after
-            // earlier destinations have already accepted the payload. Never
-            // discard their receipts or hide partial publication from callers.
+        failure_slots.reserve(destinations.size());
+        // Allocate EVERY receipt and fallback Future before admitting any
+        // destination. A second allocation while handling std::bad_alloc
+        // could otherwise lose earlier successful fanout receipt entries.
+        for (const auto edge : destinations) {
+            failure_slots.emplace_back();
+            auto fallback = failure_slots.back().get_future().share();
+            results.push_back({edge, schema_[edge].target, std::move(fallback)});
+        }
+        // Each branch can fail independently. A successful/returned admission
+        // replaces the fallback; a throwing admission settles the already-
+        // allocated promise, so catch(...) does not allocate a fresh Future.
+        for (std::size_t i = 0; i < results.size(); ++i) {
             try {
-                result.admission = write_async(result.edge_index, payload);
+                auto admission = write_async(results[i].edge_index, payload);
+                results[i].admission = std::move(admission);
             } catch (...) {
-                result.admission = failed_exception(std::current_exception());
+                failure_slots[i].set_exception(std::current_exception());
             }
         }
         return results;
