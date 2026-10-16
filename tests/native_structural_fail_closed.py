@@ -46,9 +46,15 @@ def main():
         for name, source in PROGRAMS.items():
             path = pathlib.Path(root) / (name.replace(" ", "-") + ".ores")
             path.write_text(source, encoding="utf-8")
+            # Keep compiler outputs in the isolated directory and prove a
+            # rejected fixture did not leave a runnable/IR artifact.
+            before = {item.name for item in pathlib.Path(root).iterdir()}
             result = subprocess.run(
                 [str(compiler), str(path)], capture_output=True, text=True,
-                timeout=15, check=False)
+                cwd=root, timeout=15, check=False)
+            after = {item.name for item in pathlib.Path(root).iterdir()}
+            if before != after:
+                raise RuntimeError(f"{name}: rejected source created artifact(s): {sorted(after - before)}")
             if result.returncode is None or result.returncode <= 0:
                 raise RuntimeError(f"{name}: expected a diagnosed compiler failure; got {result.returncode}")
             if not result.stderr.strip():
