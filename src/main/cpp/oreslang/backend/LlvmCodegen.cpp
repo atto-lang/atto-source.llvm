@@ -537,6 +537,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 !source.actors.empty() || !source.cooperative_loops.empty() ||
                 source.functions.empty() || source.functions.size() > 64)
             throw std::runtime_error("checked native functions require host-only pure scalar module");
+        if (experimental_checked_result_functions &&
+                !std::any_of(source.functions.begin(), source.functions.end(),
+                    [](const Function& fn) { return fn.exported; }))
+            throw std::runtime_error("checked result ABI requires at least one pub function");
         for (const auto& fn : source.functions) {
             if (fn.returns_void || !fn.result || fn.parameters.size() > 8 ||
                     !fn.generic_parameters.empty() || fn.scalar_while ||
