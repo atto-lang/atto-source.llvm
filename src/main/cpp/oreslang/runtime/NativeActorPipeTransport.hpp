@@ -71,6 +71,10 @@ public:
     std::uint64_t supervisor_id() const noexcept { return group_->supervisor_id(); }
     std::size_t edge_count() const noexcept { return edges_.size(); }
     bool closed() const noexcept { return closed_.load(std::memory_order_acquire); }
+    /** Host-only observation of charged payload bytes (NOT total heap use). */
+    std::size_t buffered_payload_bytes() const noexcept {
+        return graph_buffered_bytes_.load(std::memory_order_acquire);
+    }
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
     std::shared_future<void> write_async(std::size_t edge, std::string payload) {
