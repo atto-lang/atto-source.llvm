@@ -222,6 +222,58 @@ int main() {
         check(pending_cancelled, "pending branch was not cancelled on STOP");
     }
 
+    // Every RR attempt consumes its turn, including an overloaded edge.
+    // Pending admission must not silently skip to a healthier consumer.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4);
+        pipe.write_round_robin_async("Producer", "a0").get();
+        pipe.write_round_robin_async("Producer", "b0").get();
+        auto queued_a = pipe.write_round_robin_async("Producer", "a1");
+        auto queued_b = pipe.write_round_robin_async("Producer", "b1");
+        check(queued_a.wait_for(0ms) == std::future_status::timeout &&
+              queued_b.wait_for(0ms) == std::future_status::timeout,
+              "RR must preserve per-edge backpressure");
+        bool rejected_a = false, rejected_b = false;
+        try { pipe.write_round_robin_async("Producer", "a2").get(); }
+        catch (const std::logic_error&) { rejected_a = true; }
+        try { pipe.write_round_robin_async("Producer", "b2").get(); }
+        catch (const std::logic_error&) { rejected_b = true; }
+        check(rejected_a && rejected_b,
+              "RR must report saturated admissions independently");
+        check(pipe.read_async(0).get() == "a0" &&
+              pipe.read_async(1).get() == "b0",
+              "RR saturation corrupted admitted messages");
+        queued_a.get();
+        queued_b.get();
+        check(pipe.read_async(0).get() == "a1" &&
+              pipe.read_async(1).get() == "b1",
+              "RR pending admissions did not drain in order");
+        pipe.write_round_robin_async("Producer", "next-a").get();
+        check(pipe.read_async(0).get() == "next-a",
+              "RR cursor did not consume rejected turns");
+        pipe.close();
+    }
+
+    // A failed fanout returns a target-labelled failure for every branch,
+    // not an empty result or one ambiguous aggregate exception.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4);
+        auto report = pipe.write_all_report_async(
+            "Producer", std::string(1024 * 1024 + 1, 'x'));
+        check(report.size() == 2 && report[0].target == "ConsumerA" &&
+              report[1].target == "ConsumerB",
+              "oversized fanout lost per-target receipts");
+        for (auto& receipt : report) {
+            bool denied = false;
+            try { receipt.admission.get(); }
+            catch (const std::logic_error&) { denied = true; }
+            check(denied, "oversized fanout edge did not reject admission");
+        }
+        pipe.close();
+    }
+
     // Host-only concurrency: per-source selector mutex serializes selection,
     // while actual actor guest execution is outside this transport.
     {
