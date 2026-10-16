@@ -141,8 +141,6 @@ static int same_actor(OresNativeActorRef a, OresNativeActorRef b) {
         && a.scheduler_domain == b.scheduler_domain
         && a.actor_slot == b.actor_slot && a.generation == b.generation;
 }
-static void control_lock(OresNativeVM* vm);
-static void control_unlock(OresNativeVM* vm);
 
 OresNativeActorRef ores_native_vm_spawn_supervised(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
