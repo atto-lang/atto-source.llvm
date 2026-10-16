@@ -50,6 +50,27 @@ int main() {
             "canonical denied IPv4");
     require(numeric_alias.allows(Permission::Net,"api.example.com:443"),true,
             "ordinary DNS permitted under wildcard");
+    // Differential-style, self-contained numeric-address regression matrix:
+    // broad allow-net must reject every noncanonical numeric/hex spelling.
+    // This is a policy test, not an actual socket/connect-time DNS guard.
+    auto numeric_wildcard = make(Permission::Net,{scope(Permission::Net,"*")});
+    const std::vector<std::string> numeric_parts = {
+        "0","00","01","1","127","0x0","0x1","0x7f",
+        "0X7F","0xFF","077","255","256"
+    };
+    const auto canonical_octet = [](const std::string& s) {
+        return s == "0" || s == "1" || s == "127" || s == "255";
+    };
+    for (const auto& first : numeric_parts)
+        for (const auto& second : numeric_parts)
+            for (const auto& third : numeric_parts) {
+                const std::string endpoint =
+                    first + "." + second + "." + third + ".1:443";
+                require(numeric_wildcard.allows(Permission::Net,endpoint),
+                        canonical_octet(first) && canonical_octet(second) &&
+                            canonical_octet(third),
+                        "noncanonical numeric address matrix");
+            }
     auto sub = make(Permission::Net,{scope(Permission::Net,"*.example.com:443")});
     require(sub.allows(Permission::Net,"a.example.com:443"),true,"wildcard subdomain");
     require(sub.allows(Permission::Net,"example.com:443"),false,"no apex");
