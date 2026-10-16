@@ -42,8 +42,10 @@ public:
             NativeSupervisorRegistry& registry,
             const NativeSupervisorRegistry::SupervisorRef& supervisor,
             std::vector<PipeStage> stages, std::size_t edge_capacity,
-            std::size_t worker_capacity)
-        : schema_(check_actor_pipeline(stages)) {
+            std::size_t worker_capacity,
+            std::size_t buffered_byte_capacity = 64 * 1024 * 1024)
+        : schema_(check_actor_pipeline(stages)),
+          max_buffered_bytes_(buffered_byte_capacity) {
         initialize(registry, supervisor, edge_capacity, worker_capacity);
     }
 
@@ -57,8 +59,10 @@ public:
             const NativeSupervisorRegistry::SupervisorRef& supervisor,
             std::vector<PipeStage> stages,
             std::vector<PipeConnection> connections,
-            std::size_t edge_capacity, std::size_t worker_capacity)
-        : schema_(check_actor_pipeline_graph(stages, connections)) {
+            std::size_t edge_capacity, std::size_t worker_capacity,
+            std::size_t buffered_byte_capacity = 64 * 1024 * 1024)
+        : schema_(check_actor_pipeline_graph(stages, connections)),
+          max_buffered_bytes_(buffered_byte_capacity) {
         initialize(registry, supervisor, edge_capacity, worker_capacity);
     }
 
@@ -71,6 +75,11 @@ public:
     std::uint64_t supervisor_id() const noexcept { return group_->supervisor_id(); }
     std::size_t edge_count() const noexcept { return edges_.size(); }
     bool closed() const noexcept { return closed_.load(std::memory_order_acquire); }
+    /** Host observability: queued message and pending-writer bytes, never
+     * bytes already handed to an awaiting reader. */
+    std::size_t buffered_payload_bytes() const noexcept {
+        return buffered_payload_bytes_.load(std::memory_order_acquire);
+    }
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
     std::shared_future<void> write_async(std::size_t edge, std::string payload) {
@@ -88,18 +97,32 @@ public:
                 && link.readers.empty()
                 && link.writers.size() >= link.capacity)
             return failed_void("native actor pipe pending-write budget exceeded");
+        // Construct promise/future before charging. An OOM during creation
+        // must not leak graph credits. Direct reader handoff is not buffered.
         auto pending = std::make_shared<PendingWrite>(std::move(payload));
         auto future = pending->promise.get_future().share();
-        if (!link.readers.empty()) {
-            auto recipient = std::move(link.readers.front());
-            link.readers.pop_front();
-            recipient->set_value(std::move(pending->payload));
-            pending->promise.set_value();
-        } else if (link.messages.size() < link.capacity) {
-            link.messages.push_back(std::move(pending->payload));
-            pending->promise.set_value();
-        } else {
-            link.writers.push_back(std::move(pending));
+        const bool buffered = link.readers.empty();
+        const auto charged_bytes = pending->payload.size();
+        if (buffered && !try_reserve_buffered_bytes(charged_bytes))
+            return failed_void("native actor pipe graph payload byte budget exceeded");
+        try {
+            if (!buffered) {
+                auto recipient = std::move(link.readers.front());
+                link.readers.pop_front();
+                recipient->set_value(std::move(pending->payload));
+                pending->promise.set_value();
+            } else if (link.messages.size() < link.capacity) {
+                link.messages.push_back(std::move(pending->payload));
+                pending->promise.set_value();
+            } else {
+                link.writers.push_back(std::move(pending));
+            }
+        } catch (...) {
+            // Roll back a not-yet-published reservation on failed admission.
+            // Once queued, no following operation may throw in normal flow.
+            if (buffered) buffered_payload_bytes_.fetch_sub(
+                charged_bytes, std::memory_order_acq_rel);
+            throw;
         }
         return future;
     }
@@ -116,6 +139,8 @@ public:
         if (!link.messages.empty()) {
             auto payload = std::move(link.messages.front());
             link.messages.pop_front();
+            buffered_payload_bytes_.fetch_sub(
+                payload.size(), std::memory_order_acq_rel);
             receiver->set_value(std::move(payload));
             // close() publishes cancellation before visiting every edge. An
             // overlapping read may still drain already-admitted data, but
@@ -253,6 +278,8 @@ public:
                 edge->closed = true;
                 // Buffered admitted payloads remain readable after closure.
                 for (auto& waiting : edge->writers) {
+                    buffered_payload_bytes_.fetch_sub(
+                        waiting->payload.size(), std::memory_order_acq_rel);
                     try { waiting->promise.set_exception(std::make_exception_ptr(
                             std::logic_error("native actor pipe is closed"))); }
                     catch (...) { }
@@ -276,8 +303,11 @@ private:
             NativeSupervisorRegistry& registry,
             const NativeSupervisorRegistry::SupervisorRef& supervisor,
             std::size_t edge_capacity, std::size_t worker_capacity) {
-        if (edge_capacity == 0)
-            throw std::invalid_argument("native pipeline edge capacity must be positive");
+        if (edge_capacity == 0 || edge_capacity > 4096
+                || worker_capacity == 0 || worker_capacity > 4096)
+            throw std::invalid_argument("native pipeline queue/worker capacity outside 1..4096");
+        if (max_buffered_bytes_ == 0 || max_buffered_bytes_ > 64 * 1024 * 1024)
+            throw std::invalid_argument("native pipeline byte capacity outside 1..67108864");
         // Allocate all independently bounded edges before publishing the
         // supervised group. Outbound order is caller-defined graph order.
         edges_.reserve(schema_.size());
@@ -297,6 +327,21 @@ private:
     }
 
     static constexpr std::size_t max_payload_bytes = 1024 * 1024;
+
+    /** Graph-wide credit reservation across independently locked edges.
+     * No mutex acquisition across edge locks; failed CAS retries are bounded
+     * by concurrent progress. The subtraction form avoids size_t overflow. */
+    bool try_reserve_buffered_bytes(std::size_t bytes) noexcept {
+        auto used = buffered_payload_bytes_.load(std::memory_order_relaxed);
+        while (used <= max_buffered_bytes_
+                && bytes <= max_buffered_bytes_ - used) {
+            if (buffered_payload_bytes_.compare_exchange_weak(
+                    used, used + bytes, std::memory_order_acq_rel,
+                    std::memory_order_relaxed))
+                return true;
+        }
+        return false;
+    }
 
     /** Reject overlong encodings, surrogate code points, truncated sequences
      * and out-of-range Unicode before hashing. Key byte identity remains
@@ -358,6 +403,8 @@ private:
     }
 
     const std::vector<PipeConnection> schema_;
+    const std::size_t max_buffered_bytes_;
+    std::atomic<std::size_t> buffered_payload_bytes_{0};
     std::vector<std::unique_ptr<Edge>> edges_;
     std::unordered_map<std::string, std::vector<std::size_t>> outgoing_;
     // Held only for deterministic round-robin selection, never on guest
