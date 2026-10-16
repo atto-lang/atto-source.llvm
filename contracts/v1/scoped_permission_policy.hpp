@@ -95,6 +95,7 @@ class ScopedPolicy final {
         }
         if (s.empty() || s.size() > 253 || s.front() == '.' || s.back() == '.') return false;
         bool numeric = true;
+        bool numeric_address_alias = true;
         std::size_t begin = 0, segments = 0;
         do {
             auto dot = s.find('.', begin);
@@ -106,6 +107,13 @@ class ScopedPolicy final {
                     return false;
                 if (c < '0' || c > '9') numeric = false;
             }
+            const bool decimal_part =
+                part.find_first_not_of("0123456789") == std::string_view::npos;
+            const bool hexadecimal_part = part.size() > 2 &&
+                part.substr(0, 2) == "0x" &&
+                part.substr(2).find_first_not_of("0123456789abcdef") ==
+                    std::string_view::npos;
+            if (!decimal_part && !hexadecimal_part) numeric_address_alias = false;
             if (dot == s.npos) break;
             begin = dot + 1; ++segments;
         } while (true);
@@ -123,8 +131,11 @@ class ScopedPolicy final {
                 start = end + 1;
             } while (true);
         }
-        // Reject hexadecimal libc IPv4 aliases before any broad grants.
-        if (s.rfind("0x", 0) == 0) return false;
+        // libc may resolve mixed decimal/hex dotted components as IPv4
+        // (127.0x0.0.1, 1.2.3.0x01), not as the hostname written here.
+        // Reject every noncanonical numeric/hex-component address spelling,
+        // not merely spellings beginning with 0x.
+        if (!numeric && numeric_address_alias) return false;
         out.host = std::move(s);
         return true;
     }
