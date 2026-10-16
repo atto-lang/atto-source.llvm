@@ -320,25 +320,28 @@ llvm::Value* lower(const Expression& expr,
 // Validate expressions without effects, owners, or borrowed places.
 bool checked_pure_function_tree(const Expression& expr,
                                 const std::unordered_set<std::string>& parameters,
-                                std::size_t depth = 0) {
-    if (depth >= 64) return false;
+                                std::size_t& remaining_nodes, std::size_t depth = 0) {
+    // The input byte budget alone does not bound the compiler's IR explosion.
+    if (depth >= 64 || remaining_nodes == 0) return false;
+    --remaining_nodes;
     switch (expr.kind) {
         case Expression::Kind::Integer: return true;
         case Expression::Kind::Variable: return parameters.count(expr.name) == 1;
         case Expression::Kind::Negate:
-            return expr.left && checked_pure_function_tree(*expr.left, parameters, depth + 1);
+            return expr.left &&
+                checked_pure_function_tree(*expr.left, parameters, remaining_nodes, depth + 1);
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
             return expr.left && expr.right &&
-                checked_pure_function_tree(*expr.left, parameters, depth + 1) &&
-                checked_pure_function_tree(*expr.right, parameters, depth + 1);
+                checked_pure_function_tree(*expr.left, parameters, remaining_nodes, depth + 1) &&
+                checked_pure_function_tree(*expr.right, parameters, remaining_nodes, depth + 1);
         case Expression::Kind::Call:
             if (expr.type_arguments_present || !expr.type_arguments.empty()) return false;
             return std::all_of(expr.arguments.begin(), expr.arguments.end(),
                 [&](const std::unique_ptr<Expression>& argument) {
-                    return argument &&
-                        checked_pure_function_tree(*argument, parameters, depth + 1);
+                    return argument && checked_pure_function_tree(
+                        *argument, parameters, remaining_nodes, depth + 1);
                 });
         default: return false;
     }
@@ -439,8 +442,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         !param.class_name.empty() || !param.generic_type.empty() ||
                         !parameters.insert(param.name).second)
                     throw std::runtime_error("checked native functions require unique value int parameters");
-            if (!checked_pure_function_tree(*fn.result, parameters))
-                throw std::runtime_error("checked native function expression is not pure scalar");
+            std::size_t remaining_nodes = 2048;
+            if (!checked_pure_function_tree(*fn.result, parameters, remaining_nodes))
+                throw std::runtime_error("checked native function expression not pure or exceeds 2048-node/64-depth budget");
         }
         std::unordered_map<std::string, std::vector<std::string>> graph;
         for (const auto& fn : source.functions) {
