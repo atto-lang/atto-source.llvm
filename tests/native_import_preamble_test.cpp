@@ -15,6 +15,21 @@ int main() {
     check(a.imports.size()==2 && a.imports[0]=="./helper" && a.imports[1]=="pkg:math/add");
     check(a.stripped_source.size()==std::string("// comment\n import \"./helper\";  // note\nimport \"pkg:math/add\";\npub fnc main(): int { return add(1,2); }\n").size());
     check(a.stripped_source.find("import") == std::string::npos);
+    auto named = split_import_preamble(
+        "import fnc helper from \"+/lib/helper\";\n"
+        "pub fnc main(): int { return helper(); }\n");
+    check(named.imports.size() == 1 && named.imports[0] == "+/lib/helper");
+    check(named.requested_functions.size() == 1 &&
+          named.requested_functions[0] == "helper");
+    check(named.stripped_source.size() ==
+          std::string("import fnc helper from \"+/lib/helper\";\npub fnc main(): int { return helper(); }\n").size());
+    check(a.requested_functions.size() == 2 && a.requested_functions[0].empty());
+    rejects("import fnc from \"+/lib/helper\";\n");
+    rejects("import fnc helper \"+/lib/helper\";\n");
+    rejects("import fnc helper from \"+/lib/helper\" unexpected;\n");
+    rejects("import fnc helper from \"+/lib/helper\"\n");
+    rejects("import fnc 1bad from \"+/lib/helper\";\n");
+    rejects("import module stuff from \"+/lib/helper\";\n");
     rejects("import src/file;\nfnc main(): int {return 0;}");
     rejects("import \"\";\n");
     rejects("import \"a\" garbage;\n");
