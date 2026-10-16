@@ -20,6 +20,7 @@ import time
 
 POSITIVE = "pub fnc main(): int {\n  return 20 + 22;\n}\n"
 NEGATIVE = "pub fnc main(): int {\n  return nonexistent_symbol;\n}\n"
+ARITHMETIC = "pub fnc main(): int {\\n  return 100 - (3 + 2) - 19;\\n}\\n"
 ERROR_WORDS = re.compile(r"\b(error|undefined|undeclared|unresolved|unknown)\b|not found|cannot find", re.I)
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_OUTPUT = 32768
@@ -249,13 +250,14 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="ores-ai-smoke-") as directory:
         temp = Path(directory)
-        sources = {"positive": POSITIVE, "negative": NEGATIVE}
+        sources = {"positive": POSITIVE, "arithmetic": ARITHMETIC, "negative": NEGATIVE}
         for label, source_text in sources.items():
             path = temp / (label + ".ores")
             path.write_text(source_text)
             source_hash = sha256(path)
             result = run(compile_argv(path), 90, root)
             case = {"id": label, "source_sha256": source_hash, "compile": result}
+            expected_exit = 42 if label == "positive" else 76
             if label == "negative":
                 case["passed"] = rejected(result)
             else:
@@ -266,7 +268,7 @@ def main():
                         case["execution"] = executed
                         case["passed"] = (
                             not executed["timeout"] and not executed["output_truncated"]
-                            and executed["exit_code"] == 42
+                            and executed["exit_code"] == expected_exit
                         )
                     else:
                         # Compiler must emit real textual LLVM IR, not a success string.
@@ -291,7 +293,7 @@ def main():
                                 )
                                 case["passed"] = (
                                     not executed["timeout"] and not executed["output_truncated"]
-                                    and executed["exit_code"] == 42
+                                    and executed["exit_code"] == expected_exit
                                     and case["linked_native_sha256"]
                                         == case["post_execution_native_sha256"]
                                 )
@@ -299,14 +301,15 @@ def main():
                                 case["passed"] = False
             evidence["cases"].append(case)
 
-    evidence["ok"] = all(item["passed"] for item in evidence["cases"]) and len(evidence["cases"]) == 2
+    evidence["ok"] = all(item["passed"] for item in evidence["cases"]) and len(evidence["cases"]) == 3
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(evidence, indent=2) + "\n")
     print(json.dumps({
         "backend": args.backend, "ok": evidence["ok"],
         "positive": evidence["cases"][0]["passed"],
-        "negative": evidence["cases"][1]["passed"],
+        "arithmetic": evidence["cases"][1]["passed"],
+        "negative": evidence["cases"][2]["passed"],
         "report": str(output),
         "claim": "real process results, not backend parity or full compiler coverage",
     }))
