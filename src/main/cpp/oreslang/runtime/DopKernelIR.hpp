@@ -66,6 +66,7 @@ class HostBuffer {
         std::vector<unsigned char> bytes;
         mutable std::mutex lock;
         std::size_t loans = 0;
+        bool writer = false;
         bool closed = false;
         static std::size_t checked_host_size(const Plan& layout) {
             // HostBuffer read()/write() always copy sizeof(float) bytes. A
@@ -114,6 +115,36 @@ public:
         std::shared_ptr<State> state_;
     };
 
+    // Per-element locks cannot protect a batch from concurrent partial observation.
+    class WriteLoan {
+    public:
+        explicit WriteLoan(std::shared_ptr<State> state) : state_(std::move(state)) {}
+        WriteLoan(const WriteLoan&) = delete;
+        WriteLoan& operator=(const WriteLoan&) = delete;
+        WriteLoan(WriteLoan&& other) noexcept : state_(std::move(other.state_)) {}
+        WriteLoan& operator=(WriteLoan&&) = delete;
+        ~WriteLoan() { release(); }
+        void write(std::uint64_t row, std::uint32_t field, float value) {
+            if (!state_) throw std::logic_error("stale write loan");
+            std::lock_guard<std::mutex> guard(state_->lock);
+            if (state_->closed || !state_->writer)
+                throw std::logic_error("inactive write loan");
+            const auto offset = state_->layout.byte_offset(row, field);
+            std::memcpy(state_->bytes.data() + static_cast<std::size_t>(offset),
+                        &value, sizeof(value));
+        }
+        void release() noexcept {
+            if (!state_) return;
+            auto held = std::move(state_);
+            {
+                std::lock_guard<std::mutex> guard(held->lock);
+                held->writer = false;
+            }
+        }
+    private:
+        std::shared_ptr<State> state_;
+    };
+
     explicit HostBuffer(Plan layout) : state_(std::make_shared<State>(layout)) {}
     HostBuffer(const HostBuffer&) = delete;
     HostBuffer& operator=(const HostBuffer&) = delete;
@@ -123,7 +154,7 @@ public:
         // transferred behind its borrow owner's back.
         if (other.state_) {
             std::lock_guard<std::mutex> guard(other.state_->lock);
-            if (other.state_->closed || other.state_->loans != 0)
+            if (other.state_->closed || other.state_->loans != 0 || other.state_->writer)
                 throw std::logic_error("cannot move closed or borrowed host buffer");
         }
         state_ = std::move(other.state_);
@@ -134,14 +165,14 @@ public:
         // Never silently drop a live allocation or an outstanding loan.
         if (state_) {
             std::lock_guard<std::mutex> state_guard(state_->lock);
-            if (!state_->closed || state_->loans != 0)
+            if (!state_->closed || state_->loans != 0 || state_->writer)
                 throw std::logic_error("cannot overwrite live owned host buffer");
         }
         // Reject transfer of a borrowed or closed source, not just an
         // unretired destination, while both owner locks are held.
         if (other.state_) {
             std::lock_guard<std::mutex> guard(other.state_->lock);
-            if (other.state_->closed || other.state_->loans != 0)
+            if (other.state_->closed || other.state_->loans != 0 || other.state_->writer)
                 throw std::logic_error("cannot move closed or borrowed host buffer");
         }
         state_ = std::move(other.state_);
@@ -170,7 +201,7 @@ public:
         std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->loans != 0) throw std::logic_error("cannot move borrowed buffer");
+        if (state_->loans != 0 || state_->writer) throw std::logic_error("cannot move borrowed buffer");
         HostBuffer replacement(std::move(state_));
         return replacement;
     }
@@ -179,11 +210,21 @@ public:
         std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->closed) throw std::logic_error("closed buffer");
+        if (state_->closed || state_->writer) throw std::logic_error("closed or write-borrowed buffer");
         if (state_->loans == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("read loan counter exhausted");
         ++state_->loans;
         return ReadLoan(state_);
+    }
+
+    WriteLoan borrow_write() {
+        std::lock_guard<std::mutex> owner(owner_lock_);
+        active();
+        std::lock_guard<std::mutex> guard(state_->lock);
+        if (state_->closed || state_->writer || state_->loans != 0)
+            throw std::logic_error("cannot exclusively borrow host buffer");
+        state_->writer = true;
+        return WriteLoan(state_);
     }
 
     float read(std::uint64_t row, std::uint32_t field) const {
@@ -195,7 +236,7 @@ public:
         std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->closed || state_->loans) throw std::logic_error("write to closed or borrowed buffer");
+        if (state_->closed || state_->loans || state_->writer) throw std::logic_error("write to closed or borrowed buffer");
         const auto offset = state_->layout.byte_offset(row, field);
         std::memcpy(state_->bytes.data() + static_cast<std::size_t>(offset), &value, sizeof(value));
     }
@@ -204,7 +245,7 @@ public:
         std::lock_guard<std::mutex> owner(owner_lock_);
         if (!state_) return; // relinquished ownership
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->loans != 0) throw std::logic_error("outstanding read loan");
+        if (state_->loans != 0 || state_->writer) throw std::logic_error("outstanding host buffer loan");
         state_->closed = true;
     }
 
@@ -233,13 +274,14 @@ inline void execute_cpu(const Kernel& kernel, const HostBuffer& input, HostBuffe
             || !matching_layout(kernel.layout, output.layout()))
         throw std::invalid_argument("kernel layout does not match owned buffers");
     auto loan = input.borrow_read();
+    auto destination = output.borrow_write();
     for (std::uint64_t row = 0; row < kernel.layout.rows(); ++row) {
         for (std::uint32_t field = 0; field < kernel.layout.fields(); ++field) {
             const auto v = loan.read(row, field);
             const auto result = kernel.operation == Op::Scale ? v * kernel.scale
                 : kernel.operation == Op::Bias ? v + kernel.bias
                 : (v * kernel.scale) + kernel.bias;
-            output.write(row, field, result);
+            destination.write(row, field, result);
         }
     }
 }
