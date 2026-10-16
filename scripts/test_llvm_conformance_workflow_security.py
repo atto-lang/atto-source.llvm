@@ -26,7 +26,7 @@ def problems(text):
         errors.append("workflow must use minimum read-only repository permissions")
     if re.search(r"(?m)^\s*(?:pull_request_target|id-token:\s*write|contents:\s*write)\b", text):
         errors.append("privileged workflow event or permission is forbidden")
-    if "${{ secrets." in text:
+    if re.search(r"\$\{\{\s*secrets\s*\.", text, flags=re.IGNORECASE):
         errors.append("conformance tests must not receive GitHub secrets")
     checkout = re.search(
         r"(?m)^      - uses: actions/checkout@[0-9a-f]{40}[^\n]*\n"
@@ -72,6 +72,12 @@ class WorkflowSecurityProof(unittest.TestCase):
             clean.replace("  contents: read", "  contents: read\n  id-token: write"),
             clean.replace("      - name: Verify AI smoke admission unit tests",
                           "      - run: echo ${{ secrets.DANGEROUS }}\n"
+                          "      - name: Verify AI smoke admission unit tests"),
+            clean.replace("      - name: Verify AI smoke admission unit tests",
+                          "      - run: echo ${{secrets.DANGEROUS}}\n"
+                          "      - name: Verify AI smoke admission unit tests"),
+            clean.replace("      - name: Verify AI smoke admission unit tests",
+                          "      - run: echo ${{  secrets.DANGEROUS }}\n"
                           "      - name: Verify AI smoke admission unit tests"),
         ):
             with self.subTest(fragment=mutated[:60]):
