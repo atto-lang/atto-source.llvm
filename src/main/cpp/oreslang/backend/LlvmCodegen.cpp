@@ -151,6 +151,18 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut: {
+            // The ownership pass admits only direct primitive projections.
+            // field_storage contains the actual in-place i64 address, not a
+            // temporary copy: a mutable loan can write the field back.
+            // Its conservatively whole-object lifetime ends with this call.
+            if (expr.left && expr.left->kind == Expression::Kind::Field) {
+                if (!expr.left->left ||
+                        expr.left->left->kind != Expression::Kind::Variable)
+                    throw std::runtime_error(
+                        "native projected borrow requires direct named class field");
+                return field_storage.at(field_key(
+                    expr.left->left->name, expr.left->name));
+            }
             // Heap owner storage is a HANDLE, never a borrowable i64 address.
             // A shared call-scoped loan reads into a temporary scalar stack
             // slot that cannot escape this synchronous call. Mutable loans
