@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <functional>
 #include <cctype>
 #include <stdexcept>
@@ -141,6 +142,38 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
     auto result = std::make_unique<Expression>();
     result->kind = kind;
     result->offset = offset;
+    return result;
+}
+
+// Compile-time rejection is independent of runtime error/actor cleanup.
+// It proves that a *known* overflowing arithmetic subtree cannot silently
+// wrap in LLVM. Dynamic arithmetic still needs checked lowering.
+std::optional<std::int64_t> checked_constant_i64(const Expression& expr) {
+    using Kind = Expression::Kind;
+    if (expr.kind == Kind::Integer) return expr.integer;
+    if (expr.kind == Kind::Negate) {
+        if (!expr.left) return std::nullopt;
+        const auto operand = checked_constant_i64(*expr.left);
+        if (!operand) return std::nullopt;
+        if (*operand == std::numeric_limits<std::int64_t>::min())
+            throw std::runtime_error("native signed i64 constant negation overflow at byte "
+                                     + std::to_string(expr.offset));
+        return -*operand;
+    }
+    if (expr.kind != Kind::Add && expr.kind != Kind::Subtract &&
+            expr.kind != Kind::Multiply) return std::nullopt;
+    if (!expr.left || !expr.right) return std::nullopt;
+    const auto left = checked_constant_i64(*expr.left);
+    const auto right = checked_constant_i64(*expr.right);
+    if (!left || !right) return std::nullopt;
+    std::int64_t result = 0;
+    const bool overflow =
+        expr.kind == Kind::Add ? __builtin_add_overflow(*left, *right, &result) :
+        expr.kind == Kind::Subtract ? __builtin_sub_overflow(*left, *right, &result) :
+                                     __builtin_mul_overflow(*left, *right, &result);
+    if (overflow)
+        throw std::runtime_error("native signed i64 constant arithmetic overflow at byte "
+                                 + std::to_string(expr.offset));
     return result;
 }
 
@@ -1159,6 +1192,7 @@ private:
                                                  : Expression::Kind::Subtract, offset);
             expr->left = std::move(left);
             expr->right = product();
+            (void)checked_constant_i64(*expr);
             left = std::move(expr);
         }
         return left;
@@ -1181,6 +1215,7 @@ private:
             auto expr = make_expression(Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = unary();
+            (void)checked_constant_i64(*expr);
             left = std::move(expr);
         }
         return left;
@@ -1249,6 +1284,7 @@ private:
             }
             auto expr = make_expression(Expression::Kind::Negate, offset);
             expr->left = unary();
+            (void)checked_constant_i64(*expr);
             return expr;
         }
         return primary();
