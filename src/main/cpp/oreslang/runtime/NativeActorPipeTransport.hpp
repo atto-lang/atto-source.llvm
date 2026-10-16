@@ -44,10 +44,12 @@ public:
             std::vector<PipeStage> stages, std::size_t edge_capacity,
             std::size_t worker_capacity,
             std::size_t buffered_byte_capacity = 64 * 1024 * 1024,
-            std::size_t buffered_message_capacity = 65536)
+            std::size_t buffered_message_capacity = 65536,
+            std::size_t pending_reader_capacity = 65536)
         : schema_(check_actor_pipeline(stages)),
           max_buffered_bytes_(buffered_byte_capacity),
-          max_buffered_messages_(buffered_message_capacity) {
+          max_buffered_messages_(buffered_message_capacity),
+          max_pending_readers_(pending_reader_capacity) {
         initialize(registry, supervisor, edge_capacity, worker_capacity);
     }
 
@@ -63,10 +65,12 @@ public:
             std::vector<PipeConnection> connections,
             std::size_t edge_capacity, std::size_t worker_capacity,
             std::size_t buffered_byte_capacity = 64 * 1024 * 1024,
-            std::size_t buffered_message_capacity = 65536)
+            std::size_t buffered_message_capacity = 65536,
+            std::size_t pending_reader_capacity = 65536)
         : schema_(check_actor_pipeline_graph(stages, connections)),
           max_buffered_bytes_(buffered_byte_capacity),
-          max_buffered_messages_(buffered_message_capacity) {
+          max_buffered_messages_(buffered_message_capacity),
+          max_pending_readers_(pending_reader_capacity) {
         initialize(registry, supervisor, edge_capacity, worker_capacity);
     }
 
@@ -86,6 +90,9 @@ public:
     }
     std::size_t buffered_message_count() const noexcept {
         return buffered_message_count_.load(std::memory_order_acquire);
+    }
+    std::size_t pending_reader_count() const noexcept {
+        return pending_reader_count_.load(std::memory_order_acquire);
     }
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
@@ -123,6 +130,9 @@ public:
             if (!buffered) {
                 auto recipient = std::move(link.readers.front());
                 link.readers.pop_front();
+                // Direct handoff has fulfilled an outstanding read. Release
+                // its global promise slot before publication of the result.
+                pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
                 recipient->set_value(std::move(pending->payload));
                 pending->promise.set_value();
             } else if (link.messages.size() < link.capacity) {
@@ -179,7 +189,17 @@ public:
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe pending-read budget exceeded")));
         } else {
-            link.readers.push_back(std::move(receiver));
+            if (!try_reserve_pending_reader()) {
+                receiver->set_exception(std::make_exception_ptr(
+                    std::logic_error("native actor pipe global pending-read budget exceeded")));
+            } else {
+                try {
+                    link.readers.push_back(std::move(receiver));
+                } catch (...) {
+                    pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
+                    throw;
+                }
+            }
         }
         return future;
     }
@@ -306,6 +326,7 @@ public:
                 }
                 edge->writers.clear();
                 for (auto& waiting : edge->readers) {
+                    pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
                     try { waiting->set_exception(std::make_exception_ptr(
                             std::logic_error("native actor pipe is closed"))); }
                     catch (...) { }
@@ -330,6 +351,8 @@ private:
             throw std::invalid_argument("native pipeline byte capacity outside 1..67108864");
         if (max_buffered_messages_ == 0 || max_buffered_messages_ > 65536)
             throw std::invalid_argument("native pipeline message capacity outside 1..65536");
+        if (max_pending_readers_ == 0 || max_pending_readers_ > 65536)
+            throw std::invalid_argument("native pipeline pending reader capacity outside 1..65536");
         // Allocate all independently bounded edges before publishing the
         // supervised group. Outbound order is caller-defined graph order.
         edges_.reserve(schema_.size());
@@ -357,6 +380,19 @@ private:
         auto used = buffered_message_count_.load(std::memory_order_relaxed);
         while (used < max_buffered_messages_) {
             if (buffered_message_count_.compare_exchange_weak(
+                    used, used + 1, std::memory_order_acq_rel,
+                    std::memory_order_relaxed))
+                return true;
+        }
+        return false;
+    }
+
+    /** Reserve one queued-reader promise across ALL graph edges.
+     * A per-edge quota alone permits up to 4096*4096 reader allocations. */
+    bool try_reserve_pending_reader() noexcept {
+        auto used = pending_reader_count_.load(std::memory_order_relaxed);
+        while (used < max_pending_readers_) {
+            if (pending_reader_count_.compare_exchange_weak(
                     used, used + 1, std::memory_order_acq_rel,
                     std::memory_order_relaxed))
                 return true;
@@ -439,8 +475,10 @@ private:
     const std::vector<PipeConnection> schema_;
     const std::size_t max_buffered_bytes_;
     const std::size_t max_buffered_messages_;
+    const std::size_t max_pending_readers_;
     std::atomic<std::size_t> buffered_payload_bytes_{0};
     std::atomic<std::size_t> buffered_message_count_{0};
+    std::atomic<std::size_t> pending_reader_count_{0};
     std::vector<std::unique_ptr<Edge>> edges_;
     std::unordered_map<std::string, std::vector<std::size_t>> outgoing_;
     // Held only for deterministic round-robin selection, never on guest
