@@ -57,6 +57,32 @@ exact-source CI pass. Default native arithmetic, actors and owner-bearing
 functions remain **blocked_unsound** for signed overflow until a typed
 failure-propagation ABI and cleanup/supervision design is implemented.
 
+## Recoverable experimental checked-result function ABI (LLVM)
+
+The separate opt-in `--target=host --experimental-checked-i64-result-functions`
+emits C-callable symbols `__oreslang_checked_v2_<function>_<arity>` with
+signature `i32(i64...arguments, i64* output)`. Status `0` publishes exactly
+one result, `1` denotes signed-i64 overflow, and `2` rejects a null output
+pointer without evaluating arithmetic. A failing nested callee returns its
+original status to the caller; the caller's output remains unchanged. This
+uses real signed LLVM add/sub/mul/negate overflow intrinsics, *not* process
+traps. The existing trap-only and single-function status v1 experiments
+remain unchanged and cannot be combined with result v2.
+
+**This is an internal migration proof, not general Oreslang semantics.** The
+whole-module pure-function admission gate still rejects actors, classes,
+owners, borrows, stateful code, effects, source-level errors and suspension.
+It does not implement cleanup, supervision, a guest Result type, or portable
+cross-backend public function ABI. Named call labels are not accepted in v2.
+
+The CTest `numeric_experimental_checked_result_function_graph` compiles
+the guest source through the actual Oreslang LLVM compiler, links the IR using
+Clang at `-O0` and `-O2`, exercises 363 signed boundary pairs per optimization
+level plus nested call propagation, null pointers and error-atomic output, and
+tests invalid source admission. Until the exact-source compiler test actually
+executes, the new mode remains `implemented_unverified` and must not
+advance the global default `checked_i64_overflow` capability.
+
 ## Evidence is tiered
 
 - `reference_only`: Python checks the independently defined fixture; **no Oreslang execution**.
