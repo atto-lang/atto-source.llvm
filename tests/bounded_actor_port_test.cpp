@@ -17,6 +17,14 @@ struct MoveOnly {
     MoveOnly& operator=(const MoveOnly&) = delete;
 };
 
+// An unacknowledged lease must never be overwritten by move assignment:
+// doing so would drop its payload without releasing its queued/checked-out
+// frame and byte credits. Move construction is still needed for optional.
+using OwnedDelivery = BoundedActorPort<MoveOnly>::Delivery;
+static_assert(std::is_move_constructible_v<OwnedDelivery>);
+static_assert(!std::is_move_assignable_v<OwnedDelivery>);
+static_assert(!std::is_copy_constructible_v<OwnedDelivery>);
+
 struct AllocFaultMoveOnly {
     std::unique_ptr<int> item;
     static inline bool fail_next_allocation = false;
@@ -82,6 +90,22 @@ int main() {
     check(x->id() != y->id());
     check(x->acknowledge_released() && y->acknowledge_released());
     clean.close();
+
+    // Moving the lease into a new owner is valid, unlike overwriting a
+    // different live lease; exactly one receiver can acknowledge the credit.
+    BoundedActorPort<MoveOnly> movedPort(1, 16);
+    MoveOnly movable(91);
+    check(movedPort.offer(std::move(movable), 16));
+    auto originalDelivery = movedPort.try_receive();
+    check(originalDelivery.has_value());
+    OwnedDelivery movedDelivery(std::move(*originalDelivery));
+    check(*movedDelivery.value().item == 91);
+    rejected([&] { (void)originalDelivery->value(); });
+    check(movedPort.used_frames() == 1 && movedPort.used_bytes() == 16);
+    check(movedDelivery.acknowledge_released());
+    check(!movedDelivery.acknowledge_released());
+    check(movedPort.used_frames() == 0 && movedPort.used_bytes() == 0);
+    movedPort.close();
 
     // Force the owned-envelope allocation to fail after queue slot
     // reservation. No byte credit, frame ID, or sender ownership is lost.
