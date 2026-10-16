@@ -20,6 +20,7 @@ struct OresNativeVM {
     pthread_mutex_t control_lock;
     unsigned pending_control_wakes;
     int control_retired;
+    int guest_actor_admitted; /* NIO bootstrap barrier: no late reactor creation */
     void* nio_backend;
     OresNativeVMNioDestroy nio_destroy;
 };
@@ -112,11 +113,24 @@ int ores_native_vm_has_hard_security_boundary(
     return 0;
 }
 
+static void control_lock(OresNativeVM* vm);
+static void control_unlock(OresNativeVM* vm);
+
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot) {
     OresNativeActorRef invalid = {0, 0, 0};
-    return vm && valid_domain(domain)
-        ? ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot) : invalid;
+    if (!vm || !valid_domain(domain)) return invalid;
+    // Shared lock order CONTROL -> actor scheduler. Bootstrap attachment must
+    // never race first guest spawn and silently add reactor threads later.
+    control_lock(vm);
+    OresNativeActorRef admitted = invalid;
+    if (!vm->control_retired) {
+        admitted = ores_native_actor_scheduler_spawn(
+            vm->schedulers[domain], actor_slot);
+        if (admitted.scheduler_domain) vm->guest_actor_admitted = 1;
+    }
+    control_unlock(vm);
+    return admitted;
 }
 
 
@@ -149,6 +163,7 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
                 &vm->supervisors[domain][actor_slot];
             entry->child = child;
             entry->supervisor = supervisor;
+            vm->guest_actor_admitted = 1;
         }
     }
     control_unlock(vm);
@@ -319,6 +334,19 @@ unsigned ores_native_vm_control_pump(OresNativeVM* vm) {
     control_unlock(vm);
     return signalled;
 }
+/* Trusted bootstrap probe. A concurrent first actor spawn can still
+ * win before the later final attachment CAS; the host must fence producers
+ * during initialization. Check again inside attach_nio under CONTROL lock.
+ */
+int ores_native_vm_nio_can_attach(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    int ok = !vm->control_retired && !vm->guest_actor_admitted
+        && !vm->nio_backend;
+    control_unlock(vm);
+    return ok;
+}
+
 /* The VM owns the opaque selector backend, but never calls a C++ symbol
  * from its C scheduler core. This preserves standalone C-only host tests.
  * Attachment is linearized against retirement under the VM CONTROL lock.
@@ -327,7 +355,8 @@ int ores_native_vm_attach_nio(
     OresNativeVM* vm, void* backend, OresNativeVMNioDestroy destroy) {
     if (!vm || !backend || !destroy) return 0;
     control_lock(vm);
-    const int accepted = !vm->control_retired && !vm->nio_backend;
+    const int accepted = !vm->control_retired && !vm->guest_actor_admitted
+        && !vm->nio_backend;
     if (accepted) {
         vm->nio_backend = backend;
         vm->nio_destroy = destroy;
