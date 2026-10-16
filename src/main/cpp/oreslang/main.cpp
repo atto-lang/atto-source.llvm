@@ -61,6 +61,7 @@ int main(int argc, char** argv) {
     bool experimental_rt_scalar_loop = false;
     bool experimental_checked_i64 = false;
     bool experimental_checked_functions = false;
+    bool experimental_checked_result_functions = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -77,6 +78,11 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate checked-i64-functions option\n"; return 2;
             }
             experimental_checked_functions = true;
+        } else if (arg == "--experimental-checked-i64-result-functions") {
+            if (experimental_checked_result_functions) {
+                std::cerr << "duplicate checked-i64-result-functions option\n"; return 2;
+            }
+            experimental_checked_result_functions = true;
         } else if (arg == "--experimental-rt-scalar-loop") {
             if (experimental_rt_scalar_loop) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
@@ -111,7 +117,7 @@ int main(int argc, char** argv) {
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-checked-i64] [--experimental-checked-i64-functions] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-checked-i64] [--experimental-checked-i64-functions] [--experimental-checked-i64-result-functions] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -305,7 +311,8 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
             ast, wasm32_target, cortex_m_target,
-            experimental_checked_i64, experimental_checked_functions);
+            experimental_checked_i64, experimental_checked_functions,
+            experimental_checked_result_functions);
         std::cout.flush();
         return 0;
     } catch (const std::exception& error) {
