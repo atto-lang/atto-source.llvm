@@ -376,7 +376,12 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
                 throw std::invalid_argument("installed package escapes physical project root");
             return existing_source_under(it->second,rooted_path(it->second,input.suffix));
         }
-        case Kind::Absolute:return existing_source(input.path);
+        case Kind::Absolute:
+            // classify() recognizes Win32 drive roots even on POSIX. Never
+            // reinterpret one as a relative host path during resolution.
+            if (!fs::path(input.path).is_absolute())
+                throw std::invalid_argument("foreign-platform absolute import path");
+            return existing_source(input.path);
         case Kind::Relative:{
             const auto candidate=normalized_absolute(importer.parent_path()/input.path);
             // Package-relative imports may move within the package, not
