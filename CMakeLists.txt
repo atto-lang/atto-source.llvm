@@ -29,6 +29,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-policy substrate only; actual guest host-I/O boundaries are not lowered.
+    add_executable(oreslang-native-scoped-policy-test
+        contracts/v1/scoped_permission_policy_test.cpp)
+    target_include_directories(oreslang-native-scoped-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1")
+    target_compile_options(oreslang-native-scoped-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME scoped_permission_host_policy_substrate
+        COMMAND oreslang-native-scoped-policy-test)
+    set_tests_properties(scoped_permission_host_policy_substrate PROPERTIES TIMEOUT 15)
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
