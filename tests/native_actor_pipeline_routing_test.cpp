@@ -112,6 +112,58 @@ int main() {
         pipe.close();
     }
 
+    // Five-backend v1 conformance fixture: one source with three separate
+    // Worker instances of one nominal class, real host mailbox admission.
+    {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event", "producer-1"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-b"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-c"}
+        };
+        std::vector<PipeConnection> edges = {
+            {"producer-1", "worker-a", "Event"},
+            {"producer-1", "worker-b", "Event"},
+            {"producer-1", "worker-c", "Event"}
+        };
+        NativeActorPipeTransport pipe(registry, supervisor, stages, edges, 8, 8);
+        const auto admitted = pipe.write_all_report_async("producer-1", "all");
+        check(admitted.size() == 3, "canonical fan-out recipient count");
+        for (std::size_t i = 0; i < 3; ++i) {
+            check(admitted[i].target == edges[i].target,
+                  "canonical fan-out edge order");
+            admitted[i].admission.get();
+            check(pipe.read_async(i).get() == "all",
+                  "canonical fan-out payload lost");
+        }
+        rejected([&] { (void)pipe.write_one_async("producer-1", "ambiguous"); },
+                 "ambiguous default forward accepted");
+        for (int i = 0; i < 6; ++i)
+            pipe.write_round_robin_async("producer-1", "rr").get();
+        for (int i = 0; i < 3; ++i) {
+            check(pipe.read_async(static_cast<std::size_t>(i)).get() == "rr",
+                  "first RR sweep wrong");
+            check(pipe.read_async(static_cast<std::size_t>(i)).get() == "rr",
+                  "second RR sweep wrong");
+        }
+        const std::string keys[] = {
+            "customer-7", "alpha", "beta", "\xf0\x9f\x8c\x8d", ""
+        };
+        const std::size_t slots[] = {0, 0, 2, 0, 2};
+        for (std::size_t i = 0; i < 5; ++i) {
+            pipe.write_by_key_async("producer-1", keys[i], "key").get();
+            check(pipe.read_async(slots[i]).get() == "key",
+                  "five-backend FNV key destination mismatch");
+        }
+        pipe.write_to_async("producer-1", "worker-b", "direct").get();
+        check(pipe.read_async(1).get() == "direct",
+              "canonical named target mismatch");
+        rejected([&] {
+            (void)pipe.write_to_async("producer-1", "worker-z", "bad");
+        }, "unconnected canonical target admitted");
+        pipe.close();
+    }
+
     // Legacy one-consumer source forward is explicit, not policy-dependent.
     {
         std::vector<PipeStage> linear = {
