@@ -29,6 +29,14 @@ namespace oreslang::runtime {
  */
 class NativeActorPipeTransport final {
 public:
+    /** Stable edge identity paired with independent, admission-only status.
+     * Never interpret a completed admission Future as consumer execution. */
+    struct RouteEdgeReceipt {
+        std::size_t edge_index;
+        std::string target;
+        std::shared_future<void> admission;
+    };
+
     NativeActorPipeTransport(
             NativeSupervisorRegistry& registry,
             const NativeSupervisorRegistry::SupervisorRef& supervisor,
@@ -141,14 +149,42 @@ public:
      * after other edges accepted a copy. Callers must examine every Future
      * and implement application-level deduplication/compensation as needed.
      */
-    std::vector<std::shared_future<void>> write_all_async(
+    std::vector<RouteEdgeReceipt> write_all_report_async(
             const std::string& source, const std::string& payload) {
         const auto& destinations = connected_outlets(source);
-        std::vector<std::shared_future<void>> results;
+        std::vector<RouteEdgeReceipt> results;
         results.reserve(destinations.size());
+        // Materialize metadata BEFORE any admission: no allocation of a
+        // destination label can interrupt an already-started fan-out batch.
         for (const auto edge : destinations)
-            results.push_back(write_async(edge, payload));
+            results.push_back({edge, schema_[edge].target, {}});
+        // A closed/saturated edge returns a failed admission Future, not a
+        // missing entry. Every attempted destination remains identifiable.
+        for (auto& result : results)
+            result.admission = write_async(result.edge_index, payload);
         return results;
+    }
+
+    /** Compatibility host entry point: report futures in approved edge order. */
+    std::vector<std::shared_future<void>> write_all_async(
+            const std::string& source, const std::string& payload) {
+        auto report = write_all_report_async(source, payload);
+        std::vector<std::shared_future<void>> results;
+        results.reserve(report.size());
+        for (auto& entry : report)
+            results.push_back(std::move(entry.admission));
+        return results;
+    }
+
+    /** Prospective self.forward(value): never silently choose the first of
+     * several connected consumers. Branching requires an explicit policy. */
+    std::shared_future<void> write_one_async(
+            const std::string& source, std::string payload) {
+        const auto& destinations = connected_outlets(source);
+        if (destinations.size() != 1)
+            throw std::invalid_argument(
+                "native actor pipe forward is ambiguous: select a routing policy");
+        return write_async(destinations.front(), std::move(payload));
     }
 
     /** Strict per-source round robin, including routes whose write later
@@ -181,8 +217,9 @@ public:
     std::shared_future<void> write_by_key_async(
             const std::string& source, const std::string& key,
             std::string payload) {
-        if (key.size() > 4096)
-            throw std::invalid_argument("native actor pipe route key too large");
+        if (key.size() > 4096 || !valid_utf8_key(key))
+            throw std::invalid_argument(
+                "native actor pipe route key must be bounded canonical UTF-8");
         const auto& destinations = connected_outlets(source);
         std::uint64_t digest = UINT64_C(14695981039346656037);
         for (const unsigned char byte : key) {
@@ -249,6 +286,33 @@ private:
     }
 
     static constexpr std::size_t max_payload_bytes = 1024 * 1024;
+
+    /** Reject overlong encodings, surrogate code points, truncated sequences
+     * and out-of-range Unicode before hashing. Key byte identity remains
+     * caller-defined; normalization (NFC) is an upstream typed-codec duty. */
+    static bool valid_utf8_key(const std::string& key) noexcept {
+        for (std::size_t i = 0; i < key.size();) {
+            const auto lead = static_cast<unsigned char>(key[i]);
+            if (lead <= 0x7f) { ++i; continue; }
+            std::size_t width = 0;
+            if (lead >= 0xc2 && lead <= 0xdf) width = 2;
+            else if (lead >= 0xe0 && lead <= 0xef) width = 3;
+            else if (lead >= 0xf0 && lead <= 0xf4) width = 4;
+            else return false;
+            if (width > key.size() - i) return false;
+            for (std::size_t j = 1; j < width; ++j) {
+                const auto byte = static_cast<unsigned char>(key[i + j]);
+                if ((byte & 0xc0) != 0x80) return false;
+            }
+            const auto second = static_cast<unsigned char>(key[i + 1]);
+            if ((lead == 0xe0 && second < 0xa0) ||
+                (lead == 0xed && second > 0x9f) ||
+                (lead == 0xf0 && second < 0x90) ||
+                (lead == 0xf4 && second > 0x8f)) return false;
+            i += width;
+        }
+        return true;
+    }
 
     struct PendingWrite {
         explicit PendingWrite(std::string value) : payload(std::move(value)) {}
