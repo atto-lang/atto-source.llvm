@@ -29,8 +29,16 @@ public:
         Lease(SharedDomainArena& arena, std::uint64_t actor, Grant grant, bool exclusive)
             : arena_(&arena), exclusive_(exclusive) {
             if (!actor) throw std::logic_error("shared region actor identity required");
-            if (exclusive_) write_ = std::unique_lock<std::shared_mutex>(arena.mutex_);
-            else read_ = std::shared_lock<std::shared_mutex>(arena.mutex_);
+            // Actor carrier threads must not park behind another actor's
+            // critical lease. Admission is fail-fast; the scheduler may
+            // resubmit a turn after the owner releases its lease.
+            if (exclusive_) {
+                write_ = std::unique_lock<std::shared_mutex>(arena.mutex_, std::try_to_lock);
+                if (!write_.owns_lock()) throw std::logic_error("shared region busy");
+            } else {
+                read_ = std::shared_lock<std::shared_mutex>(arena.mutex_, std::try_to_lock);
+                if (!read_.owns_lock()) throw std::logic_error("shared region busy");
+            }
             arena.validate_grant(grant, actor, exclusive_);
         }
         void require_live(bool write = false) const {
