@@ -157,11 +157,33 @@ public:
             // close() will settle the unpromoted writer with an exception.
             if (!closed_.load(std::memory_order_acquire)
                     && !link.closed && !link.writers.empty()) {
-                auto waiting = std::move(link.writers.front());
+                // Retain the pending writer and its exact byte credit until
+                // the message is safely inserted. A failed deque allocation
+                // must NOT orphan an unresolved Future or leak graph quota.
+                auto waiting = link.writers.front();
+                try {
+                    link.messages.push_back(std::move(waiting->payload));
+                } catch (...) {
+                    // Single-element deque append has the strong exception
+                    // guarantee; std::string move is noexcept. Preserve the
+                    // original writer at the head for a future direct read.
+                    return future;
+                }
                 link.writers.pop_front();
-                link.messages.push_back(std::move(waiting->payload));
                 waiting->promise.set_value();
             }
+        } else if (!closed_.load(std::memory_order_acquire) &&
+                !link.closed && !link.writers.empty()) {
+            // Recovery after a failed promotion: a writer can be pending
+            // with an empty mailbox. Handoff preserves FIFO without another
+            // queue allocation or leaving the reader suspended forever.
+            auto waiting = link.writers.front();
+            const auto bytes = waiting->payload.size();
+            receiver->set_value(std::move(waiting->payload));
+            link.writers.pop_front();
+            link.buffered_bytes -= bytes;
+            release_total_bytes(bytes);
+            waiting->promise.set_value();
         } else if (closed_.load(std::memory_order_acquire) || link.closed) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe is closed")));
