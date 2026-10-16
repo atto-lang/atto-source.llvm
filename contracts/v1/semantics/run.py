@@ -2,7 +2,8 @@
 """Independent compiler admission, diagnostic class and native-result contract runner.
 
 Semantics here belong to the suite, not either compiler implementation.
-Only the LLVM backend currently has a native exit-result adapter.
+Both LLVM native execution and an explicitly configured Graal guest adapter
+require real compilation and execution for positive native results.
 """
 import argparse
 import hashlib
@@ -50,6 +51,8 @@ def validate_suite():
         if case["id"] in ids:
             raise ValueError("duplicate case: " + case["id"])
         ids.add(case["id"])
+        if case["source"] in files:
+            raise ValueError("duplicate fixture source: " + case["source"])
         f = (ROOT / case["source"]).resolve()
         if not f.is_relative_to((ROOT / "fixtures").resolve()) or not f.is_file():
             raise ValueError("invalid fixture: " + case["source"])
@@ -61,7 +64,8 @@ def validate_suite():
             raise ValueError("pending requires reason and resolved cases cannot retain one: " + case["id"])
         if all(s == "pending" for s in case["backends"].values()):
             raise ValueError("a case cannot be pending on both backends: " + case["id"])
-    on_disk = {"fixtures/" + f.name for f in (ROOT / "fixtures").glob("*.ores")}
+    on_disk = {p.relative_to(ROOT).as_posix()
+               for p in (ROOT / "fixtures").rglob("*.ores")}
     if files != on_disk:
         raise ValueError("orphan or missing fixtures: " + str(sorted(files ^ on_disk)))
     # Bind the suite identity to the actual programs and normative contracts.
@@ -83,6 +87,12 @@ def validate_command(command):
     if not argv or sum(p.count("{source}") for p in argv) != 1:
         raise ValueError("compiler command must contain exactly one {source}")
     return argv
+
+def requires_guest_runner(suite, backend):
+    return backend == "graal" and any(
+        case["kind"] == "native_exit" and case["backends"]["graal"] == "required"
+        for case in suite["cases"]
+    )
 
 def check_diagnostic(returncode, stdout, stderr, category, backend):
     # A crash, missing compiler, signal or setup failure cannot satisfy a rejection.
@@ -180,6 +190,8 @@ def main():
     if args.run_command and args.backend != "graal":
         p.error("--run-command is only applicable to the graal backend")
     run_argv = validate_command(args.run_command) if args.run_command else None
+    if requires_guest_runner(suite, args.backend) and run_argv is None:
+        p.error("--run-command is mandatory for required Graal native_exit cases")
     results = []
     for case in suite["cases"]:
         if case["backends"][args.backend] == "pending":
