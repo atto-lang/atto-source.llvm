@@ -241,9 +241,22 @@ inline SourceConfig read_project(const fs::path& source,
         auto entry=normalized_absolute(path.is_absolute()?path:result.root/path);
         if(result.package_manifest&&!beneath(result.root,entry))
             throw std::invalid_argument("package main escapes project root");
-        if(result.package_manifest && fs::exists(entry) &&
-           !beneath(fs::canonical(result.root),fs::canonical(entry)))
-            throw std::invalid_argument("package main escapes physical project root");
+        if(result.package_manifest) {
+            // A missing generated main may still pass through an existing
+            // symlinked ancestor outside the package. Validate the nearest
+            // existing physical ancestor and reject dangling symlinks.
+            auto cursor=entry;
+            while(!cursor.empty() && !fs::exists(cursor)) {
+                if(fs::is_symlink(cursor))
+                    throw std::invalid_argument("package main has dangling symlink ancestor");
+                const auto parent=cursor.parent_path();
+                if(parent==cursor)break;
+                cursor=parent;
+            }
+            if(!cursor.empty() &&
+               !beneath(fs::canonical(result.root),fs::canonical(cursor)))
+                throw std::invalid_argument("package main escapes physical project root");
+        }
         result.main_entry=entry;
     }
     if(result.package_manifest){
