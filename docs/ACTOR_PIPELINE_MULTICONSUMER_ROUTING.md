@@ -147,13 +147,14 @@ isolate memory ownership, or guest compiler lowering.
 
 ### Native aggregate payload accounting (2026-10-15 hardening)
 
-The native transport now accepts an optional graph-wide **buffered byte
-capacity**, defaulting to **64 MiB** and restricted to **1..64 MiB**.
-An individual DATA payload is limited to **1 MiB**, while the edge and
-supervisor worker capacities are each restricted to **1..4096**. The byte
-budget is a second, independent pressure gate shared atomically across
-*all* graph edges: an overloaded producer cannot allocate unlimited DATA
-behind otherwise separate consumer queues.
+The native transport now accepts optional graph-wide **buffered byte**
+and **buffered message** capacities, defaulting to **64 MiB / 65,536**
+and restricted to **1..64 MiB / 1..65,536** respectively. An individual
+DATA payload is limited to **1 MiB**, while the edge and supervisor worker
+capacities are each restricted to **1..4096**. These are independent,
+atomic pressure gates shared across *all* graph edges. A zero-byte DATA
+message still consumes one message slot, so empty messages cannot evade
+the resource bound.
 
 Bytes are charged only for a buffered message or pending writer, before
 publication; a failed reservation never consumes credits. Reading a queued
@@ -161,8 +162,9 @@ message releases its bytes. Promoting an already charged writer preserves
 the charge until its DATA is read. STOP releases cancelled pending-writer
 credits but preserves credits for previously admitted buffered DATA, which
 remains drainable. A direct handoff to an already-waiting reader is not a
-buffered transport allocation. The host-only
-`buffered_payload_bytes()` diagnostic exposes current charged bytes.
+buffered transport allocation. The host-only `buffered_payload_bytes()` and
+`buffered_message_count()` diagnostics expose the currently charged
+payload bytes and buffered/pending messages.
 
 This is **not** a global heap cap on consumers holding already-delivered
 Futures or a claim of guest-level backpressure. The future scheduler
