@@ -103,6 +103,12 @@ public:
             ? reactors_[index]->completion_fd() : -1;
     }
 
+    /** A completion-fd consumer drains eventfd readiness before polling records. */
+    void drain_completion_signal(std::size_t index) noexcept {
+        if (index < started_.load(std::memory_order_acquire))
+            reactors_[index]->drain_completion_signal();
+    }
+
     /** Host teardown only. Joining reactor threads may wait for OS scheduling. */
     void stop() noexcept {
         std::lock_guard<std::mutex> lock(mu_);
