@@ -151,7 +151,22 @@ public:
                     && !link.closed && !link.writers.empty()) {
                 auto waiting = std::move(link.writers.front());
                 link.writers.pop_front();
-                link.messages.push_back(std::move(waiting->payload));
+                const auto bytes = waiting->payload.size();
+                // A failed deque allocation during promotion must not leak
+                // this pending writer's already-reserved byte credits or
+                // strand its admission Future. The consumed reader still
+                // receives its previously-admitted message.
+                try {
+                    link.messages.push_back(std::move(waiting->payload));
+                } catch (...) {
+                    link.buffered_bytes -= bytes;
+                    graph_buffered_bytes_.fetch_sub(
+                        bytes, std::memory_order_acq_rel);
+                    try {
+                        waiting->promise.set_exception(std::current_exception());
+                    } catch (...) { }
+                    return future;
+                }
                 waiting->promise.set_value();
             }
         } else if (closed_.load(std::memory_order_acquire) || link.closed) {
