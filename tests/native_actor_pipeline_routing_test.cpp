@@ -1371,6 +1371,57 @@ int main() {
               "STOP drain failed to refund remaining accepted DATA");
     }
 
+    // An injected failure during STOP-error construction must be safe even
+    // when two close() callers race to publish the terminal barrier. The
+    // winning closer determines the exception type; neither may expose an
+    // unset/broken Future, publish extra DATA or refund the same credit twice.
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+    for (int trial = 0; trial < 24; ++trial) {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+            64, 8, 8);
+        pipe.write_to_async("Producer", "ConsumerA", "a").get();
+        pipe.write_to_async("Producer", "ConsumerB", "b").get();
+        auto pending_a = pipe.write_to_async("Producer", "ConsumerA", "wa");
+        auto pending_b = pipe.write_to_async("Producer", "ConsumerB", "wb");
+        check(pipe.buffered_payload_bytes() == 6 &&
+              pipe.buffered_message_count() == 4,
+              "racing-STOP fixture lacked charged pending writers");
+        pipe.fail_next_close_exception_for_test();
+        std::atomic<bool> go{false};
+        std::thread first([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            pipe.close();
+        });
+        std::thread second([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            pipe.close();
+        });
+        go.store(true, std::memory_order_release);
+        first.join();
+        second.join();
+        check(pipe.closed() && pipe.buffered_payload_bytes() == 2 &&
+              pipe.buffered_message_count() == 2 &&
+              pipe.pending_reader_count() == 0,
+              "competing STOP closers leaked or double-refunded credits");
+        for (auto* receipt : {&pending_a, &pending_b}) {
+            bool terminal = false;
+            try { receipt->get(); }
+            catch (const std::logic_error&) { terminal = true; }
+            catch (const std::bad_alloc&) { terminal = true; }
+            check(terminal,
+                  "racing STOP returned an invalid pending-write Future");
+        }
+        check(pipe.read_async(0).get() == "a" &&
+              pipe.read_async(1).get() == "b" &&
+              pipe.buffered_message_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0,
+              "racing STOP lost DATA or stranded credits after drain");
+    }
+#endif
+
     // Concurrent STOP publication must be a barrier for writers on every
     // edge, not merely for the edge currently closing. Buffered admissions
     // predating STOP stay readable; unresolved writers settle with errors.
