@@ -59,7 +59,7 @@ def main():
         write(root / "package" / "src" / "util.ores", 'fnc helper(int a): int {return a + 2;}\n')
         expect_success(args.compiler, args.clang, root / "package" / "src" / "main.ores")
         write(root / "package" / "src" / "escape.ores", 'import "../../helper";\npub fnc main(): int {return add(40, 2);}\n')
-        expect_failure(args.compiler, root / "package" / "src" / "escape.ores", "relative import escaped declared package root")
+        expect_failure(args.compiler, root / "package" / "src" / "escape.ores", "native import escapes physical search root")
     print("native scalar import execution gates passed")
 
 if __name__ == "__main__":
