@@ -60,8 +60,12 @@ failure-propagation ABI and cleanup/supervision design is implemented.
 ## Recoverable experimental checked-result function ABI (LLVM)
 
 The separate opt-in `--target=host --experimental-checked-i64-result-functions`
-emits C-callable symbols `__oreslang_checked_v2_<function>_<arity>` with
-signature `i32(i64...arguments, i64* output)`. Status `0` publishes exactly
+emits C-callable symbols `__oreslang_checked_v2_<function>_<arity>` only
+for explicitly `pub` functions, with signature
+`i32(i64...arguments, i64* output)`. Private helpers retain
+`llvm::Function::PrivateLinkage` and remain callable only from
+other functions in the generated module. Pure modules without at least
+one `pub` entrypoint are rejected before IR emission. Status `0` publishes exactly
 one result, `1` denotes signed-i64 overflow, and `2` rejects a null output
 pointer without evaluating arithmetic. A failing nested callee returns its
 original status to the caller; the caller's output remains unchanged. This
