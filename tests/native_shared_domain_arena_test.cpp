@@ -7,8 +7,21 @@
 #include <thread>
 #include <type_traits>
 #include <iostream>
+#include <string_view>
 using oreslang::runtime::SharedDomainArena;
 void require(bool cond) { if (!cond) throw std::runtime_error("shared domain test failed"); }
+// Only busy admission is retryable; ownership, revocation and invalid handles
+// must fail permanently rather than being swallowed by the contention loop.
+template<typename F> void eventually(F&& f) {
+    for (unsigned i = 0; i < 1000000; ++i) {
+        try { f(); return; }
+        catch (const std::logic_error& e) {
+            if (std::string_view(e.what()) != "shared region busy") throw;
+            std::this_thread::yield();
+        }
+    }
+    throw std::runtime_error("shared region lease admission starved");
+}
 template<typename F> void reject(F&& f) {
     bool denied=false;
     try { f(); } catch (const std::exception&) { denied=true; }
@@ -105,23 +118,43 @@ int main() {
             writer.drop(transient);
         }
     }
+    // A second carrier must return an explicit busy result instead of
+    // parking its OS thread behind a live actor read lease.
+    {
+        std::promise<void> held, release;
+        auto heldFuture = held.get_future();
+        auto releaseFuture = release.get_future();
+        std::thread holding([&] {
+            auto lease = concurrent.read(202, rg);
+            held.set_value();
+            releaseFuture.wait();
+        });
+        heldFuture.wait();
+        reject([&] { (void)concurrent.write(201, wg); });
+        release.set_value();
+        holding.join();
+    }
     std::atomic<bool> start{false};
     std::atomic<bool> correct{true};
     std::thread writerThread([&] {
         while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
         for (std::uint64_t i = 1; i <= 1500; ++i) {
-            auto lease = concurrent.write(201, wg);
-            lease.write(ch, &i, sizeof(i));
+            eventually([&] {
+                auto lease = concurrent.write(201, wg);
+                lease.write(ch, &i, sizeof(i));
+            });
         }
     });
     std::array<std::thread,4> readers;
     for (auto& thread : readers) thread = std::thread([&] {
         while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
         for (int i = 0; i < 1500; ++i) {
-            auto lease = concurrent.read(202, rg);
-            std::uint64_t value = 0;
-            lease.read(ch, &value, sizeof(value));
-            if (value > 1500) correct.store(false);
+            eventually([&] {
+                auto lease = concurrent.read(202, rg);
+                std::uint64_t value = 0;
+                lease.read(ch, &value, sizeof(value));
+                if (value > 1500) correct.store(false);
+            });
         }
     });
     start.store(true, std::memory_order_release);
