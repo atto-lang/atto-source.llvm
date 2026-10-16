@@ -28,6 +28,11 @@ namespace oreslang::runtime {
  * owning scheduler CONTROL/USER lane, never inline in a producer thread.
  *
  * Does not lower source PipelineExpr or spawn guest actors.
+ * WARNING: public host methods take a textual source selector, NOT an
+ * authenticated actor capability. Only the trusted supervisor/embedding
+ * runtime may supply those selectors. Guest lowering must bind sender
+ * instance identity and generation before entering this host substrate;
+ * matching a guessed source string alone grants no routing authority.
  */
 class NativeActorPipeTransport final {
 public:
@@ -372,7 +377,8 @@ public:
         return write_async(destinations.front(), std::move(payload));
     }
 
-    /** Strict per-source round robin, including routes whose write later
+    /** Trusted-host policy only: `source` is not an actor capability.
+     * Strict per-source round robin, including routes whose write later
      * blocks or fails. No skip-on-backpressure and no hidden retry. */
     std::shared_future<void> write_round_robin_async(
             const std::string& source, std::string payload) {
@@ -387,8 +393,10 @@ public:
         return write_async(edge, std::move(payload));
     }
 
-    /** Named destination selection is restricted to an existing source edge;
-     * a caller cannot use another actor's outbound port by guessing a name. */
+    /** Named selection is restricted to an edge owned by the supplied source.
+     * This validates topology only; it does NOT authenticate the caller or
+     * prevent a native host caller from spoofing another source string.
+     * Never expose this entry point as a guest-callable actor method. */
     std::shared_future<void> write_to_async(
             const std::string& source, const std::string& target,
             std::string payload) {
