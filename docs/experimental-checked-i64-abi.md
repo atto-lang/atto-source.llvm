@@ -109,5 +109,19 @@ default compiler. The compiler does not charge host/LLVM overhead,
 cancellation, scheduler work or resource-owning native execution against
 this estimate. Both profiles include positive bounded-fanout and
 negative exponential-fanout real-compiler regression fixtures.
+The guest harnesses now test threshold-adjacent fanout graphs: 13 levels
+have **49,149** expanded nodes and are admitted, while 14 levels have
+**98,301** and must be denied with the *work-budget* diagnostic.
+A 32-level linear call chain is admitted; 33 levels must be denied with
+the *depth-budget* diagnostic, independently of the work budget.
+
+A separate, independent **source-free** model was exercised in private
+carrier [run #38957531939](https://github.com/voxletra/voxletra-e2e/actions/runs/38957531939)
+under GCC and Clang with ASan/UBSan, 20,000 deterministic random DAGs and
+10 directed cases **per compiler**. It compared budget admission against a
+distinct unsigned-128-bit oracle. This is evidence for the algorithm,
+**not** an execution of the actual Oreslang compiler or any permission to
+mirror private source. The host exact-source CTests remain blocked.
+
 A green fixture/reference oracle by itself does not prove that the
 compiler/guest tests have run or that actor cleanup is safe.
