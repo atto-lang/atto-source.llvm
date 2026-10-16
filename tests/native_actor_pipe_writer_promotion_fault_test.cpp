@@ -51,4 +51,70 @@ int main() {
                 "transport failed to recover after writer promotion");
         pipe.close();
     }
+#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+    // When a promotion fails, the buffer can have a vacant slot while
+    // older writers still own charged pending admissions. A later write
+    // must not overtake them. A second failure can also leave NO buffered
+    // messages but one live writer: the next read must drain it directly.
+    for (int scenario = 0; scenario < 2; ++scenario) {
+        NativeActorPipeTransport pipe(registry, supervisor, stages, 2, 4);
+        pipe.write_one_async("Producer", "A").get();
+        pipe.write_one_async("Producer", "B").get();
+        auto first_failed = pipe.write_one_async("Producer", "X");
+        auto older = pipe.write_one_async("Producer", "OLD");
+        require(first_failed.wait_for(0ms) == std::future_status::timeout
+                && older.wait_for(0ms) == std::future_status::timeout,
+                "both older writers must start queued");
+
+        pipe.test_fail_next_writer_promotion();
+        require(pipe.read_async(0).get() == "A", "first buffered DATA changed");
+        bool first_rejected = false;
+        try { first_failed.get(); }
+        catch (const std::bad_alloc&) { first_rejected = true; }
+        require(first_rejected, "first injected promotion fault not reported");
+        require(pipe.buffered_payload_bytes() == 4
+                && pipe.buffered_message_count() == 2,
+                "first injected failure did not preserve remaining credits");
+
+        auto newer = pipe.write_one_async("Producer", "NEW");
+        require(newer.wait_for(0ms) == std::future_status::timeout,
+                "new writer overtook an older queued writer after promotion fault");
+        require(pipe.buffered_payload_bytes() == 7
+                && pipe.buffered_message_count() == 3,
+                "new pending writer did not charge credits");
+
+        if (scenario == 1)
+            pipe.test_fail_next_writer_promotion();
+        require(pipe.read_async(0).get() == "B", "second buffered DATA changed");
+
+        if (scenario == 1) {
+            bool older_rejected = false;
+            try { older.get(); }
+            catch (const std::bad_alloc&) { older_rejected = true; }
+            require(older_rejected, "second injected promotion fault not reported");
+            require(pipe.buffered_payload_bytes() == 3
+                    && pipe.buffered_message_count() == 1,
+                    "second injected failure leaked or erased newer writer credits");
+            // There is now no buffered DATA, but NEW is still queued.
+            require(pipe.read_async(0).get() == "NEW",
+                    "queued writer became stranded behind an empty mailbox");
+            newer.get();
+        } else {
+            older.get();
+            require(pipe.read_async(0).get() == "OLD",
+                    "pending writer lost FIFO order after the first fault");
+            newer.get();
+            require(pipe.read_async(0).get() == "NEW",
+                    "younger pending writer was not delivered last");
+        }
+        require(pipe.buffered_payload_bytes() == 0
+                && pipe.buffered_message_count() == 0
+                && pipe.pending_reader_count() == 0,
+                "recovery left global credits charged");
+        pipe.write_one_async("Producer", "healthy").get();
+        require(pipe.read_async(0).get() == "healthy",
+                "transport cannot accept DATA after repeated promotion failures");
+        pipe.close();
+    }
+#endif
 }
