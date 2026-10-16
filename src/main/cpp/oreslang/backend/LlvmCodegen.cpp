@@ -268,9 +268,103 @@ llvm::Value* lower(const Expression& expr,
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
 }
 
+
+/*
+ * Explicit experimental checked-i64 C ABI, deliberately separate from
+ * ordinary Oreslang's currently wrapping i64 ABI. For one pure scalar
+ * source function 'checked' only:
+ *    i32 __oreslang_checked_scalar_v1(i64 ...arguments, i64* output)
+ * 0 => success/output initialized; 1 => overflow/output untouched;
+ * 2 => null output/output untouched. No process trap, globals, owners,
+ * actors, allocations, callbacks or implicit source-level error claims.
+ * This is a migration/conformance slice, NOT general numeric parity.
+ */
+bool checked_scalar_tree(const Expression& expr,
+                         const std::unordered_set<std::string>& parameters,
+                         std::size_t depth = 0) {
+    if (depth >= 64) return false;
+    switch (expr.kind) {
+        case Expression::Kind::Integer: return true;
+        case Expression::Kind::Variable: return parameters.count(expr.name) == 1;
+        case Expression::Kind::Negate:
+            return expr.left && checked_scalar_tree(*expr.left, parameters, depth + 1);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            return expr.left && expr.right &&
+                checked_scalar_tree(*expr.left, parameters, depth + 1) &&
+                checked_scalar_tree(*expr.right, parameters, depth + 1);
+        default: return false;
+    }
+}
+
+llvm::Value* lower_checked_scalar(
+    const Expression& expr, llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Type* i64, llvm::BasicBlock* overflow,
+    const std::unordered_map<std::string, llvm::Value*>& parameters) {
+    if (expr.kind == Expression::Kind::Integer)
+        return llvm::ConstantInt::getSigned(i64, expr.integer);
+    if (expr.kind == Expression::Kind::Variable)
+        return parameters.at(expr.name);
+    llvm::Intrinsic::ID intrinsic;
+    llvm::Value* left = nullptr;
+    llvm::Value* right = nullptr;
+    if (expr.kind == Expression::Kind::Negate) {
+        intrinsic = llvm::Intrinsic::ssub_with_overflow;
+        left = llvm::ConstantInt::get(i64, 0);
+        right = lower_checked_scalar(*expr.left, builder, module, i64, overflow, parameters);
+    } else {
+        left = lower_checked_scalar(*expr.left, builder, module, i64, overflow, parameters);
+        right = lower_checked_scalar(*expr.right, builder, module, i64, overflow, parameters);
+        intrinsic = expr.kind == Expression::Kind::Add
+            ? llvm::Intrinsic::sadd_with_overflow
+            : expr.kind == Expression::Kind::Subtract
+            ? llvm::Intrinsic::ssub_with_overflow
+            : llvm::Intrinsic::smul_with_overflow;
+    }
+    auto* declaration = llvm::Intrinsic::getDeclaration(&module, intrinsic, {i64});
+    auto* pair = builder.CreateCall(declaration, {left, right}, "checked.pair");
+    auto* value = builder.CreateExtractValue(pair, {0}, "checked.value");
+    auto* failed = builder.CreateExtractValue(pair, {1}, "checked.overflow");
+    auto* next = llvm::BasicBlock::Create(
+        builder.getContext(), "checked.continue", builder.GetInsertBlock()->getParent());
+    builder.CreateCondBr(failed, overflow, next);
+    builder.SetInsertPoint(next);
+    return value;
+}
+
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+                                  bool cortex_m_target, bool experimental_checked_i64) {
+    if (experimental_checked_i64) {
+        // This opt-in companion ABI cannot bypass ownership cleanup because
+        // it admits NO owner state, actor, calls, side effect, or suspension.
+        if (wasm32_target || cortex_m_target || !source.module.empty() ||
+                !source.classes.empty() || !source.actors.empty() ||
+                source.functions.size() != 1) {
+            throw std::runtime_error("experimental checked-i64 requires one host-only scalar function");
+        }
+        const auto& fn = source.functions.front();
+        if (fn.name != "checked" || fn.returns_void || !fn.result ||
+                fn.parameters.size() > 4 || !fn.generic_parameters.empty() ||
+                fn.scalar_while || !fn.locals.empty() || !fn.statements.empty() ||
+                !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                fn.caught_throw_value || !fn.caught_throw_defers.empty()) {
+            throw std::runtime_error("experimental checked-i64 requires pure checked() expression");
+        }
+        std::unordered_set<std::string> names;
+        for (const auto& param : fn.parameters) {
+            if (param.mode != Parameter::Mode::Value || !param.class_name.empty() ||
+                    !param.generic_type.empty() || !names.insert(param.name).second) {
+                throw std::runtime_error("experimental checked-i64 requires unique value int parameters");
+            }
+        }
+        if (!checked_scalar_tree(*fn.result, names))
+            throw std::runtime_error("experimental checked-i64 expression contains effects or exceeds depth limit");
+    }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
@@ -1475,6 +1569,39 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.CreateRet(builder.CreateSelect(valid, narrowed,
                 llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
         }
+    }
+
+    if (experimental_checked_i64) {
+        const auto& fn = source.functions.front();
+        llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+        std::vector<llvm::Type*> argument_types(fn.parameters.size(), i64);
+        argument_types.push_back(loan_ptr);
+        auto* contract = llvm::Function::Create(
+            llvm::FunctionType::get(i32, argument_types, false),
+            llvm::Function::ExternalLinkage, "__oreslang_checked_scalar_v1", module);
+        llvm::IRBuilder<> checked(llvm::BasicBlock::Create(context, "entry", contract));
+        std::unordered_map<std::string, llvm::Value*> arguments;
+        auto it = contract->arg_begin();
+        for (const auto& parameter : fn.parameters) {
+            it->setName(parameter.name);
+            arguments.emplace(parameter.name, &*it++);
+        }
+        llvm::Value* output = &*it;
+        output->setName("output");
+        auto* invalid_output = llvm::BasicBlock::Create(context, "checked.null.output", contract);
+        auto* evaluate = llvm::BasicBlock::Create(context, "checked.evaluate", contract);
+        auto* overflow = llvm::BasicBlock::Create(context, "checked.overflow", contract);
+        checked.CreateCondBr(checked.CreateIsNull(output), invalid_output, evaluate);
+        checked.SetInsertPoint(invalid_output);
+        checked.CreateRet(llvm::ConstantInt::get(i32, 2));
+        checked.SetInsertPoint(evaluate);
+        llvm::Value* value = lower_checked_scalar(*fn.result, checked, module,
+            i64, overflow, arguments);
+        checked.CreateStore(value, output);
+        checked.CreateRet(llvm::ConstantInt::get(i32, 0));
+        checked.SetInsertPoint(overflow);
+        // Output is written only after every checked operation succeeds.
+        checked.CreateRet(llvm::ConstantInt::get(i32, 1));
     }
 
     std::string diagnostics;
