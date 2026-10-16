@@ -1922,4 +1922,13 @@ if(BUILD_TESTING)
           --clang "${ORE_NUMERIC_CLANG}")
     set_tests_properties(numeric_experimental_checked_i64_status_abi
         PROPERTIES TIMEOUT 240)
+    # Actual Oreslang compiler IR -> Clang -> native host execution.
+    # Deliberately excludes owner/actor cleanup until typed unwind is ready.
+    add_test(NAME numeric_experimental_checked_pure_function_graph
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_checked_pure_functions.py"
+          --compiler "$<TARGET_FILE:oreslang-llvmc>"
+          --clang "${ORE_NUMERIC_CLANG}")
+    set_tests_properties(numeric_experimental_checked_pure_function_graph
+        PROPERTIES TIMEOUT 240)
 endif()
