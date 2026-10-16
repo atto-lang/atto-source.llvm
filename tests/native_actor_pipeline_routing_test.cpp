@@ -81,6 +81,67 @@ int main() {
         }, "supervisor actor in data pipeline permitted");
     }
 
+    // Two downstream instances of ONE actor class must have independent
+    // destinations and mailboxes. Graph edges identify node instances, never
+    // a class name shared by several workers.
+    {
+        const std::vector<PipeStage> instances = {
+            {"Ingress", PipeRole::readable, "", "Event", "front"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-0"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-1"}
+        };
+        const std::vector<PipeConnection> edges = {
+            {"front", "worker-0", "Event"},
+            {"front", "worker-1", "Event"}
+        };
+        check(check_actor_pipeline_graph(instances, edges).size() == 2,
+              "same-class consumer instances rejected");
+        NativeActorPipeTransport pipe(
+            registry, supervisor, instances, edges, 2, 4);
+        pipe.write_round_robin_async("front", "job-0").get();
+        pipe.write_round_robin_async("front", "job-1").get();
+        check(pipe.read_async(0).get() == "job-0",
+              "first worker instance received wrong job");
+        check(pipe.read_async(1).get() == "job-1",
+              "second worker instance received wrong job");
+        pipe.write_to_async("front", "worker-1", "named").get();
+        check(pipe.read_async(1).get() == "named",
+              "named route confused worker class with node instance");
+        rejected([&] {
+            pipe.write_to_async("front", "Worker", "ambiguous");
+        }, "actor class name leaked as implicit route authority");
+        rejected([&] {
+            auto bad = instances;
+            bad[2].node_id = "worker-0";
+            (void)check_actor_pipeline_graph(bad, edges);
+        }, "duplicate instance ID permitted");
+        rejected([&] {
+            auto bad = instances;
+            bad[2].node_id = "front";
+            (void)check_actor_pipeline_graph(bad, edges);
+        }, "node ID alias to source permitted");
+        pipe.close();
+    }
+
+    // Linear pipes also require unique node identities when actor types
+    // repeat; otherwise subsequent node-oriented routing would alias edges.
+    {
+        const std::vector<PipeStage> repeated = {
+            {"Worker", PipeRole::readable, "", "Event", "one"},
+            {"Worker", PipeRole::writable, "Event", "", "two"}
+        };
+        const auto links = check_actor_pipeline(repeated);
+        check(links.size() == 1 && links[0].source == "one" &&
+              links[0].target == "two",
+              "linear same-class actors lost explicit instance IDs");
+        rejected([&] {
+            auto duplicate = repeated;
+            duplicate[0].node_id.clear();
+            duplicate[1].node_id.clear();
+            (void)check_actor_pipeline(duplicate);
+        }, "linear duplicate actor identities were conflated");
+    }
+
     // Legacy one-consumer source forward is explicit, not policy-dependent.
     {
         std::vector<PipeStage> linear = {
