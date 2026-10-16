@@ -820,6 +820,78 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-resource-registry-test)
     set_tests_properties(native_actor_resource_registry_quiescence PROPERTIES TIMEOUT 15)
 
+    add_executable(oreslang-native-pipeline-graph-contract-test
+        tests/native_actor_pipe_graph_contract_test.cpp)
+    target_include_directories(oreslang-native-pipeline-graph-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-pipeline-graph-contract-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_typed_multiconsumer_graph_contract
+        COMMAND oreslang-native-pipeline-graph-contract-test)
+    set_tests_properties(native_actor_typed_multiconsumer_graph_contract
+        PROPERTIES TIMEOUT 15)
+
+    # Real bounded host pipeline routing: DAG fan-out, strict per-source RR,
+    # explicit destinations and key affinity. NOT guest self.* lowering.
+    add_executable(oreslang-native-actor-pipeline-routing-test
+        tests/native_actor_pipeline_routing_test.cpp)
+    target_include_directories(oreslang-native-actor-pipeline-routing-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pipeline-routing-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    # Allocation seams exist only in test executables, not in production.
+    target_compile_definitions(oreslang-native-actor-pipeline-routing-test PRIVATE
+        ORESLANG_ACTOR_PIPE_FAULT_TESTS=1 ORES_ACTOR_PIPE_TEST_FAULT_INJECTION=1)
+    target_link_libraries(oreslang-native-actor-pipeline-routing-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_pipeline_multiconsumer_host_routing
+        COMMAND oreslang-native-actor-pipeline-routing-test)
+    set_tests_properties(native_actor_pipeline_multiconsumer_host_routing
+        PROPERTIES TIMEOUT 25)
+
+    # A separate macro-free build exercises the real production surface.
+    # Fault-injection CTest alone can mask compile/runtime regressions behind
+    # ORESLANG_ACTOR_PIPE_FAULT_TESTS or ORES_ACTOR_PIPE_TEST_FAULT_INJECTION.
+    add_executable(oreslang-native-actor-pipeline-routing-production-test
+        tests/native_actor_pipeline_routing_test.cpp)
+    target_include_directories(oreslang-native-actor-pipeline-routing-production-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pipeline-routing-production-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-pipeline-routing-production-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_pipeline_multiconsumer_production_routing
+        COMMAND oreslang-native-actor-pipeline-routing-production-test)
+    set_tests_properties(native_actor_pipeline_multiconsumer_production_routing
+        PROPERTIES TIMEOUT 25)
+
+    # Sealed correlation frame model: bounded flow/branch IDs, one-shot
+    # reverse hops and generation retirement. Host metadata only; source
+    # self.backward/self.reply still require scheduler/compiler lowering.
+    add_executable(oreslang-native-actor-pipe-route-ledger-test
+        tests/native_actor_pipe_route_ledger_test.cpp)
+    target_include_directories(oreslang-native-actor-pipe-route-ledger-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-pipe-route-ledger-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-actor-pipe-route-ledger-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_pipeline_correlation_host_ledger
+        COMMAND oreslang-native-actor-pipe-route-ledger-test)
+    set_tests_properties(native_actor_pipeline_correlation_host_ledger
+        PROPERTIES TIMEOUT 25)
+
+    # Independent deterministic 32x pending-writer promotion regression.
+    add_executable(oreslang-native-actor-writer-promotion-fault-test
+        tests/native_actor_pipe_writer_promotion_fault_test.cpp)
+    target_include_directories(oreslang-native-actor-writer-promotion-fault-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-writer-promotion-fault-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_compile_definitions(oreslang-native-actor-writer-promotion-fault-test PRIVATE
+        ORES_ACTOR_PIPE_TEST_FAULT_INJECTION=1)
+    target_link_libraries(oreslang-native-actor-writer-promotion-fault-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_writer_promotion_fault_injection
+        COMMAND oreslang-native-actor-writer-promotion-fault-test)
+    set_tests_properties(native_actor_writer_promotion_fault_injection PROPERTIES TIMEOUT 25)
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
