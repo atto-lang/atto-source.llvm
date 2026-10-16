@@ -108,6 +108,10 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
 struct Loan {
     std::string name;
     bool exclusive = false;
+    // Projection borrows alias their complete class owner until this
+    // synchronous call returns. This intentionally forbids disjoint loans
+    // until source/CFG lowering models exact per-field loan provenance.
+    bool projected_scalar_field = false;
 };
 
 // Only named, OWNED int parameter storage is currently addressable. A loan
@@ -121,9 +125,29 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
         reject(expr, "borrowed argument requires explicit rt borrow [mut]");
     if ((expected == Mode::BorrowMut) != exclusive)
         reject(expr, "borrow mode does not match borrowed parameter");
-    if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+    if (!expr.left)
         reject(expr, "native borrow requires an addressable named int parameter");
-    LocalOwnership& source = local(*expr.left, locals);
+    const Expression* root = expr.left.get();
+    std::string projection;
+    if (root->kind == Expression::Kind::Field) {
+        // Accept only one direct, public, primitive class-field projection.
+        // A nested member, Array<int> field, class temporary, or naked class
+        // value has no native scalar loan provenance.
+        if (!root->left || root->left->kind != Expression::Kind::Variable)
+            reject(expr, "native projected borrow requires direct named class field");
+        projection = root->name;
+        root = root->left.get();
+        LocalOwnership& projected_owner = checked_field(
+            root->name, projection, expr.offset, locals);
+        if (projected_owner.class_array_fields.count(projection) ||
+                !projected_owner.class_array_fields.empty())
+            reject(expr, "ownership violation: native projected borrow requires primitive-only class fields");
+        if (projected_owner.moved_fields.count(projection))
+            reject(expr, "ownership violation: cannot borrow a moved class field");
+    }
+    if (root->kind != Expression::Kind::Variable)
+        reject(expr, "native borrow requires an addressable named int parameter");
+    LocalOwnership& source = local(*root, locals);
     if (source.int_array)
         reject(expr, "ownership violation: native Array<int> cannot be borrowed or escaped");
     // A borrowed parameter has a caller-held lifetime and already carries
@@ -133,21 +157,21 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (source.heap_owned && exclusive)
         reject(expr, "ownership violation: native owned int mutable borrow needs handle-aware writeback");
     if (source.mode == Mode::Borrow && exclusive)
-        reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
+        reject(expr, "cannot mutably reborrow shared parameter '" + root->name + "'");
     if (exclusive && source.mode == Mode::Value && !source.mutable_owner)
-        reject(expr, "cannot mutably borrow immutable owner '" + expr.left->name + "'");
+        reject(expr, "cannot mutably borrow immutable owner '" + root->name + "'");
     if (source.moved)
         reject(expr, (source.class_name.empty()
             ? "borrow of explicitly moved int '" : "ownership violation: borrow of moved class '")
-            + expr.left->name + "'");
+            + root->name + "'");
     if (!source.class_name.empty() && !source.moved_fields.empty())
         reject(expr, "ownership violation: cannot borrow a partially moved class '" +
-            expr.left->name + "'");
+            root->name + "'");
     if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
-        reject(expr, "conflicting active native borrow of '" + expr.left->name + "'");
+        reject(expr, "conflicting active native borrow of '" + root->name + "'");
     if (exclusive) source.exclusive_loan = true;
     else ++source.shared_loans;
-    return {expr.left->name, exclusive};
+    return {root->name, exclusive, !projection.empty()};
 }
 
 void release(const Loan& loan, Locals& locals) {
@@ -209,7 +233,12 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
             // for temporaries and missing explicit 'rt borrow' markers.
             Loan loan = acquire(argument, parameter.mode, locals);
             const auto& source = locals.at(loan.name);
-            if (source.class_name != parameter.class_name)
+            // A class-field projection supplies a borrowed i64 pointer,
+            // not a borrowed class pointer. All such field loans currently
+            // freeze the whole owner, preventing sibling-alias escape.
+            const std::string actual_class =
+                loan.projected_scalar_field ? std::string{} : source.class_name;
+            if (actual_class != parameter.class_name)
                 reject(argument, "ownership violation: borrowed argument type mismatch");
             loans.push_back(std::move(loan));
         }
