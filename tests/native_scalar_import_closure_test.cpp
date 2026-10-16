@@ -100,6 +100,27 @@ int main() {
         reject([&] { (void)closure(dir/"pkg"/"src"/"escape.ores"); },
                "escapes physical search root");
 
+        // Canonicalize symlink targets, not merely the import spelling.
+        std::error_code link_error;
+        fs::create_symlink("../../helper.ores", dir/"pkg"/"src"/"link.ores", link_error);
+        if (!link_error) {
+            write(dir/"pkg"/"src"/"symlink.ores",
+                  "import \"./link\";\npub fnc main(): int {return answer();}\n");
+            reject([&] { (void)closure(dir/"pkg"/"src"/"symlink.ores"); },
+                   "escapes physical search root");
+        }
+
+        // A long linear chain must fail before unbounded recursive discovery.
+        for (unsigned i = 0; i < 34; ++i) {
+            const std::string name = "depth-" + std::to_string(i) + ".ores";
+            const std::string body = i < 33
+                ? "import \"./depth-" + std::to_string(i + 1) + "\";\n"
+                : "pub fnc last(): int {return 1;}\n";
+            write(dir/name, body);
+        }
+        reject([&] { (void)closure(dir/"depth-0.ores"); },
+               "native scalar import depth exceeded");
+
         // Source count is bounded independently of path depth.
         std::string imports;
         for (unsigned i = 0; i < 64; ++i) {
