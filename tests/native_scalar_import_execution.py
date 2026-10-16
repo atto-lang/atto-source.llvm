@@ -38,12 +38,24 @@ def main():
     args = p.parse_args()
     with tempfile.TemporaryDirectory(prefix="ores-native-scalar-import-") as directory:
         root = Path(directory)
-        write(root / "helper.ores", "fnc add(int a, int b): int { return a + b; }\n")
+        write(root / "helper.ores", "pub fnc add(int a, int b): int { return a + b; }\n")
         write(root / "main.ores", 'import "./helper";\npub fnc main(): int { return add(40, 2); }\n')
         expect_success(args.compiler, args.clang, root / "main.ores")
-        write(root / "extra.ores", 'fnc extra(int value): int { return value + 1; }\n')
+        write(root / "extra.ores", 'pub fnc extra(int value): int { return value + 1; }\n')
         write(root / "reorder.ores", 'import "./extra";\nimport "./helper";\npub fnc main(): int { return extra(add(39, 2)); }\n')
         expect_success(args.compiler, args.clang, root / "reorder.ores")
+        # Import closure is a source-concatenation experiment. Private
+        # imported declarations must never be silently exposed to the caller.
+        write(root / "private.ores", "fnc secret(): int { return 42; }\n")
+        write(root / "private_caller.ores",
+              'import "./private";\npub fnc main(): int { return secret(); }\n')
+        expect_failure(args.compiler, root / "private_caller.ores",
+                       "native scalar imported function must be pub")
+        write(root / "foreign_main.ores", "pub fnc main(): int { return 42; }\n")
+        write(root / "imported_entry.ores",
+              'import "./foreign_main";\nfnc helper(): int { return 1; }\n')
+        expect_failure(args.compiler, root / "imported_entry.ores",
+                       "native scalar imported source cannot define main")
         write(root / "cycle_a.ores", 'import "./cycle_b";\npub fnc main(): int { return 42; }\n')
         write(root / "cycle_b.ores", 'import "./cycle_a";\nfnc unused(): int { return 1; }\n')
         expect_failure(args.compiler, root / "cycle_a.ores", "cyclic native scalar imports")
@@ -56,7 +68,7 @@ def main():
         expect_failure(args.compiler, root / "foreign_import.ores", "native imports support only .ores sources")
         write(root / "package" / ".ores.pkg.toml", 'schema_version = "1"\n[source]\nroots = ["src"]\n')
         write(root / "package" / "src" / "main.ores", 'import "@/src/util";\npub fnc main(): int { return helper(40); }\n')
-        write(root / "package" / "src" / "util.ores", 'fnc helper(int a): int {return a + 2;}\n')
+        write(root / "package" / "src" / "util.ores", 'pub fnc helper(int a): int {return a + 2;}\n')
         expect_success(args.compiler, args.clang, root / "package" / "src" / "main.ores")
         write(root / "package" / "src" / "escape.ores", 'import "../../helper";\npub fnc main(): int {return add(40, 2);}\n')
         expect_failure(args.compiler, root / "package" / "src" / "escape.ores", "native import escapes physical search root")
