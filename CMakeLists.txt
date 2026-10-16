@@ -108,6 +108,11 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_structural_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_fail_closed.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_structural_fail_closed PROPERTIES TIMEOUT 65)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
@@ -1904,4 +1909,41 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/value_boundaries.py"
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
+endif()
+
+# Structural syntax must not turn into nominal calls or successful scalar IR.
+# Replace these negative gates with positive native guest tests only after
+# parser, public shape, readonly loans and ordered match lowering all exist.
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  foreach(surface IN ITEMS callable routine-callable param routine-param match-value match-statement)
+    if(surface STREQUAL "callable" OR surface STREQUAL "routine-callable")
+      if(surface STREQUAL "callable")
+        set(fixture "structural-callable-unsupported.ores")
+      else()
+        set(fixture "structural-routine-unsupported.ores")
+      endif()
+      set(diagnostic "native structural callable requires")
+    elseif(surface STREQUAL "param" OR surface STREQUAL "routine-param")
+      if(surface STREQUAL "param")
+        set(fixture "structural-param-unsupported.ores")
+      else()
+        set(fixture "structural-routine-param-unsupported.ores")
+      endif()
+      set(diagnostic "native structural parameter requires")
+    else()
+      if(surface STREQUAL "match-value")
+        set(fixture "structural-match-value-unsupported.ores")
+      else()
+        set(fixture "structural-match-statement-unsupported.ores")
+      endif()
+      set(diagnostic "native structural match expression requires")
+    endif()
+    add_test(NAME native_structural_${surface}_fail_closed
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+        --compiler "$<TARGET_FILE:oreslang-llvmc>"
+        --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
+        --diagnostic "${diagnostic}")
+    set_tests_properties(native_structural_${surface}_fail_closed PROPERTIES TIMEOUT 25)
+  endforeach()
 endif()

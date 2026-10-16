@@ -516,6 +516,11 @@ private:
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
+        // A keyword reservation is not a structural type checker. Reject
+        // explicitly until shape, loan and dispatch semantics are lowered.
+        if (token_.text == "structural") {
+            fail("native structural callable requires verified signature and borrow lowering");
+        }
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -575,6 +580,9 @@ private:
         if (!accept(")")) {
             do {
                 Parameter parameter;
+                if (token_.text == "structural") {
+                    fail("native structural parameter requires public-shape and readonly-loan checking");
+                }
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
@@ -1185,6 +1193,9 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (token_.text == "match" || token_.text == "structural") {
+            fail("native structural match expression requires typed ordered-pattern lowering");
+        }
         if (token_.text == "trap") {
             // Reserved for Option-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase

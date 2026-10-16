@@ -1,0 +1,2 @@
+routine inspect(structural Candidate item): int { return 1; }
+fnc main(): int { return 1; }

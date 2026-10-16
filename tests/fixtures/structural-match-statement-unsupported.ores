@@ -1,0 +1,1 @@
+fnc main(): int { match 1 over on _ -> { return 1; } end return 1; }
