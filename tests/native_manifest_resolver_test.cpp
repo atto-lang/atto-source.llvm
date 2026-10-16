@@ -76,6 +76,11 @@ math = { zed = "acme/math" }
         if(!external_pkg_error)
             rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:math/src/external");},
                     "package physical symlink escape");
+        if(!external_root_error)
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","./external.ores");},
+                    "package-relative physical symlink escape");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","../../outside/valid.ores");},
+                "package-relative parent traversal escape");
         if(!external_bare_error)
             rejects([&]{(void)resolve_source(config,app/"src/main.ores","outside/valid");},
                     "import_paths physical directory symlink escape");
