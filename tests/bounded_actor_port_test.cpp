@@ -1,6 +1,7 @@
 #include "oreslang/runtime/BoundedActorPort.hpp"
 
 #include <memory>
+#include <iostream>
 #include <new>
 #include <stdexcept>
 
@@ -94,4 +95,5 @@ int main() {
     check(faultDelivery->acknowledge_released());
     check(faultPort.used_frames() == 0 && faultPort.used_bytes() == 0);
     faultPort.close();
+    std::cout << "PASS native owned actor port allocation rollback and acknowledged transfer\\n";
 }
