@@ -60,6 +60,63 @@ class DiagnosticProof(unittest.TestCase):
         self.assertGreaterEqual(len(suite["cases"]), 10)
         self.assertEqual(len(digest), 64)
 
+    def test_defer_fixtures_have_honest_pending_native_gates(self):
+        suite, _ = run.validate_suite()
+        cases = {case["id"]: case for case in suite["cases"]}
+        for name, expected in (
+            ("native.defer-lifo-cfg", 111),
+            ("native.defer-field-return", 42),
+            ("native.try-finally-return-snapshot", 42),
+        ):
+            with self.subTest(name=name):
+                case = cases[name]
+                self.assertEqual(case["kind"], "native_exit")
+                self.assertEqual(case["expected_exit"], expected)
+                self.assertEqual(case["backends"]["llvm"], "pending")
+                self.assertEqual(case["backends"]["graal"], "required")
+                self.assertTrue(case["pending_reason"])
+
+    def test_graal_required_cases_must_be_executed(self):
+        import io
+        from contextlib import redirect_stderr
+        suite, _ = run.validate_suite()
+        self.assertTrue(run.requires_guest_runner(suite, "graal"))
+        self.assertFalse(run.requires_guest_runner(suite, "llvm"))
+        with patch.object(sys, "argv", [
+            "run.py", "--backend", "graal", "--command", "compiler {source}",
+            "--revision", "a" * 40
+        ]), redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as raised:
+                run.main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--run-command is mandatory", err.getvalue())
+
+    def test_duplicate_fixture_paths_rejected(self):
+        import shutil, tempfile, json
+        suite, _ = run.validate_suite()
+        repeat = dict(suite["cases"][0])
+        repeat["id"] = "native.duplicate-fixture-test"
+        suite["cases"].append(repeat)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(run.ROOT, root, dirs_exist_ok=True)
+            (root / "cases.json").write_text(json.dumps(suite))
+            with patch.object(run, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "duplicate fixture source"):
+                    run.validate_suite()
+
+    def test_nested_orphan_fails_inventory(self):
+        import shutil, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(run.ROOT, root, dirs_exist_ok=True)
+            file = root / "fixtures" / "nested" / "unregistered.ores"
+            file.parent.mkdir(parents=True)
+            file.write_text("pub fnc main(): int { return 0; }\\n")
+            with patch.object(run, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "orphan or missing fixtures"):
+                    run.validate_suite()
+
     def test_mutating_fixture_or_schema_changes_suite_identity(self):
         import shutil
         import tempfile
@@ -200,11 +257,21 @@ class ComparatorParityProof(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("SUITE_COMPLETE=no", summary)
 
-    def test_strict_gate_accepts_complete_fixture_suite_with_pinned_heads(self):
+    def test_strict_gate_rejects_real_pending_native_fixtures(self):
+        self.assertTrue(any("pending" in case["backends"].values()
+                            for case in self.suite["cases"]))
         status, summary = self.compare(strict=True, revisions=self.sha)
+        self.assertEqual(status, 1)
+        self.assertIn("SUITE_COMPLETE=no", summary)
+        self.assertIn("BACKEND_PENDING=", summary)
+
+    def test_strict_gate_accepts_only_complete_required_subset(self):
+        suite = {"cases": [case for case in self.suite["cases"]
+                           if all(x == "required" for x in case["backends"].values())]}
+        self.assertTrue(suite["cases"])
+        status, summary = self.compare(strict=True, revisions=self.sha, suite=suite)
         self.assertEqual(status, 0)
         self.assertIn("SUITE_COMPLETE=yes", summary)
-        self.assertIn("BACKEND_PENDING=0", summary)
 
     def test_strict_gate_demands_pinned_heads(self):
         with self.assertRaisesRegex(ValueError, "requires pinned"):
