@@ -839,6 +839,9 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-actor-pipeline-routing-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
+    # Allocation failpoints are compiled into this test executable ONLY.
+    target_compile_definitions(oreslang-native-actor-pipeline-routing-test PRIVATE
+        ORESLANG_ACTOR_PIPE_FAULT_TESTS=1)
     target_link_libraries(oreslang-native-actor-pipeline-routing-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_pipeline_multiconsumer_host_routing
         COMMAND oreslang-native-actor-pipeline-routing-test)
