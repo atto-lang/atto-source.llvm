@@ -341,6 +341,31 @@ inline std::optional<fs::path> existing_source_under(const fs::path& root,
     return source;
 }
 
+// Rooted +/ and pkg: imports must not use a nested package as a path
+// trampoline, even if its symlink resolves back to a source in the parent.
+// Check the spelled lexical route AND the canonical destination. This is
+// package-context admission, not a race-free filesystem sandbox.
+inline std::optional<fs::path> existing_rooted_source_under(
+        const fs::path& root, const fs::path& candidate) {
+    const auto physical=existing_source_under(root,candidate);
+    if(!physical)return std::nullopt;
+    const fs::path lexical_root=normalized_absolute(root);
+    const fs::path physical_root=fs::canonical(root);
+    const auto check=[&](const fs::path& path,const fs::path& boundary){
+        if(!beneath(boundary,path))
+            throw std::invalid_argument("rooted import escapes package root");
+        for(fs::path parent=path.parent_path();parent!=boundary;parent=parent.parent_path()){
+            if(parent.empty()||parent==parent.root_path())
+                throw std::invalid_argument("rooted import escapes package root");
+            if(fs::symlink_status(parent/".ores.pkg.toml").type()!=fs::file_type::not_found)
+                throw std::invalid_argument("rooted import crosses nested package boundary");
+        }
+    };
+    check(normalized_absolute(candidate),lexical_root);
+    check(*physical,physical_root);
+    return physical;
+}
+
 // A single physical file may not be silently imported under two package
 // contexts. The future graph linker must register every resolved source.
 struct SourceIdentityRegistry {
@@ -379,7 +404,7 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             throw std::invalid_argument("native Java host imports require unsupported backend lowering");
         case Kind::Root:
             if(!config.package_manifest)throw std::invalid_argument("+/ requires .ores.pkg.toml");
-            return existing_source_under(config.root,rooted_path(config.root,input.suffix));
+            return existing_rooted_source_under(config.root,rooted_path(config.root,input.suffix));
         case Kind::Package:{
             auto it=config.dependencies.find(input.alias);
             if(it==config.dependencies.end())throw std::invalid_argument("undeclared dependency alias");
@@ -387,7 +412,7 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             if(fs::exists(it->second) &&
                !beneath(fs::canonical(config.root),fs::canonical(it->second)))
                 throw std::invalid_argument("installed package escapes physical project root");
-            return existing_source_under(it->second,rooted_path(it->second,input.suffix));
+            return existing_rooted_source_under(it->second,rooted_path(it->second,input.suffix));
         }
         case Kind::Absolute:
             // classify() recognizes Win32 drive roots even on POSIX. Never
