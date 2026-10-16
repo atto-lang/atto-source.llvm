@@ -16,6 +16,13 @@ def require(condition, *evidence):
 
 compiler = str(Path(sys.argv[1]).resolve())
 CASES = json.loads(Path(__file__).with_name("value-boundary-rejections.json").read_text())
+# Exercise the identical ten-case corpus in all five source repos, using the
+# *real compiler* and its existing positive scalar/no-artifact admission gate.
+shared = json.loads((Path(__file__).resolve().parents[1] / "contracts" / "v1" /
+                     "cpu-gpu-nb-unsupported-v1.json").read_text())
+require(len(shared) == 10 and len(set(shared)) == 10, "bad CPU/GPU/nb registry")
+require(not (set(CASES) & set(shared)), "overlapping negative test IDs")
+CASES.update(shared)
 MODE = []
 with tempfile.TemporaryDirectory(prefix="ores-value-boundaries-") as work:
     source = Path(work) / "main.ores"
