@@ -1,6 +1,6 @@
 # Oreslang Sendable / Serializable boundary contract (v1 proposal)
 
-Status: **proposed migration contract, NOT implemented language syntax or evidence of backend parity** (2026-10-15). Applies to Java/GraalVM, LLVM and shared conformance. It deliberately separates local actor transport from network encoding. Until a compiler/runtime path is certified under this contract, its existing stricter MessagePack actor-transport gate remains in force.
+Status: **proposed migration contract, NOT implemented language syntax or evidence of backend parity** (2026-10-15). Applies to Java/GraalVM, LLVM, .NET, Wasm, Forge and shared conformance; see the identical [five-backend parity gate](../../contracts/v1/SENDABLE_SERIALIZABLE_PARITY_V1.md) and [admission fixture](../../contracts/v1/sendable-serializable-parity.v1.json). It deliberately separates local actor transport from network encoding. Until a compiler/runtime path is certified under this contract, its existing stricter MessagePack actor-transport gate remains in force.
 
 ## Two independent questions
 
