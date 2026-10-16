@@ -87,6 +87,9 @@ class HostBuffer {
         explicit State(Plan value)
             : layout(value), region_root(RegionRoot::create_bound(value.rows(), value.fields())),
               bytes(checked_host_size(value), 0) { }
+        // Region identity must retire when the final storage reference dies,
+        // including owner destruction without an explicit close().
+        ~State() noexcept { region_root.retire_bound(); }
     };
 public:
     class ReadLoan {
