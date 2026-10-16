@@ -1909,3 +1909,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_physical_turn_credit_host_only
         PROPERTIES TIMEOUT 25)
 endif()
+
+# Dedicated Linux epoll reactor thread, bounded completion ring and generation
+# fencing. Host-only substrate; no compiler source-level await linkage yet.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-epoll-reactor-test tests/native_epoll_reactor_test.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-reactor-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_generation_completion
+        COMMAND oreslang-native-epoll-reactor-test)
+    set_tests_properties(native_epoll_reactor_generation_completion PROPERTIES TIMEOUT 20)
+endif()
