@@ -59,6 +59,7 @@ math = { zed = "acme/math" }
         // Symlinks to valid .ores files outside declared roots must not
         // launder package, rooted or bare-search import authority.
         fs::create_directories(tmp/"outside");
+        fs::create_directories(app/"packages");
         write(tmp/"outside/valid.ores","untrusted");
         std::error_code external_root_error,external_pkg_error,external_bare_error,internal_error;
         fs::create_symlink(tmp/"outside/valid.ores",app/"src/external.ores",external_root_error);
@@ -147,11 +148,11 @@ math = { zed = "acme/math" }
         // Entrypoint paths and manifest metadata must also be checked against
         // physical targets when they exist, not only against lexical ancestry.
         write(app/".ores.pkg.toml",
-              "schema_version=\"1\"\\n[entrypoints]\\nmain=\"src/external.ores\"\\n");
+              "schema_version=\"1\"\n[entrypoints]\nmain=\"src/external.ores\"\n");
         if(!external_root_error)
             rejects([&]{(void)read_project(app/"src/main.ores");},
                     "package entrypoint physical symlink escape");
-        write(tmp/"outside/evil.toml","schema_version=\"1\"\\n");
+        write(tmp/"outside/evil.toml","schema_version=\"1\"\n");
         fs::remove(app/".ores.pkg.toml");
         std::error_code manifest_symlink_error;
         fs::create_symlink(tmp/"outside/evil.toml",app/".ores.pkg.toml",manifest_symlink_error);
