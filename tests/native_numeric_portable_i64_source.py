@@ -66,6 +66,65 @@ def check_positive(compiler, clang, source, expected, folder, label,
         raise AssertionError(label + ": guest wrote unexpected stderr")
 
 
+# These assertions are deliberately required only for the compile-success
+# arm of shared overflow tests. A generic SIGILL/SIGTRAP is not evidence of
+# signed-i64 overflow: the actual compiler IR must connect an overflow-flag
+# extraction to the conditional trap block before that signal can count.
+_OVERFLOW_PAIR = re.compile(
+    r"(?m)^\s*(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*=\s*call\s+\{\s*i64\s*,\s*i1\s*\}"
+    r"\s+@llvm\.(sadd|ssub|smul)\.with\.overflow\.i64\s*\(")
+_OVERFLOW_FLAG = re.compile(
+    r"(?m)^\s*(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*=\s*extractvalue\s+\{\s*i64\s*,\s*i1\s*\}"
+    r"\s+(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*,\s*1\b")
+_OVERFLOW_GUARD = re.compile(
+    r"(?m)^\s*br\s+i1\s+(%[A-Za-z_.$][A-Za-z_0-9.$]*)\s*,\s*label"
+    r"\s+%(i64\.overflow\.trap(?:\.\d+)?)\s*,\s*label"
+    r"\s+%i64\.checked\.continue(?:\.\d+)?\b")
+_OVERFLOW_FAILURE = re.compile(
+    r"(?m)^\s*(i64\.overflow\.trap(?:\.\d+)?):\s*(?:;[^\n]*)?\n"
+    r"\s*call\s+void\s+@llvm\.trap\s*\(\s*\)\s*\n\s*unreachable\b")
+
+
+def assert_checked_overflow_path(ir, operation):
+    """Reject IR with an unguarded/unrelated trap masquerading as overflow.
+
+    This is a conservative structure check of Oreslang's experimental pure
+    scalar lowering, not a full LLVM verification or an actor cleanup proof.
+    """
+    if not isinstance(ir, str) or len(ir) > 2 * 1024 * 1024:
+        raise AssertionError("invalid checked overflow IR")
+    if operation not in ("sadd", "ssub", "smul"):
+        raise AssertionError("unsupported checked overflow operation")
+    # Validate the real entrypoint. A checked helper in an unrelated
+    # function must not be accepted as proof that guest main overflows.
+    entries = re.findall(
+        r"(?ms)^define[ \t]+i64[ \t]+@__oreslang_guest_main[ \t]*"
+        r"\([ \t]*\)[^\n{]*\{[^\n]*\n([\s\S]*?)^\}[ \t]*$", ir)
+    if len(entries) != 1:
+        raise AssertionError("overflow IR requires exactly one guest main body")
+    body = entries[0]
+    pairs = list(_OVERFLOW_PAIR.finditer(body))
+    pair_ops = {x.group(1): x.group(2) for x in pairs}
+    if operation not in pair_ops.values():
+        raise AssertionError("signed-i64 overflow intrinsic absent: " + operation)
+    flags = {x.group(1): x.group(2) for x in _OVERFLOW_FLAG.finditer(body)
+             if x.group(2) in pair_ops}
+    guards = list(_OVERFLOW_GUARD.finditer(body))
+    traps = re.findall(r"\bcall\s+void\s+@llvm\.trap\s*\(\s*\)", body)
+    failures = list(_OVERFLOW_FAILURE.finditer(body))
+    labels = {x.group(1) for x in failures}
+    unreachable = re.findall(r"(?m)^\s*unreachable\b", body)
+    if (not flags or not guards or not traps
+            or len(guards) != len(traps) or len(failures) != len(traps)
+            or len(unreachable) != len(failures)
+            or len({x.group(2) for x in guards}) != len(guards)
+            or any(x.group(1) not in flags or x.group(2) not in labels
+                   for x in guards)
+            or not any(pair_ops[flags[x.group(1)]] == operation
+                       for x in guards if x.group(1) in flags)):
+        raise AssertionError("overflow IR lacks operation-specific flag-derived guarded trap")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -138,6 +197,18 @@ def main():
         # successful/wrapped i64 result. Check which outcome occurred rather
         # than mistakenly requiring all four to fail during parsing.
         import signal
+        expected_ops = {
+            "positive-add-overflow": "sadd",
+            "negative-sub-overflow": "ssub",
+            "positive-multiply-overflow": "smul",
+            "negative-unary-overflow": "ssub",
+        }
+        safe_neighbours = {
+            "positive-add-overflow": ("(9223372036854775807-1)+1", 9223372036854775807),
+            "negative-sub-overflow": ("(-9223372036854775808+1)-1", -9223372036854775808),
+            "positive-multiply-overflow": ("3037000499*3037000499", 3037000499**2),
+            "negative-unary-overflow": ("-(-9223372036854775808+1)", 9223372036854775807),
+        }
         rejection_count = 0
         runtime_traps = 0
         for case in overflow["cases"]:
@@ -156,6 +227,7 @@ def main():
                 continue
             if attempt.stderr.strip() or not ENTRY.search(attempt.stdout):
                 raise AssertionError(case["id"] + ": malformed compiler-success IR")
+            assert_checked_overflow_path(attempt.stdout, expected_ops[case["id"]])
             ir, count = HOST_WRAPPER.subn(r"\1@oreslang_os_main", attempt.stdout)
             if count != 1:
                 raise AssertionError(case["id"] + ": unexpected host wrapper inventory")
@@ -175,6 +247,11 @@ def main():
                     or execution.stdout or execution.stderr):
                 raise AssertionError(case["id"] +
                     ": emitted guest arithmetic did not trap; wrapped value or unrelated error")
+            # A compiler that unconditionally traps even for valid nearby
+            # arithmetic cannot satisfy signed-i64 numerical semantics.
+            expression, expected = safe_neighbours[case["id"]]
+            check_positive(compiler, clang, expression, expected, folder,
+                           case["id"] + "-safe-boundary")
             runtime_traps += 1
     print(f"NATIVE_NUMERIC_I64_POSITIVE=8 UNSUPPORTED=6 OVERFLOW_REJECTED={rejection_count}"
           f" OVERFLOW_TRAPPED={runtime_traps}; dynamic arithmetic still unverified")

@@ -22,7 +22,16 @@ with `verification/generate_numeric_overflow_cases.py` and
 `verification/tests.cpp`; and Wasm's pinned external LLVM compiler plus
 isolated runtime in `tests/numeric-source-parity.test.mjs`.
 All reject or signal overflow; none may return a normal wrapped signed-i64
-value. A test skip, stale compiler, unassigned runner, or source-free LLVM
+value. The LLVM executable negative harness additionally requires, for
+runtime-trapped cases, that the actual `__oreslang_guest_main` body in the exact emitted IR connect the appropriate
+signed-overflow intrinsic through its SSA overflow flag to the matching
+conditional `llvm.trap` block. An unrelated signal, stray instruction,
+comment-only guard, or unused intrinsic is not accepted as evidence.
+Each trapped case must also have a nearby non-overflow Oreslang source
+expression compile and return its exact full-width i64 value. The native
+harness has independent synthetic-IR self-tests, but the real compiler
+and sanitizer gates remain unexecuted until source-org CI starts.
+A test skip, stale compiler, unassigned runner, or source-free LLVM
 control is **not** proof of compiled parity.
 
 Java/LLVM full-source Actions currently fail before jobs can execute; the
@@ -215,3 +224,27 @@ The .NET and Forge engines currently implement small checked-i64 subsets;
 Wasm is LLVM-dependent and exposes only a core `() -> i64` ABI. Neither
 running the reference Python oracle nor checking these manifests establishes
 numerical feature parity.
+
+## Identical i64 source file across five backends (2026-10-16)
+
+The complete Oreslang source file `i64-max-minus-one.ores` is byte-identical
+in Java and LLVM (this directory) and in .NET, Forge and WASM
+(`contracts/scalar/v1/fixtures/i64-max-minus-one.ores`). Its reviewed Git
+blob is `c400f440fde2fbc10514ab7cfd2ffe3d19729ee1`. The required
+value is `9223372036854775806`, with no signed-64-bit intermediate overflow.
+
+The extended .NET/Forge/WASM corpus has **11 cases** (6 positive, 5
+bootstrap-specific negative), manifest blob
+`fd9df902b2df734ac62875037ca66db3ea41bc6b` and digest
+`5b5d1bc00def9b3a343cb3281e0bb0be4e5ca438095f621141049e2d7a1a25b3`.
+These are normative fixture pins, not executed source parity evidence.
+
+Evidence gates intentionally differ: Java must execute the exact source in
+GraalVM; LLVM must compile it through its native compiler and execute the
+full-width i64 result; WASM must compile that source through a hash-pinned
+LLVM compiler and run the zero-import guest; Forge must evaluate the source
+with its checked interpreter; .NET presently checks native compiler
+admission and does not execute each new source fixture as native guest code.
+Report these separately. A zero-step Actions failure or a passing fixture
+checksum never counts as compiler/runtime parity.
+
