@@ -2,6 +2,14 @@
 
 Status: **host-only credit proof plus architectural contract**. This document does NOT claim integrated source-level NIO, native `await` continuations, parallel source actors or hard-real-time guarantees. Companion Java: `oreslang-source.java/docs/NIO_REACTOR_AND_PARALLEL_ACTOR_EXECUTION.md`.
 
+## Implementation status on this draft branch (October 16)
+
+- `NativeEpollReactor.hpp`: Linux-only dedicated `epoll_wait` thread with 64 fixed operation slots, generation-tagged one-shot tickets, nonparking `try_watch/try_cancel/try_pop`, eventfd completion signal and terminal records. No guest callback or trace GC in the reactor.
+- `NativeEpollReactorManager.hpp`: default one reactor and capacity four. The ordinary throughput profile permits additional reactors only after sustained ready-event processing and pressure; the `preallocated_rt` profile establishes the requested fixed reactor-thread population before any guest work.
+- `NativeActorScheduler.c` now has explicit `ores_native_actor_scheduler_prestart_realtime()`, which prestarts all configured carriers before admission and irrevocably disables runtime pthread creation for that scheduler. `NativeOresVM` exposes `open_realtime(config)` and cold-VM `prepare_realtime(vm)`. The original default `open` still creates **zero carrier threads** until runnable work. No change to actor physical single-flight authority.
+- CTest registrations cover the kernel reactor, manager and preallocated four-domain VM startup. The standalone epoll/manager tests passed with GCC and Clang ASan+UBSan against identical Git blob files. The full VM CTest, runtime sanitizer suite and native compiler-to-guest integration have **not** yet been validated on an executing CI runner.
+- The reactor manager is a host substrate: no production source-level `std/net`, no native guest `await` continuation hookup, no channel/FD capability migration and no certified WCET. A bounded completion queue alone does not establish memory ownership after an actor restart.
+
 ## Verified current native foundation
 
 - Merged PR #280 added `NonblockingTcpLinux.hpp`: nonblocking/CLOEXEC TCP socket, `accept4(...SOCK_NONBLOCK)`, `recv/send(...MSG_DONTWAIT)`, one-shot epoll readiness and eventfd wakeup. `EpollReadiness.wait()` parks only if a dedicated reactor thread calls it; the header does NOT create, own, start, scale or retire a reactor thread.
