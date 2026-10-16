@@ -10,6 +10,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
@@ -94,6 +95,13 @@ public:
     std::size_t pending_reader_count() const noexcept {
         return pending_reader_count_.load(std::memory_order_acquire);
     }
+
+#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+    // Test-build-only deterministic injection; excluded from production ABI.
+    void test_fail_next_writer_promotion() noexcept {
+        fail_next_writer_promotion_.store(true, std::memory_order_release);
+    }
+#endif
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
     std::shared_future<void> write_async(std::size_t edge, std::string payload) {
@@ -181,6 +189,11 @@ public:
                 link.writers.pop_front();
                 const auto bytes = waiting->payload.size();
                 try {
+#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+                    if (fail_next_writer_promotion_.exchange(
+                            false, std::memory_order_acq_rel))
+                        throw std::bad_alloc();
+#endif
                     link.messages.push_back(std::move(waiting->payload));
                 } catch (...) {
                     buffered_payload_bytes_.fetch_sub(bytes, std::memory_order_acq_rel);
@@ -503,6 +516,9 @@ private:
     // the exclusive terminal publication barrier. Never held for host STOP.
     std::shared_mutex publication_mutex_;
     std::atomic<bool> closed_{false};
+#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+    std::atomic<bool> fail_next_writer_promotion_{false};
+#endif
 };
 
 } // namespace oreslang::runtime
