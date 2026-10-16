@@ -29,6 +29,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Independently exercised filesystem and package-manifest resolver,
+    # host-only; actual .ores import parsing/linking remains unsupported.
+    add_executable(oreslang-native-manifest-resolver-test
+        tests/native_manifest_resolver_test.cpp)
+    target_include_directories(oreslang-native-manifest-resolver-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-manifest-resolver-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_manifest_resolver_host_only
+        COMMAND oreslang-native-manifest-resolver-test)
+    set_tests_properties(native_manifest_resolver_host_only PROPERTIES TIMEOUT 20)
+
     # Host-only import-policy primitive test. Does not prove native linker parity.
     add_executable(oreslang-native-import-path-policy-test
         tests/native_import_path_policy_test.cpp)
