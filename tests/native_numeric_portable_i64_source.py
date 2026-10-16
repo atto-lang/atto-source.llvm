@@ -98,8 +98,8 @@ def assert_checked_overflow_path(ir, operation):
     # Validate the real entrypoint. A checked helper in an unrelated
     # function must not be accepted as proof that guest main overflows.
     entries = re.findall(
-        r"(?ms)^define[ \\t]+i64[ \\t]+@__oreslang_guest_main[ \\t]*"
-        r"\\([ \\t]*\\)[^\\n{]*\\{[^\\n]*\\n([\\s\\S]*?)^\\}[ \\t]*$", ir)
+        r"(?ms)^define[ \t]+i64[ \t]+@__oreslang_guest_main[ \t]*"
+        r"\([ \t]*\)[^\n{]*\{[^\n]*\n([\s\S]*?)^\}[ \t]*$", ir)
     if len(entries) != 1:
         raise AssertionError("overflow IR requires exactly one guest main body")
     body = entries[0]
