@@ -41,6 +41,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-manifest-resolver-test)
     set_tests_properties(native_manifest_resolver_host_only PROPERTIES TIMEOUT 20)
 
+    # Import directive preamble scanner independently compiles as C++17.
+    add_executable(oreslang-native-import-preamble-test
+        tests/native_import_preamble_test.cpp)
+    target_include_directories(oreslang-native-import-preamble-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-import-preamble-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_import_preamble_host_only
+        COMMAND oreslang-native-import-preamble-test)
+    set_tests_properties(native_import_preamble_host_only PROPERTIES TIMEOUT 20)
+
     # Host-only import-policy primitive test. Does not prove native linker parity.
     add_executable(oreslang-native-import-path-policy-test
         tests/native_import_path_policy_test.cpp)
@@ -330,6 +341,18 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # Integration gate: actual compiler resolves two .ores units, emits verified
+    # IR, Clang links it, and the resulting imported call must exit as expected.
+    # This is an opt-in host scalar slice, NOT general namespace import parity.
+    if(ORE_CLANG)
+        add_test(NAME native_scalar_import_source_execution
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_import_execution.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        set_tests_properties(native_scalar_import_source_execution
+            PROPERTIES TIMEOUT 180)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
