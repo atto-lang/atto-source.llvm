@@ -163,6 +163,16 @@ int main() {
         rejected([&] { pipe.write_to_async("source-1", "Worker", "bad"); },
                  "nominal class name bypassed instance connection authority");
         pipe.close();
+        bool denied_after_close_first = false;
+        try {
+            pipe.write_by_key_async("source-1",
+                    std::string(1, char(0x80)), "after-close").get();
+        } catch (const std::logic_error& stopped) {
+            denied_after_close_first =
+                    std::string(stopped.what()).find("closed") != std::string::npos;
+        }
+        check(denied_after_close_first,
+              "retired native graph key was parsed before stop barrier");
     }
 
     // Five-backend v1 conformance fixture: one source with three separate
@@ -740,6 +750,53 @@ int main() {
                   "post-STOP drain lost an already-admitted message");
         check(pipe.buffered_payload_bytes() == 0,
               "post-STOP drain leaked graph payload credit");
+    }
+
+    // An attacker must not queue O(number_of_edges * edge_capacity)
+    // unresolved read promises; a separate graph-wide reader quota is
+    // required even if zero-byte DATA/message credits are also bounded.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 4, 4,
+            1024, 16, 2);
+        auto reader_a = pipe.read_async(0);
+        auto reader_b = pipe.read_async(1);
+        check(reader_a.wait_for(0ms) == std::future_status::timeout &&
+              reader_b.wait_for(0ms) == std::future_status::timeout &&
+              pipe.pending_reader_count() == 2,
+              "reader promises did not reserve graph-global slots");
+        bool global_denied = false;
+        try { (void)pipe.read_async(0).get(); }
+        catch (const std::logic_error&) { global_denied = true; }
+        check(global_denied && pipe.pending_reader_count() == 2,
+              "third cross-edge reader bypassed aggregate quota");
+        pipe.write_to_async("Producer", "ConsumerA", "handoff").get();
+        check(reader_a.get() == "handoff" &&
+              pipe.pending_reader_count() == 1,
+              "direct reader handoff failed to release global reader slot");
+        auto reused = pipe.read_async(0);
+        check(pipe.pending_reader_count() == 2,
+              "reader capacity was not reusable after handoff");
+        pipe.close();
+        check(pipe.pending_reader_count() == 0,
+              "STOP failed to return every outstanding reader slot");
+        int cancelled = 0;
+        try { (void)reader_b.get(); }
+        catch (const std::logic_error&) { ++cancelled; }
+        try { (void)reused.get(); }
+        catch (const std::logic_error&) { ++cancelled; }
+        check(cancelled == 2, "STOP left unfulfilled reader Futures");
+
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+                1024, 16, 0);
+        }, "zero graph reader budget accepted");
+        rejected([&] {
+            NativeActorPipeTransport invalid(
+                registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+                1024, 16, 65537);
+        }, "oversized graph reader budget accepted");
     }
 
     // Graph-wide byte credits count BOTH buffered messages and suspended
