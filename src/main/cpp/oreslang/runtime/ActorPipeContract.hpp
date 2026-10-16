@@ -41,13 +41,8 @@ inline std::vector<PipeConnection> check_actor_pipeline(
     std::unordered_set<std::string> instance_ids;
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& stage = stages[i];
-        const auto& actor_id =
-                stage.instance_id.empty() ? stage.actor_type : stage.instance_id;
-        if (stage.actor_type.empty() || actor_id.empty()
-                || stage.actor_type.size() > 256 || actor_id.size() > 256
-                || !instance_ids.insert(actor_id).second)
-            throw std::invalid_argument(
-                    "linear pipeline requires unique bounded actor instance IDs");
+        if (stage.actor_type.empty())
+            throw std::invalid_argument("pipeline actor type cannot be blank");
         if (stage.role == PipeRole::supervisor_actor)
             throw std::invalid_argument("supervisor actors cannot be pipeline stages");
         if (stage.role == PipeRole::ordinary_actor)
@@ -79,6 +74,17 @@ inline std::vector<PipeConnection> check_actor_pipeline(
         if (i + 1 == stages.size() && stage.role != PipeRole::writable
                 && stage.role != PipeRole::duplex)
             throw std::invalid_argument("actor pipeline sink must be writable or duplex");
+    }
+    // Do not mask established role/port diagnostics (e.g. an illegal
+    // source or middle stage) with a duplicate-ID error. Validate instance
+    // uniqueness only after all existing stage contracts have passed.
+    for (const auto& stage : stages) {
+        const auto& actor_id =
+                stage.instance_id.empty() ? stage.actor_type : stage.instance_id;
+        if (actor_id.empty() || stage.actor_type.size() > 256
+                || actor_id.size() > 256 || !instance_ids.insert(actor_id).second)
+            throw std::invalid_argument(
+                    "linear pipeline requires unique bounded actor instance IDs");
     }
     std::vector<PipeConnection> connections;
     connections.reserve(stages.size() - 1);
