@@ -25,6 +25,7 @@ def main():
         # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 0, None),
         ("source-actor-bare-method.ores", 1, 0, None),
+        ("source-actor-inline-self.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
@@ -58,6 +59,8 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        "source-actor-inline-self-duplicate.ores": "self is not an overload parameter",
+        "source-actor-inline-self-trailing.ores": "expected 'int'",
     }
     for name, diagnostic in negatives.items():
         result = run([args.compiler, str(fixtures / name)])
@@ -75,6 +78,7 @@ def main():
                 "source-actor-spawn-stop.ores",
                 "source-actor-method-keyword.ores",
                 "source-actor-bare-method.ores",
+                "source-actor-inline-self.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
