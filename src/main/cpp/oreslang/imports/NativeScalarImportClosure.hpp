@@ -19,9 +19,14 @@ struct ScalarImportUnit {
     std::size_t end = 0;
     bool entry = false;
 };
+struct RequestedScalarFunction {
+    fs::path source_file;
+    std::string name;
+};
 struct ScalarImportClosure {
     std::string source;
     std::vector<ScalarImportUnit> units;
+    std::vector<RequestedScalarFunction> named_imports;
 };
 inline ScalarImportClosure assemble_scalar_import_closure(
     const fs::path& entry,
@@ -37,6 +42,7 @@ inline ScalarImportClosure assemble_scalar_import_closure(
     SourceIdentityRegistry identities;
     std::string combined;
     std::vector<ScalarImportUnit> units;
+    std::vector<RequestedScalarFunction> named_imports;
     const auto physical_entry = fs::canonical(entry);
     std::size_t total_bytes = 0;
 
@@ -73,7 +79,8 @@ inline ScalarImportClosure assemble_scalar_import_closure(
             throw std::invalid_argument("native scalar import closure exceeds 8 MiB");
         total_bytes += source.size();
         const auto preamble = split_import_preamble(source);
-        for (const auto& raw : preamble.imports) {
+        for (std::size_t import_index = 0; import_index < preamble.imports.size(); ++import_index) {
+            const auto& raw = preamble.imports[import_index];
             const auto input = classify(raw);
             if (input.kind == Kind::Absolute)
                 throw std::invalid_argument("absolute native scalar imports are unsupported");
@@ -92,6 +99,10 @@ inline ScalarImportClosure assemble_scalar_import_closure(
                 if (!beneath(fs::canonical(project.root), *target))
                     throw std::invalid_argument("relative import escaped declared package root");
             }
+            if (!preamble.requested_functions[import_index].empty()) {
+                named_imports.push_back(RequestedScalarFunction{
+                    *target, preamble.requested_functions[import_index]});
+            }
             visit(*target, next_boundary, depth + 1);
         }
         // Dependency-first assembly allows the existing parser to perform
@@ -108,6 +119,6 @@ inline ScalarImportClosure assemble_scalar_import_closure(
         states.at(physical) = 2;
     };
     visit(physical_entry, {}, 0);
-    return {std::move(combined),std::move(units)};
+    return {std::move(combined),std::move(units),std::move(named_imports)};
 }
 } // namespace oreslang::imports
