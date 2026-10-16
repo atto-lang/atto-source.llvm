@@ -1,9 +1,12 @@
 # Native import path policy substrate (stage B, partial)
 
-This branch adds a small dependency-free C++17 `oreslang::imports` policy
-component and a host-only CTest. It is **not invoked by the native Oreslang
-parser, module loader, code generator, or linker**. Thus neither standalone
-compilation success nor these tests demonstrate executable multi-file imports.
+This branch began as a small dependency-free C++17 `oreslang::imports`
+policy component and host-only CTest. It now also contains an **opt-in**
+`--experimental-scalar-imports` closure assembled by the CLI before parsing.
+This is source concatenation for a narrow host/int-only experiment, **not**
+namespace-aware multi-file linking or general backend import parity.
+The new compiler execution regressions have been committed but not verified
+on an exact-head compiler runner.
 
 The component provides:
 - Namespace classification: `@/` root, `pkg:` alias, explicit `./` /
@@ -193,3 +196,32 @@ destination PR #5 remain open. An approval for Java source transfer would not
 automatically authorize LLVM source publication. Do not publish LLVM private
 source to an alternate organization without a separately reviewed LLVM-source
 origin policy and destination allowlist.
+
+## Experimental scalar import compiler admission (2026-10-16)
+
+The opt-in `--experimental-scalar-imports` CLI builds a dependency-first
+closure from physical `.ores` sources, then submits the combined text to the
+existing scalar parser/code generator. A native compiler -> LLVM IR -> Clang ->
+executable test was added, including missing imports, cycles, package-root
+resolution, unsupported absolute/foreign imports, and private-declaration
+denials. **The test has not been executed against the exact latest compiler
+head.**
+
+The compiler now retains source unit spans so each parsed declaration can be
+attributed to its originating file. Because the current compiler merges
+namespaces, a multi-source scalar closure requires every function to be
+`pub`; imported private functions and imported `main` definitions are
+rejected. This is intentionally stricter than intended Oreslang visibility:
+proper private intra-module helpers will require a symbol-level module graph
+rather than text concatenation. The assembly byte bound also includes each
+appended newline.
+
+Not supported: SCC/cyclic imports, type-only imports, namespace-qualified
+symbols, proper per-file visibility and initialization, actors/classes,
+ownership/effects beyond the scalar experiment, Wasm and Cortex-M import
+lowering, mutable filesystem races, or cross-backend parity.
+
+**Promotion requires an actual compiler build, native integration CTest and
+linked execution from this exact head.** The source GitHub Actions jobs have
+continued to fail before test steps; a source-free alternate organization
+canary does not count as evidence. No unapproved source mirror was created.
