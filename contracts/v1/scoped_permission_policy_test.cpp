@@ -101,7 +101,8 @@ int main() {
             "IPv6 portless request cannot evade port-specific deny");
     for (const char* bad : {"::1:443", "[::1", "[::1]:", "[::1]:0",
                             "[::1]:65536", "[::1]x:443", "[::1]:-1",
-                            "[fe80::1%eth0]:443", "[::ffff:127.0.0.1]:443"}) {
+                            "[fe80::1%eth0]:443", "[::ffff:127.0.0.1]:443",
+                            "[::192.0.2.1]:443", "[::ffff:c000:201]:443"}) {
         require(ipv6deny.allows(Permission::Net,bad),false,"reject unsafe IPv6 syntax");
     }
 #endif
