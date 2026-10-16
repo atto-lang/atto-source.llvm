@@ -31,6 +31,31 @@ lack f32, f64, BigInt, Decimal, Complex, and Matrix implementations.
 Cross-repo numerical work is tracked at
 https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/1068.
 
+## Experimental LLVM checked-i64 execution slice
+
+The compiler now admits `--target=host --experimental-checked-i64-functions`
+for a **whole-module, pure, value-only signed-i64 function graph**, limited to
+64 functions, eight parameters each and acyclic call depth at most 32. The
+admission check rejects actors, classes/owned resources, locals, mutable
+state, deferred effects, cross-target execution, generic arguments, unresolved
+callees, recursive cycles and overload-arity collisions.
+
+For this **opt-in** subset, signed add/subtract/multiply/unary negation use
+`llvm.sadd.with.overflow.i64`, `llvm.ssub.with.overflow.i64` and
+`llvm.smul.with.overflow.i64`. Overflow executes `llvm.trap`; it does **not**
+return a Result, trigger Oreslang throw/raise, or clean up an owner frame.
+The old experimental `--experimental-checked-i64` status C ABI remains
+separate and cannot be combined with the new mode.
+
+The CTest `numeric_experimental_checked_pure_function_graph` compiles
+Oreslang source with the actual LLVM frontend, compiles the resulting IR
+with Clang, executes 11×11 boundary inputs on each of add/sub/mul plus
+nested-call and negation checks, and rejects unsupported effectful/cyclic
+programs. This is **only test coverage added**, not a claim of an executed
+exact-source CI pass. Default native arithmetic, actors and owner-bearing
+functions remain **blocked_unsound** for signed overflow until a typed
+failure-propagation ABI and cleanup/supervision design is implemented.
+
 ## Evidence is tiered
 
 - `reference_only`: Python checks the independently defined fixture; **no Oreslang execution**.
