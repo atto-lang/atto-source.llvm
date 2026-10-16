@@ -1,8 +1,0 @@
-fnc observe(borrow int n): void {
-  return;
-}
-pub fnc main(): int {
-  val n: int = 13;
-  defer observe(rt borrow n);
-  return rt take n;
-}

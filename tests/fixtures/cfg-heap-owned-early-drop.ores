@@ -1,5 +1,0 @@
-pub fnc main(): int {
-  const score: owned int = 42;
-  if (score eq 42) { return score; } fi
-  return 0;
-}

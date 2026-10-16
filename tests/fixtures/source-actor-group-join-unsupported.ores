@@ -1,8 +1,0 @@
-// Parser-level fail-closed check for an opaque join-permit in a native
-// function parameter. No native permit ABI or typed lowering exists yet.
-pub fnc consume(ActorGroupJoinCapability permit): int {
-  return 0;
-}
-pub fnc main(): int {
-  return 0;
-}

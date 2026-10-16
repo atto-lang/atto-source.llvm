@@ -1,0 +1,2 @@
+fnc fixed<A, A=int>(): int { return 42; }
+pub fnc main(): int { return fixed<int>(); }

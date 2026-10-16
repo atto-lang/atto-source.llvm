@@ -1,8 +1,0 @@
-// Both argument calls have identical return types; their order is observable
-// in LLVM IR even though formal argument binding reverses their slots.
-pub fnc main(): int {
-  return combine(second: read_second(), first: read_first());
-}
-fnc read_first(): int { return 1; }
-fnc read_second(): int { return 2; }
-fnc combine(int first, int second): int { return first * 10 + second; }

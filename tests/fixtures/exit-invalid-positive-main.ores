@@ -1,4 +1,0 @@
-// Must not wrap to exit status 0 when returned to an OS shell.
-pub routine main(): int {
-    return 256;
-}

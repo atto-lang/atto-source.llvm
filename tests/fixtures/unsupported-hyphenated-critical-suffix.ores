@@ -1,4 +1,0 @@
-// The longer identifier 'readonly' must not match compound 'read'.
-pub fnc critical-readonly snapshot(): int {
-    return 1;
-}

@@ -1,2 +1,0 @@
-fnc quotient(int a, int b): int { return a / b; }
-pub fnc main(): int { return quotient(8, 2); }

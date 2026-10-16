@@ -1,2 +1,0 @@
-fnc f(): int { return 1; }
-fnc f(): int { return 2; }

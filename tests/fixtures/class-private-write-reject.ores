@@ -1,8 +1,0 @@
-define class Secret as
-  int token: 3;
-end
-pub fnc main(): int {
-  let mut Secret secret = new Secret();
-  secret.token = 42;
-  return 0;
-}

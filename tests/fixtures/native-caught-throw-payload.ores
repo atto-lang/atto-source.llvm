@@ -1,8 +1,0 @@
-pub fnc main(): int {
-  try {
-    throw 43;
-  } catch (err) {
-    return err;
-  } finally {
-  }
-}

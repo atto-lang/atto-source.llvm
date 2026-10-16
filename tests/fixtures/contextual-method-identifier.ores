@@ -1,5 +1,0 @@
-// 'method' is contextual: a valid scalar local name, not globally reserved.
-pub fnc main(): int {
-  const method: int = 42;
-  return method;
-}

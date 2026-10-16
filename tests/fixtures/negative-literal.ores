@@ -1,3 +1,0 @@
-pub fnc main(): int {
-  return -5 + 47;
-}

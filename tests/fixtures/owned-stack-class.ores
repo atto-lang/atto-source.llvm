@@ -1,8 +1,0 @@
-define class Box as
-  pub let int left = 7;
-  pub let int right = 6;
-end
-pub fnc main(): int {
-  let Box box = new Box();
-  return box.left + box.right;
-}

@@ -1,5 +1,0 @@
-pub routine main(): void {
-}
-fnc __oreslang_guest_main(): int {
-    return 7;
-}

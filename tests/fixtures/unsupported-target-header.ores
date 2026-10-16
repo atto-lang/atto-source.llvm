@@ -1,3 +1,0 @@
-// ores:targets=browser,server
-// ores:requires=clock
-pub fnc main(): int { return 42; }

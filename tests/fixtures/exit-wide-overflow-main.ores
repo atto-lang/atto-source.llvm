@@ -1,4 +1,0 @@
-// Must never truncate an i64 2^32 value to successful shell status zero.
-pub routine main(): int {
-    return 4294967296;
-}

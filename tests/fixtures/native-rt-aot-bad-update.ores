@@ -1,6 +1,0 @@
-suspend fnc spin():void {
-    val count: int = 41;
-    while (true) {
-        count = count + 2;
-    }
-}

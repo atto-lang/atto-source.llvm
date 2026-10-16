@@ -1,8 +1,0 @@
-define actor Counter as {
-  const value: int = 40;
-  pub fnc on_message(int message): int { return value; }
-}
-define actor Counter as {
-  const value: int = 2;
-  pub fnc on_message(int message): int { return value; }
-}

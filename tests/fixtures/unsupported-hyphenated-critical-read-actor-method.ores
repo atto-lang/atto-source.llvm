@@ -1,7 +1,0 @@
-define actor Counter as
-    let value: int = 0;
-    pub critical-read fnc on_message(int message): int {
-        return message;
-    }
-end
-pub fnc main(): int { return 0; }

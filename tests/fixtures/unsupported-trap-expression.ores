@@ -1,3 +1,0 @@
-pub fnc main(): int {
-  return trap (40 + 2);
-}

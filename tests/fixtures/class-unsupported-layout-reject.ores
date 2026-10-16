@@ -1,5 +1,0 @@
-define class Box as
-  pub let int value = 0;
-  pub let int other = 1;
-end
-pub fnc main(): int { return 42; }

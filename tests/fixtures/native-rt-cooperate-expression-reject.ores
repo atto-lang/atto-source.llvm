@@ -1,4 +1,0 @@
-pub routine main(): int {
-  const x: int = rt cooperate;
-  return x;
-}

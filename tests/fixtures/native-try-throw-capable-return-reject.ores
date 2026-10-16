@@ -1,6 +1,0 @@
-fnc work(): int { return 5; }
-pub fnc main(): int {
-  try { return work(); }
-  catch (err) { return 0; }
-  finally {}
-}

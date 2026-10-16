@@ -1,6 +1,0 @@
-pub routine main(): int {
-  loop do
-    return 1;
-  done
-  return 0;
-}

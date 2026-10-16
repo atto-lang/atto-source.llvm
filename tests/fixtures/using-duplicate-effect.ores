@@ -1,1 +1,0 @@
-pub fnc main(): int using io, io { return 42; }

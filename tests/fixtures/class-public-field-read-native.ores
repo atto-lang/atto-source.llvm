@@ -1,7 +1,0 @@
-define class Public as
-  pub final int token: 42;
-end
-pub fnc main(): int {
-  let Public value = new Public();
-  return value.token;
-}

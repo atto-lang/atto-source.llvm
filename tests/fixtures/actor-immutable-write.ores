@@ -1,7 +1,0 @@
-define actor Counter as {
-  const immutable: int = 40;
-  pub fnc on_message(int message): int {
-    immutable = 41;
-    return immutable;
-  }
-}

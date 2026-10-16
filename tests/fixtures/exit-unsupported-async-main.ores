@@ -1,4 +1,0 @@
-// Async root completion requires native continuation/supervision lowering.
-pub async routine main(): int {
-    return 0;
-}

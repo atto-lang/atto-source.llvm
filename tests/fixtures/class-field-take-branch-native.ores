@@ -1,9 +1,0 @@
-define class Pair as
-  pub let int left = 20;
-  pub let int right = 22;
-end
-pub fnc main(): int {
-  let Pair pair = new Pair();
-  if (pair.left eq 20) { return rt take pair.left + pair.right; } fi
-  return pair.left + pair.right;
-}

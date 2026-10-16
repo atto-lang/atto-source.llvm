@@ -1,5 +1,0 @@
-pub routine main(): int {
-  while true do
-  done
-  return 0;
-}

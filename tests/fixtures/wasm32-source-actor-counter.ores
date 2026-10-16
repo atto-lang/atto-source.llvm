@@ -1,7 +1,0 @@
-define actor Counter as
-    let total: int = 10;
-    pub on_message(int delta): int {
-        total = total + delta;
-        return total;
-    }
-end

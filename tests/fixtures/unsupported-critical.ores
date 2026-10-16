@@ -1,4 +1,0 @@
-// Native parser must not silently drop Java's per-file critical effect.
-pub critical fnc total(): int {
-  return 1;
-}

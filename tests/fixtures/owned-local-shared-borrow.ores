@@ -1,6 +1,0 @@
-fnc read(borrow int x): int { return x; }
-pub fnc main(): int {
- const v: int = 39;
- val w: int = read(rt borrow v) + 3;
- return w;
-}

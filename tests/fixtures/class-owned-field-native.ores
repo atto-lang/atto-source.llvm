@@ -1,7 +1,0 @@
-define class Box as
-  pub let int value = 42;
-end
-pub fnc main(): int {
-  let Box b = new Box();
-  return b.value;
-}

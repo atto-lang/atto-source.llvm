@@ -1,8 +1,0 @@
-define class Pair as
-  final mut Array<int> a: new Array<int>();
-  constructor(int start) { return; }
-end
-pub fnc main(): int {
-  let mut Pair p = new Pair(42);
-  return 42;
-}

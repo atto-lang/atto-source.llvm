@@ -1,4 +1,0 @@
-// Must fail closed: shared reader admission and protected-state effects are not lowered.
-pub fnc critical-read read_value(): int {
-  return 1;
-}

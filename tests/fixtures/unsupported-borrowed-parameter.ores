@@ -1,1 +1,0 @@
-fnc inspect(borrow int value): int { return value; }

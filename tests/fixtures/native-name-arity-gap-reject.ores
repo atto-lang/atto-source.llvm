@@ -1,4 +1,0 @@
-// Arity 1 cannot fall back to arity 0 or 2.
-fnc choose(): int { return 4; }
-fnc choose(int a, int b): int { return a + b; }
-pub fnc main(): int { return choose(41); }

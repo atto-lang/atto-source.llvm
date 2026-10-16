@@ -1,4 +1,0 @@
-// Must fail closed: native guest-source RW scheduling is not lowered.
-pub critical-write fnc write_value(): int {
-  return 1;
-}

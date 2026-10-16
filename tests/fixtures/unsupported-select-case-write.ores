@@ -1,5 +1,0 @@
-// Reusable write ownership is not native-supported; do not emit LLVM IR.
-pub fnc main(): int {
-  val SelectCase outgoing = SelectCase.write(output, value);
-  return 0;
-}

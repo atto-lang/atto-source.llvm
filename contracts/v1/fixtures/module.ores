@@ -1,3 +1,0 @@
-define module demo as
-  pub fnc main(): int { return 7; }
-end

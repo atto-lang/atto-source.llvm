@@ -1,0 +1,2 @@
+fnc invalid<A=B, B=int>(): int { return 42; }
+pub fnc main(): int { return invalid<int>(); }

@@ -1,0 +1,2 @@
+fnc add<A, B=int>(A x, B y): int { return x + y; }
+pub fnc main(): int { return add<B=int, int>(19, 23); }

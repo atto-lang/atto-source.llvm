@@ -1,4 +1,0 @@
-// Until native exit effects exist this must reject without emitting executable IR.
-pub routine main(): void {
-    std.process.exit(0);
-}

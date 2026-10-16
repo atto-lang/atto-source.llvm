@@ -1,3 +1,0 @@
-# Wasm32 bounded-class execution gate
-
-This gate uses the actual Oreslang LLVM compiler, not synthetic Wasm or host callbacks. It compiles four existing same-source multi-field class/borrow/mutation/control-flow fixtures, links target-marked LLVM IR via Clang wasm32 with a fixed 2-page memory maximum, and runs the resulting core Wasm in Node. All four must return 42n, with no Wasm imports. Three invalid-borrow/mutation source fixtures must fail without IR. wasm32 actor and native heap region declarations are explicitly rejected at codegen admission. This is not a new GC, full struct ABI across the host boundary, or Java/GraalVM parity proof. Requires Clang and Node for the optional CTest.

@@ -1,3 +1,0 @@
-// Borrow parameter mode and parameter name do NOT disambiguate overloads.
-fnc inspect(borrow int x): int { return x; }
-fnc inspect(borrow mut int other): int { return other; }

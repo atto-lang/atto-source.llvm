@@ -1,9 +1,0 @@
-// "owned" is an ordinary identifier under shared Oreslang syntax.
-fnc owned(int owned): int {
-  const local: int = owned;
-  return local;
-}
-pub fnc main(): int {
-  const owned: int = 21;
-  return owned(owned) + 21;
-}

@@ -1,0 +1,2 @@
+fnc identity<A, B=int>(A value): A { return value; }
+pub fnc main(): int { return identity<_, B=int>(42); }

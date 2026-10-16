@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oreslang proposed actor concurrency policy envelope",
+  "description": "HIR proposal only; not yet used by Java/Graal or LLVM compilers. One knob for generic actors; exactly two for connection-oriented actor ingress.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ingress_protocol",
+    "concurrency"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "v0-proposal"
+    },
+    "ingress_protocol": {
+      "enum": [
+        "generic",
+        "http",
+        "tcp",
+        "ws"
+      ]
+    },
+    "concurrency": {
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "ingress_protocol": {
+          "const": "generic"
+        },
+        "concurrency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "messages"
+          ],
+          "properties": {
+            "messages": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "ingress_protocol": {
+          "enum": [
+            "http",
+            "tcp",
+            "ws"
+          ]
+        },
+        "concurrency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "connections",
+            "messages_per_connection"
+          ],
+          "properties": {
+            "connections": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "messages_per_connection": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
+  ]
+}

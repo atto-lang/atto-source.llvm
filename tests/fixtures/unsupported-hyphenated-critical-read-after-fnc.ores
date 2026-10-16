@@ -1,4 +1,0 @@
-// Reader modifier after fnc must never parse as an ordinary name or unchecked subtraction.
-pub fnc critical-read snapshot(): int {
-  return 1;
-}

@@ -1,6 +1,0 @@
-// Must fail compilation until actor semantics and ownership are implemented.
-define actor Worker as
-  fnc run(int value): int {
-    return value;
-  }
-end

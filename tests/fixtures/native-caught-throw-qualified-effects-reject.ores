@@ -1,8 +1,0 @@
-pub fnc main(): int using io {
-  try {
-    throw 7;
-  } catch (err) {
-    return err;
-  } finally {
-  }
-}

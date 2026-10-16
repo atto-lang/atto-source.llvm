@@ -1,5 +1,0 @@
-pub fnc main(): int {
-  try { return 1; }
-  catch (err) {}
-  finally { break; }
-}

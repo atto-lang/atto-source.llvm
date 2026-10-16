@@ -1,0 +1,239 @@
+{
+  "schema_version": "1.0.0",
+  "scope": "free-function-scalar-generic-v1",
+  "cases": [
+    {
+      "id": "generic.scalar.explicit",
+      "source": "fixtures/explicit.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.inferred",
+      "source": "fixtures/inferred.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.dependent-default",
+      "source": "fixtures/dependent-default.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.named-override",
+      "source": "fixtures/named-override.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.explicit-inference-hole",
+      "source": "fixtures/explicit-inference-hole.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.omitted-default",
+      "source": "fixtures/omitted-default.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.missing-required",
+      "source": "fixtures/missing-required.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "cannot infer generic parameter",
+        "graal": "cannot infer generic parameter"
+      }
+    },
+    {
+      "id": "generic.scalar.explicit-uninferable-hole",
+      "source": "fixtures/explicit-uninferable-hole.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "cannot infer generic parameter",
+        "graal": "cannot infer generic parameter"
+      }
+    },
+    {
+      "id": "generic.scalar.duplicate-named",
+      "source": "fixtures/duplicate-named.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "duplicate generic argument",
+        "graal": "duplicate generic argument"
+      }
+    },
+    {
+      "id": "generic.scalar.unknown-named",
+      "source": "fixtures/unknown-named.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "unknown named generic argument",
+        "graal": "has no generic parameter named"
+      }
+    },
+    {
+      "id": "generic.scalar.forward-default",
+      "source": "fixtures/forward-default.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "forward or self-referential generic default",
+        "graal": "forward or self-referential"
+      }
+    },
+    {
+      "id": "generic.scalar.nested-inference-hole",
+      "source": "fixtures/nested-inference-hole.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "native scalar generic type requires int",
+        "graal": "nested inference hole"
+      }
+    },
+    {
+      "id": "generic.scalar.positional-after-named",
+      "source": "fixtures/positional-after-named.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "positional generic argument after named argument",
+        "graal": "positional generic arguments must precede named"
+      }
+    },
+    {
+      "id": "generic.scalar.nonscalar-native-rejected",
+      "source": "fixtures/nonscalar-native-rejected.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "pending"
+      },
+      "diagnostics": {
+        "llvm": "native scalar generic type requires int"
+      },
+      "pending_reason": "LLVM native stage 1 accepts only int; the Java backend admits bool generic arguments"
+    },
+    {
+      "id": "generic.scalar.dependent-chain",
+      "source": "fixtures/dependent-chain.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.positional-plus-named",
+      "source": "fixtures/positional-plus-named.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.inferred-hole-with-other-default",
+      "source": "fixtures/inferred-hole-with-other-default.ores",
+      "kind": "native_exit",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "expected_exit": 42
+    },
+    {
+      "id": "generic.scalar.dependent-hole-cannot-default",
+      "source": "fixtures/dependent-hole-cannot-default.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "cannot infer generic parameter",
+        "graal": "cannot resolve dependent default"
+      }
+    },
+    {
+      "id": "generic.scalar.duplicate-generic-declaration",
+      "source": "fixtures/duplicate-generic-declaration.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "duplicate generic parameter",
+        "graal": "invalid or duplicate generic parameter"
+      }
+    },
+    {
+      "id": "generic.scalar.self-dependent-default",
+      "source": "fixtures/self-dependent-default.ores",
+      "kind": "diagnostic",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      },
+      "diagnostics": {
+        "llvm": "forward or self-referential generic default",
+        "graal": "forward or self-referential generic default"
+      }
+    }
+  ]
+}

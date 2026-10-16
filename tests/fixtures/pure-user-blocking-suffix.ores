@@ -1,3 +1,0 @@
-// A pure user function is not classified as native I/O from its name alone.
-pub fnc main(): int { return pure_math_blocking(); }
-fnc pure_math_blocking(): int { return 42; }

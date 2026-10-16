@@ -1,3 +1,0 @@
-pub fnc connect_actors(): int {
-    return spawn A1() pipe spawn A2() pipe spawn A3();
-}

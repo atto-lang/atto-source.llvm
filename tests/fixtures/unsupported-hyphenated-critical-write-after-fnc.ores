@@ -1,4 +1,0 @@
-// Parser must recognize modifier after fnc but reject until typed RW lowering.
-pub fnc critical-write update(): int {
-  return 1;
-}

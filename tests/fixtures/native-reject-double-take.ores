@@ -1,1 +1,0 @@
-pub fnc main(int value): int { return rt take value + rt take value; }

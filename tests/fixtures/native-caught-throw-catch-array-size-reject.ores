@@ -1,4 +1,0 @@
-pub fnc main(): int {
-  let mut Array<int> values = new Array<int>();
-  try { throw 43; } catch (err) { return values.size; } finally { }
-}

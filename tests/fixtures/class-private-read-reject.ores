@@ -1,7 +1,0 @@
-define class Secret as
-  final int token: 42;
-end
-pub fnc main(): int {
-  let Secret secret = new Secret();
-  return secret.token;
-}

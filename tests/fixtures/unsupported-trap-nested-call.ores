@@ -1,6 +1,0 @@
-fnc id(int value): int {
-  return value;
-}
-pub fnc main(): int {
-  return id(trap (42));
-}

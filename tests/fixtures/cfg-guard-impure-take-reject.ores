@@ -1,5 +1,0 @@
-pub fnc main(): int {
-  const score: int = 42;
-  if (rt take score eq 42) { return 42; } fi
-  return score;
-}

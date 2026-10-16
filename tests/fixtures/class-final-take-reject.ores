@@ -1,7 +1,0 @@
-define class Pair as
-  pub final int a: 42;
-end
-pub fnc main(): int {
-  let mut Pair p = new Pair();
-  return rt take p.a;
-}

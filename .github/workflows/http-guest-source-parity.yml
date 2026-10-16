@@ -1,0 +1,16 @@
+name: Shared JVM LLVM guest source identity
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  fixture-identity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify canonical guest source blob
+        run: python3 scripts/verify_http_fixture.py

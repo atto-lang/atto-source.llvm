@@ -1,1 +1,0 @@
-pub fnc main(): int { return rt take (40 + 2); }

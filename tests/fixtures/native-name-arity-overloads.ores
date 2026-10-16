@@ -1,4 +1,0 @@
-fnc pick(): int { return 4; }
-fnc pick(int value): int { return value + 5; }
-fnc pick(int value, int extra): int { return value + extra; }
-fnc main(): int { return pick() + pick(3) + pick(8, 4); }

@@ -1,4 +1,0 @@
-pub fnc main(): int {
-  const x: int = x + 1;
-  return x;
-}

@@ -1,4 +1,0 @@
-// DynamicSelectPlan must not be advertised as LLVM-supported yet.
-pub fnc main(): int {
-  return select from plan;
-}

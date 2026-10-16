@@ -1,9 +1,0 @@
-define class Pair as
-  final int a: input;
-  constructor(int input) { return; }
-end
-pub fnc main(): int {
-  const owned_value: owned int = 42;
-  let Pair p = new Pair(owned_value);
-  return p.a;
-}

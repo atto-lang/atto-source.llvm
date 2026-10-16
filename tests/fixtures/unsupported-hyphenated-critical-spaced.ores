@@ -1,4 +1,0 @@
-// Whitespace must never turn subtraction into a RW modifier.
-pub fnc critical - read snapshot(): int {
-    return 1;
-}

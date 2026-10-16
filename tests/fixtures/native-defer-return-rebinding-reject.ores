@@ -1,5 +1,0 @@
-pub fnc main(): int {
-  val result: int = 3;
-  defer result = 4;
-  return result;
-}

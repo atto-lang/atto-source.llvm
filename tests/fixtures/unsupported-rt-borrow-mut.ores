@@ -1,1 +1,0 @@
-pub fnc main(int owner): int { return rt borrow mut owner; }

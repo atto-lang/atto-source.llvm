@@ -1,5 +1,0 @@
-pub fnc oreslang_actor_Counter_on_message(): int { return 17; }
-define actor Counter as {
-  const base: int = 42;
-  pub fnc on_message(int message): int { return base; }
-}

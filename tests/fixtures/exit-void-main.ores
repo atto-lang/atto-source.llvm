@@ -1,3 +1,0 @@
-// Falling off a void entrypoint is a successful process exit.
-pub routine main(): void {
-}

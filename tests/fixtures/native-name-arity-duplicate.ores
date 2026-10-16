@@ -1,2 +1,0 @@
-fnc pick(int value): int { return value; }
-fnc pick(int second): int { return second + 1; }

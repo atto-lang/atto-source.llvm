@@ -1,2 +1,0 @@
-/* outer /* nested */ closing */
-pub fnc main(): int { return 4_0 + 2; }

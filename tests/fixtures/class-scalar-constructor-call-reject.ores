@@ -1,9 +1,0 @@
-define class Pair as
-  final int a: compute(start);
-  constructor(int start) { return; }
-end
-pub fnc compute(int start): int { return start; }
-pub fnc main(): int {
-  let Pair p = new Pair(42);
-  return p.a;
-}

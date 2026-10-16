@@ -1,3 +1,0 @@
-pub routine main(int value): void {
-    return;
-}

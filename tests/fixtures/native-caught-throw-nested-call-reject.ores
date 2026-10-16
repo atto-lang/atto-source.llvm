@@ -1,9 +1,0 @@
-fnc fail_payload(): int { return 7; }
-pub fnc main(): int {
-  try {
-    throw fail_payload();
-  } catch (err) {
-    return 43;
-  } finally {
-  }
-}

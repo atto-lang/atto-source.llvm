@@ -1,7 +1,0 @@
-// Must remain a select effect, not a callable name or integer subtraction.
-pub fnc main(): int {
-  nb-select {
-    default: {}
-  }
-  return 0;
-}
