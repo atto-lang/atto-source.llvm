@@ -32,6 +32,19 @@ int main() {
     check(crlf_result.imports.size()==2 && crlf_result.imports[0]=="./a" &&
           crlf_result.imports[1]=="pkg:x/b");
     check(crlf_result.stripped_source.size()==crlf.size());
+    // A CR-only comment boundary must not erase a following import. Keep
+    // original offsets and line endings byte-identical for diagnostics.
+    const std::string cr = "// leading\rimport \"./a\";\rimport \"pkg:x/b\";\rpub fnc main(): int {return 42;}\r";
+    auto cr_result = split_import_preamble(cr);
+    check(cr_result.imports.size()==2 && cr_result.imports[0]=="./a" &&
+          cr_result.imports[1]=="pkg:x/b");
+    check(cr_result.stripped_source.size()==cr.size());
+    check(cr_result.stripped_source.find("import")==std::string::npos);
+    check(cr_result.stripped_source.find('\r')!=std::string::npos);
+    const std::string mixed = "// comment\rimport \"./one\";\nimport \"./two\";\r\npub fnc main(): int {return 42;}\n";
+    auto mixed_result = split_import_preamble(mixed);
+    check(mixed_result.imports.size()==2 && mixed_result.stripped_source.size()==mixed.size());
+    check(mixed_result.stripped_source.find("import")==std::string::npos);
     auto eof=split_import_preamble("import \"./a\";");
     check(eof.imports.size()==1 && eof.stripped_source.size()==13);
     auto max_path=split_import_preamble("import \""+std::string(4096,'x')+"\";\n");
