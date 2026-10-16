@@ -35,7 +35,8 @@ https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/1068.
 
 The compiler now admits `--target=host --experimental-checked-i64-functions`
 for a **whole-module, pure, value-only signed-i64 function graph**, limited to
-64 functions, eight parameters each and acyclic call depth at most 32. The
+64 functions, eight parameters each, at most 2048 expression AST nodes
+per function (depth under 64), and acyclic call depth at most 32. The
 admission check rejects actors, classes/owned resources, locals, mutable
 state, deferred effects, cross-target execution, generic arguments, unresolved
 callees, recursive cycles and overload-arity collisions.
