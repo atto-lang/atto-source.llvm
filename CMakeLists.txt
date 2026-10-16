@@ -29,6 +29,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only import-policy primitive test. Does not prove native linker parity.
+    add_executable(oreslang-native-import-path-policy-test
+        tests/native_import_path_policy_test.cpp)
+    target_include_directories(oreslang-native-import-path-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-import-path-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_import_path_policy_host_only
+        COMMAND oreslang-native-import-path-policy-test)
+    set_tests_properties(native_import_path_policy_host_only PROPERTIES TIMEOUT 20)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
