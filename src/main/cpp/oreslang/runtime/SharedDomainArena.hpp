@@ -109,7 +109,10 @@ public:
     }
 
     Grant grant(std::uint64_t actor, bool allow_read, bool allow_write) {
-        std::unique_lock lock(mutex_);
+        // Like actor lease admission, membership grants may not park a CONTROL
+        // carrier behind a guest-held critical lease.
+        std::unique_lock lock(mutex_, std::try_to_lock);
+        if (!lock.owns_lock()) throw std::logic_error("shared region busy");
         if (closing_.load(std::memory_order_acquire) || !actor || (!allow_read && !allow_write))
             throw std::logic_error("invalid shared region grant");
         for (std::size_t i = 0; i < Members; ++i) {
