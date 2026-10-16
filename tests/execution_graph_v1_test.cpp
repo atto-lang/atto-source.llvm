@@ -93,6 +93,18 @@ int main() {
         });
         expect_fail([&] { (void) executorRejected.get(); }, "executor budget");
 
+        // Admission failures can occur after the external scheduler retained
+        // the closure. That rejected task must be inert if delivered later.
+        std::function<void()> orphan;
+        auto rejectedAfterQueue = plan.submit_cpu([&](std::function<void()> task) {
+            orphan = std::move(task);
+            throw std::runtime_error("executor rejected after enqueue");
+        });
+        require(static_cast<bool>(orphan), "missing late-rejected task");
+        expect_fail([&] { (void) rejectedAfterQueue.get(); }, "rejected after enqueue");
+        orphan();
+        expect_fail([&] { (void) rejectedAfterQueue.get(); }, "rejected after enqueue");
+
         // Cancellation vs actual execution can race. Exactly one terminal state
         // must prevail. No unhandled exception or double promise settlement.
         for (int i = 0; i < 64; ++i) {
