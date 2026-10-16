@@ -27,11 +27,6 @@ int main(void) {
     require(first.ticket != 0 && first.reactor == 0);
     require(ores_native_nio_started_reactors(runtime) == 1);
     require(write(pipefd[1], "!", 1) == 1);
-    OresNativeNioCompletion received = {0};
-    require(next_completion(runtime, &received));
-    require(received.outcome == ORES_NATIVE_NIO_READY);
-    require(received.watch.ticket == first.ticket);
-    require(received.fd == pipefd[0] && (received.events & EPOLLIN));
     /* A host polling the completion FD must be able to acknowledge its
      * readiness without entering a permanently readable busy loop. */
     struct pollfd notification = {ores_native_nio_completion_fd(runtime, 0), POLLIN, 0};
@@ -39,6 +34,11 @@ int main(void) {
     ores_native_nio_drain_completion_signal(runtime, 0);
     notification.revents = 0;
     require(poll(&notification, 1, 0) == 0);
+    OresNativeNioCompletion received = {0};
+    require(next_completion(runtime, &received));
+    require(received.outcome == ORES_NATIVE_NIO_READY);
+    require(received.watch.ticket == first.ticket);
+    require(received.fd == pipefd[0] && (received.events & EPOLLIN));
     char c;
     require(read(pipefd[0], &c, 1) == 1 && c == '!');
     OresNativeNioWatch second = {0};
@@ -47,14 +47,14 @@ int main(void) {
     require(!ores_native_nio_try_cancel(runtime, first));
     require(ores_native_nio_try_cancel(runtime, second));
     require(!ores_native_nio_try_cancel(runtime, second));
-    require(next_completion(runtime, &received));
-    require(received.outcome == ORES_NATIVE_NIO_CANCELLED);
-    require(received.watch.ticket == second.ticket);
     notification.revents = 0;
     require(poll(&notification, 1, 1000) == 1);
     ores_native_nio_drain_completion_signal(runtime, 0);
     notification.revents = 0;
     require(poll(&notification, 1, 0) == 0);
+    require(next_completion(runtime, &received));
+    require(received.outcome == ORES_NATIVE_NIO_CANCELLED);
+    require(received.watch.ticket == second.ticket);
     close(pipefd[0]); close(pipefd[1]);
     ores_native_nio_close(runtime);
 
