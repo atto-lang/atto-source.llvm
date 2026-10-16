@@ -1935,3 +1935,21 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-epoll-reactor-manager-test)
     set_tests_properties(native_epoll_reactor_manager_rt_preallocated PROPERTIES TIMEOUT 20)
 endif()
+
+# Native RT profile has no pthread creation after VM preparation. Existing
+# throughput open remains metadata-only until first runnable admission.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-vm-realtime-prestart-test
+        tests/native_vm_realtime_prestart_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-realtime-prestart-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-realtime-prestart-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-realtime-prestart-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_vm_realtime_preallocated_startup
+        COMMAND oreslang-native-vm-realtime-prestart-test)
+    set_tests_properties(native_vm_realtime_preallocated_startup PROPERTIES TIMEOUT 25)
+endif()
