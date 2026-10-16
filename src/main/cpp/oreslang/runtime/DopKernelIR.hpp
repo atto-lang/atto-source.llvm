@@ -263,6 +263,8 @@ public:
         if (state_->loans != 0 || state_->writer) throw std::logic_error("outstanding host buffer loan");
         state_->closed = true;
         state_->region_root.retire_bound();
+        std::vector<unsigned char> released;
+        state_->bytes.swap(released);
     }
 
 private:
