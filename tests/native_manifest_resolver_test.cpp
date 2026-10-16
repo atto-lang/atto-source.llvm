@@ -88,6 +88,18 @@ math = { zed = "acme/math" }
             require(resolve_source(config,app/"src/main.ores","+/src/internal")==
                     fs::canonical(app/"src/util.ores"),"in-root symlink rejected");
         require(resolve_source(config,app/"src/main.ores","+/src/util")==fs::canonical(app/"src/util.ores"),"+ root");
+        // The search root may be *exactly* the nested package directory.
+        // Checking only descendants of that root would skip its own marker.
+        auto configured_child_root=config;
+        configured_child_root.import_paths={nested};
+        rejects([&]{(void)resolve_source(configured_child_root,app/"src/main.ores",
+                                         "src/leaf");},
+                "configured bare root at nested package acquired child authority");
+        if(!nested_alias_error)
+            rejects([&]{(void)resolve_source(configured_child_root,app/"src/main.ores",
+                                             "parent-alias");},
+                    "configured child search root symlink laundered parent source");
+
         // Parent project authority must not tunnel into a nested package
         // through relative, bare import-path or symlink-alias spellings.
         rejects([&]{(void)resolve_source(config,app/"src/main.ores",
