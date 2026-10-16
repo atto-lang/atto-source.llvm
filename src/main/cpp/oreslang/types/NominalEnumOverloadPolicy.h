@@ -39,7 +39,8 @@ inline bool eligibleEnum(const std::vector<Variant>& variants) {
             if (!value.primitiveFields.empty()) return false;
             continue;
         }
-        if (value.layout == PayloadLayout::Unsupported
+        if ((value.layout != PayloadLayout::Primitive
+                && value.layout != PayloadLayout::PrimitiveTuple)
             || value.primitiveFields.empty()
             || (value.layout == PayloadLayout::Primitive
                 && value.primitiveFields.size() != 1)) return false;
@@ -97,6 +98,8 @@ inline Signature signature(
         if (parameter.second.empty()) {
             throw std::invalid_argument("parameter has no statically resolved type ID");
         }
+        if (parameter.first != Kind::Primitive && parameter.first != Kind::Enum)
+            throw std::invalid_argument("unknown nominal overload parameter kind");
         if (parameter.first == Kind::Primitive && !isPrimitive(parameter.second)) {
             throw std::invalid_argument(
                 "structural/borrowed/generic/unknown primitive overload type");
