@@ -1,0 +1,8 @@
+// Native classes require explicit override-only virtual dispatch authority.
+define abstract class Framework as
+  private abstract handle(int value): int;
+end
+define class Child extends Framework as
+  private handle(self, int value): int { return value; }
+end
+pub fnc main(): int { return 0; }
