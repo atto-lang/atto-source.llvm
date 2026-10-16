@@ -36,20 +36,27 @@ public:
 enum class RegionMode { Read, Write, Discard, Reduce, Atomic };
 
 struct RegionAccess {
-    RegionRoot root;
-    std::uint32_t field;
-    std::uint64_t begin;
-    std::uint64_t end;
-    RegionMode mode;
-    std::string reduction;
+    const RegionRoot root;
+    const std::uint32_t field;
+    const std::uint64_t begin;
+    const std::uint64_t end;
+    const RegionMode mode;
+    const std::string reduction;
+
+    static std::uint64_t checked_end(const RegionRoot& r,
+                                     std::uint64_t begin, std::uint64_t count) {
+        if (begin > r.rows() || count > r.rows() - begin)
+            throw std::out_of_range("DOP field or row slice out of bounds");
+        return begin + count;
+    }
 
     RegionAccess(RegionRoot region, std::uint32_t field_id,
                  std::uint64_t row_start, std::uint64_t row_count,
                  RegionMode privilege, std::string reduction_op = {})
-        : root(std::move(region)), field(field_id), begin(row_start), end(row_start),
-          mode(privilege), reduction(std::move(reduction_op)) {
-        if (field >= root.fields() || begin > root.rows()
-                || row_count > root.rows() - begin)
+        : root(std::move(region)), field(field_id), begin(row_start),
+          end(checked_end(root, row_start, row_count)), mode(privilege),
+          reduction(std::move(reduction_op)) {
+        if (field >= root.fields())
             throw std::out_of_range("DOP field or row slice out of bounds");
         if (mode != RegionMode::Read && mode != RegionMode::Write
                 && mode != RegionMode::Discard && mode != RegionMode::Reduce
@@ -62,13 +69,12 @@ struct RegionAccess {
         if ((mode == RegionMode::Reduce && !valid_operator)
                 || (mode != RegionMode::Reduce && !reduction.empty()))
             throw std::invalid_argument("reduction requires exactly one named operator");
-        end = begin + row_count; // checked above; cannot overflow
-    }
+     }
 };
 
 struct RegionTask {
-    std::string name;
-    std::vector<RegionAccess> accesses;
+    const std::string name;
+    const std::vector<RegionAccess> accesses;
     RegionTask(std::string task_name, std::vector<RegionAccess> task_accesses)
         : name(std::move(task_name)), accesses(std::move(task_accesses)) {
         if (name.empty() || name.find_first_not_of(" \t\r\n") == std::string::npos
