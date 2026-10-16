@@ -286,6 +286,49 @@ int main() {
     }
 
 
+    // 16-MiB payload credits alone cannot limit empty-message metadata.
+    // Reject malformed or excessive queue config before allocating edges.
+    {
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 0, 4);
+        }, "zero edge capacity accepted");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 4097, 4);
+        }, "unbounded empty-message capacity accepted");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 4, 0);
+        }, "zero worker capacity accepted");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 4, 4097);
+        }, "unbounded worker capacity accepted");
+
+        std::vector<PipeStage> many = {
+            {"Producer", PipeRole::readable, "", "Event"}
+        };
+        std::vector<PipeConnection> links;
+        for (int i = 0; i < 17; ++i) {
+            std::string sink = "sink-" + std::to_string(i);
+            many.push_back({"Worker", PipeRole::writable, "Event", "", sink});
+            links.push_back({"Producer", sink, "Event"});
+        }
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, many, links, 4096, 4);
+        }, "aggregate empty-message slot amplification accepted");
+        // Boundary: exactly 65,536 graph edge slots is still valid.
+        {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, many, links, 1024, 4);
+            check(pipe.edge_count() == 17,
+                  "legal graph slot bound rejected");
+            pipe.close();
+        }
+    }
+
     // Per-edge byte credit applies to accepted messages and to pending
     // writes, not just to the maximum size of one individual payload.
     // Exhausting one branch must not consume another branch's byte credit.
