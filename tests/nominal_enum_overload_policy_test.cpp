@@ -46,6 +46,7 @@ int main() {
     REQUIRE(!eligibleEnum({{PayloadLayout::PrimitiveTuple, {"int", "Any"}}}));
     REQUIRE(!eligibleEnum({{PayloadLayout::Unit, {"int"}}}));
     REQUIRE(!eligibleEnum({{PayloadLayout::Primitive, {"int", "bool"}}}));
+    REQUIRE(!eligibleEnum({{static_cast<PayloadLayout>(255), {"int"}}}));
 
     Signature color = signature("go", {
         {Kind::Enum, "unit::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
@@ -96,6 +97,8 @@ int main() {
     rejects([&] { (void)signature("go", {{Kind::Primitive, "Unknown"}}, eligibleIds); });
     rejects([&] { (void)signature("go", {{Kind::Primitive, "{a:int}"}}, eligibleIds); });
     rejects([&] { (void)signature("go", {{Kind::Enum, ""}}, eligibleIds); });
+    rejects([&] { (void)signature("go", {
+        {static_cast<Kind>(255), "int"}}, eligibleIds); });
     rejects([&] { (void)compare(color, signature("other", {
         {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}}, eligibleIds)); });
 
