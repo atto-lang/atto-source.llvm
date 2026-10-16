@@ -107,6 +107,27 @@ int main() {
     };
     expect(check_actor_pipeline_graph(unicode_stages, unicode_links).size() == 1);
 
+    // Strict graph-string validation must match the Java planner.
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(1, char(0));
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(257, 'z');
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=stages;wrong[0].outbound=std::string(257, 'x');
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=links;wrong[0].payload=std::string(1, char(0));
+               (void)check_actor_pipeline_graph(stages, wrong); });
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(1, char(0x80));
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(1, char(0xc0));
+               (void)check_actor_pipeline_graph(wrong, links); });
+    {
+        auto unicode=stages;
+        unicode[0].instance_id=std::string({char(0xc3),char(0xa9)});
+        auto edges=links;
+        for (auto& link: edges)
+            if (link.source == "Source") link.source=unicode[0].instance_id;
+        expect(check_actor_pipeline_graph(unicode, edges).size() == 4);
+    }
     // Two worker *instances* of one nominal actor type are legal. Graph
     // endpoints resolve instance IDs, not nominal class names.
     std::vector<PipeStage> identical_workers = {
