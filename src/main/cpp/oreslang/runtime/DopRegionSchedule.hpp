@@ -62,10 +62,11 @@ struct RegionAccess {
                 && mode != RegionMode::Discard && mode != RegionMode::Reduce
                 && mode != RegionMode::Atomic)
             throw std::invalid_argument("invalid DOP privilege");
-        const auto trimmed = reduction.find_first_not_of(" \t\r\n");
-        const bool valid_operator = trimmed != std::string::npos
-            && trimmed == 0
-            && reduction.find_last_not_of(" \t\r\n") == reduction.size() - 1;
+        // Match Java String.trim() at the ABI boundary: reject every ASCII
+        // control/space codepoint <= U+0020 at either end (not just CR/LF/TAB).
+        const bool valid_operator = !reduction.empty()
+            && static_cast<unsigned char>(reduction.front()) > 0x20
+            && static_cast<unsigned char>(reduction.back()) > 0x20;
         if ((mode == RegionMode::Reduce && !valid_operator)
                 || (mode != RegionMode::Reduce && !reduction.empty()))
             throw std::invalid_argument("reduction requires exactly one named operator");
@@ -77,9 +78,9 @@ struct RegionTask {
     const std::vector<RegionAccess> accesses;
     RegionTask(std::string task_name, std::vector<RegionAccess> task_accesses)
         : name(std::move(task_name)), accesses(std::move(task_accesses)) {
-        if (name.empty() || name.find_first_not_of(" \t\r\n") == std::string::npos
-                || name.find_first_not_of(" \t\r\n") != 0
-                || name.find_last_not_of(" \t\r\n") != name.size() - 1)
+        if (name.empty()
+                || static_cast<unsigned char>(name.front()) <= 0x20
+                || static_cast<unsigned char>(name.back()) <= 0x20)
             throw std::invalid_argument("invalid DOP task name");
     }
 };
