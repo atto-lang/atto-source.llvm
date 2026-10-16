@@ -33,8 +33,12 @@ public:
             throw std::domain_error("selected network endpoint denied");
 #if defined(__unix__) || defined(__APPLE__)
         const auto colon = selected.rfind(':');
-        if (colon == selected.npos || colon == 0 || colon + 1 == selected.size())
+        if (colon == selected.npos || colon == 0 || colon + 1 == selected.size() ||
+            selected.size() - (colon + 1) > 5)
             throw std::domain_error("invalid selected endpoint");
+        // The trusted adapter independently rejects long numeric ports
+        // before unsigned arithmetic; policy admission alone is not a
+        // substitute for validating the actual socket endpoint.
         const std::string host(selected.substr(0, colon));
         unsigned port = 0;
         for (std::size_t i = colon + 1; i < selected.size(); ++i) {
