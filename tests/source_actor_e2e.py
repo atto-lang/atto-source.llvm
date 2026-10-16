@@ -5,6 +5,11 @@ import pathlib
 import subprocess
 import tempfile
 
+# All compiler, IR and guest-execution assertions below are conformance gates.
+# Python -O / PYTHONOPTIMIZE strips assertions and would falsely report PASS.
+if not __debug__:
+    raise SystemExit("source actor parity validation refuses optimized Python: assertions are required")
+
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
 
