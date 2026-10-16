@@ -561,7 +561,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_value_pipeline_noncall_rejected value-pipe-noncall-reject.ores
         --diagnostic "native pipeline stage requires a named scalar callable")
     oreslang_contract_test(native_result_pipeline_requires_tagged_values value-pipe-result-unsupported.ores
-        --diagnostic "native pipeline stage requires a named scalar callable")
+        --diagnostic "native tagged Option/Result pipeline unsupported")
+    oreslang_contract_test(native_option_pipeline_requires_tagged_values value-pipe-option-unsupported.ores
+        --diagnostic "native tagged Option/Result pipeline unsupported")
+    oreslang_contract_test(native_chained_result_pipeline_rejects_before_ir value-pipe-result-chained-unsupported.ores
+        --diagnostic "native tagged Option/Result pipeline unsupported")
+    add_executable(oreslang-value-pipe-admission-audit
+        tests/value_pipe_admission_audit.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-value-pipe-admission-audit PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    add_test(NAME native_value_pipeline_admission_audit
+        COMMAND oreslang-value-pipe-admission-audit)
+    set_tests_properties(native_value_pipeline_admission_audit PROPERTIES TIMEOUT 30)
     if(ORE_CLANG)
         oreslang_contract_test(native_scalar_value_pipeline_executed value-pipe-scalar-main.ores
             --run 7 --clang "${ORE_CLANG}")
