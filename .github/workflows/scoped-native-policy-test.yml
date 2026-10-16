@@ -4,6 +4,8 @@ on:
     paths:
       - "contracts/v1/scoped_permission_policy.hpp"
       - "contracts/v1/scoped_permission_policy_test.cpp"
+      - "contracts/v1/scoped-permissions-v1.json"
+      - "contracts/v1/verify_scoped_permissions.py"
       - "contracts/v1/scoped_tcp_boundary.hpp"
       - "contracts/v1/scoped_tcp_boundary_test.cpp"
       - ".github/workflows/scoped-native-policy-test.yml"
@@ -18,6 +20,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
+      - name: Check SHA-256-pinned 44-case canonical permission corpus (not runtime proof)
+        run: python3 contracts/v1/verify_scoped_permissions.py --validate-only
       - name: Compile with strict GCC warnings
         run: |
           c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_permission_policy_test.cpp -o /tmp/ores-native-policy-gcc
