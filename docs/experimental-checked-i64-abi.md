@@ -123,5 +123,27 @@ distinct unsigned-128-bit oracle. This is evidence for the algorithm,
 **not** an execution of the actual Oreslang compiler or any permission to
 mirror private source. The host exact-source CTests remain blocked.
 
+The two real guest harnesses additionally compile the **13-level**
+admitted fanout graph through the actual Oreslang frontend, link its
+emitted LLVM IR with Clang at **-O0 and -O2**, and execute positive and
+overflow cases. In the trap mode, `entry(1)` must be 8192,
+`entry(-1)` must be -8192 and `entry(INT64_MAX)` must signal a genuine
+overflow trap. In result-v2 mode, exact results, status=1 and untouched
+output on overflow, and null-output status=2 are checked. The trap-mode
+negative admission harness also refuses any partial LLVM IR on stdout.
+These are **added, not yet executed** Oreslang compiler tests.
+
+A separate independently authored C++ checked-fanout ABI *double*
+(not Oreslang-generated LLVM) ran on funded private-hosted GitHub Actions
+at [ClipTown run #38984007416](https://github.com/cliptown/cliptown-e2e/actions/runs/38984007416):
+GCC and Clang at **-O0 and -O2** both passed ASan/UBSan host checks and
+real SIGILL overflow traps (four configurations). The exact carrier
+commit was `40398788ca70b68263709b0ff3f65034ea3b6bfb`; actual
+runner ID `1000005492` and six completed job steps were verified.
+The preceding attempt on Voxletra [#38983871653](https://github.com/voxletra/voxletra-e2e/actions/runs/38983871653)
+failed at **runner_id=0, zero steps**, and does not count as a test.
+Only synthetic code moved to the second carrier. No confidential
+compiler or actor Git tree was exported.
+
 A green fixture/reference oracle by itself does not prove that the
 compiler/guest tests have run or that actor cleanup is safe.
