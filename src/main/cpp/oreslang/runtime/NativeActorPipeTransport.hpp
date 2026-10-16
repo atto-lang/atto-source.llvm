@@ -107,6 +107,12 @@ public:
     void fail_next_buffered_enqueue_for_test() noexcept {
         fail_next_enqueue_.store(true, std::memory_order_release);
     }
+
+    // Verify that a failed waiting-reader deque allocation returns the
+    // graph-wide reader promise credit without publishing a dangling reader.
+    void fail_next_reader_enqueue_for_test() noexcept {
+        fail_next_reader_enqueue_.store(true, std::memory_order_release);
+    }
 #endif
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
@@ -232,6 +238,11 @@ public:
                     std::logic_error("native actor pipe global pending-read budget exceeded")));
             } else {
                 try {
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+                    if (fail_next_reader_enqueue_.exchange(
+                            false, std::memory_order_acq_rel))
+                        throw std::bad_alloc();
+#endif
                     link.readers.push_back(std::move(receiver));
                 } catch (...) {
                     pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
@@ -546,6 +557,7 @@ private:
 #if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
     std::atomic<bool> fail_next_promotion_{false};
     std::atomic<bool> fail_next_enqueue_{false};
+    std::atomic<bool> fail_next_reader_enqueue_{false};
 #endif
 };
 
