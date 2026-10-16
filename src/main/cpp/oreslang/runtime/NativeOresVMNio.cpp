@@ -1,9 +1,11 @@
 #include "oreslang/runtime/NativeOresVMNio.h"
 
-namespace {
-void destroy_nio(void* backend) {
+// The callback is owned by a C-compiled VM, so use C language linkage
+// explicitly rather than relying on permissive C++ callback-pointer ABI.
+extern "C" void ores_native_vm_nio_destroy_backend(void* backend) {
     ores_native_nio_close(static_cast<OresNativeNio*>(backend));
 }
+namespace {
 OresNativeNio* admitted_nio(OresNativeVM* vm) {
     return static_cast<OresNativeNio*>(ores_native_vm_nio_backend(vm));
 }
@@ -18,7 +20,7 @@ extern "C" int ores_native_vm_enable_nio(
     OresNativeNio* backend =
         ores_native_nio_open(max_reactors, preallocated_realtime, rt_reactors);
     if (!backend) return 0;
-    if (!ores_native_vm_attach_nio(vm, backend, &destroy_nio)) {
+    if (!ores_native_vm_attach_nio(vm, backend, &ores_native_vm_nio_destroy_backend)) {
         ores_native_nio_close(backend);
         return 0;
     }
