@@ -1,0 +1,6 @@
+// Typed lex allowlists need native closure layout and ownership analysis.
+pub fnc main(): int {
+  const outer: int = 5;
+  const closure = lex[outer] || -> outer + 1;
+  return closure();
+}
