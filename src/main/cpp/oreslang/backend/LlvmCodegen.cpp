@@ -19,6 +19,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -330,6 +331,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error("reserved native entrypoint symbol collision");
     }
     llvm::Module module("oreslang-source", context);
+    // Machine-readable IR-stage scheduling intent. This is not a runtime
+    // scheduling guarantee or a hard-RT/WCET certificate. Linkers may strip
+    // non-semantic LLVM metadata; external admission must use an authenticated
+    // manifest linked to the final binary in a subsequent implementation.
+    for (const auto& actor : source.actors) {
+        if (!actor.realtime) continue;
+        if (actor.realtime->mode != RealtimeContract::Mode::Soft)
+            throw std::runtime_error("unverified realtime mode reached LLVM lowering");
+        llvm::NamedMDNode* declarations =
+            module.getOrInsertNamedMetadata("oreslang.realtime.soft.v1");
+        const auto field = [&](std::string value) -> llvm::Metadata* {
+            return llvm::MDString::get(context, value);
+        };
+        declarations->addOperand(llvm::MDNode::get(context, {
+            field(actor.name),
+            field(std::to_string(actor.realtime->period_us)),
+            field(std::to_string(actor.realtime->deadline_us)),
+            field(std::to_string(actor.realtime->budget_us)),
+            field(std::to_string(actor.realtime->mailbox))
+        }));
+    }
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.
