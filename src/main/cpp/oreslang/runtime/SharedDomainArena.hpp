@@ -28,6 +28,7 @@ public:
         bool exclusive_;
         Lease(SharedDomainArena& arena, std::uint64_t actor, Grant grant, bool exclusive)
             : arena_(&arena), exclusive_(exclusive) {
+            if (!actor) throw std::logic_error("shared region actor identity required");
             if (exclusive_) write_ = std::unique_lock<std::shared_mutex>(arena.mutex_);
             else read_ = std::shared_lock<std::shared_mutex>(arena.mutex_);
             arena.validate_grant(grant, actor, exclusive_);
