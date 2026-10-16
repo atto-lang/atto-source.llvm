@@ -44,6 +44,11 @@ int main() {
     bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce); });
     bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Read, "sum"); });
     bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce, " sum"); });
+    bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce, "\vsum"); });
+    bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce, std::string(1, '\0') + "sum"); });
+    bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce, "sum\f"); });
+    bad([&] { RegionTask("name\v", {}); });
+    bad([&] { RegionTask(std::string(1, '\0') + "name", {}); });
     bad([&] { RegionAccess(r, 0, 0, 1, static_cast<RegionMode>(255)); });
     bad([&] { RegionRoot::trusted_create(std::numeric_limits<std::uint64_t>::max(), 1); });
     std::vector<RegionTask> tasks;
