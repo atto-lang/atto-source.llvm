@@ -471,6 +471,11 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-target-abi-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME portable_target_abi_v1 COMMAND oreslang-target-abi-test
         "${CMAKE_CURRENT_SOURCE_DIR}/contracts/architecture/v1/targets.tsv")
+    add_executable(oreslang-dop-region-schedule-test tests/dop_region_schedule_test.cpp)
+    target_include_directories(oreslang-dop-region-schedule-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-dop-region-schedule-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME dop_region_effect_dependencies COMMAND oreslang-dop-region-schedule-test)
     add_executable(oreslang-dop-kernel-test tests/dop_kernel_lowering_test.cpp)
     target_include_directories(oreslang-dop-kernel-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-kernel-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
