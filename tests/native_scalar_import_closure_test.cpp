@@ -102,6 +102,15 @@ int main() {
               "import \"+/src/helper\";\npub fnc main(): int {return helper();}\n");
         auto rooted = closure(dir/"pkg"/"src"/"rooted.ores");
         check(rooted.units.size() == 2, "canonical +/ import did not link scalar graph");
+        write(dir/"pkg"/"src"/"named.ores",
+              "import fnc helper from \"+/src/helper\";\npub fnc main(): int {return helper();}\n");
+        auto named = closure(dir/"pkg"/"src"/"named.ores");
+        check(named.units.size() == 2, "named import did not build source closure");
+        check(named.named_imports.size() == 1 &&
+              named.named_imports.front().name == "helper" &&
+              named.named_imports.front().source_file ==
+                  fs::canonical(dir/"pkg"/"src"/"helper.ores"),
+              "named import lost physical source identity or requested function");
         write(dir/"pkg"/"src"/"legacy-root.ores",
               "import \"@/src/helper\";\npub fnc main(): int {return helper();}\n");
         reject([&] { (void)closure(dir/"pkg"/"src"/"legacy-root.ores"); },
