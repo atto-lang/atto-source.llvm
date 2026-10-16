@@ -20,7 +20,7 @@ import time
 
 POSITIVE = "pub fnc main(): int {\n  return 20 + 22;\n}\n"
 NEGATIVE = "pub fnc main(): int {\n  return nonexistent_symbol;\n}\n"
-ARITHMETIC = "pub fnc main(): int {\\n  return 100 - (3 + 2) - 19;\\n}\\n"
+ARITHMETIC = "pub fnc main(): int {\n  return 100 - (3 + 2) - 19;\n}\n"
 ERROR_WORDS = re.compile(r"\b(error|undefined|undeclared|unresolved|unknown)\b|not found|cannot find", re.I)
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_OUTPUT = 32768
