@@ -62,6 +62,35 @@ console.log('SOURCE_ACTOR_WASM32_ISOLATION_PASS');
     assert result.returncode == 0 and "SOURCE_ACTOR_WASM32_ISOLATION_PASS" in result.stdout, (
         result.stdout, result.stderr
     )
+    # A receiver marker is a spelling alias, not an extra guest parameter.
+    # Compile the *real* alternate source to Wasm and execute both instances.
+    explicit = Path(folder) / "inline-self.ores"
+    original = Path(args.fixture).read_text(encoding="utf8")
+    assert "on_message(" in original, "source fixture has no actor handler"
+    explicit.write_text(
+        original.replace("on_message(", "on_message(self, ", 1),
+        encoding="utf8")
+    explicit_ir = run([args.compiler, "--target=wasm32", str(explicit)])
+    assert explicit_ir.returncode == 0 and not explicit_ir.stderr, (
+        explicit_ir.stderr, explicit_ir.stdout)
+    assert "@oreslang_wasm_actor_on_message(i64" in explicit_ir.stdout
+    assert "oreslang_source_actor_spawn" not in explicit_ir.stdout
+    alternate_wasm = str(Path(folder) / "inline-self.wasm")
+    alternate_link = run([
+        args.clang, "--target=wasm32", "-x", "ir", "-Oz", "-nostdlib",
+        "-Wl,--no-entry",
+        "-Wl,--export=oreslang_wasm_actor_init",
+        "-Wl,--export=oreslang_wasm_actor_on_message",
+        "-Wl,--export=oreslang_wasm_actor_teardown",
+        "-Wl,--initial-memory=131072", "-Wl,--max-memory=131072",
+        "-o", alternate_wasm, "-"
+    ], input=explicit_ir.stdout)
+    assert alternate_link.returncode == 0, alternate_link.stderr
+    alternate_result = run([args.node, "--input-type=module", "-e", js, alternate_wasm])
+    assert (alternate_result.returncode == 0 and
+            "SOURCE_ACTOR_WASM32_ISOLATION_PASS" in alternate_result.stdout), (
+                alternate_result.stdout, alternate_result.stderr)
+
     # The initial guest ABI is strictly one actor type, one host-controlled instance.
     invalid = Path(folder) / "two.ores"
     invalid.write_text(Path(args.fixture).read_text() +
