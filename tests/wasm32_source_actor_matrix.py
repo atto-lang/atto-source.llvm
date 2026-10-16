@@ -5,6 +5,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+# Python -O removes every assert, including the real compiler and Wasm guest
+# execution gates. Refuse optimization rather than emit a false-positive PASS.
+if not __debug__:
+    raise SystemExit("wasm32 source actor parity validation refuses optimized Python: assertions are required")
+
 p = argparse.ArgumentParser()
 p.add_argument("--compiler", required=True)
 p.add_argument("--clang", required=True)
