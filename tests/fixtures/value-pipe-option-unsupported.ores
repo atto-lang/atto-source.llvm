@@ -1,0 +1,2 @@
+// A tagged pipeline must not be lowered by the scalar compiler.
+pub fnc main(): int { return 1 |> Option /* comment */ . map(unknown); }

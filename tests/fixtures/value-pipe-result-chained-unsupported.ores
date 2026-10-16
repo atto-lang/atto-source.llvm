@@ -1,0 +1,3 @@
+// Reject tagged stage after a valid scalar stage without emitting IR.
+fnc plus(int n): int { return n + 1; }
+pub fnc main(): int { return 1 |> plus |> Result.map_err(unknown); }

@@ -1,0 +1,2 @@
+// Option and Result are not lowered by the restricted native i64 compiler.
+pub fnc main(): int { return 1 |> Result.map_err(unknown); }

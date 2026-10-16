@@ -1,0 +1,5 @@
+// Pipeline forwards its value as positional argument zero; named trailing arguments
+// must bind by formal name, not by their lexical order.
+pub fnc main(): int { return 3 |> combine(y: 1, x: 4) |> plus(delta: 1); }
+fnc combine(int n, int x, int y): int { return n * 10 + x * 2 + y; }
+fnc plus(int n, int delta): int { return n + delta; }
