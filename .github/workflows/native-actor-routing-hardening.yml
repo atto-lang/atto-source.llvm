@@ -1,0 +1,102 @@
+name: Native actor routing hardened contracts
+
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/runtime/ActorPipeContract.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeSupervisorRegistry.hpp'
+      - 'tests/native_actor_pipe_graph_contract_test.cpp'
+      - 'tests/native_actor_pipeline_routing_test.cpp'
+      - '.github/workflows/native-actor-routing-hardening.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-route-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-routing:
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['g++', 'clang++']
+        build_type: [Debug, Release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable PR HEAD with no persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Confirm exact checked-out commit, tree and clean source
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git rev-parse HEAD^{tree}
+          git ls-tree -r HEAD | wc -l
+      - name: Install native compiler and LLVM dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure real native CTest targets
+        env:
+          COMPILER: ${{ matrix.compiler }}
+          BUILD_TYPE: ${{ matrix.build_type }}
+        run: cmake -S . -B build-route -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DCMAKE_CXX_COMPILER="$COMPILER" -DBUILD_TESTING=ON
+      - name: Compile both real native routing CTest binaries
+        run: cmake --build build-route --target oreslang-native-pipeline-graph-contract-test oreslang-native-actor-pipeline-routing-test --parallel 2
+      - name: Execute repeated graph, fanout, credit and injection tests
+        run: ctest --test-dir build-route -R '^native_actor_(typed_multiconsumer_graph_contract|pipeline_multiconsumer_host_routing)$' --output-on-failure --repeat until-fail:8 --timeout 180
+      - name: Verify no accidental edits to pinned source
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain=v1 --untracked-files=all -- . ':!build-route')"
+
+  routing-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source commit
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Install Clang native dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential clang llvm-dev
+      - name: Compile sanitized real native routing binaries
+        run: |
+          set -euo pipefail
+          mkdir -p build-route-sanitized
+          clang++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -DORESLANG_NATIVE_PIPE_TEST_FAULT_INJECTION=1 -I src/main/cpp \
+            tests/native_actor_pipeline_routing_test.cpp \
+            -o build-route-sanitized/routing
+          clang++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -I src/main/cpp tests/native_actor_pipe_graph_contract_test.cpp \
+            -o build-route-sanitized/graph
+      - name: Execute ASan+UBSan repeat with fail-fast diagnostics
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          for round in $(seq 1 8); do
+            ./build-route-sanitized/graph
+            ./build-route-sanitized/routing
+          done
