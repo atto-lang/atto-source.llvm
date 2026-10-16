@@ -24,7 +24,8 @@ namespace oreslang::runtime {
  */
 template <typename T>
 class BoundedActorPort final {
-    static_assert(std::is_move_constructible_v<T>, "actor payload must be movable");
+    static_assert(std::is_nothrow_move_constructible_v<T>,
+                  "actor payload must have a nonthrowing ownership transfer");
 
     struct Envelope {
         std::uint64_t id;
@@ -50,7 +51,10 @@ public:
         Delivery(const Delivery&) = delete;
         Delivery& operator=(const Delivery&) = delete;
         Delivery(Delivery&&) noexcept = default;
-        Delivery& operator=(Delivery&&) noexcept = default;
+        // Replacing a live delivery would destroy its owned payload while
+        // silently orphaning its outstanding frame/byte credits. Require
+        // explicit acknowledgement instead of move-assigning over a lease.
+        Delivery& operator=(Delivery&&) = delete;
         T& value() {
             if (acknowledged_ || !payload_) throw std::logic_error("stale owned actor payload");
             return *payload_;
@@ -66,13 +70,21 @@ public:
          * ownership/borrow fences have acknowledged quiescence. */
         bool acknowledge_released() {
             if (acknowledged_ || !state_) return false;
-            std::lock_guard<std::mutex> guard(state_->mutex);
-            if (!state_->used_frames || state_->used_bytes < bytes_)
-                throw std::logic_error("actor port accounting corrupted");
-            acknowledged_ = true;
-            --state_->used_frames;
-            state_->used_bytes -= bytes_;
-            payload_.reset();
+            // An actor payload may have a destructor that re-enters port
+            // observability or publishes independent scheduler callbacks.
+            // Settle credits under the lock, but run arbitrary payload
+            // destruction only AFTER releasing the non-recursive mutex.
+            std::unique_ptr<T> retired;
+            {
+                std::lock_guard<std::mutex> guard(state_->mutex);
+                if (!state_->used_frames || state_->used_bytes < bytes_)
+                    throw std::logic_error("actor port accounting corrupted");
+                acknowledged_ = true;
+                --state_->used_frames;
+                state_->used_bytes -= bytes_;
+                retired = std::move(payload_); // noexcept ownership transfer
+            }
+            retired.reset(); // may invoke T::~T and re-enter port APIs
             return true;
         }
 
@@ -106,8 +118,18 @@ public:
         if (state_->used_frames >= state_->max_frames ||
             bytes > state_->max_bytes - state_->used_bytes)
             return false;
-        auto owned = std::make_unique<T>(std::move(payload));
-        state_->queue.push_back(Envelope{state_->next_id++, bytes, std::move(owned)});
+        // Reserve the queue slot before moving from the sender. Either the
+        // slot allocation or payload allocation may throw; neither may
+        // consume the sender's ownership or a byte/frame credit.
+        state_->queue.push_back(Envelope{state_->next_id, bytes, nullptr});
+        try {
+            state_->queue.back().payload = std::make_unique<T>(std::move(payload));
+        } catch (...) {
+            state_->queue.pop_back();
+            throw;
+        }
+        // The move is noexcept, and publication/counter updates cannot throw.
+        ++state_->next_id;
         ++state_->used_frames;
         state_->used_bytes += bytes;
         return true;
