@@ -34,8 +34,18 @@ inline Import classify(std::string_view raw) {
         if (c=='\\') c='/';
     }
     if (starts(s,"java:")) return {Kind::HostJava,s,{},{}};
+    // A Windows drive path must not be treated as a bare relative filename
+    // when the compiler is hosted on POSIX (and vice versa). Drive-relative
+    // C:foo and NTFS alternate-data-stream suffixes are deliberately denied.
+    const auto is_drive = s.size() >= 2 &&
+        ((s[0]>='A'&&s[0]<='Z')||(s[0]>='a'&&s[0]<='z')) && s[1]==':';
+    if (is_drive && s.size() >= 3 && s[2]=='/')
+        return {Kind::Absolute,s,{},{}};
+    if (starts(s,"//")) return {Kind::Absolute,s,{},{}};
     if (starts(s,"@/")) {
         if (s.size()==2 || s[2]=='/') throw std::invalid_argument("invalid @/ path");
+        if (s.find(':', 2) != std::string::npos)
+            throw std::invalid_argument("colon in rooted import suffix");
         return {Kind::Root,s,{},s.substr(2)};
     }
     if (starts(s,"pkg:")) {
@@ -43,9 +53,13 @@ inline Import classify(std::string_view raw) {
         if (slash==std::string::npos || slash==4 || slash+1==s.size() ||
             s[slash+1]=='/' || !valid_alias(std::string_view(s).substr(4,slash-4)))
             throw std::invalid_argument("expected pkg:<alias>/<source>");
+        if (s.find(':', slash + 1) != std::string::npos)
+            throw std::invalid_argument("colon in package import suffix");
         return {Kind::Package,s,s.substr(4,slash-4),s.substr(slash+1)};
     }
     if (s[0]=='@') throw std::invalid_argument("invalid @ prefix");
+    if (s.find(':') != std::string::npos)
+        throw std::invalid_argument("unsupported colon or drive-relative import path");
     if (fs::path(s).is_absolute()) return {Kind::Absolute,s,{},{}};
     if (s=="."||s==".."||starts(s,"./")||starts(s,"../")) return {Kind::Relative,s,{},{}};
     return {Kind::Bare,s,{},{}};
@@ -78,6 +92,8 @@ inline fs::path rooted_path(const fs::path &root, std::string_view suffix) {
     reject_control_bytes(suffix,"rooted import");
     std::string normalized(suffix);
     std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    if (normalized.find(':') != std::string::npos)
+        throw std::invalid_argument("colon in rooted import suffix");
     fs::path p(normalized);
     if(p.is_absolute()) throw std::invalid_argument("absolute rooted import");
     auto anchor=normalized_absolute(root);
