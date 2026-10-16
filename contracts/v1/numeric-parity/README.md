@@ -156,6 +156,24 @@ runs on an authorized runner, the new mode remains
 `implemented_unverified` and must not advance the global default
 `checked_i64_overflow` capability.
 
+## Five-backend scalar boundary overlap (2026-10-16)
+
+The portable reference expression `max-minus-one` pins
+`9223372036854775807-1 = 9223372036854775806`, with no
+out-of-range intermediate. The corresponding source program
+`pub fnc main(): int { return 9223372036854775807 - 1; }`
+is now registered in the shared 11-case scalar corpus on .NET PR #37,
+Wasm PR #35 and Forge PR #30. Those three manifests have the identical
+Git blob `fd9df902b2df734ac62875037ca66db3ea41bc6b` and the
+manifest-plus-fixtures SHA-256
+`5b5d1bc00def9b3a343cb3281e0bb0be4e5ca438095f621141049e2d7a1a25b3`.
+
+The Java/LLVM Python reference tests pin that expression separately.
+.NET source admission, Forge interpreted guest output, and WASM compiled
+LLVM-to-WASM guest execution are **different evidence tiers**. Adding
+the contract does not establish that any backend's exact-head native CI
+has executed; never mark full language parity on this basis alone.
+
 ## Evidence is tiered
 
 - `reference_only`: Python checks the independently defined fixture; **no Oreslang execution**.
