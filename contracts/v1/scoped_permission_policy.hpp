@@ -98,8 +98,9 @@ class ScopedPolicy final {
             if (mapped && addr[10] == 0xff && addr[11] == 0xff)
                 return false;
             if (closing + 1 < s.size()) {
-                if (s[closing + 1] != ':' || closing + 2 == s.size())
-                    return false;
+                if (s[closing + 1] != ':' || closing + 2 == s.size() ||
+                    s.size() - (closing + 2) > 5)
+                    return false; // Reject overflow/ambiguous long ports before arithmetic.
                 unsigned port = 0;
                 for (std::size_t i = closing + 2; i < s.size(); ++i) {
                     if (s[i] < '0' || s[i] > '9') return false;
@@ -124,7 +125,9 @@ class ScopedPolicy final {
         }
         auto colon = s.find(':');
         if (colon != s.npos) {
-            if (s.find(':', colon + 1) != s.npos || colon + 1 == s.size()) return false;
+            if (s.find(':', colon + 1) != s.npos || colon + 1 == s.size() ||
+                s.size() - (colon + 1) > 5)
+                return false; // A wrapped unsigned port must never authorize a short one.
             unsigned port = 0;
             for (auto i = colon + 1; i < s.size(); ++i) {
                 const char c = s[i];
