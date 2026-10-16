@@ -32,6 +32,8 @@ math = { zed = "acme/math" }
         write(app/"src/main.ores","main");
         write(app/"src/util.ores","util");
         write(app/"src/javaonly.java","foreign native unit must reject");
+        std::error_code symlink_error;
+        fs::create_symlink("javaonly.java",app/"src/java_alias.ores",symlink_error);
         write(app/"src/other.c","unverified foreign source must reject");
         write(app/"src/.hidden/code.ores","hidden");
         write(app/"zed_modules/acme/math/src/add.ores","add");
@@ -66,6 +68,9 @@ math = { zed = "acme/math" }
                 "implicit Java import must not be considered native source");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","javaonly.java");},
                 "explicit Java import must not be considered native source");
+        if(!symlink_error)
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","java_alias.ores");},
+                    "ores extension must not launder foreign symlink target");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","other.c");},
                 "foreign C input must not be returned as Oreslang source");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","./javaonly.java");},
@@ -75,6 +80,8 @@ math = { zed = "acme/math" }
         require(child.dependencies.empty(),"inherited consumer aliases");
         rejects([&]{(void)identities.register_source(child,app/"src/main.ores");},
                 "same canonical source in conflicting package context");
+        rejects([&]{(void)identities.register_source(config,app/"src/javaonly.java");},
+                "foreign source registered in native identity graph");
         rejects([&]{(void)find_manifest(app/"src/main.ores",shared);},
                 "outside discovery boundary must not silently select boundary");
         rejects([&]{(void)read_project(app/"src/main.ores",shared);},
@@ -93,6 +100,9 @@ math = { zed = "acme/math" }
         require(!resolve_source(empty,app/"src/main.ores","util"),"empty roots leaked root");
         write(app/".ores.pkg.toml","schema_version=\"1\"\n[entrypoints]\nmain=\"../escape\"\n");
         rejects([&]{(void)read_project(app/"src/main.ores");},"entrypoint traversal");
+        write(app/".ores.pkg.toml","schema_version=\"1\"\n[package]\nname=7\n");
+        rejects([&]{(void)read_project(app/"src/main.ores");},
+                "known TOML metadata key with wrong type admitted");
         write(app/".ores.pkg.toml","schema_version=\"1\"\n[source]\nroots=[\"src\"]\nroots=[\"lib\"]\n");
         rejects([&]{(void)read_project(app/"src/main.ores");},"duplicate key");
         write(app/".ores.pkg.toml","schema_version=\"1\"\n[dependencies]\nfoo=\"../../evil\"\n");
