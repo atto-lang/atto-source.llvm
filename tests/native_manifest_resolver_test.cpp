@@ -166,6 +166,30 @@ math = { zed = "acme/math" }
         if(!external_root_error)
             rejects([&]{(void)read_project(app/"src/main.ores");},
                     "package entrypoint physical symlink escape");
+        // A generated entrypoint need not exist yet, but a directory
+        // symlink in its ancestor chain must not rebase it outside the root.
+        std::error_code redirected_main_error, dangling_main_error;
+        fs::create_directory_symlink(tmp/"outside",app/"src"/"generated-outside",
+                                     redirected_main_error);
+        if(!redirected_main_error) {
+            write(app/".ores.pkg.toml",
+                  "schema_version=\"1\"\n[entrypoints]\nmain=\"src/generated-outside/not-yet.ores\"\n");
+            rejects([&]{(void)read_project(app/"src/main.ores");},
+                    "missing entrypoint under outside symlink was accepted");
+        }
+        fs::create_directory_symlink(tmp/"outside"/"absent",
+                                     app/"src"/"dangling-generated",dangling_main_error);
+        if(!dangling_main_error) {
+            write(app/".ores.pkg.toml",
+                  "schema_version=\"1\"\n[entrypoints]\nmain=\"src/dangling-generated/not-yet.ores\"\n");
+            rejects([&]{(void)read_project(app/"src/main.ores");},
+                    "dangling entrypoint ancestor was accepted");
+        }
+        write(app/".ores.pkg.toml",
+              "schema_version=\"1\"\n[entrypoints]\nmain=\"src/not-yet-created/main.ores\"\n");
+        require(read_project(app/"src/main.ores").main_entry ==
+                app/"src/not-yet-created/main.ores",
+                "legitimate generated in-root entrypoint denied");
         write(tmp/"outside/evil.toml","schema_version=\"1\"\n");
         fs::remove(app/".ores.pkg.toml");
         std::error_code manifest_symlink_error;
