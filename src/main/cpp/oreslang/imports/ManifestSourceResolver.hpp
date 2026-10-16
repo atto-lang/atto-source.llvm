@@ -436,10 +436,15 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             append_list(roots,legacy_paths,legacy_separator,cwd);
             for(const auto& root:roots){
                 auto path=rooted_path(root,input.path);
-                // A configured bare root is not permission to cross into an
-                // independently declared nested package. Preserve the lexical
-                // spelling as well as the canonical physical ancestry.
-                if(auto match=existing_rooted_source_under(root,path))return match;
+                // The configured search root confines physical targets.
+                // A root *inside* the project may itself be a child package,
+                // so also enforce the enclosing package boundary: checking
+                // only below the search root misses its own package marker.
+                auto match=existing_rooted_source_under(root,path);
+                if(match && config.package_manifest &&
+                   beneath(config.root,path))
+                    (void)existing_rooted_source_under(config.root,path);
+                if(match)return match;
             }
             return std::nullopt;
         }
