@@ -13,7 +13,11 @@ execution, JIT compilation, or reflective code synthesis.
 LLVM's experimental source compiler does **not** currently implement the Java
 annotation AST, `@FromJson`, derivation, attribute macros, `macro_rules!`, or typed
 procedural macros. The native lexer/parser rejects those source forms; this is
-intentional, not evidence of parity. `tests/annotation_macro_aot_admission_matrix.py`
+intentional, not evidence of parity. The only deliberately special-cased source
+attribute in the experimental LLVM compiler is the narrowly typed built-in
+`@realtime(mode: #soft, ...)` on actors ([contract v1](REALTIME_CONTRACT_V1.md)).
+It emits advisory LLVM IR metadata only; `#bounded` and `#hard` continue to fail
+closed, and no generic annotation or macro framework is thereby admitted. `tests/annotation_macro_aot_admission_matrix.py`
 asserts that representative annotations/macros are rejected with nonzero status,
 no LLVM IR on stdout, **no unexpected generated files** in an isolated
 working directory, and a diagnostic under both host and wasm32 targets. It
