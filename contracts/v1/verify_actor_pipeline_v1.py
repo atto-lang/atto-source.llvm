@@ -71,6 +71,16 @@ def main() -> int:
         pair_ids.add((a, b))
         degrees[b] += 1
         adjacency[a].append(b)
+    # Nominal port declarations do not imply connected edges.
+    # A transform requires ACTUAL inbound/outbound connections.
+    for instance, stage in ids.items():
+        inbound, outbound = degrees[instance], len(adjacency[instance])
+        role = stage["role"]
+        if ((inbound == 0 and outbound == 0)
+                or (role == "readable" and outbound == 0)
+                or (role == "writable" and inbound == 0)
+                or (role == "transform" and (inbound == 0 or outbound == 0))):
+            raise AssertionError("pipeline actor missing connected role port")
     roots = [a for a, count in degrees.items() if count == 0]
     if not any(ids[r]["role"] in ("readable", "duplex") for r in roots):
         raise AssertionError("no authorized ingress root")
