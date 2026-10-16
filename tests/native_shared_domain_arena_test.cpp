@@ -44,17 +44,40 @@ int main() {
     require(observed == 0x1234567890abcdefull);
     reject([&] { (void)a.write(102, readerGrant); });
     {
-        auto outstanding = a.read(101, writerGrant);
-        require(!a.try_revoke(readerGrant));  // must not block on a live reader
+        std::promise<void> leaseReady, leaseRelease;
+        auto ready = leaseReady.get_future();
+        auto release = leaseRelease.get_future();
+        std::thread reader([&] {
+            auto outstanding = a.read(101, writerGrant);
+            leaseReady.set_value();
+            release.wait();
+        });
+        ready.wait();
+        require(!a.try_revoke(readerGrant));  // CONTROL must not block on a reader
+        leaseRelease.set_value();
+        reader.join();
     }
     require(a.try_revoke(readerGrant));
     reject([&] { (void)a.read(102, readerGrant); });
     // Retirement is nonblocking and does not free underneath an active lease.
     {
-        auto pending=a.read(101, writerGrant);
+        std::promise<void> leaseReady, leaseRelease;
+        auto ready = leaseReady.get_future();
+        auto release = leaseRelease.get_future();
+        std::atomic<bool> revokedReadDenied{false};
+        std::thread reader([&] {
+            auto pending = a.read(101, writerGrant);
+            leaseReady.set_value();
+            release.wait();
+            std::uint64_t x = 0;
+            try { pending.read(h, &x, sizeof(x)); }
+            catch (const std::logic_error&) { revokedReadDenied.store(true); }
+        });
+        ready.wait();
         require(!a.try_retire());
-        std::uint64_t x=0;
-        reject([&] { pending.read(h,&x,sizeof(x)); });
+        leaseRelease.set_value();
+        reader.join();
+        require(revokedReadDenied.load());
     }
     require(a.try_retire());
     require(a.try_retire());
