@@ -74,6 +74,16 @@ def main():
         write(root / "package" / "src" / "main.ores", 'import "@/src/util";\npub fnc main(): int { return helper(40); }\n')
         write(root / "package" / "src" / "util.ores", 'pub fnc helper(int a): int {return a + 2;}\n')
         expect_success(args.compiler, args.clang, root / "package" / "src" / "main.ores")
+        # One installed zed-pkg alias, with physical package metadata checked.
+        write(root / "package" / ".ores.pkg.toml",
+              'schema_version = "1"\n[source]\nroots = ["src"]\n[dependencies]\nmath = { zed = "acme/math" }\n')
+        write(root / "package" / "zed_modules" / "acme" / "math" / ".zpkg.toml",
+              '[package]\norg = "acme"\nname = "math"\n')
+        write(root / "package" / "zed_modules" / "acme" / "math" / "src" / "answer.ores",
+              'pub fnc answer(): int { return 42; }\n')
+        write(root / "package" / "src" / "pkg_main.ores",
+              'import "pkg:math/src/answer";\npub fnc main(): int {return answer();}\n')
+        expect_success(args.compiler, args.clang, root / "package" / "src" / "pkg_main.ores")
         write(root / "package" / "src" / "escape.ores", 'import "../../helper";\npub fnc main(): int {return add(40, 2);}\n')
         expect_failure(args.compiler, root / "package" / "src" / "escape.ores", "native import escapes physical search root")
     print("native scalar import execution gates passed")
