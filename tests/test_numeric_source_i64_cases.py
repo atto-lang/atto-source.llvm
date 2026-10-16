@@ -60,6 +60,24 @@ class PortableI64ReferenceTest(unittest.TestCase):
 
 
 
+    def test_five_backend_max_minus_one_boundary(self):
+        """Pin the shared signed-i64 expression from the 11-case scalar corpus.
+
+        Reference oracle only; this must not be counted as compiler execution.
+        """
+        cases = json.loads(FILE.read_bytes())["cases"]
+        matched = [c for c in cases if c["id"] == "max-minus-one"]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["expression"], "9223372036854775807-1")
+        self.assertEqual(matched[0]["expected"], "9223372036854775806")
+        observed = interpret(ast.parse(matched[0]["expression"], mode="eval").body)
+        self.assertEqual(observed, (1 << 63) - 2)
+        source_text = "pub fnc main(): int { return " + (
+            matched[0]["expression"].replace("-", " - ")) + "; }\n"
+        self.assertEqual(
+            source_text,
+            "pub fnc main(): int { return 9223372036854775807 - 1; }\n")
+
     def test_pinned_shared_overflow_corpus_rejects_all_four_cases(self):
         """A data-only oracle: failure at any i64 intermediate is mandatory.
 
