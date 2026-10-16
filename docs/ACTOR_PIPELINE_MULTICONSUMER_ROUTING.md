@@ -23,6 +23,11 @@ actors, or actors with no authorized connected port:
 | `self.reply(payload)` | Reply to authenticated origin of currently handled request, including fan-in | `Future<RouteReceipt>` |
 
 `forward_all` is the canonical *fan-out/broadcast* operation.
+The native host's `write_all_report_async` produces explicit ordered
+`{edge_index, target, admission}` entries, so callers can identify successful
+and failed branches without inferring a destination from vector position.
+The compatibility `write_all_async` API remains available, but its unlabeled
+futures are not the future guest-facing `RouteBatchReport` representation.
 `forward_round_robin` is canonical *load spread*, not "send to all."
 `forward_by_key` supports partition locality. Avoid introducing
 synonymous `broadcast`, `fanout`, `scatter`, `send_all` variants until
@@ -85,8 +90,11 @@ into current round-robin semantics.
 
 ```ores
 // Illustrative ONLY until the Java and LLVM compiler lowering gates pass.
-define transform-pipe actor Dispatcher as
-  async receive(ActorMail<Event> mail): void {
+define transform pipe actor Dispatcher as
+  forward_messages: Event
+  backward_messages: Ack
+
+  async receive_forward(ActorMail<Event> mail): void {
     // Broadcast one immutable event to every connected consumer:
     const batch = await self.forward_all(rt share mail.value);
     // Partial failure remains visible in batch.per_target.
@@ -97,6 +105,11 @@ define transform-pipe actor Dispatcher as
     // Affinity and explicit destination are separate routing choices:
     await self.forward_by_key(mail.value.user_id, rt copy mail.value);
     await self.forward_to("audit", rt copy mail.value);
+  }
+
+  async receive_backward(ActorMail<Ack> mail): void {
+    // A real guest implementation must use authenticated flow correlation.
+    await self.backward(rt copy mail.value);
   }
 end
 ```
@@ -113,9 +126,15 @@ constructor with independent bounded mailboxes and implements:
 
 - `write_all_async(source, payload)` — ordered vector of per-edge Futures,
   non-transactional fan-out;
+- `write_all_report_async(source, payload)` — individually tagged target
+  receipts and their independent admission Futures;
+- `write_one_async(source, payload)` — single-edge-only default forward;
+  rejects ambiguous branching;
 - `write_round_robin_async(source, payload)` — source-local strict RR;
 - `write_to_async(source, target, payload)` — authorized connected edge;
-- `write_by_key_async(source, key, payload)` — stable FNV-1a edge selection.
+- `write_by_key_async(source, key, payload)` — stable FNV-1a edge selection;
+  rejects malformed/overlong UTF-8, surrogates and oversize keys. Unicode
+  normalization (NFC), if required, belongs to the typed key codec upstream.
 
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
