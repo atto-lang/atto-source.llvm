@@ -55,6 +55,34 @@ class DiagnosticProof(unittest.TestCase):
                 self.assertEqual(result.exception.code, 2)
                 self.assertIn("--validate cannot be combined", stderr.getvalue())
 
+    def test_all_pending_execution_must_not_return_success(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        # Regress a future feature inventory where this backend has no
+        # executable cases. Manifest-only or all-pending is NOT an execution.
+        suite = {"cases": [{
+            "id": "native.pending-only-regression",
+            "kind": "native_exit",
+            "source": "fixtures/add.ores",
+            "expected_exit": 42,
+            "backends": {"llvm": "pending", "graal": "required"},
+            "pending_reason": "synthetic test backend remains unsupported",
+        }]}
+        argv = [
+            "run.py", "--backend", "llvm", "--command", "compiler {source}",
+            "--revision", "a" * 40
+        ]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(sys, "argv", argv):
+            with patch.object(run, "validate_suite", return_value=(suite, "0" * 64)):
+                with patch.object(run.subprocess, "run") as compiler:
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        self.assertEqual(run.main(), 1)
+                    compiler.assert_not_called()
+        self.assertIn("SUMMARY pass=0 pending=1 fail=0", stdout.getvalue())
+        self.assertIn("zero conformance cases passed", stderr.getvalue())
+
     def test_validates_strict_schema_fixture_inventory(self):
         suite, digest = run.validate_suite()
         self.assertGreaterEqual(len(suite["cases"]), 10)
