@@ -1,0 +1,11 @@
+// A receiver marker requires a normal message parameter after its comma.
+define actor Worker as {
+  const base: int = 40;
+  let total: int = 0;
+  pub method on_message(self,): int { return base; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  return 43;
+}
