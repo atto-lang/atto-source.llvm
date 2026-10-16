@@ -293,6 +293,10 @@ public:
             const std::string& source, const std::string& key,
             std::string payload) {
         const auto& destinations = connected_outlets(source);
+        // A retired generation refuses DATA before parsing its key. The
+        // final mailbox publication is still serialized in write_async().
+        if (closed_.load(std::memory_order_acquire))
+            return failed_void("native actor pipe is closed");
         if (key.size() > 4096 || !valid_utf8_key(key))
             throw std::invalid_argument(
                 "native actor pipe route key must be bounded canonical UTF-8");
