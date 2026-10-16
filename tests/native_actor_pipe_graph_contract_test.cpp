@@ -167,6 +167,42 @@ int main() {
                (void)check_actor_pipeline_graph(wrong,links); });
     deny([&] { auto wrong=stages;wrong.pop_back();
                (void)check_actor_pipeline_graph(wrong,links); });
+    // Endpoint pair uniqueness must not concatenate user-controlled names.
+    // Both pairs below would equal "a:b:c" if constructed naively.
+    {
+        std::vector<PipeStage> tricky = {
+            {"P", PipeRole::readable, "", "E", "a:b"},
+            {"P", PipeRole::readable, "", "E", "a"},
+            {"S", PipeRole::writable, "E", "", "c"},
+            {"S", PipeRole::writable, "E", "", "b:c"}
+        };
+        std::vector<PipeConnection> edges = {
+            {"a:b", "c", "E"}, {"a", "b:c", "E"}
+        };
+        expect(check_actor_pipeline_graph(tricky, edges).size() == 2);
+        deny([&] { auto duplicate = edges; duplicate.push_back(edges[0]);
+                   (void)check_actor_pipeline_graph(tricky, duplicate); });
+        // Canonically similar UTF-8 strings are still distinct instance IDs.
+        auto unicode=tricky;
+        unicode[0].instance_id=std::string({char(0xc3),char(0xa9)});
+        unicode[1].instance_id=std::string({char('e'),char(0xcc),char(0x81)});
+        std::vector<PipeConnection> unicode_edges = {
+            {unicode[0].instance_id,"c","E"},
+            {unicode[1].instance_id,"b:c","E"}
+        };
+        expect(check_actor_pipeline_graph(unicode,unicode_edges).size()==2);
+        std::string exact256;
+        for (int i=0;i<64;++i)
+            exact256+=std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
+        auto upper=tricky;
+        upper[0].instance_id=exact256;
+        auto upper_edges=edges;
+        upper_edges[0].source=exact256;
+        expect(check_actor_pipeline_graph(upper,upper_edges).size()==2);
+        deny([&] { auto over=upper; over[0].instance_id+=
+                        std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
+                   (void)check_actor_pipeline_graph(over,upper_edges); });
+    }
     // Budget checks operate before graph allocation and fail closed.
     deny([&] { auto wrong=links;wrong.clear();
                (void)check_actor_pipeline_graph(stages,wrong); });
