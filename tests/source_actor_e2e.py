@@ -2,7 +2,6 @@
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
 import pathlib
-import re
 import subprocess
 import tempfile
 
@@ -75,9 +74,11 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             # Multiple actors of one class must share exactly one compiled
             # native on_message implementation, irrespective of receiver syntax.
-            handlers = re.findall(
-                r"(?m)^define\\s+[^\\n]*@oreslang_actor_Worker_on_message\\(",
-                guest.stdout)
+            handlers = [
+                line for line in guest.stdout.splitlines()
+                if line.startswith("define ")
+                and "@oreslang_actor_Worker_on_message(" in line
+            ]
             assert len(handlers) == 1, (
                 "instance count or self spelling duplicated method code", name,
                 len(handlers))
