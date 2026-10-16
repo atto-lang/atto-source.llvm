@@ -40,6 +40,22 @@ class SmokeAdmission(unittest.TestCase):
         ]:
             self.assertFalse(smoke.rejected(result))
 
+    def test_malformed_utf8_compiler_streams_fail_closed(self):
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            programs = [
+                "import os; os.write(1,b'42'+bytes([255]))",
+                "import os,sys; os.write(2,b'error: unknown nonexistent_symbol'+bytes([255]));sys.exit(1)"
+            ]
+            for program in programs:
+                with self.subTest(program=program):
+                    observed = smoke.run([sys.executable, "-c", program],
+                                         timeout=5, cwd=tmp)
+                    self.assertIsNone(observed["exit_code"])
+                    self.assertIn("invalid UTF-8", observed["stderr"])
+                    self.assertFalse(smoke.good(observed))
+                    self.assertFalse(smoke.rejected(observed))
+
     def test_reference_programs_stable(self):
         self.assertIn("return 20 + 22;", smoke.POSITIVE)
         self.assertIn("nonexistent_symbol", smoke.NEGATIVE)
