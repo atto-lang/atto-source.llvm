@@ -107,6 +107,43 @@ int main() {
         {Kind::Enum, "other::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
     REQUIRE(compare(color, imported) == PairStatus::DistinctEnums);
 
+    // Full-vector static proof: a discriminator match must not allow a
+    // different non-discriminator primitive argument to reach the call site.
+    REQUIRE(selectResolved({color, mode},
+                           {{Kind::Enum, "unit::Color"},
+                            {Kind::Primitive, "int"}}, eligibleIds) == 0);
+    REQUIRE(selectResolved({color, mode},
+                           {{Kind::Enum, "unit::Mode"},
+                            {Kind::Primitive, "int"}}, eligibleIds) == 1);
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"},
+                        {Kind::Primitive, "string"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"},
+                        {Kind::Primitive, "Unknown"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"},
+                        {Kind::Primitive, "f32"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "attacker::Fake"},
+                        {Kind::Primitive, "int"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color}, {{Kind::Enum, "unit::Color"},
+                  {Kind::Primitive, "int"}}, eligibleIds); });
+
+    Signature colorF64 = signature("go", {
+        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "f64"}}, eligibleIds);
+    Signature modeF64 = signature("go", {
+        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "f64"}}, eligibleIds);
+    REQUIRE(selectResolved({colorF64, modeF64},
+                           {{Kind::Enum, "unit::Color"},
+                            {Kind::Primitive, "f64"}}, eligibleIds) == 0);
+    rejects([&] { (void)selectResolved(
+        {colorF64, modeF64}, {{Kind::Enum, "unit::Color"},
+                              {Kind::Primitive, "int"}}, eligibleIds); });
+
     // This deliberately exercises only compiler-side keys, NOT LLVM source
     // parsing, AOT vtables, actor dispatch or guest execution.
     return 0;
