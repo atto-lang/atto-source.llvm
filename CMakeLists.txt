@@ -486,7 +486,12 @@ if(BUILD_TESTING)
     add_executable(oreslang-dop-owner-race-test tests/dop_hostbuffer_owner_race_test.cpp)
     target_include_directories(oreslang-dop-owner-race-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-owner-race-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_features(oreslang-dop-owner-race-test PRIVATE cxx_std_20)
     add_test(NAME dop_hostbuffer_owner_close_races COMMAND oreslang-dop-owner-race-test)
+    add_executable(oreslang-dop-close-reclamation-test tests/dop_hostbuffer_close_reclamation_test.cpp)
+    target_include_directories(oreslang-dop-close-reclamation-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-dop-close-reclamation-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME dop_hostbuffer_close_reclaims_storage COMMAND oreslang-dop-close-reclamation-test)
 
     add_executable(oreslang-dop-region-schedule-test tests/dop_region_schedule_test.cpp)
     target_include_directories(oreslang-dop-region-schedule-test PRIVATE
