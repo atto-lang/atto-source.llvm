@@ -209,6 +209,9 @@ public:
                 }
             });
         } catch (...) {
+            // A scheduler may enqueue work before throwing. Revoke any
+            // delayed execution, not only the Future result.
+            state->cancelled.store(true, std::memory_order_release);
             state->fail(std::current_exception());
         }
         return exposed;
