@@ -646,6 +646,42 @@ int main() {
 
 
 #if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // Partial fan-out must preserve a successfully delivered first branch
+    // when a later branch throws after graph-wide credit reservation.
+    // The failed branch remains target-labelled and subsequent admission
+    // recovers without leaked message or byte reservations.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4);
+        auto direct = pipe.read_async(0);
+        check(direct.wait_for(0ms) == std::future_status::timeout &&
+              pipe.pending_reader_count() == 1,
+              "partial fan-out fixture did not reserve direct reader");
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto receipts = pipe.write_all_report_async("Producer", "first-good");
+        check(receipts.size() == 2 &&
+              receipts[0].target == "ConsumerA" &&
+              receipts[1].target == "ConsumerB",
+              "allocation failure discarded target-labelled fan-out receipts");
+        receipts[0].admission.get();
+        check(direct.get() == "first-good",
+              "later failing fan-out branch erased prior direct delivery");
+        bool failed = false;
+        try { receipts[1].admission.get(); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "buffered fan-out OOM did not settle failed branch");
+        check(pipe.pending_reader_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "partial fan-out OOM leaked graph-wide reader or buffer credits");
+        pipe.write_to_async("Producer", "ConsumerB", "recovered").get();
+        check(pipe.read_async(1).get() == "recovered" &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "partial fan-out OOM poisoned subsequent branch admission");
+        pipe.close();
+    }
+
     // Buffered insertion can fail after credit reservation. The queue and
     // pending-writer paths must both roll back graph bytes/message credits,
     // and a subsequent write must use the same mailbox successfully.
