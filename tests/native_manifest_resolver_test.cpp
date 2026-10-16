@@ -31,6 +31,8 @@ math = { zed = "acme/math" }
 )");
         write(app/"src/main.ores","main");
         write(app/"src/util.ores","util");
+        write(app/"src/javaonly.java","foreign native unit must reject");
+        write(app/"src/other.c","unverified foreign source must reject");
         write(app/"src/.hidden/code.ores","hidden");
         write(app/"zed_modules/acme/math/src/add.ores","add");
         write(nested/".ores.pkg.toml","schema_version=\"1\"\n[source]\nroots=[\"src\"]\n");
@@ -42,6 +44,11 @@ math = { zed = "acme/math" }
         require(config.source_roots.size()==1,"source roots not loaded");
         require(config.dependencies.size()==1,"dependency not loaded");
         require(config.main_entry==app/"src/main.ores","entrypoint mismatch");
+        SourceIdentityRegistry identities;
+        require(identities.register_source(config,app/"src/main.ores")==
+                fs::canonical(app/"src/main.ores"),"canonical source identity");
+        require(identities.register_source(config,app/"src/main.ores")==
+                fs::canonical(app/"src/main.ores"),"repeat physical source identity");
         require(resolve_source(config,app/"src/main.ores","@/src/util")==fs::canonical(app/"src/util.ores"),"@ root");
         require(resolve_source(config,app/"src/main.ores","pkg:math/src/add")==fs::canonical(app/"zed_modules/acme/math/src/add.ores"),"pkg alias");
         write(app/"zed_modules/acme/math/.zpkg.toml", "[package]\norg=\"acme\"\nname=\"wrong\"\n");
@@ -53,9 +60,25 @@ math = { zed = "acme/math" }
         require(resolve_source(config,app/"src/main.ores","leaf",shared.string())==std::nullopt,"undeclared bare file");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","@/../../other");},"root escape");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:unknown/foo");},"unknown alias");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","java:java.util.List");},
+                "unsupported native Java host import");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","javaonly");},
+                "implicit Java import must not be considered native source");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","javaonly.java");},
+                "explicit Java import must not be considered native source");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","other.c");},
+                "foreign C input must not be returned as Oreslang source");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","./javaonly.java");},
+                "importer-relative Java source admission");
         auto child=read_project(nested/"src/leaf.ores");
         require(child.root==nested,"nearest nested package");
         require(child.dependencies.empty(),"inherited consumer aliases");
+        rejects([&]{(void)identities.register_source(child,app/"src/main.ores");},
+                "same canonical source in conflicting package context");
+        rejects([&]{(void)find_manifest(app/"src/main.ores",shared);},
+                "outside discovery boundary must not silently select boundary");
+        rejects([&]{(void)read_project(app/"src/main.ores",shared);},
+                "outside project boundary must fail closed");
         require(read_project(shared).root==shared,"manifestless directory root");
         require(read_project(shared/"util.ores").root==shared,"manifestless file root");
         auto installed=app/"zed_modules/acme/math";
