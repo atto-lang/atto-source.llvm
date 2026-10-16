@@ -45,6 +45,58 @@ int main() {
             if (link.source == "Source") link.source=unicode[0].instance_id;
         expect(check_actor_pipeline_graph(unicode, edges).size() == 4);
     }
+    // Strict Unicode-scalar boundary corpus, also exercised by the
+    // independent Python UTF-8 oracle. Reject malformed encodings in BOTH
+    // graph admission and legacy linear pipe admission.
+    {
+        const std::vector<PipeStage> linear = {
+            {"Reader", PipeRole::readable, "", "Payload"},
+            {"Writer", PipeRole::writable, "Payload", ""}
+        };
+        const std::vector<std::string> invalid = {
+            std::string(1, char(0)),
+            std::string("\xc0\xaf", 2),           // overlong ASCII
+            std::string("\xe0\x80\x80", 3),   // overlong U+0000
+            std::string("\xed\xa0\x80", 3),   // surrogate U+D800
+            std::string("\xf4\x90\x80\x80", 4), // above U+10FFFF
+            std::string("\xe2\x82", 2),          // truncated three-byte
+            std::string("\xf0\x9f\x8c", 3),   // truncated four-byte
+            std::string(257, 'x')               // oversized byte component
+        };
+        // Guard the fixture itself: accidentally doubled hex escapes turn
+        // invalid octets into printable ASCII and make rejection vacuous.
+        expect(invalid.size() == 8 &&
+               invalid[1].size() == 2 &&
+               static_cast<unsigned char>(invalid[1][0]) == 0xc0 &&
+               static_cast<unsigned char>(invalid[1][1]) == 0xaf &&
+               invalid[3].size() == 3 &&
+               static_cast<unsigned char>(invalid[3][0]) == 0xed &&
+               invalid[4].size() == 4 &&
+               static_cast<unsigned char>(invalid[4][0]) == 0xf4 &&
+               invalid[6].size() == 3 &&
+               static_cast<unsigned char>(invalid[6][0]) == 0xf0);
+        for (const auto& component : invalid) {
+            deny([&] { auto bad=stages;
+                       bad[1].actor_type=component;
+                       (void)check_actor_pipeline_graph(bad,links); });
+            deny([&] { auto bad=linear;
+                       bad[1].actor_type=component;
+                       (void)check_actor_pipeline(bad); });
+            deny([&] { auto bad=links;
+                       bad[0].payload=component;
+                       (void)check_actor_pipeline_graph(stages,bad); });
+        }
+        // Exactly 256 bytes is legal; the bound is bytes, not codepoints.
+        auto large=stages;
+        large[0].instance_id=std::string(256, 'a');
+        auto large_links=links;
+        for (auto& edge : large_links)
+            if (edge.source == "Source") edge.source=large[0].instance_id;
+        expect(check_actor_pipeline_graph(large, large_links).size()==4);
+        large[0].instance_id.push_back('a');
+        deny([&] { (void)check_actor_pipeline_graph(large,large_links); });
+    }
+
     // Two worker *instances* of one nominal actor type are legal. Graph
     // endpoints resolve instance IDs, not nominal class names.
     std::vector<PipeStage> identical_workers = {
