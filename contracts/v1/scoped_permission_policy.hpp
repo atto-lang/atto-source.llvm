@@ -296,6 +296,10 @@ public:
             else if (c < '0' || c > '9') return false;
         }
         if (dots != 3) return false;
+        // 0.0.0.0 is an unspecified bind address, not a safe remote identity.
+        // Linux can connect to it through loopback (127.0.0.1), bypassing an
+        // explicit deny on the actual loopback destination.
+        if (resolved.host == "0.0.0.0" || target.host == "0.0.0.0") return false;
         // Numeric requests already name the actual destination. A caller
         // must not authorize another selected address by presenting it as
         // if it were the result of DNS resolution of a numeric literal.
