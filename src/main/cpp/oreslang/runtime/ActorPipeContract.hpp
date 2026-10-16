@@ -32,14 +32,28 @@ struct PipeConnection {
     std::string payload;
 };
 
+// Bound every identity and payload-type component before graph construction.
+inline bool valid_pipe_component(const std::string& value) noexcept {
+    return value.size() <= 256 && value.find(char(0)) == std::string::npos;
+}
+
 inline std::vector<PipeConnection> check_actor_pipeline(
         const std::vector<PipeStage>& stages) {
-    if (stages.size() < 2)
-        throw std::invalid_argument("actor pipeline requires at least two stages");
+    if (stages.size() < 2 || stages.size() > 1024)
+        throw std::invalid_argument("actor pipeline stage budget invalid");
+    std::unordered_set<std::string> instance_ids;
+    instance_ids.reserve(stages.size());
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& stage = stages[i];
-        if (stage.actor_type.empty())
-            throw std::invalid_argument("pipeline actor type cannot be blank");
+        const auto& actor_id = stage.instance_id.empty()
+                ? stage.actor_type : stage.instance_id;
+        if (stage.actor_type.empty() || actor_id.empty() ||
+                !valid_pipe_component(stage.actor_type) ||
+                !valid_pipe_component(actor_id) ||
+                !valid_pipe_component(stage.inbound) ||
+                !valid_pipe_component(stage.outbound) ||
+                !instance_ids.insert(actor_id).second)
+            throw std::invalid_argument("pipeline actor identity or type invalid");
         if (stage.role == PipeRole::supervisor_actor)
             throw std::invalid_argument("supervisor actors cannot be pipeline stages");
         if (stage.role == PipeRole::ordinary_actor)
@@ -81,7 +95,11 @@ inline std::vector<PipeConnection> check_actor_pipeline(
             throw std::invalid_argument("actor pipe payload mismatch: "
                     + source.actor_type + " emits " + source.outbound
                     + " but " + target.actor_type + " requires " + target.inbound);
-        connections.push_back({source.actor_type, target.actor_type, source.outbound});
+        connections.push_back({
+            source.instance_id.empty() ? source.actor_type : source.instance_id,
+            target.instance_id.empty() ? target.actor_type : target.instance_id,
+            source.outbound
+        });
     }
     return connections;
 }
@@ -104,7 +122,10 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
         const auto& s = stages[i];
         const auto& actor_id = s.instance_id.empty() ? s.actor_type : s.instance_id;
         if (s.actor_type.empty() || actor_id.empty() ||
-                s.actor_type.size() > 256 || actor_id.size() > 256 ||
+                !valid_pipe_component(s.actor_type) ||
+                !valid_pipe_component(actor_id) ||
+                !valid_pipe_component(s.inbound) ||
+                !valid_pipe_component(s.outbound) ||
                 !ids.emplace(actor_id, i).second)
             throw std::invalid_argument(
                 "pipeline graph requires distinct, bounded actor instance IDs");
@@ -133,6 +154,12 @@ inline std::vector<PipeConnection> check_actor_pipeline_graph(
     std::vector<std::size_t> incoming_count(stages.size(), 0);
     std::vector<std::size_t> outgoing_count(stages.size(), 0);
     for (const auto& link : links) {
+        if (link.source.empty() || link.target.empty() ||
+                link.payload.empty() ||
+                !valid_pipe_component(link.source) ||
+                !valid_pipe_component(link.target) ||
+                !valid_pipe_component(link.payload))
+            throw std::invalid_argument("pipeline graph link component invalid");
         const auto source = ids.find(link.source);
         const auto target = ids.find(link.target);
         if (source == ids.end() || target == ids.end() ||
