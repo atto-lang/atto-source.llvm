@@ -173,4 +173,67 @@ inline std::size_t select(
     return chosen;
 }
 
+// Compiler-only selection from a FULL vector of already-resolved argument
+// type identities. Unlike select()'s enum-discriminator-only proof, this
+// rejects incompatible non-discriminator arguments before returning a target.
+// Caller must have resolved these identities from source declarations; a
+// runtime tag, payload, wire frame, or external string is never proof.
+inline std::size_t selectResolved(
+    const std::vector<Signature>& candidates,
+    const std::vector<Position>& arguments,
+    const std::unordered_set<std::string>& verifiedEligibleEnumIds) {
+    if (candidates.size() < 2)
+        throw std::invalid_argument("nominal selection requires multiple overloads");
+    if (candidates.size() > MaxSameArityCandidates)
+        throw std::invalid_argument("nominal overload candidate bound exceeded");
+    if (candidates.front().arity() != arguments.size())
+        throw std::invalid_argument("resolved argument arity mismatch");
+
+    std::unordered_set<std::size_t> discriminators;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        if (candidates[i].arity() != arguments.size()
+            || candidates[i].name != candidates.front().name)
+            throw std::invalid_argument("mixed-name/arity overload family");
+        for (std::size_t j = i + 1; j < candidates.size(); ++j) {
+            if (compare(candidates[i], candidates[j]) != PairStatus::DistinctEnums)
+                throw std::invalid_argument("ambiguous same-arity overload family");
+            for (std::size_t p = 0; p < arguments.size(); ++p) {
+                if (!(candidates[i].positions[p] == candidates[j].positions[p]))
+                    discriminators.insert(p);
+            }
+        }
+    }
+
+    std::unordered_map<std::size_t, std::string> proofs;
+    for (std::size_t p : discriminators) {
+        const Position& actual = arguments[p];
+        if (actual.kind != Kind::Enum
+            || verifiedEligibleEnumIds.find(actual.id)
+                == verifiedEligibleEnumIds.end())
+            throw std::invalid_argument("unproven nominal enum discriminator");
+        proofs.emplace(p, actual.id);
+    }
+    const std::size_t choice = select(candidates, proofs);
+    const Signature& selected = candidates[choice];
+    for (std::size_t p = 0; p < arguments.size(); ++p) {
+        const Position& required = selected.positions[p];
+        const Position& actual = arguments[p];
+        if (required.kind == Kind::Enum) {
+            if (actual.kind != Kind::Enum
+                || verifiedEligibleEnumIds.find(actual.id)
+                    == verifiedEligibleEnumIds.end()
+                || required.id != actual.id)
+                throw std::invalid_argument(
+                    "selected nominal enum argument identity mismatch");
+        } else {
+            if (actual.kind != Kind::Primitive || !isPrimitive(actual.id))
+                throw std::invalid_argument("unproven primitive argument identity");
+            std::string canonical = actual.id == "String" ? "string" : actual.id;
+            if (required.id != canonical)
+                throw std::invalid_argument("selected primitive argument identity mismatch");
+        }
+    }
+    return choice;
+}
+
 } // namespace oreslang::types::overloads
