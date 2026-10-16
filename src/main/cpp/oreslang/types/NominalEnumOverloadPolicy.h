@@ -205,9 +205,15 @@ inline std::size_t selectResolved(
                     == verifiedEligibleEnumIds.end())
                     throw std::invalid_argument(
                         "candidate contains unverified enum identity");
-            } else if (!isPrimitive(declared.id) || declared.id == "String") {
+            } else if (declared.kind == Kind::Primitive) {
+                if (!isPrimitive(declared.id) || declared.id == "String")
+                    throw std::invalid_argument(
+                        "candidate contains invalid or noncanonical primitive identity");
+            } else {
+                // Kind is publicly constructible from an integer cast; never
+                // treat an unknown discriminator tag as a primitive slot.
                 throw std::invalid_argument(
-                    "candidate contains invalid or noncanonical primitive identity");
+                    "candidate contains invalid overload position kind");
             }
         }
         for (std::size_t j = i + 1; j < candidates.size(); ++j) {
