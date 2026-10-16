@@ -139,9 +139,17 @@ def main():
             checked_run(binary, op, a, b, value)
             cases += 1
         negatives = [
-            "fnc bad(int a):int{val x:int=a;return x;}",  # lexical owner cleanup gate
-            "fnc bad(int a):int{defer some(a);return a;}",  # effect/defers gate
+            "fnc bad(int a):int{val x:int=a;return x;}",  # lexical locals gate
+            "fnc bad(int a):int{defer some(a);return a;}",  # side effects gate
             "fnc bad(int a):int{return rt take(a);}",  # ownership gate
+            "fnc bad(int a):int{return missing(a);}",  # unknown callee
+            "fnc bad(int a):int{return bad(a);}",  # direct recursion
+            "fnc first(int a):int{return second(a);}"
+            "fnc second(int a):int{return first(a);}",  # indirect recursion
+            "fnc inc(int a):int{return a+1;}"
+            "fnc twice(int a):int{return inc(a,a);}",  # wrong call arity
+            "fnc twice(int a):int{return a;}"
+            "fnc twice(int b):int{return b;}",  # duplicate name/arity
         ]
         for i, code in enumerate(negatives):
             invalid = root / ("invalid-%d.ores" % i)
