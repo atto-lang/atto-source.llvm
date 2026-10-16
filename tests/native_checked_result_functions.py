@@ -192,7 +192,7 @@ def executable_case(binary, op, a, b, value):
                              (op, a, b, expected, p.returncode, p.stdout, p.stderr))
 
 
-def rejected(compiler, work, label, source, flags=None):
+def rejected(compiler, work, label, source, flags=None, expected_error=None):
     file = work / (label + ".ores")
     file.write_text(source + "\n", encoding="utf-8")
     args = [compiler, "--target=host", "--experimental-checked-i64-result-functions"]
@@ -201,6 +201,8 @@ def rejected(compiler, work, label, source, flags=None):
     p = run(args + [str(file)])
     if p.returncode != 1 or not p.stderr.startswith("oreslang-llvmc:") or p.stdout:
         raise AssertionError(label + ": invalid guest was not rejected: " + repr(p))
+    if expected_error is not None and expected_error not in p.stderr:
+        raise AssertionError(label + ": rejected for wrong reason: " + repr(p.stderr))
 
 
 def main():
@@ -268,21 +270,30 @@ def main():
             if p.returncode or p.stdout != "2 987654321\n" or p.stderr:
                 raise AssertionError("null output contract failed: " + repr(p))
             passed += 1
+        # These are *public* invalid entries so a newly enforced visibility
+        # restriction cannot accidentally make every negative appear green.
         negatives = {
-            "owner": "fnc bad(int a):int{val x:int=a;return x;}",
-            "borrow": "fnc bad(int a):int{return rt borrow(a);}",
-            "effect": "fnc bad(int a):int{defer other(a);return a;}",
-            "unknown": "fnc bad(int a):int{return missing(a);}",
-            "recursive": "fnc bad(int a):int{return bad(a);}",
-            "indirect-cycle": ("fnc x(int a):int{return y(a);}"
+            "only-private": "fnc helper(int a):int{return a+1;}",
+            "owner": "pub fnc bad(int a):int{val x:int=a;return x;}",
+            "borrow": "pub fnc bad(int a):int{return rt borrow(a);}",
+            "effect": "pub fnc bad(int a):int{defer other(a);return a;}",
+            "unknown": "pub fnc bad(int a):int{return missing(a);}",
+            "recursive": "pub fnc bad(int a):int{return bad(a);}",
+            "indirect-cycle": ("pub fnc x(int a):int{return y(a);}"
                                "fnc y(int a):int{return x(a);}"),
-            "duplicate": ("fnc bad(int a):int{return a;}"
+            "duplicate": ("pub fnc bad(int a):int{return a;}"
                           "fnc bad(int b):int{return b;}"),
             "named-arguments": ("fnc inc(int a):int{return a+1;}"
-                                "fnc twice(int a):int{return inc(a:a);}"),
+                                "pub fnc twice(int a):int{return inc(a:a);}"),
+        }
+        reasons = {
+            "only-private": "requires at least one pub function",
+            "recursive": "recursive call graph unsupported",
+            "indirect-cycle": "recursive call graph unsupported",
+            "named-arguments": "requires positional-only calls",
         }
         for label, code in negatives.items():
-            rejected(compiler, work, label, code)
+            rejected(compiler, work, label, code, expected_error=reasons.get(label))
         rejected(compiler, work, "mixed-trap", SOURCE,
                  ["--experimental-checked-i64-functions"])
         rejected(compiler, work, "mixed-status", SOURCE,
