@@ -552,6 +552,44 @@ int main() {
               "reused mailbox did not release its charged payload");
         pipe.close();
     }
+
+    // Catch an invisible per-edge credit leak even if graph-wide telemetry
+    // appears correct: after a failed pending promotion, drain all admitted
+    // data and refill the same edge to its precise 16 MiB byte ceiling.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 16, 4);
+        const std::string megabyte(1024 * 1024, 'F');
+        for (int i = 0; i < 15; ++i)
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        pipe.write_to_async("Producer", "ConsumerB", "r").get();
+        auto pending = pipe.write_to_async("Producer", "ConsumerB", "p");
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "byte-credit fault fixture failed to queue a writer");
+        pipe.fail_next_writer_promotion_for_test();
+        check(pipe.read_async(1).get() == megabyte,
+              "byte-credit fault fixture dropped its acknowledged reader");
+        bool failed = false;
+        try { pending.get(); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "promotion error was not reported on the pending future");
+        for (int i = 0; i < 14; ++i)
+            check(pipe.read_async(1).get() == megabyte,
+                  "failed promotion corrupted retained mailbox FIFO");
+        check(pipe.read_async(1).get() == "r",
+              "failed promotion corrupted terminal mailbox payload");
+        check(pipe.buffered_payload_bytes() == 0,
+              "fault path leaked graph credit after complete drain");
+        for (int i = 0; i < 16; ++i)
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        check(pipe.buffered_payload_bytes() == 16ULL * 1024 * 1024,
+              "fault path did not restore full edge byte-credit capacity");
+        bool denied = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", megabyte).get(); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied, "recovered edge exceeded its 16 MiB byte budget");
+        pipe.close();
+    }
 #endif
 
     // Pending writers consume the SAME byte credit as accepted messages.
