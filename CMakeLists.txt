@@ -1160,6 +1160,23 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_duplicate_parameters duplicate-parameter.ores --diagnostic "duplicate parameter")
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
+
+    # Primitive field projections use synchronous whole-object loan
+    # admission until per-field provenance can be proven by both checker and
+    # LLVM lowering. Rejections must emit zero IR.
+    oreslang_contract_test(native_projection_alias_conflict
+        class-projection-overlap-reject.ores --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_projection_immutable_exclusive
+        class-projection-immutable-mut-reject.ores --diagnostic "cannot mutably borrow immutable owner")
+    oreslang_contract_test(native_projection_moved_field
+        class-projection-moved-field-reject.ores --diagnostic "cannot borrow a moved class field")
+    oreslang_contract_test(native_projection_private_field
+        class-projection-private-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(native_projection_type_mismatch
+        class-projection-type-mismatch-reject.ores --diagnostic "borrowed argument type mismatch")
+    oreslang_contract_test(native_projection_whole_owner_conflict
+        class-projection-whole-object-conflict-reject.ores --diagnostic "conflicting active native borrow")
+
     # Source-level bounded class ownership and per-call shared/exclusive loans.
     # All class records are stack allocated; unverified class shapes and
     # by-value object parameters remain compile-time errors with no IR.
@@ -1288,6 +1305,16 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_public_class_field_read class-public-field-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(class_exec_mutable_borrow class-mutable-borrow-native.ores --run 42 --clang "${ORE_CLANG}")
+
+        oreslang_contract_test(native_projection_shared_clang
+            class-projection-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_exclusive_clang
+            class-projection-exclusive-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_shared_reborrow_clang
+            class-projection-shared-reborrow-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_two_shared_clang
+            class-projection-two-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+
         oreslang_contract_test(class_exec_shared_read class-shared-read-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_mut_to_shared_reborrow class-reborrow-native.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(class_exec_owned_stack_field class-owned-field-native.ores --run 42 --clang "${ORE_CLANG}")
