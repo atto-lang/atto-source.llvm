@@ -132,6 +132,8 @@ unsigned ores_native_vm_control_pump(OresNativeVM* vm);
  * a guest actor callback or on a reactor thread.
  */
 typedef void (*OresNativeVMNioDestroy)(void* opaque_backend);
+/* Bootstrap-only check; final attach repeats this under the CONTROL gate. */
+int ores_native_vm_nio_can_attach(OresNativeVM* vm);
 int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
                               OresNativeVMNioDestroy destroy);
 void* ores_native_vm_nio_backend(OresNativeVM* vm);
