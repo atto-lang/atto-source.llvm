@@ -190,6 +190,17 @@ int main() {
         pipe.write_by_key_async("Producer", unicode_key, "valid-unicode").get();
         check(pipe.read_async(key_slot(unicode_key)).get() == "valid-unicode",
               "valid non-ASCII UTF-8 key was misrouted");
+        // Independent FNV-1a 64-bit known-slot fixtures also pinned by the
+        // Java host routing smoke. Edges: [ConsumerA, ConsumerB].
+        pipe.write_by_key_async("Producer", "partition-\\xf0\\x9f\\x8c\\x8d", "slot-zero").get();
+        check(pipe.read_async(0).get() == "slot-zero",
+              "UTF-8 partition fixture drifted from Java slot zero");
+        pipe.write_by_key_async("Producer", "caf\\xc3\\xa9", "slot-one").get();
+        check(pipe.read_async(1).get() == "slot-one",
+              "accented UTF-8 partition fixture drifted from Java slot one");
+        pipe.write_by_key_async("Producer", "device-42", "ascii-zero").get();
+        check(pipe.read_async(0).get() == "ascii-zero",
+              "ASCII partition fixture drifted from Java slot zero");
         pipe.close();
         bool denied = false;
         try { pipe.write_round_robin_async("Producer", "after-close").get(); }
