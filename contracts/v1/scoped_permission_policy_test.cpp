@@ -17,6 +17,9 @@ int main() {
     const auto scope = [](Permission p, std::string s, bool deny=false){return ScopeRule{p,std::move(s),deny};};
     const auto make = [&](Permission p,std::vector<ScopeRule> rules){return ScopedPolicy::from_host({p},std::move(rules));};
     auto file = make(Permission::Read,{scope(Permission::Read,"/workspace/data")});
+    auto root = make(Permission::Read,{scope(Permission::Read,"/")});
+    require(root.allows(Permission::Read,"/workspace/data"),true,"explicit root scope");
+    require(root.allows(Permission::Read,"relative/path"),false,"no relative paths");
     require(file.allows(Permission::Read,"/workspace/data/file.txt"),true,"path child");
     require(file.allows(Permission::Read,"/workspace/database/file.txt"),false,"path prefix");
     require(file.allows(Permission::Read,"/workspace/data "),false,"whitespace");
