@@ -52,6 +52,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-import-preamble-test)
     set_tests_properties(native_import_preamble_host_only PROPERTIES TIMEOUT 20)
 
+    # Actual filesystem import closure, including canonical provenance,
+    # package dependency metadata and fail-closed import graph limits.
+    # No LLVM library dependency; independently testable with native C++17.
+    add_executable(oreslang-native-scalar-import-closure-test
+        tests/native_scalar_import_closure_test.cpp)
+    target_include_directories(oreslang-native-scalar-import-closure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-scalar-import-closure-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_scalar_import_closure_host_only
+        COMMAND oreslang-native-scalar-import-closure-test)
+    set_tests_properties(native_scalar_import_closure_host_only PROPERTIES TIMEOUT 40)
+
     # Host-only import-policy primitive test. Does not prove native linker parity.
     add_executable(oreslang-native-import-path-policy-test
         tests/native_import_path_policy_test.cpp)
