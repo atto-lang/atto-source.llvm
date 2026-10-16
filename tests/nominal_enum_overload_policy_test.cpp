@@ -165,6 +165,17 @@ int main() {
         {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
         eligibleIds); });
 
+    // A cast to the public C++ enum can carry an invalid discriminator
+    // that resembles a primitive; the compiler cannot admit this as a slot.
+    Signature invalidKind{"go", {
+        {Kind::Enum, "unit::Color"},
+        {static_cast<Kind>(255), "int"}
+    }};
+    rejects([&] { (void)selectResolved(
+        {invalidKind, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
+
     // This deliberately exercises only compiler-side keys, NOT LLVM source
     // parsing, AOT vtables, actor dispatch or guest execution.
     return 0;
