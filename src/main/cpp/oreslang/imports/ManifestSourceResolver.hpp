@@ -377,7 +377,14 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             return existing_source_under(it->second,rooted_path(it->second,input.suffix));
         }
         case Kind::Absolute:return existing_source(input.path);
-        case Kind::Relative:return existing_source(normalized_absolute(importer.parent_path()/input.path));
+        case Kind::Relative:{
+            const auto candidate=normalized_absolute(importer.parent_path()/input.path);
+            // Package-relative imports may move within the package, not
+            // jump outside the physical package root via '..' or symlinks.
+            if(config.package_manifest || !config.boundary.empty())
+                return existing_source_under(config.root,candidate);
+            return existing_source(candidate);
+        }
         case Kind::Bare:{
             std::vector<fs::path> roots;
             for(const auto& p:config.source_roots)append(roots,p);
