@@ -311,6 +311,40 @@ int main() {
         pipe.close();
     }
 
+
+    // Pending writers consume the SAME byte credit as accepted messages.
+    // Promotion from a pending writer to the mailbox transfers (rather
+    // than duplicates) that credit, and the read frees one message's bytes.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 10, 4);
+        const std::string megabyte(1024 * 1024, 'Q');
+        for (int i = 0; i < 10; ++i)
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        std::vector<std::shared_future<void>> pending_writers;
+        for (int i = 0; i < 6; ++i) {
+            auto future = pipe.write_to_async("Producer", "ConsumerB", megabyte);
+            check(future.wait_for(0ms) == std::future_status::timeout,
+                  "saturated mailbox unexpectedly admitted pending writer");
+            pending_writers.push_back(std::move(future));
+        }
+        bool denied_writer = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", megabyte).get(); }
+        catch (const std::logic_error&) { denied_writer = true; }
+        check(denied_writer, "pending writers bypassed resident byte cap");
+        check(pipe.read_async(1).get() == megabyte,
+              "byte-credit drain missed queued payload");
+        pending_writers[0].get();
+        auto recovered = pipe.write_to_async("Producer", "ConsumerB", megabyte);
+        check(recovered.wait_for(0ms) == std::future_status::timeout,
+              "byte-credit recovery should still respect mailbox backpressure");
+        pipe.close();
+        bool cancelled = false;
+        try { recovered.get(); }
+        catch (const std::logic_error&) { cancelled = true; }
+        check(cancelled, "STOP failed to cancel byte-accounted pending writer");
+    }
+
     // Host-only concurrency: per-source selector mutex serializes selection,
     // while actual actor guest execution is outside this transport.
     {
