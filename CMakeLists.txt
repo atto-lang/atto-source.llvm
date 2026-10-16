@@ -557,7 +557,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_pipeline_named_stage_ir value-pipe-named-stage-main.ores
         --ir "call i64 @combine")
     oreslang_contract_test(native_pipeline_named_binding_collision_rejected value-pipe-named-stage-collision.ores
-        --diagnostic "duplicate native named call binding")
+        --diagnostic "duplicate binding of parameter 'n'")
     oreslang_contract_test(native_pipeline_depth_128_accepted value-pipe-depth-128.ores
         --ir "call i64 @next")
     oreslang_contract_test(native_pipeline_depth_129_rejected value-pipe-depth-129-reject.ores
