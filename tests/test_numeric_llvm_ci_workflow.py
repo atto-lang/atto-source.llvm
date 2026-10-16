@@ -43,7 +43,7 @@ class CheckedI64WorkflowAdmissionTest(unittest.TestCase):
         yaml = CI.read_text(encoding="utf-8")
         steps = re.split(r"(?m)^      - name: ", yaml)
         matching = [s for s in steps if s.startswith(
-            "Verify registered CTest inventory cannot silently skip native tests\n")]
+            "Verify checked-i64 CTest inventory before full native suite\n")]
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0].count("\n        run:"), 1)
         self.assertIn("ctest_manifest_gate.py --build-dir build --min-tests 250",
