@@ -191,7 +191,7 @@ def main():
         for optimization in ("0", "2", "3"):
             exe = work / ("guest-O" + optimization)
             compiled = run([clang, "-O" + optimization, "-std=c11",
-                            "-Wall", "-Wextra", "-Werror", str(host),
+                            "-Wall", "-Wextra", "-Werror", "-Wno-override-module", str(host),
                             str(irfile), "-o", str(exe)])
             if compiled.returncode:
                 raise AssertionError("Clang could not link real guest IR: " + compiled.stderr)
@@ -249,6 +249,13 @@ def main():
                  ["--experimental-checked-i64-functions"])
         rejected(compiler, work, "mixed-status", SOURCE,
                  ["--experimental-checked-i64"])
+        # Invalid flag combinations fail before source is read or parsed.
+        for option in ("--experimental-owned-int", "--experimental-rt-scalar-loop"):
+            attempt = run([compiler, "--experimental-checked-i64-result-functions",
+                           option, str(source)])
+            if attempt.returncode != 2 or not attempt.stderr.startswith(
+                    "checked scalar function modes cannot combine"):
+                raise AssertionError("incompatible experimental mode was not rejected: " + repr(attempt))
     print("CHECKED_RESULT_GUEST_CASES=%d NEGATIVE_ADMISSION=%d RESULT_ABI_V2=PASS" %
           (passed, len(negatives)+2))
 
