@@ -286,6 +286,30 @@ int main() {
     }
 
 
+    // Empty data consumes queue/writer slots even though buffered bytes are 0.
+    // Pending writes remain FIFO; excess admissions fail independently.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4);
+        pipe.write_to_async("Producer", "ConsumerB", "").get();
+        pipe.write_to_async("Producer", "ConsumerB", "").get();
+        auto pending0 = pipe.write_to_async("Producer", "ConsumerB", "");
+        auto pending1 = pipe.write_to_async("Producer", "ConsumerB", "");
+        check(pending0.wait_for(0ms) == std::future_status::timeout &&
+              pending1.wait_for(0ms) == std::future_status::timeout,
+              "zero-byte writer unexpectedly bypassed queue slots");
+        bool denied_empty = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", "").get(); }
+        catch (const std::logic_error&) { denied_empty = true; }
+        check(denied_empty, "zero-byte payload bypassed bounded pending writers");
+        check(pipe.read_async(1).get().empty() && pipe.read_async(1).get().empty(),
+              "admitted empty messages missing");
+        pending0.get(); pending1.get();
+        check(pipe.read_async(1).get().empty() && pipe.read_async(1).get().empty(),
+              "pending empty-message queue did not drain");
+        pipe.close();
+    }
+
     // 16-MiB payload credits alone cannot limit empty-message metadata.
     // Reject malformed or excessive queue config before allocating edges.
     {
