@@ -45,6 +45,14 @@ int main() {
     mustDeny(denied, endpoint, endpoint);
     mustDeny(grant, "127.1:" + std::to_string(ntohs(address.sin_port)), endpoint);
     mustDeny(grant, endpoint, "127.0.0.2:" + std::to_string(ntohs(address.sin_port)));
+    // Linux may route an unspecified remote 0.0.0.0 socket to loopback.
+    // This must fail even under a broad network grant or if a caller pins
+    // the unspecified address as both the requested and selected endpoint.
+    const auto wildcard = ScopedPolicy::from_host({Permission::Net},
+        {{Permission::Net, "*", false}});
+    const auto unspecified = "0.0.0.0:" + std::to_string(ntohs(address.sin_port));
+    mustDeny(wildcard, unspecified, unspecified);
+    mustDeny(wildcard, endpoint, unspecified);
     try {
         (void)ScopedTcpBoundary::connect_selected_ipv4(grant, endpoint, endpoint, 0);
         throw std::runtime_error("invalid timeout did not reject");
