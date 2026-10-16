@@ -1,4 +1,9 @@
 #include "oreslang/runtime/NativeActorPipeTransport.hpp"
+
+// The CTest target must always exercise the fault-injection path.
+#if !defined(ORESLANG_NATIVE_PIPE_TEST_FAULT_INJECTION)
+#error "routing CTest must enable native promotion allocation fault injection"
+#endif
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -436,6 +441,37 @@ int main() {
               "concurrent graph drain leaked aggregate credits");
     }
 
+
+    // Simulate deque allocation failure only in this isolated native
+    // CTest binary. A reader already completed before promotion must not
+    // become a failed read; the pending writer must retain both its Future
+    // and its exact byte credit until the next direct read consumes it.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4);
+        const std::string first(1024 * 1024, 'A');
+        const std::string second(1024 * 1024, 'B');
+        pipe.write_to_async("Producer", "ConsumerA", first).get();
+        auto pending = pipe.write_to_async("Producer", "ConsumerA", second);
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "fault test expected a pending writer");
+        check(pipe.buffered_payload_bytes() == 2ULL * 1024 * 1024,
+              "fault setup lost pending byte credit");
+        pipe.fail_next_promotion_for_test();
+        auto delivered = pipe.read_async(0);
+        check(delivered.get() == first,
+              "failed promotion incorrectly undid completed read");
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "failed promotion settled a still-pending writer");
+        check(pipe.buffered_payload_bytes() == 1024ULL * 1024,
+              "failed promotion leaked or dropped pending byte credit");
+        check(pipe.read_async(0).get() == second,
+              "stranded pending writer was not delivered on direct retry");
+        pending.get();
+        check(pipe.buffered_payload_bytes() == 0,
+              "pending-writer fallback did not release aggregate credits");
+        pipe.close();
+    }
 
     // Every pending byte must eventually become a queued delivery or be
     // released. Promotion is a transfer of existing credit, not a fresh
