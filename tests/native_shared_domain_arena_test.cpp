@@ -21,10 +21,11 @@ int main() {
     auto readerGrant=a.grant(102, true, false);
     auto other=SharedDomainArena{};
     auto foreignGrant=other.grant(104,true,false);
-    reject([&] { (void)a.read(foreignGrant); });
+    reject([&] { (void)a.read(104, foreignGrant); });
+    reject([&] { (void)a.write(102, writerGrant); }); // wrong actor, valid grant
     SharedDomainArena::Handle h{};
     {
-        auto writer=a.write(writerGrant);
+        auto writer=a.write(101, writerGrant);
         h=writer.allocate(sizeof(std::uint64_t));
         std::uint64_t x=0x1234567890abcdefull;
         writer.write(h, &x,sizeof(x));
@@ -32,7 +33,7 @@ int main() {
     }
     std::atomic<std::uint64_t> observed{0};
     std::thread otherCarrier([&] {
-        auto r=a.read(readerGrant);
+        auto r=a.read(102, readerGrant);
         std::uint64_t x=0;
         r.read(h,&x,sizeof(x));
         observed.store(x);
@@ -40,19 +41,19 @@ int main() {
     });
     otherCarrier.join();
     require(observed == 0x1234567890abcdefull);
-    reject([&] { (void)a.write(readerGrant); });
+    reject([&] { (void)a.write(102, readerGrant); });
     a.revoke(readerGrant);
-    reject([&] { (void)a.read(readerGrant); });
+    reject([&] { (void)a.read(102, readerGrant); });
     // Retirement is nonblocking and does not free underneath an active lease.
     {
-        auto pending=a.read(writerGrant);
+        auto pending=a.read(101, writerGrant);
         require(!a.try_retire());
         std::uint64_t x=0;
         reject([&] { pending.read(h,&x,sizeof(x)); });
     }
     require(a.try_retire());
     require(a.try_retire());
-    reject([&] { (void)a.read(writerGrant); });
+    reject([&] { (void)a.read(101, writerGrant); });
     reject([&] { (void)a.grant(3,true,true); });
     std::cout << "shared domain arena tests passed\n";
 }
