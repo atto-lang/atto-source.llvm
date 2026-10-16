@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdint>
+#include <limits>
 #include <functional>
 #include <cctype>
 #include <stdexcept>
@@ -1223,6 +1225,28 @@ private:
         if (token_.text == "-") {
             const auto offset = token_.offset;
             advance();
+            // A positive i64 token cannot hold 2^63, but its negation is
+            // exactly INT64_MIN. Parse that magnitude as unsigned only in
+            // this unary-minus position; never admit a bare positive 2^63.
+            if (token_.kind == Kind::Integer) {
+                std::string digits(token_.text);
+                if (digits.front() == '_' || digits.back() == '_' ||
+                        digits.find("__") != std::string::npos)
+                    fail("malformed integer separator");
+                digits.erase(std::remove(digits.begin(), digits.end(), '_'),
+                             digits.end());
+                std::uint64_t magnitude = 0;
+                const auto parsed = std::from_chars(
+                    digits.data(), digits.data() + digits.size(), magnitude);
+                if (parsed.ec == std::errc{} &&
+                        parsed.ptr == digits.data() + digits.size() &&
+                        magnitude == (std::uint64_t{1} << 63)) {
+                    advance();
+                    auto minimum = make_expression(Expression::Kind::Integer, offset);
+                    minimum->integer = std::numeric_limits<std::int64_t>::min();
+                    return minimum;
+                }
+            }
             auto expr = make_expression(Expression::Kind::Negate, offset);
             expr->left = unary();
             return expr;
