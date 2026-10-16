@@ -381,21 +381,52 @@ bool checked_scalar_tree(const Expression& expr,
 llvm::Value* lower_checked_scalar(
     const Expression& expr, llvm::IRBuilder<>& builder, llvm::Module& module,
     llvm::Type* i64, llvm::BasicBlock* overflow,
-    const std::unordered_map<std::string, llvm::Value*>& parameters) {
+    const std::unordered_map<std::string, llvm::Value*>& parameters,
+    const std::unordered_map<std::string, llvm::Function*>* checked_functions = nullptr) {
     if (expr.kind == Expression::Kind::Integer)
         return llvm::ConstantInt::getSigned(i64, expr.integer);
     if (expr.kind == Expression::Kind::Variable)
         return parameters.at(expr.name);
+    if (expr.kind == Expression::Kind::Call) {
+        if (!checked_functions)
+            throw std::runtime_error("checked scalar calls not admitted for this ABI");
+        // Named-label ABI mapping has not been verified in the result profile.
+        if (std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
+                [](const std::string& name) { return !name.empty(); }))
+            throw std::runtime_error("checked result calls require positional arguments");
+        std::vector<llvm::Value*> operands;
+        for (const auto& argument : expr.arguments)
+            operands.push_back(lower_checked_scalar(*argument, builder, module, i64,
+                                                    overflow, parameters, checked_functions));
+        auto* slot = builder.CreateAlloca(i64, nullptr, "checked.callee.output");
+        operands.push_back(slot);
+        auto* callee = checked_functions->at(native_function_slot(expr.name, expr.arguments.size()));
+        auto* status = builder.CreateCall(callee, operands, "checked.callee.status");
+        auto* fail = llvm::BasicBlock::Create(builder.getContext(),
+                                             "checked.callee.failure", builder.GetInsertBlock()->getParent());
+        auto* next = llvm::BasicBlock::Create(builder.getContext(),
+                                             "checked.callee.success", builder.GetInsertBlock()->getParent());
+        builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(status->getType(), 0)),
+                             next, fail);
+        builder.SetInsertPoint(fail);
+        // No caller-visible store has occurred: propagate the exact status.
+        builder.CreateRet(status);
+        builder.SetInsertPoint(next);
+        return builder.CreateLoad(i64, slot, "checked.callee.value");
+    }
     llvm::Intrinsic::ID intrinsic;
     llvm::Value* left = nullptr;
     llvm::Value* right = nullptr;
     if (expr.kind == Expression::Kind::Negate) {
         intrinsic = llvm::Intrinsic::ssub_with_overflow;
         left = llvm::ConstantInt::get(i64, 0);
-        right = lower_checked_scalar(*expr.left, builder, module, i64, overflow, parameters);
+        right = lower_checked_scalar(*expr.left, builder, module, i64, overflow,
+                                     parameters, checked_functions);
     } else {
-        left = lower_checked_scalar(*expr.left, builder, module, i64, overflow, parameters);
-        right = lower_checked_scalar(*expr.right, builder, module, i64, overflow, parameters);
+        left = lower_checked_scalar(*expr.left, builder, module, i64, overflow,
+                                    parameters, checked_functions);
+        right = lower_checked_scalar(*expr.right, builder, module, i64, overflow,
+                                     parameters, checked_functions);
         intrinsic = expr.kind == Expression::Kind::Add
             ? llvm::Intrinsic::sadd_with_overflow
             : expr.kind == Expression::Kind::Subtract
@@ -413,12 +444,74 @@ llvm::Value* lower_checked_scalar(
     return value;
 }
 
+
+// Opt-in pure checked-result ABI v2: i32 function(i64..., i64* output).
+// Status 0=success, 1=overflow, 2=null output. Out is published once,
+// after all callees and arithmetic complete. No owners or actors permitted.
+std::string emit_checked_result_function_ir(const Program& source) {
+    llvm::LLVMContext context;
+    llvm::Module module("oreslang-checked-result-v2", context);
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    auto* i32 = llvm::Type::getInt32Ty(context);
+    std::unordered_map<std::string, llvm::Function*> functions;
+    for (const auto& fn : source.functions) {
+        std::vector<llvm::Type*> signature(fn.parameters.size(), i64);
+        signature.push_back(i64->getPointerTo());
+        auto* f = llvm::Function::Create(
+            llvm::FunctionType::get(i32, signature, false),
+            llvm::Function::ExternalLinkage,
+            "__oreslang_checked_v2_" + fn.name + "_" +
+                std::to_string(fn.parameters.size()), module);
+        if (!functions.emplace(native_function_slot(fn.name, fn.parameters.size()), f).second)
+            throw std::runtime_error("checked result duplicate function/arity");
+    }
+    for (const auto& fn : source.functions) {
+        auto* function = functions.at(native_function_slot(fn.name, fn.parameters.size()));
+        llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", function));
+        std::unordered_map<std::string, llvm::Value*> parameters;
+        auto it = function->arg_begin();
+        for (const auto& param : fn.parameters) {
+            it->setName(param.name);
+            parameters.emplace(param.name, &*it++);
+        }
+        llvm::Value* output = &*it;
+        output->setName("output");
+        auto* invalid = llvm::BasicBlock::Create(context, "null.output", function);
+        auto* evaluate = llvm::BasicBlock::Create(context, "evaluate", function);
+        auto* overflow = llvm::BasicBlock::Create(context, "arithmetic.overflow", function);
+        b.CreateCondBr(b.CreateIsNull(output), invalid, evaluate);
+        b.SetInsertPoint(invalid);
+        b.CreateRet(llvm::ConstantInt::get(i32, 2));
+        b.SetInsertPoint(evaluate);
+        auto* result = lower_checked_scalar(*fn.result, b, module, i64, overflow,
+                                            parameters, &functions);
+        b.CreateStore(result, output);
+        b.CreateRet(llvm::ConstantInt::get(i32, 0));
+        b.SetInsertPoint(overflow);
+        b.CreateRet(llvm::ConstantInt::get(i32, 1));
+    }
+    std::string diagnostics;
+    llvm::raw_string_ostream errors(diagnostics);
+    if (llvm::verifyModule(module, &errors)) {
+        errors.flush();
+        throw std::runtime_error("invalid checked result module: " + diagnostics);
+    }
+    std::string result;
+    llvm::raw_string_ostream output(result);
+    module.print(output, nullptr);
+    output.flush();
+    return result;
+}
+
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target, bool experimental_checked_i64,
-                                   bool experimental_checked_functions) {
-    if (experimental_checked_functions) {
+                                   bool experimental_checked_functions,
+                                   bool experimental_checked_result_functions) {
+    if (experimental_checked_functions || experimental_checked_result_functions) {
+        if (experimental_checked_functions && experimental_checked_result_functions)
+            throw std::runtime_error("checked result and trap modes are mutually exclusive");
         // A trapped callee cannot unwind another function's owner frames.
         // Admit only an entirely pure same-module host call graph.
         if (experimental_checked_i64 || wasm32_target || cortex_m_target ||
@@ -478,6 +571,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             };
         for (const auto& edge : graph) (void)visit(edge.first);
     }
+    if (experimental_checked_result_functions)
+        return emit_checked_result_function_ir(source);
     if (experimental_checked_i64) {
         // This opt-in companion ABI cannot bypass ownership cleanup because
         // it admits NO owner state, actor, calls, side effect, or suspension.
