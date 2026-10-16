@@ -121,7 +121,15 @@ int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* schedul
  * Returns 0 when not ready; after success the pointer is invalid.
  */
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler);
-/* Carriers created on demand, initially zero; includes workers until retirement. */
+/* Before any runnable DATA/CONTROL is admitted, prestart the complete
+ * configured carrier set and permanently forbid additional pthread creation.
+ * Used by the zero-GC real-time VM bootstrap. Partial failure requires
+ * retiring/closing the unexposed scheduler; it cannot be retried on hot path.
+ * This does not prove OS-level hard real-time scheduling or WCET.
+ */
+int ores_native_actor_scheduler_prestart_realtime(OresNativeActorScheduler* scheduler);
+/* Carrier count starts at zero for ordinary throughput profile. RT profile
+ * deliberately prestarts workers before exposing the scheduler. */
 size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
