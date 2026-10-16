@@ -32,7 +32,7 @@ class DiagnosticProof(unittest.TestCase):
                 self.assertTrue(run.check_diagnostic(
                     1, "", expected_error, "unknown_name", backend))
                 self.assertTrue(run.check_diagnostic(
-                    1, "  \\n\\t", expected_error, "unknown_name", backend))
+                    1, "  \n\t", expected_error, "unknown_name", backend))
                 for output in ("42", "partial guest output", "; ModuleID = leaked"):
                     self.assertFalse(run.check_diagnostic(
                         1, output, expected_error, "unknown_name", backend))
