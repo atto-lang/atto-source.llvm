@@ -1953,3 +1953,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-realtime-prestart-test)
     set_tests_properties(native_vm_realtime_preallocated_startup PROPERTIES TIMEOUT 25)
 endif()
+
+# Narrow C ABI for the C++ Linux reactor domain. Validates C compiler + C++
+# link, typed generation tickets, readiness/completion, and RT startup mode.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-epoll-reactor-abi-test
+        tests/native_epoll_reactor_abi_test.c
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-epoll-reactor-abi-test PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-epoll-reactor-abi-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-abi-test PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_c_abi
+        COMMAND oreslang-native-epoll-reactor-abi-test)
+    set_tests_properties(native_epoll_reactor_c_abi PROPERTIES TIMEOUT 25)
+endif()
