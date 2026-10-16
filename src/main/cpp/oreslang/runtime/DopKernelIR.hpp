@@ -256,6 +256,15 @@ public:
         std::memcpy(state_->bytes.data() + static_cast<std::size_t>(offset), &value, sizeof(value));
     }
 
+    // Host-only physical allocation accounting; unlike shape byte_length()
+    // this reports capacity still retained by this buffer wrapper.
+    std::size_t retained_host_capacity_bytes() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
+        if (!state_) return 0;
+        std::lock_guard<std::mutex> guard(state_->lock);
+        return state_->bytes.capacity();
+    }
+
     void close() {
         std::lock_guard<std::mutex> owner(owner_lock_);
         if (!state_) return; // relinquished ownership
