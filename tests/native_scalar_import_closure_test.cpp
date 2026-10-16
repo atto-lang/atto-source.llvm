@@ -128,6 +128,43 @@ int main() {
                    "escapes physical search root");
         }
 
+        // The actual importer must see the same ordered ambient roots as
+        // the independently tested resolver policy. The first matching
+        // physical source wins, with explicit empty roots disabling ".".
+        const auto roots = dir/"search";
+        write(roots/".ores.pkg.toml",
+              "schema_version = \"1\"\n[source]\nroots = [\"src\"]\nimport_paths = [\"vendor\"]\n");
+        write(roots/"src"/"entry.ores", "import \"pick\";\npub fnc main(): int {return pick();}\n");
+        write(roots/"src"/"pick.ores", "pub fnc pick(): int {return 42;}\n");
+        write(roots/"vendor"/"pick.ores", "pub fnc pick(): int {return 41;}\n");
+        write(dir/"ambient"/"pick.ores", "pub fnc pick(): int {return 40;}\n");
+        write(dir/"legacy"/"pick.ores", "pub fnc pick(): int {return 39;}\n");
+        const auto env_ores=(dir/"ambient").string();
+        const auto env_legacy=(dir/"legacy").string();
+        const auto chosen=[&] {
+            return assemble_scalar_import_closure(roots/"src"/"entry.ores",
+                                                  valid,env_ores,env_legacy,':',dir);
+        };
+        check(chosen().units.front().file==fs::canonical(roots/"src"/"pick.ores"),
+              "source.roots must precede all other paths");
+        fs::remove(roots/"src"/"pick.ores");
+        check(chosen().units.front().file==fs::canonical(roots/"vendor"/"pick.ores"),
+              "source.import_paths must precede ambient roots");
+        fs::remove(roots/"vendor"/"pick.ores");
+        check(chosen().units.front().file==fs::canonical(dir/"ambient"/"pick.ores"),
+              "ORES_PATHS must precede legacy ORESLANG_PATH");
+        fs::remove(dir/"ambient"/"pick.ores");
+        check(chosen().units.front().file==fs::canonical(dir/"legacy"/"pick.ores"),
+              "legacy fallback must remain last");
+        write(roots/".ores.pkg.toml",
+              "schema_version = \"1\"\n[source]\nroots = []\nimport_paths = []\n");
+        write(roots/"pick.ores", "pub fnc pick(): int {return 77;}\n");
+        reject([&] {(void)assemble_scalar_import_closure(roots/"src"/"entry.ores",valid);},
+               "native scalar import source not found");
+        check(assemble_scalar_import_closure(roots/"src"/"entry.ores",
+              valid,roots.string()).units.front().file == fs::canonical(roots/"pick.ores"),
+              "explicit env root should restore missing bare import");
+
         // A long linear chain must fail before unbounded recursive discovery.
         for (unsigned i = 0; i < 34; ++i) {
             const std::string name = "depth-" + std::to_string(i) + ".ores";
