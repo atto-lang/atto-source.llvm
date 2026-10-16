@@ -53,6 +53,12 @@ int main() {
     const auto unspecified = "0.0.0.0:" + std::to_string(ntohs(address.sin_port));
     mustDeny(wildcard, unspecified, unspecified);
     mustDeny(wildcard, endpoint, unspecified);
+    // The trusted numeric TCP adapter must not interpret a wrapped port as
+    // the approved listener port, even if the caller controls selected text.
+    for (const char* bad_port : {"4294967739", "4294967297", "000443", "9999999999"}) {
+        mustDeny(wildcard, endpoint, std::string("127.0.0.1:") + bad_port);
+        mustDeny(wildcard, std::string("127.0.0.1:") + bad_port, endpoint);
+    }
     try {
         (void)ScopedTcpBoundary::connect_selected_ipv4(grant, endpoint, endpoint, 0);
         throw std::runtime_error("invalid timeout did not reject");
