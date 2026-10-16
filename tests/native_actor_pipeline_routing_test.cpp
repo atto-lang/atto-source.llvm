@@ -357,6 +357,37 @@ int main() {
         check(pending_cancelled, "pending branch was not cancelled on STOP");
     }
 
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+    // The FIRST RR attempt must consume source cursor slot zero even when
+    // pending Future allocation throws. A failed first-request cursor map
+    // insertion would instead leave the next attempt targeting slot zero.
+    for (int trial = 0; trial < 32; ++trial) {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 32, 4);
+        pipe.fail_next_pending_allocation_for_test();
+        bool threw_oom = false;
+        try {
+            (void)pipe.write_round_robin_async("Producer", "discarded");
+        } catch (const std::bad_alloc&) {
+            threw_oom = true;
+        }
+        check(threw_oom && pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "first RR admission OOM did not refund graph quotas");
+        pipe.write_round_robin_async("Producer", "next-b").get();
+        check(pipe.read_async(1).get() == "next-b",
+              "RR must consume first slot even if its admission throws");
+        pipe.write_round_robin_async("Producer", "wrap-a").get();
+        check(pipe.read_async(0).get() == "wrap-a",
+              "RR cursor failed to wrap after allocation error");
+        check(pipe.pending_reader_count() == 0 &&
+              pipe.buffered_message_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0,
+              "RR fault recovery stranded admission credits");
+        pipe.close();
+    }
+#endif
+
     // Every RR attempt consumes its turn, including an overloaded edge.
     // Pending admission must not silently skip to a healthier consumer.
     {
