@@ -60,9 +60,12 @@ class SmokeAdmission(unittest.TestCase):
         self.assertIn("return 20 + 22;", smoke.POSITIVE)
         self.assertIn("nonexistent_symbol", smoke.NEGATIVE)
         self.assertNotIn("nonexistent_symbol", smoke.POSITIVE)
-        self.assertEqual(
-            smoke.ARITHMETIC,
-            "pub fnc main(): int {\\n  return 100 - (3 + 2) - 19;\\n}\\n")
+        self.assertEqual(smoke.ARITHMETIC.splitlines(), [
+            "pub fnc main(): int {",
+            "  return 100 - (3 + 2) - 19;",
+            "}"
+        ])
+        self.assertTrue(smoke.ARITHMETIC.endswith(chr(10)))
         self.assertEqual(100 - (3 + 2) - 19, 76)
 
     def test_checkout_identity_reads_current_git_head(self):
