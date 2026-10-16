@@ -227,6 +227,9 @@ public:
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
+                if (token_.text == "abstract") {
+                    fail("native private abstract class hooks require typed virtual dispatch and originating-superclass call authority");
+                }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
@@ -281,6 +284,10 @@ private:
         }
         if (token_.text == "final") {
             fail("native final actor fields require typed field initialization and ownership lowering");
+        }
+        if (token_.text == "receive" || token_.text == "on_start"
+                || token_.text == "private" || token_.text == "abstract") {
+            fail("native ActorMail receive/on_start requires runtime-owned mailbox and lifecycle dispatch");
         }
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
