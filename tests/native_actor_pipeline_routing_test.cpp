@@ -339,6 +339,8 @@ int main() {
         NativeActorPipeTransport pipe(
             registry, supervisor, graph_stages(), graph_edges(), 128, 4, 256);
         std::atomic<int> admitted{0};
+        std::atomic<int> admitted_a{0};
+        std::atomic<int> admitted_b{0};
         std::atomic<int> rejected_budget{0};
         std::atomic<int> unexpected{0};
         std::vector<std::thread> senders;
@@ -349,6 +351,8 @@ int main() {
                     try {
                         pipe.write_to_async("Producer", target, "four").get();
                         admitted.fetch_add(1);
+                        if (p % 2 == 0) admitted_a.fetch_add(1);
+                        else admitted_b.fetch_add(1);
                     } catch (const std::logic_error&) {
                         rejected_budget.fetch_add(1);
                     } catch (...) {
@@ -363,7 +367,8 @@ int main() {
               pipe.buffered_payload_bytes() == 256,
               "concurrent graph quota allowed overcommit or lost credit");
         for (int e = 0; e < 2; ++e) {
-            for (int i = 0; i < 32; ++i) {
+            const int count = e == 0 ? admitted_a.load() : admitted_b.load();
+            for (int i = 0; i < count; ++i) {
                 check(pipe.read_async(e).get() == "four",
                       "concurrent credit accounting lost admitted payload");
             }
