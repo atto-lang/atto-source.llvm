@@ -20,6 +20,14 @@ PROGRAMS = {
     "structural callable": """
         structural fnc main(): int { return 1; }
     """,
+    "positional tuple shorthand": """
+        fnc take((int, int, string?) value): int { return 1; }
+        fnc main(): int { return take((5, 3)); }
+    """,
+    "structural positional tuple": """
+        fnc take(structural (int, int, string?) value): int { return 1; }
+        fnc main(): int { return take(...(5, 3, "foo", "start")); }
+    """,
     "structural match": """
         fnc main(): int {
           match 1 over
