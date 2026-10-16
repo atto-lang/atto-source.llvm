@@ -246,6 +246,31 @@ and ASan/UBSan builds (six key vectors and every key length 0..4096).
 That probe is *not* an execution of the full production header/CTest
 suite, which remains blocked on a runnable approved CI environment.
 
+### Graph-wide pending-reader budget and exact failure injection
+
+In addition to the 64 MiB buffered byte and 65,536 buffered message
+caps, the native transport independently limits **unresolved reader
+promises across the whole graph** (configurable 1..65,536). Accepted
+pending readers reserve a credit; direct handoff and STOP cancellation
+return it. Deque allocation failure must roll back the reservation.
+`pending_reader_count()` is host-only diagnostic accounting and is
+not total process-memory usage. The native test-only build can inject
+`std::bad_alloc` at the precise reader-enqueue site to exercise credit
+recovery and subsequent handoff.
+
+The native correlation ledger also retains owning `shared_ptr` handles
+for every active frame. Completion, abort, or STOP releases ownership;
+dropping all caller-owned copies does not prematurely free a live
+frame or allow a reused raw pointer to pass active-frame validation.
+The ledger's stale-frame and orphaned-frame regressions cover this ABA
+boundary. The separate native writer-promotion fault test runs 32
+write/read cycles to expose leaked reservations and failed recovery.
+
+All fault-injection controls require
+`ORESLANG_ACTOR_PIPE_FAULT_TESTS` and are absent from production builds.
+None of these host tests establishes scheduler-authenticated guest
+`self.forward_*`, `self.backward`, or `self.reply` execution.
+
 ## Mandatory release gates
 
 - Compile and execute the new host graph/routing C++ CTests with both
