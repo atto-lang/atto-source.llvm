@@ -152,15 +152,19 @@ def main():
     p.add_argument("--validate", action="store_true")
     p.add_argument("--backend", choices=["llvm", "graal"])
     p.add_argument("--command", help="shell-free argv with one {source} placeholder")
-    p.add_argument("--clang", default="")
+    p.add_argument("--clang", default=None)
     p.add_argument("--run-command", help="Graal OresMain guest process argv with one {source}")
     p.add_argument("--revision", help="40-character Git commit SHA for the compiled backend")
-    p.add_argument("--timeout", type=int, default=30)
+    p.add_argument("--timeout", type=int, default=None,
+                   help="compiler/guest timeout in seconds (default: 30; execution only)")
     p.add_argument("--report", type=Path)
     args = p.parse_args()
     suite, checksum = validate_suite()
     if args.validate:
-        if args.backend or args.command or args.report:
+        if (args.backend is not None or args.command is not None or
+                args.report is not None or args.run_command is not None or
+                args.revision is not None or args.clang is not None or
+                args.timeout is not None):
             p.error("--validate cannot be combined with an execution option")
         print(f"Validated {len(suite['cases'])} semantic cases, SHA256={checksum}")
         return 0
@@ -168,6 +172,8 @@ def main():
         p.error("--backend, --command and --revision are required")
     if not re.fullmatch("[a-f0-9]{40}", args.revision):
         p.error("--revision must be a 40-character Git commit SHA")
+    if args.timeout is None:
+        args.timeout = 30
     if not 1 <= args.timeout <= 300:
         p.error("--timeout must be 1..300 seconds")
     argv = validate_command(args.command)
