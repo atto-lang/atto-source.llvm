@@ -291,8 +291,20 @@ private:
             NativeSupervisorRegistry& registry,
             const NativeSupervisorRegistry::SupervisorRef& supervisor,
             std::size_t edge_capacity, std::size_t worker_capacity) {
-        if (edge_capacity == 0)
-            throw std::invalid_argument("native pipeline edge capacity must be positive");
+        // Per-payload byte credits do not bound empty/very-small message
+        // metadata. Bound configured queue slots before constructing edges:
+        // every edge can hold capacity queued messages, pending writers AND
+        // pending readers independently. Never allow capacity * edge_count
+        // to overflow or reserve an unbounded quantity of host objects.
+        static constexpr std::size_t max_edge_slots = 4096;
+        static constexpr std::size_t max_graph_edge_slots = 65536;
+        static constexpr std::size_t max_workers = 4096;
+        if (edge_capacity == 0 || edge_capacity > max_edge_slots)
+            throw std::invalid_argument("native pipeline edge slot budget invalid");
+        if (worker_capacity == 0 || worker_capacity > max_workers)
+            throw std::invalid_argument("native pipeline worker slot budget invalid");
+        if (schema_.size() > max_graph_edge_slots / edge_capacity)
+            throw std::invalid_argument("native pipeline aggregate edge slot budget exceeded");
         // Allocate all independently bounded edges before publishing the
         // supervised group. Outbound order is caller-defined graph order.
         edges_.reserve(schema_.size());
