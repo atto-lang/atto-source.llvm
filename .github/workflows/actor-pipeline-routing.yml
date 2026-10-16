@@ -33,10 +33,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Record complete source identity
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Require exact PR-head source checkout
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          git rev-parse HEAD
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git rev-parse 'HEAD^{tree}'
+          git hash-object src/main/cpp/oreslang/runtime/ActorPipeContract.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp \
+            src/main/cpp/oreslang/runtime/ActorPipeRouteLedger.hpp
           git hash-object src/main/cpp/oreslang/runtime/ActorPipeContract.hpp \
             src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp
       - name: Run full GCC/Clang and sanitizer matrix
