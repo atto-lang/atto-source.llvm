@@ -97,7 +97,7 @@ def requires_guest_runner(suite, backend):
 def check_diagnostic(returncode, stdout, stderr, category, backend):
     # A crash, missing compiler, signal or setup failure cannot satisfy a rejection.
     # A valid rejection must also identify the intended semantic error.
-    if returncode != 1 or (backend == "llvm" and stdout.strip()):
+    if returncode != 1 or stdout.strip():
         return False
     return bool(re.search(CLASSES[backend][category], stderr, flags=re.IGNORECASE))
 
