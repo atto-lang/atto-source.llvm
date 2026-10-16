@@ -62,6 +62,40 @@ int main() {
         // on the operation path; all three are already prestarted.
         manager.stop();
     }
+    {
+        // A Linux FD can be installed in multiple *different* epoll instances.
+        // Only the manager-level claim table stops two reactors from racing
+        // to consume one socket/pipe's data. A stopped/cancelled watch keeps
+        // ownership until its terminal completion is consumed.
+        NativeEpollReactorManager manager(2,
+            NativeEpollReactorManager::Profile::preallocated_rt, 2);
+        int endpoints[2]{-1, -1};
+        check(::pipe2(endpoints, O_NONBLOCK | O_CLOEXEC) == 0);
+        auto original = manager.try_watch(endpoints[0], EPOLLIN);
+        check(original.has_value());
+        check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+        check(::write(endpoints[1], "x", 1) == 1);
+        std::optional<NativeEpollReactorManager::Completion> delivered;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!delivered && std::chrono::steady_clock::now() < deadline) {
+            delivered = manager.try_pop();
+            if (!delivered) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        check(delivered.has_value());
+        check(delivered->reactor == original->reactor);
+        check(delivered->event.ticket.value == original->ticket.value);
+        // Ownership releases only after pop; a new watch gets a fresh ticket.
+        std::optional<NativeEpollReactorManager::Watch> next;
+        for (int attempt = 0; attempt < 50 && !next; ++attempt) {
+            next = manager.try_watch(endpoints[0], EPOLLIN);
+            if (!next) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        check(next.has_value());
+        check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+        manager.stop();
+        ::close(endpoints[0]);
+        ::close(endpoints[1]);
+    }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
     catch (const std::invalid_argument&) { bad = true; }
