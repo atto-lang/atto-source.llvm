@@ -176,6 +176,17 @@ buffered transport allocation. The host-only `buffered_payload_bytes()` and
 `buffered_message_count()` diagnostics expose the currently charged
 payload bytes and buffered/pending messages.
 
+A failed pending-writer promotion may leave free buffer capacity while older
+writers are still queued. New writers MUST queue behind older pending writers,
+never fill the free slot ahead of them, and the per-edge pending-writer quota
+continues to apply independently of buffer occupancy. If repeated promotion
+failures empty the buffer while a charged writer remains, the next reader
+directly receives the oldest pending writer and releases its graph-wide byte
+and message credits. The failed writers' admission futures settle exceptionally;
+successful recovery does not reorder or duplicate DATA. The fault-injection
+regression covers FIFO, pending-writer capacity, stranded-reader prevention,
+and post-failure reuse under both GCC and Clang sanitizer targets.
+
 This is **not** a global heap cap on consumers holding already-delivered
 Futures or a claim of guest-level backpressure. The future scheduler
 `RouteReceipt`/typed `ActorMail<T>` integration must enforce the same
