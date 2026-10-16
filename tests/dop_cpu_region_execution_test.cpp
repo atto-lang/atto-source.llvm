@@ -15,6 +15,25 @@ template<class F> void must_reject(F fn) {
 int main() {
     using namespace oreslang::dop;
     for (auto kind : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
+        const Plan empty(kind, 0, 3, 4, 16, kind == Layout::AoSoA ? 4 : 1);
+        check(empty.byte_length() == 0);
+        HostBuffer input(empty), output(empty);
+        const Kernel kernel(empty, Element::F32, Op::ScaleBias, 2.0f, 1.0f);
+        const auto source_root = input.region_root();
+        const auto destination_root = output.region_root();
+        const RegionAccess source(source_root, 2, 0, 0, RegionMode::Read);
+        const RegionAccess destination(destination_root, 2, 0, 0, RegionMode::Write);
+        execute_cpu_region(kernel, input, output, source, destination);
+        execute_cpu(kernel, input, output);
+        must_reject([&] { (void) input.read(0, 0); });
+        must_reject([&] {
+            (void) RegionAccess(source_root, 0, 0, 1, RegionMode::Read);
+        });
+        input.close();
+        output.close();
+        check(!source_root.is_live_owned() && !destination_root.is_live_owned());
+    }
+    for (auto kind : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
         Plan layout(kind, 7, 3, 4, 16, kind == Layout::AoSoA ? 4 : 1);
         Kernel kernel(layout, Element::F32, Op::ScaleBias, 2.0f, 1.0f);
         HostBuffer input(layout), output(layout), untrusted(layout);
