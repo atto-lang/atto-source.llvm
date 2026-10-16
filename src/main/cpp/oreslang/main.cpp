@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <vector>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <array>
@@ -115,9 +116,12 @@ int main(int argc, char** argv) {
                 (cortex_m_target || wasm32_target || experimental_owned_int ||
                  experimental_rt_scalar_loop))
             throw std::runtime_error("experimental scalar imports require host-only, plain int mode");
-        const auto text = experimental_scalar_imports
-            ? oreslang::imports::assemble_scalar_import_closure(
-                  path, require_valid_source_utf8)
+        std::optional<oreslang::imports::ScalarImportClosure> import_closure;
+        if (experimental_scalar_imports)
+            import_closure.emplace(oreslang::imports::assemble_scalar_import_closure(
+                path, require_valid_source_utf8));
+        const auto text = import_closure
+            ? import_closure->source
             : read_regular_source(path, kMaxSourceBytes, cortex_m_target
                   ? "cortex-m source exceeds 128 KiB limit"
                   : "native source exceeds 8 MiB admission limit");
@@ -138,6 +142,24 @@ int main(int argc, char** argv) {
                 (!ast.module.empty() || !ast.classes.empty() || !ast.actors.empty() ||
                  !ast.cooperative_loops.empty()))
             throw std::runtime_error("native scalar import slice rejects modules, classes and actors");
+        if (import_closure) {
+            // Concatenating source units erases lexical namespaces. Until
+            // symbol-table linking exists, fail closed for imported private
+            // declarations instead of inadvertently exporting them globally.
+            for (const auto& fn : ast.functions) {
+                const auto& units = import_closure->units;
+                const auto unit = std::find_if(units.begin(),units.end(),
+                    [&](const oreslang::imports::ScalarImportUnit& candidate) {
+                        return candidate.begin <= fn.offset && fn.offset < candidate.end;
+                    });
+                if (unit == units.end())
+                    throw std::runtime_error("native scalar function lost source provenance");
+                if (!unit->entry && !fn.exported)
+                    throw std::runtime_error("native scalar imported function must be pub");
+                if (!unit->entry && fn.name == "main")
+                    throw std::runtime_error("native scalar imported source cannot define main");
+            }
+        }
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls
