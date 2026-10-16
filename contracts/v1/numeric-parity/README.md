@@ -22,7 +22,16 @@ with `verification/generate_numeric_overflow_cases.py` and
 `verification/tests.cpp`; and Wasm's pinned external LLVM compiler plus
 isolated runtime in `tests/numeric-source-parity.test.mjs`.
 All reject or signal overflow; none may return a normal wrapped signed-i64
-value. A test skip, stale compiler, unassigned runner, or source-free LLVM
+value. The LLVM executable negative harness additionally requires, for
+runtime-trapped cases, that the exact emitted IR connect the appropriate
+signed-overflow intrinsic through its SSA overflow flag to the matching
+conditional `llvm.trap` block. An unrelated signal, stray instruction,
+comment-only guard, or unused intrinsic is not accepted as evidence.
+Each trapped case must also have a nearby non-overflow Oreslang source
+expression compile and return its exact full-width i64 value. The native
+harness has independent synthetic-IR self-tests, but the real compiler
+and sanitizer gates remain unexecuted until source-org CI starts.
+A test skip, stale compiler, unassigned runner, or source-free LLVM
 control is **not** proof of compiled parity.
 
 Java/LLVM full-source Actions currently fail before jobs can execute; the
