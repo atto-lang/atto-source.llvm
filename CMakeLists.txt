@@ -839,6 +839,10 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-actor-pipeline-routing-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
+    # Injection exists only in the dedicated host-routing CTest executable,
+    # never in production/native guest compiler binaries.
+    target_compile_definitions(oreslang-native-actor-pipeline-routing-test PRIVATE
+        ORESLANG_NATIVE_PIPE_TEST_FAULT_INJECTION=1)
     target_link_libraries(oreslang-native-actor-pipeline-routing-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_pipeline_multiconsumer_host_routing
         COMMAND oreslang-native-actor-pipeline-routing-test)
