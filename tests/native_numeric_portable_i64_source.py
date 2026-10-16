@@ -96,11 +96,11 @@ def assert_checked_overflow_path(ir, operation):
     if operation not in ("sadd", "ssub", "smul"):
         raise AssertionError("unsupported checked overflow operation")
     pairs = list(_OVERFLOW_PAIR.finditer(ir))
-    if not any(x.group(2) == operation for x in pairs):
+    pair_ops = {x.group(1): x.group(2) for x in pairs}
+    if operation not in pair_ops.values():
         raise AssertionError("signed-i64 overflow intrinsic absent: " + operation)
-    pair_symbols = {x.group(1) for x in pairs}
     flags = {x.group(1): x.group(2) for x in _OVERFLOW_FLAG.finditer(ir)
-             if x.group(2) in pair_symbols}
+             if x.group(2) in pair_ops}
     guards = list(_OVERFLOW_GUARD.finditer(ir))
     traps = re.findall(r"\bcall\s+void\s+@llvm\.trap\s*\(\s*\)", ir)
     failures = list(_OVERFLOW_FAILURE.finditer(ir))
@@ -111,8 +111,10 @@ def assert_checked_overflow_path(ir, operation):
             or len(unreachable) != len(failures)
             or len({x.group(2) for x in guards}) != len(guards)
             or any(x.group(1) not in flags or x.group(2) not in labels
-                   for x in guards)):
-        raise AssertionError("overflow IR lacks complete flag-derived guarded trap")
+                   for x in guards)
+            or not any(pair_ops[flags[x.group(1)]] == operation
+                       for x in guards if x.group(1) in flags)):
+        raise AssertionError("overflow IR lacks operation-specific flag-derived guarded trap")
 
 
 def main():
