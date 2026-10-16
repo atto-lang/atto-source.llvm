@@ -78,23 +78,43 @@ def main():
     corpus = json.loads(raw)
     assert corpus["schema_version"] == "1.0.0"
     assert len(corpus["cases"]) == 7
+    # The same four negative source expressions must be checked in every
+    # backend. Pin the exact reviewed Git blob before using its source bytes.
+    overflow_raw = (ROOT / "contracts/v1/numeric-parity/source-i64-overflow-cases.json").read_bytes()
+    overflow_sha = hashlib.sha1(
+        b"blob " + str(len(overflow_raw)).encode("ascii") + bytes((0,)) +
+        overflow_raw).hexdigest()
+    if overflow_sha != "2ce0b0ff5c52e54a788280fd64d67fa8dc32614a":
+        raise AssertionError("shared source-i64 overflow corpus Git blob mismatch")
+    overflow = json.loads(overflow_raw)
+    if (overflow.get("schema_version") != "1.0.0"
+            or overflow.get("policy") != "no-wrapping-i64"
+            or overflow.get("status") != "requires-executable-negative-tests"
+            or [v.get("id") for v in overflow.get("cases", [])] != [
+                "positive-add-overflow", "negative-sub-overflow",
+                "positive-multiply-overflow", "negative-unary-overflow"]):
+        raise AssertionError("invalid shared overflow corpus")
+    for case in overflow["cases"]:
+        if case.get("expected") != "reject-or-runtime-error":
+            raise AssertionError("unexpected shared overflow policy")
     with tempfile.TemporaryDirectory(prefix="ores-numeric-i64-") as temp:
         folder = Path(temp)
         for case in corpus["cases"]:
             check_positive(compiler, clang, case["expression"],
                            int(case["expected"]), folder, case["id"])
-        for code in (
+        negative_sources = [
             "fnc main():int{return 9223372036854775808;}",
             "fnc main():int{return -9223372036854775809;}",
-            "fnc main():int{return 9223372036854775807+1;}",
-            "fnc main():int{return -9223372036854775808-1;}",
-            "fnc main():int{return 3037000500*3037000500;}",
-            "fnc main():int{return -(-9223372036854775808);}",
             "fnc main():int{return 3/2;}",
             "fnc main():bigint{return 1;}",
             "fnc main():decimal{return 1;}",
             "fnc main():int{return 1.25;}",
-        ):
+        ]
+        negative_sources += [
+            "fnc main():int{return " + c["source"] + ";}"
+            for c in overflow["cases"]
+        ]
+        for code in negative_sources:
             path = folder / "unsupported.ores"
             path.write_text(code, encoding="utf-8")
             negative = subprocess.run([compiler, "--target=host", str(path)],
