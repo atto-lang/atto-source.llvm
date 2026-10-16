@@ -44,6 +44,12 @@ int ores_native_nio_try_cancel(OresNativeNio* manager, OresNativeNioWatch watch)
 int ores_native_nio_try_pop(OresNativeNio* manager, OresNativeNioCompletion* output);
 int ores_native_nio_completion_fd(const OresNativeNio* manager, size_t reactor);
 
+/* A host POLLIN observer clears eventfd readiness before popping records.
+ * The counter is a wakeup signal, not the number of completed operations.
+ * Concurrent later publications re-signal it. No waits or guest callbacks.
+ */
+void ores_native_nio_drain_completion_signal(OresNativeNio* manager, size_t reactor);
+
 /* External trusted host ONLY: close joins I/O pthreads, never call on an
  * actor, ROOT/CONTROL carrier or producer concurrently using this object.
  * Every producer must already be fenced before destroy.
