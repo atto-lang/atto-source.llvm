@@ -7,6 +7,7 @@ renames only LLVM's checked C `main` wrapper and directly invokes the exported
 signed result rather than the truncated shell exit status. No stub passes.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -64,7 +65,12 @@ def main():
     args = parser.parse_args()
     compiler = str(Path(args.compiler).resolve(strict=True))
     clang = str(Path(args.clang).resolve(strict=True))
-    corpus = json.loads(CASES.read_text(encoding="utf-8"))
+    raw = CASES.read_bytes()
+    actual = hashlib.sha1(
+        b"blob " + str(len(raw)).encode("ascii") + bytes((0,)) + raw).hexdigest()
+    if actual != "bbc319c19ecd007109d33592e210091eb267e5a2":
+        raise AssertionError("native guest corpus differs from reviewed Git blob")
+    corpus = json.loads(raw)
     assert corpus["schema_version"] == "1.0.0"
     assert len(corpus["cases"]) == 7
     with tempfile.TemporaryDirectory(prefix="ores-numeric-i64-") as temp:
@@ -83,7 +89,7 @@ def main():
             negative = subprocess.run([compiler, "--target=host", str(path)],
                                       text=True, capture_output=True, timeout=20, check=False)
             if (negative.returncode != 1 or negative.stdout.strip()
-                    or not negative.stderr.strip()):
+                    or not re.search(r"^oreslang-llvmc:\s+\S+", negative.stderr, re.M)):
                 raise AssertionError("unsupported precision source was not diagnosed by frontend")
     print("NATIVE_NUMERIC_I64_POSITIVE=7 NEGATIVE=4; advanced domains unsupported")
 
