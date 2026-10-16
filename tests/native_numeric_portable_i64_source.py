@@ -84,6 +84,12 @@ def main():
             check_positive(compiler, clang, case["expression"],
                            int(case["expected"]), folder, case["id"])
         for code in (
+            "fnc main():int{return 9223372036854775808;}",
+            "fnc main():int{return -9223372036854775809;}",
+            "fnc main():int{return 9223372036854775807+1;}",
+            "fnc main():int{return -9223372036854775808-1;}",
+            "fnc main():int{return 3037000500*3037000500;}",
+            "fnc main():int{return -(-9223372036854775808);}",
             "fnc main():int{return 3/2;}",
             "fnc main():bigint{return 1;}",
             "fnc main():decimal{return 1;}",
@@ -96,7 +102,7 @@ def main():
             if (negative.returncode != 1 or negative.stdout.strip()
                     or not re.search(r"^oreslang-llvmc:\s+\S+", negative.stderr, re.M)):
                 raise AssertionError("unsupported precision source was not diagnosed by frontend")
-    print("NATIVE_NUMERIC_I64_POSITIVE=7 NEGATIVE=4; advanced domains unsupported")
+    print("NATIVE_NUMERIC_I64_POSITIVE=7 REJECTED=10; dynamic arithmetic still unverified")
 
 
 if __name__ == "__main__":
