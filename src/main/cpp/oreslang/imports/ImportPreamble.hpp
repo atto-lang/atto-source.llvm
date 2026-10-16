@@ -9,6 +9,9 @@ namespace oreslang::imports {
 struct ImportPreamble {
     std::string stripped_source;
     std::vector<std::string> imports;
+    // Parallel to imports: named public function requested by canonical
+    // 'import fnc symbol from "path";' or empty for legacy scalar preamble.
+    std::vector<std::string> requested_functions;
 };
 
 inline ImportPreamble split_import_preamble(std::string_view source) {
@@ -28,6 +31,31 @@ inline ImportPreamble split_import_preamble(std::string_view source) {
         if (!declarations_started && is_import) {
             std::size_t p = 6;
             while (p < text.size() && (text[p] == ' ' || text[p] == '\t')) ++p;
+            std::string requested_function;
+            // Narrow, executable language syntax parity. This is NOT module
+            // namespace linking; only a single named pub fnc is admitted.
+            if (text.substr(p, 4) == "fnc " || text.substr(p, 4) == "fnc\t") {
+                p += 3;
+                while (p < text.size() && (text[p] == ' ' || text[p] == '\t')) ++p;
+                const auto name_start = p;
+                if (p == text.size() || !((text[p] >= 'a' && text[p] <= 'z') ||
+                        (text[p] >= 'A' && text[p] <= 'Z') || text[p] == '_'))
+                    throw std::invalid_argument("native named import requires a function identifier");
+                while (p < text.size() && ((text[p] >= 'a' && text[p] <= 'z') ||
+                        (text[p] >= 'A' && text[p] <= 'Z') ||
+                        (text[p] >= '0' && text[p] <= '9') || text[p] == '_')) ++p;
+                if (p - name_start > 128)
+                    throw std::invalid_argument("native import function identifier too long");
+                requested_function = std::string(text.substr(name_start, p - name_start));
+                if (p == text.size() || (text[p] != ' ' && text[p] != '\t'))
+                    throw std::invalid_argument("native named import requires from");
+                while (p < text.size() && (text[p] == ' ' || text[p] == '\t')) ++p;
+                if (text.substr(p, 4) != "from" || p + 4 == text.size() ||
+                        (text[p + 4] != ' ' && text[p + 4] != '\t'))
+                    throw std::invalid_argument("native named import requires from");
+                p += 4;
+                while (p < text.size() && (text[p] == ' ' || text[p] == '\t')) ++p;
+            }
             if (p == text.size() || text[p++] != '"')
                 throw std::invalid_argument("native import requires a quoted path");
             const auto start = p;
@@ -50,6 +78,7 @@ inline ImportPreamble split_import_preamble(std::string_view source) {
             if (output.imports.size() >= 128)
                 throw std::invalid_argument("too many native imports in one source");
             output.imports.push_back(std::move(path));
+            output.requested_functions.push_back(std::move(requested_function));
             output.stripped_source.append(line.size(), ' ');
         } else {
             // Only a contiguous, unambiguous leading import preamble is admitted.
