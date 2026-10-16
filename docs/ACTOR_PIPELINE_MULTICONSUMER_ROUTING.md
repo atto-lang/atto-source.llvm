@@ -47,6 +47,14 @@ into current round-robin semantics.
    only for backward compatibility. In production the supervisor must bind
    these identifiers to authenticated runtime actor identities/epochs.
    No caller-supplied actor name grants authority to another actor's port.
+   **Java/LLVM identity parity:** graph instance IDs, nominal actor type names,
+   inbound/outbound type tags, and every link source/target/payload component
+   are each limited to **256 UTF-8 bytes**. Reject embedded NUL, malformed
+   Unicode, invalid UTF-8, overlong encodings and surrogate codepoints; count
+   bytes, not Java UTF-16 code units. Optional empty inbound/outbound ports
+   remain valid only where the stage role permits them. Reject these values
+   before building route maps or admitting any message. This check is graph
+   validation, **not** an actor identity/capability authentication substitute.
 2. **Single physical execution.** Routing-policy mutation (RR cursor,
    subscription membership, reply correlation) belongs to the VM scheduler,
    **not** a guest-writable global or hidden ordinary actor instance field.
@@ -140,6 +148,14 @@ constructor with independent bounded mailboxes and implements:
 - `write_by_key_async(source, key, payload)` — stable FNV-1a edge selection;
   rejects malformed/overlong UTF-8, surrogates and oversize keys. Unicode
   normalization (NFC), if required, belongs to the typed key codec upstream.
+- Each edge enforces a 16 MiB buffered-payload byte credit across already
+  admitted messages AND suspended writers, in addition to the existing
+  1 MiB individual payload and message/pending-writer count limits.
+  Direct handoff to a waiting reader does not consume buffer credit;
+  draining a message or cancelling a pending writer returns its credit.
+  Exhaustion yields a failed per-edge admission Future and does not
+  block or consume other edges' byte credits. This is a per-edge limit,
+  NOT a whole-graph or actor-process memory limit.
 
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
