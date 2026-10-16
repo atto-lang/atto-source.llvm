@@ -296,6 +296,19 @@ public:
             else if (c < '0' || c > '9') return false;
         }
         if (dots != 3) return false;
+        // Numeric requests already name the actual destination. A caller
+        // must not authorize another selected address by presenting it as
+        // if it were the result of DNS resolution of a numeric literal.
+        // This IPv4-only boundary also refuses an IPv6 requested literal.
+        if (!target.host.empty() && target.host.front() == '[') return false;
+        bool requested_ipv4 = true;
+        for (char c : target.host) {
+            if (c != '.' && (c < '0' || c > '9')) {
+                requested_ipv4 = false;
+                break;
+            }
+        }
+        if (requested_ipv4 && target.host != resolved.host) return false;
         for (const auto& blocked : denied_[index(Permission::Net)]) {
             if (matches(Permission::Net, selected_ipv4, blocked)) return false;
         }
