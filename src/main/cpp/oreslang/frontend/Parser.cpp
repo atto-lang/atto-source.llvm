@@ -336,6 +336,12 @@ private:
         require(";");
         require("}");
         actor.on_message = std::move(method);
+        // The restricted native actor has exactly one message handler slot.
+        // Whether self is explicit or implicit does not create an overload.
+        if (token_.text == "pub" || token_.text == "method" ||
+            token_.text == "fnc" || token_.text == "on_message") {
+            fail("native actor permits only one on_message slot; self is not an overload parameter");
+        }
         if (braced) require("}");
         else require("end");
         return actor;
