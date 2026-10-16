@@ -82,6 +82,11 @@ cases = {
     "panic_supervisor": """
         pub fnc main(): int { panic Error("fatal"); return 42; }
     """,
+    "postfix_result_to_option": "fnc bad():Option<int>{val Result<int,string> x=Err(\"bad\");val int n=x?;return Some(n);} pub fnc main():int{return 42;}",
+    "postfix_option_to_result": "fnc bad():Result<int,string>{val Option<int> x=None;val int n=x?;return Ok(n);} pub fnc main():int{return 42;}",
+    "postfix_result_error_mismatch": "fnc bad():Result<int,bool>{val Result<int,string> x=Err(\"bad\");val int n=x?;return Ok(n);} pub fnc main():int{return 42;}",
+    "postfix_future_without_await": "fnc bad(Future<Result<int,string>> f):Result<int,string>{val int n=f?;return Ok(n);} pub fnc main():int{return 42;}",
+    "postfix_result_scalar_throws": "fnc bad():int throws Error{val Result<int,Error> x=Err(Error(\"bad\"));return x?;} pub fnc main():int{return 42;}",
 }
 with tempfile.TemporaryDirectory(prefix="ores-elm-admission-") as td:
     path = Path(td) / "main.ores"
