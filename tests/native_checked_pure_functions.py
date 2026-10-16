@@ -151,6 +151,14 @@ def main():
             "fnc twice(int a):int{return a;}"
             "fnc twice(int b):int{return b;}",  # duplicate name/arity
         ]
+        # Balanced, shallow expression with more than 2048 AST nodes.
+        # This must fail the node budget, not merely the recursion-depth gate.
+        leaves = ["a"] * 2050
+        while len(leaves) > 1:
+            leaves = ["(" + leaves[i] + "+" + leaves[i + 1] + ")"
+                      for i in range(0, len(leaves) - 1, 2)] + (
+                          leaves[-1:] if len(leaves) % 2 else [])
+        negatives.append("fnc huge(int a):int{return " + leaves[0] + ";}")
         for i, code in enumerate(negatives):
             invalid = root / ("invalid-%d.ores" % i)
             invalid.write_text(code + "\n", encoding="utf-8")
