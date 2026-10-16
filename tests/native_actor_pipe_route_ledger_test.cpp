@@ -84,6 +84,32 @@ int main() {
     rejected([&] { (void)ledger.ingress("source"); },
              "closed generation accepted new DATA");
 
+    // A caller dropping the last external Handle must NOT free a still
+    // active Frame: otherwise a later allocation may reuse its address and
+    // accidentally pass the raw-pointer identity check (ABA). The ledger
+    // owns the frame until explicit completion, abort or STOP.
+    {
+        ActorPipeRouteLedger retained(stages(), edges(), 11, 2);
+        auto root = retained.ingress("source");
+        std::weak_ptr<const ActorPipeRouteLedger::Frame> weak;
+        {
+            auto orphan = retained.round_robin(root);
+            weak = orphan;
+            check(retained.outstanding() == 2, "lost active child");
+        }
+        check(!weak.expired(), "active route lost strong ownership");
+        rejected([&] { (void)retained.round_robin(root); },
+                 "dropped handle bypassed the correlation frame budget");
+        rejected([&] { retained.advance_generation(12); },
+                 "dropped but active frame bypassed quiescence");
+        check(retained.abort_and_advance(12) == 2,
+              "abort did not retire orphaned active handles");
+        check(weak.expired(), "aborted route frame retained forever");
+        rejected([&] { retained.complete(root); },
+                 "aborted root remained active");
+        retained.close();
+    }
+
     // Selection/retirement of 2000 independent child frames is synchronized.
     ActorPipeRouteLedger parallel(stages(), edges(), 9, 2001);
     const auto parent = parallel.ingress("source");
