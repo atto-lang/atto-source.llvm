@@ -153,8 +153,9 @@ constructor with independent bounded mailboxes and implements:
   1 MiB individual payload and message/pending-writer count limits.
 - The **graph** also enforces a 64 MiB aggregate buffered-payload
   credit across all edges (queued messages plus pending writers). This
-  prevents many individually bounded edges from multiplying retained payloads
-  into an unbounded process-memory load. Credits are reserved atomically
+  prevents unbounded *transport-buffered* payload amplification across edges.
+  It does NOT bound completed read Futures, caller-retained copies, actor heaps,
+  codecs, or total process memory. Credits are reserved atomically
   before storing a payload and returned when read/cancelled on STOP; moving
   a pending writer into the queue must **not** double-charge its bytes.
   Direct handoff to a waiting reader does not consume buffered credit.
@@ -171,8 +172,18 @@ constructor with independent bounded mailboxes and implements:
   Direct handoff to a waiting reader does not consume buffer credit;
   draining a message or cancelling a pending writer returns its credit.
   Exhaustion yields a failed per-edge admission Future and does not
-  block or consume other edges' byte credits. This is a per-edge limit,
-  NOT a whole-graph or actor-process memory limit.
+  block unrelated mailbox admissions except when the graph-wide 64 MiB
+  quota is exhausted. The graph quota limits *buffered* payload bytes only;
+  it is NOT a total actor-process memory limit.
+
+- A deque-allocation failure while promoting a pending writer is a
+  **terminal per-writer admission failure**: the already-delivered message
+  remains valid, the writer Future receives the allocation exception, and
+  both per-edge and graph-wide reservations for that writer are returned.
+  The routing CTest and standalone GCC/Clang host matrix compile a
+  deterministic injection seam **only into test binaries**, so this path is
+  exercised without relying on ambient OOM. The production transport does
+  not expose the injection control.
 
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
