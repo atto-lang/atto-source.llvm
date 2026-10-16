@@ -49,7 +49,7 @@ public:
     public:
         Lease(const Lease&) = delete;
         Lease& operator=(const Lease&) = delete;
-        Lease(Lease&&) = default;
+        Lease(Lease&&) = delete; // moved-from lease must never outlive its lock
         Lease& operator=(Lease&&) = delete;
         Handle allocate(std::size_t bytes) {
             require_live(true);
