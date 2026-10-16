@@ -69,6 +69,29 @@ failed:
     return NULL;
 }
 
+/* Caller must not publish the VM to producers before this completes.
+ * All four domains must be cold: if any prestart fails, the caller must
+ * retire the partially prestarted VM instead of entering service.
+ */
+int ores_native_vm_prepare_realtime(OresNativeVM* vm) {
+    if (!vm) return 0;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        if (!ores_native_actor_scheduler_prestart_realtime(vm->schedulers[i]))
+            return 0;
+    }
+    return 1;
+}
+
+OresNativeVM* ores_native_vm_open_realtime(const OresNativeVMConfig* config) {
+    OresNativeVM* vm = ores_native_vm_open(config);
+    if (!vm) return NULL;
+    if (!ores_native_vm_prepare_realtime(vm)) {
+        if (!ores_native_vm_close(vm)) abort();
+        return NULL;
+    }
+    return vm;
+}
+
 size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain) {
     return vm && valid_domain(domain)
