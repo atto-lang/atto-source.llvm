@@ -88,6 +88,8 @@ class NumericParityAdmissionTest(unittest.TestCase):
                          "bigint_exact", "decimal_exact", "decimal_matrix"):
                 self.assertEqual(c[name], "unsupported_explicit")
         elif b == "llvm":
+            self.assertEqual(c["checked_i64_overflow"], "blocked_unsound",
+                             "LLVM native operators currently wrap signed-i64")
             self.assertNotEqual(c["bigint_exact"], "verified_compiled")
         elif b == "java":
             self.assertNotEqual(c["binary32_arithmetic"], "verified_compiled")
