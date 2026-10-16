@@ -144,6 +144,14 @@ int main() {
     require(allowed_literal.allows_network_connection("203.0.113.7:443", "198.51.100.8:443"),
             false,"numeric request cannot authorize different selected IP");
     auto broad_net = make(Permission::Net,{scope(Permission::Net,"*")});
+    // An unspecified IPv4 remote may route to loopback on Linux. It must
+    // never count as the numeric address checked at the real socket boundary.
+    require(broad_net.allows_network_connection("api.example.com:443","0.0.0.0:443"),
+            false,"unspecified selected IPv4 cannot bypass loopback deny");
+    require(broad_net.allows_network_connection("0.0.0.0:443","0.0.0.0:443"),
+            false,"unspecified numeric request cannot be used as a destination");
+    require(broad_net.allows_network_connection("203.0.113.7:443","203.0.113.7:443"),
+            true,"valid numeric peer still allowed");
     require(broad_net.allows_network_connection("203.0.113.7:443", "198.51.100.8:443"),
             false,"even wildcard grant cannot excuse numeric address mismatch");
     require(broad_net.allows_network_connection("[::1]:443", "203.0.113.7:443"),
