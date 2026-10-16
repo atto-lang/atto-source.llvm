@@ -34,8 +34,10 @@ struct PipeConnection {
 
 inline std::vector<PipeConnection> check_actor_pipeline(
         const std::vector<PipeStage>& stages) {
-    if (stages.size() < 2 || stages.size() > 1024)
-        throw std::invalid_argument("actor pipeline requires 2..1024 stages");
+    if (stages.size() < 2)
+        throw std::invalid_argument("actor pipeline requires at least two stages");
+    if (stages.size() > 1024)
+        throw std::invalid_argument("actor pipeline exceeds stage budget");
     std::unordered_set<std::string> instance_ids;
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& stage = stages[i];
