@@ -272,10 +272,10 @@ public:
     std::shared_future<void> write_by_key_async(
             const std::string& source, const std::string& key,
             std::string payload) {
+        const auto& destinations = connected_outlets(source);
         if (key.size() > 4096 || !valid_utf8_key(key))
             throw std::invalid_argument(
                 "native actor pipe route key must be bounded canonical UTF-8");
-        const auto& destinations = connected_outlets(source);
         std::uint64_t digest = UINT64_C(14695981039346656037);
         for (const unsigned char byte : key) {
             digest ^= byte;
