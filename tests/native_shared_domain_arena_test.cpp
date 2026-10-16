@@ -67,10 +67,19 @@ int main() {
         });
         ready.wait();
         require(!a.try_revoke(readerGrant));  // CONTROL must not block on a reader
+        // CONTROL membership admission also must not park behind a lease.
+        bool grantBusy = false;
+        try { (void)a.grant(105, true, false); }
+        catch (const std::logic_error& e) {
+            grantBusy = std::string_view(e.what()) == "shared region busy";
+        }
+        require(grantBusy);
         leaseRelease.set_value();
         reader.join();
     }
     require(a.try_revoke(readerGrant));
+    auto newReader = a.grant(105, true, false);
+    require(a.try_revoke(newReader));
     reject([&] { (void)a.read(102, readerGrant); });
     // Retirement is nonblocking and does not free underneath an active lease.
     {
