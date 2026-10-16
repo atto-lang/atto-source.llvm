@@ -425,7 +425,7 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             // Package-relative imports may move within the package, not
             // jump outside the physical package root via '..' or symlinks.
             if(config.package_manifest || !config.boundary.empty())
-                return existing_source_under(config.root,candidate);
+                return existing_rooted_source_under(config.root,candidate);
             return existing_source(candidate);
         }
         case Kind::Bare:{
@@ -436,7 +436,10 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
             append_list(roots,legacy_paths,legacy_separator,cwd);
             for(const auto& root:roots){
                 auto path=rooted_path(root,input.path);
-                if(auto match=existing_source_under(root,path))return match;
+                // A configured bare root is not permission to cross into an
+                // independently declared nested package. Preserve the lexical
+                // spelling as well as the canonical physical ancestry.
+                if(auto match=existing_rooted_source_under(root,path))return match;
             }
             return std::nullopt;
         }
