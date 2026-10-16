@@ -103,6 +103,18 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}" -O
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
     set_tests_properties(native_scalar_generic_contract_harness_python_O PROPERTIES TIMEOUT 25)
+
+    # These actor source-to-guest suites contain real safety assertions.
+    # Prove that PYTHONOPTIMIZE/-O cannot silently strip their test gates.
+    add_test(NAME native_actor_source_assert_gate_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_actor_optimized_assert_guard.py")
+    set_tests_properties(native_actor_source_assert_gate_selftest PROPERTIES TIMEOUT 30)
+    add_test(NAME native_actor_source_assert_gate_selftest_python_O
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_actor_optimized_assert_guard.py")
+    set_tests_properties(native_actor_source_assert_gate_selftest_python_O PROPERTIES TIMEOUT 30)
+
     add_test(NAME native_compiler_source_budget
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
