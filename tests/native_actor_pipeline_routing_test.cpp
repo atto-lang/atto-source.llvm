@@ -1300,6 +1300,73 @@ int main() {
         pipe.close();
     }
 
+    // STOP must settle every preexisting waiter with one prepared terminal
+    // exception. Simulate failure of that exception's allocation as well:
+    // even then neither writer nor reader Future may become broken_promise,
+    // and all pending graph credits must be released exactly once.
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+    constexpr int stop_exception_modes = 2;
+#else
+    constexpr int stop_exception_modes = 1;
+#endif
+    for (int fault_mode = 0; fault_mode < stop_exception_modes; ++fault_mode) {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 4, 4,
+            128, 32, 16);
+        for (int n = 0; n < 4; ++n)
+            pipe.write_to_async("Producer", "ConsumerA", "x").get();
+        std::vector<std::shared_future<void>> writers;
+        std::vector<std::shared_future<std::string>> readers;
+        for (int n = 0; n < 4; ++n) {
+            writers.push_back(
+                pipe.write_to_async("Producer", "ConsumerA", "x"));
+            readers.push_back(pipe.read_async(1));
+        }
+        check(pipe.buffered_payload_bytes() == 8 &&
+              pipe.buffered_message_count() == 8 &&
+              pipe.pending_reader_count() == 4,
+              "pre-STOP waiters were not charged correctly");
+        for (const auto& waiting : writers)
+            check(waiting.wait_for(0ms) == std::future_status::timeout,
+                  "pending STOP writer was unexpectedly settled");
+        for (const auto& waiting : readers)
+            check(waiting.wait_for(0ms) == std::future_status::timeout,
+                  "pending STOP reader was unexpectedly settled");
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+        if (fault_mode == 1) pipe.fail_next_close_exception_for_test();
+#endif
+        pipe.close();
+        // A second close is idempotent and may not refund credits again.
+        pipe.close();
+        check(pipe.closed() && pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 4 &&
+              pipe.pending_reader_count() == 0,
+              "STOP exception fault leaked or double-refunded graph credits");
+        for (auto& waiting : writers) {
+            bool terminal = false;
+            try { waiting.get(); }
+            catch (const std::bad_alloc&) { terminal = fault_mode == 1; }
+            catch (const std::logic_error&) { terminal = fault_mode == 0; }
+            check(terminal,
+                  "STOP pending writer returned wrong exception or broken_promise");
+        }
+        for (auto& waiting : readers) {
+            bool terminal = false;
+            try { (void)waiting.get(); }
+            catch (const std::bad_alloc&) { terminal = fault_mode == 1; }
+            catch (const std::logic_error&) { terminal = fault_mode == 0; }
+            check(terminal,
+                  "STOP pending reader returned wrong exception or broken_promise");
+        }
+        for (int n = 0; n < 4; ++n)
+            check(pipe.read_async(0).get() == "x",
+                  "STOP lost previously acknowledged buffered DATA");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0 &&
+              pipe.pending_reader_count() == 0,
+              "STOP drain failed to refund remaining accepted DATA");
+    }
+
     // Concurrent STOP publication must be a barrier for writers on every
     // edge, not merely for the edge currently closing. Buffered admissions
     // predating STOP stay readable; unresolved writers settle with errors.
