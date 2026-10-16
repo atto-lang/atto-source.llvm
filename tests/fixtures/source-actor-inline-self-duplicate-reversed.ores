@@ -1,0 +1,12 @@
+// Receiver spelling cannot change the on_message/1 slot in either order.
+define actor Worker as {
+  const base: int = 40;
+  let total: int = 0;
+  pub on_message(int n): int { return base + n; }
+  pub method on_message(self, int n): int { return base + n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  return 43;
+}
