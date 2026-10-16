@@ -50,20 +50,37 @@ inline Import classify(std::string_view raw) {
     if (s=="."||s==".."||starts(s,"./")||starts(s,"../")) return {Kind::Relative,s,{},{}};
     return {Kind::Bare,s,{},{}};
 }
+inline void reject_control_bytes(std::string_view input, std::string_view label) {
+    for (unsigned char byte : input)
+        if (byte < 32 || byte == 127)
+            throw std::invalid_argument(std::string("control byte in ") + std::string(label));
+}
+inline fs::path normalized_absolute(const fs::path &path) {
+    reject_control_bytes(path.string(), "filesystem path");
+    auto result = fs::absolute(path).lexically_normal();
+    // std::filesystem retains a trailing empty component on some platforms.
+    if (!result.has_filename()) result = result.parent_path();
+    return result;
+}
 inline bool beneath(const fs::path &root, const fs::path &candidate) {
-    auto c=candidate.begin();
-    for(auto r=root.begin();r!=root.end();++r,++c)
-        if(c==candidate.end()||*r!=*c) return false;
+    // Callers may use this public helper directly. Normalize both operands
+    // here rather than assuming rooted_path already normalized them.
+    auto normalized_root = normalized_absolute(root);
+    auto normalized_candidate = normalized_absolute(candidate);
+    auto c=normalized_candidate.begin();
+    for(auto r=normalized_root.begin();r!=normalized_root.end();++r,++c)
+        if(c==normalized_candidate.end()||*r!=*c) return false;
     return true;
 }
 inline fs::path rooted_path(const fs::path &root, std::string_view suffix) {
     if (suffix.empty()||suffix.front()=='/') throw std::invalid_argument("invalid rooted import");
+    if (suffix.size()>4096) throw std::invalid_argument("rooted import too long");
+    reject_control_bytes(suffix,"rooted import");
     std::string normalized(suffix);
     std::replace(normalized.begin(), normalized.end(), '\\', '/');
     fs::path p(normalized);
     if(p.is_absolute()) throw std::invalid_argument("absolute rooted import");
-    auto anchor=fs::absolute(root).lexically_normal();
-    if (!anchor.has_filename()) anchor=anchor.parent_path();
+    auto anchor=normalized_absolute(root);
     auto candidate=(anchor/p).lexically_normal();
     if(!beneath(anchor,candidate)) throw std::invalid_argument("root escape");
     return candidate;
@@ -75,8 +92,7 @@ inline std::string trim(std::string_view s) {
     return std::string(s.substr(l,r-l));
 }
 inline void append(std::vector<fs::path>& roots, const fs::path& p) {
-    auto normalized=fs::absolute(p).lexically_normal();
-    if (!normalized.has_filename()) normalized=normalized.parent_path();
+    auto normalized=normalized_absolute(p);
     if(std::find(roots.begin(),roots.end(),normalized)==roots.end()) roots.push_back(normalized);
 }
 inline void append_list(std::vector<fs::path>& roots, std::string_view s, char sep, const fs::path& cwd) {
