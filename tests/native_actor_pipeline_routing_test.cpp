@@ -319,12 +319,14 @@ int main() {
             NativeActorPipeTransport pipe(
                 registry, supervisor, many, links, 4096, 4);
         }, "aggregate empty-message slot amplification accepted");
-        // Boundary: exactly 65,536 graph edge slots is still valid.
+        // Boundary: exactly 16 * 4,096 = 65,536 graph slots is valid.
+        many.pop_back();
+        links.pop_back();
         {
             NativeActorPipeTransport pipe(
-                registry, supervisor, many, links, 1024, 4);
-            check(pipe.edge_count() == 17,
-                  "legal graph slot bound rejected");
+                registry, supervisor, many, links, 4096, 4);
+            check(pipe.edge_count() == 16,
+                  "legal aggregate slot boundary rejected");
             pipe.close();
         }
     }
