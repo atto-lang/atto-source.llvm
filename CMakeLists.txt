@@ -1931,4 +1931,11 @@ if(BUILD_TESTING)
           --clang "${ORE_NUMERIC_CLANG}")
     set_tests_properties(numeric_experimental_checked_pure_function_graph
         PROPERTIES TIMEOUT 240)
+    add_test(NAME numeric_experimental_checked_result_function_graph
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_checked_result_functions.py"
+          --compiler "$<TARGET_FILE:oreslang-llvmc>"
+          --clang "${ORE_NUMERIC_CLANG}")
+    set_tests_properties(numeric_experimental_checked_result_function_graph
+        PROPERTIES TIMEOUT 240)
 endif()
