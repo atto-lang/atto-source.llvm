@@ -68,7 +68,7 @@ math = { zed = "acme/math" }
         fs::create_directory_symlink(tmp/"outside",app/"packages/outside",external_bare_error);
         fs::create_symlink(app/"src/util.ores",app/"src/internal.ores",internal_error);
         if(!external_root_error){
-            rejects([&]{(void)resolve_source(config,app/"src/main.ores","@/src/external");},
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/src/external");},
                     "rooted physical symlink escape");
             rejects([&]{(void)resolve_source(config,app/"src/main.ores","external");},
                     "bare-root physical symlink escape");
@@ -85,9 +85,9 @@ math = { zed = "acme/math" }
             rejects([&]{(void)resolve_source(config,app/"src/main.ores","outside/valid");},
                     "import_paths physical directory symlink escape");
         if(!internal_error)
-            require(resolve_source(config,app/"src/main.ores","@/src/internal")==
+            require(resolve_source(config,app/"src/main.ores","+/src/internal")==
                     fs::canonical(app/"src/util.ores"),"in-root symlink rejected");
-        require(resolve_source(config,app/"src/main.ores","@/src/util")==fs::canonical(app/"src/util.ores"),"@ root");
+        require(resolve_source(config,app/"src/main.ores","+/src/util")==fs::canonical(app/"src/util.ores"),"+ root");
         require(resolve_source(config,app/"src/main.ores","pkg:math/src/add")==fs::canonical(app/"zed_modules/acme/math/src/add.ores"),"pkg alias");
         write(app/"zed_modules/acme/math/.zpkg.toml", "[package]\norg=\"acme\"\nname=\"wrong\"\n");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:math/src/add");},"mismatched dependency metadata");
@@ -96,7 +96,7 @@ math = { zed = "acme/math" }
         require(resolve_source(config,app/"src/main.ores",".hidden/code")==fs::canonical(app/"src/.hidden/code.ores"),"bare hidden");
         require(resolve_source(config,app/"src/main.ores","util",shared.string())==fs::canonical(app/"src/util.ores"),"project precedence");
         require(resolve_source(config,app/"src/main.ores","leaf",shared.string())==std::nullopt,"undeclared bare file");
-        rejects([&]{(void)resolve_source(config,app/"src/main.ores","@/src/util.ores:stream");},
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/src/util.ores:stream");},
                 "rooted alternate data stream must reject");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:math/src/add.ores:stream");},
                 "package alternate data stream must reject");
@@ -105,7 +105,7 @@ math = { zed = "acme/math" }
         if(!fs::path("C:/foreign/source.ores").is_absolute())
             rejects([&]{(void)resolve_source(config,app/"src/main.ores","C:/foreign/source.ores");},
                     "cross-host drive path must never become a relative source");
-        rejects([&]{(void)resolve_source(config,app/"src/main.ores","@/../../other");},"root escape");
+        rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/../../other");},"root escape");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:unknown/foo");},"unknown alias");
         rejects([&]{(void)resolve_source(config,app/"src/main.ores","java:java.util.List");},
                 "unsupported native Java host import");
@@ -136,7 +136,7 @@ math = { zed = "acme/math" }
         auto installed=app/"zed_modules/acme/math";
         auto bounded=read_project(app/"zed_modules/acme/math/src/add.ores",installed);
         require(!bounded.package_manifest,"consumer manifest escaped into package");
-        rejects([&]{(void)resolve_source(bounded,app/"zed_modules/acme/math/src/add.ores","@/src/util");},"consumer root authority");
+        rejects([&]{(void)resolve_source(bounded,app/"zed_modules/acme/math/src/add.ores","+/src/util");},"consumer root authority");
         write(app/"src/.oreslangc.cfg.toml","schema_version=\"1\"\n");
         require(read_project(app/"src/main.ores").manifest==app/".ores.pkg.toml","package precedence");
         write(app/".ores.pkg.toml","schema_version=\"1\"\n[source]\nroots=[]\n");
