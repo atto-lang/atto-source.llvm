@@ -55,6 +55,32 @@ math = { zed = "acme/math" }
         altered_context.boundary=app/"src";
         rejects([&]{(void)identities.register_source(altered_context,app/"src/main.ores");},
                 "same physical source with different discovery boundary");
+
+        // Symlinks to valid .ores files outside declared roots must not
+        // launder package, rooted or bare-search import authority.
+        fs::create_directories(tmp/"outside");
+        write(tmp/"outside/valid.ores","untrusted");
+        std::error_code external_root_error,external_pkg_error,external_bare_error,internal_error;
+        fs::create_symlink(tmp/"outside/valid.ores",app/"src/external.ores",external_root_error);
+        fs::create_symlink(tmp/"outside/valid.ores",
+                           app/"zed_modules/acme/math/src/external.ores",external_pkg_error);
+        fs::create_directory_symlink(tmp/"outside",app/"packages/outside",external_bare_error);
+        fs::create_symlink(app/"src/util.ores",app/"src/internal.ores",internal_error);
+        if(!external_root_error){
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","@/src/external");},
+                    "rooted physical symlink escape");
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","external");},
+                    "bare-root physical symlink escape");
+        }
+        if(!external_pkg_error)
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","pkg:math/src/external");},
+                    "package physical symlink escape");
+        if(!external_bare_error)
+            rejects([&]{(void)resolve_source(config,app/"src/main.ores","outside/valid");},
+                    "import_paths physical directory symlink escape");
+        if(!internal_error)
+            require(resolve_source(config,app/"src/main.ores","@/src/internal")==
+                    fs::canonical(app/"src/util.ores"),"in-root symlink rejected");
         require(resolve_source(config,app/"src/main.ores","@/src/util")==fs::canonical(app/"src/util.ores"),"@ root");
         require(resolve_source(config,app/"src/main.ores","pkg:math/src/add")==fs::canonical(app/"zed_modules/acme/math/src/add.ores"),"pkg alias");
         write(app/"zed_modules/acme/math/.zpkg.toml", "[package]\norg=\"acme\"\nname=\"wrong\"\n");
@@ -118,6 +144,21 @@ math = { zed = "acme/math" }
         rejects([&]{(void)read_project(app/"src/main.ores");},"install traversal");
         write(app/".zpkg.toml","[install]\ndir=\"zed_modules\"\n");
         require(read_project(app/"src/main.ores").package_manifest,"valid install setup");
+        // Entrypoint paths and manifest metadata must also be checked against
+        // physical targets when they exist, not only against lexical ancestry.
+        write(app/".ores.pkg.toml",
+              "schema_version=\"1\"\\n[entrypoints]\\nmain=\"src/external.ores\"\\n");
+        if(!external_root_error)
+            rejects([&]{(void)read_project(app/"src/main.ores");},
+                    "package entrypoint physical symlink escape");
+        write(tmp/"outside/evil.toml","schema_version=\"1\"\\n");
+        fs::remove(app/".ores.pkg.toml");
+        std::error_code manifest_symlink_error;
+        fs::create_symlink(tmp/"outside/evil.toml",app/".ores.pkg.toml",manifest_symlink_error);
+        if(!manifest_symlink_error)
+            rejects([&]{(void)read_project(app/"src/main.ores");},
+                    "package manifest symlink escaped discovery root");
+
         fs::remove_all(tmp);
         std::cout << "native manifest discovery and resolution: PASS\n";
         return 0;
