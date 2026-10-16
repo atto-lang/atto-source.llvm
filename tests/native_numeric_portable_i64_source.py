@@ -14,8 +14,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "contracts/v1/numeric-parity/source-i64-cases.json"
-ENTRY = re.compile(r"define\\s+i64\\s+@main\\s*\\(\\s*\\)")
-CALL = re.compile(r"@main(?=\\s*\\()")
+ENTRY = re.compile(r"define\s+i64\s+@main\s*\(\s*\)")
+CALL = re.compile(r"@main(?=\s*\()")
 
 
 def run(argv, **kwargs):
@@ -30,7 +30,7 @@ def run(argv, **kwargs):
 
 def check_positive(compiler, clang, source, expected, folder, label):
     file = folder / "case.ores"
-    file.write_text("pub fnc main():int{return " + source + ";}\\n", encoding="utf-8")
+    file.write_text("pub fnc main():int{return " + source + ";}\n", encoding="utf-8")
     emitted = run([compiler, "--target=host", str(file)])
     ir = emitted.stdout
     if not ENTRY.search(ir):
@@ -42,14 +42,14 @@ def check_positive(compiler, clang, source, expected, folder, label):
         raise AssertionError(label + ": LLVM IR compile failed")
     host = folder / "host.c"
     host.write_text(
-        '#include <stdint.h>\\n#include <stdio.h>\\n'
-        'extern int64_t oreslang_guest_main(void);\\n'
-        'int main(void) { printf("%lld\\\\n", (long long)oreslang_guest_main()); return 0; }\\n',
+        '#include <stdint.h>\n#include <stdio.h>\n'
+        'extern int64_t oreslang_guest_main(void);\n'
+        'int main(void) { printf("%lld\\n", (long long)oreslang_guest_main()); return 0; }\n',
         encoding="utf-8")
     exe = folder / "numeric-guest"
     run([clang, str(host), str(object_file), "-o", str(exe)])
     observed = run([str(exe)])
-    if observed.stdout != str(expected) + "\\n":
+    if observed.stdout != str(expected) + "\n":
         raise AssertionError(label + ": expected " + str(expected)
                              + " observed " + repr(observed.stdout))
     if observed.stderr:
