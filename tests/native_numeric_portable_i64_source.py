@@ -17,7 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "contracts/v1/numeric-parity/source-i64-cases.json"
 ENTRY = re.compile(r"define\s+i64\s+@__oreslang_guest_main\s*\(\s*\)")
-CALL = re.compile(r"@main(?=\s*\()")
+HOST_WRAPPER = re.compile(r"(?m)^(define\s+i32\s+)@main(?=\s*\()")
 
 
 def run(argv, **kwargs):
@@ -37,7 +37,12 @@ def check_positive(compiler, clang, source, expected, folder, label):
     ir = emitted.stdout
     if not ENTRY.search(ir):
         raise AssertionError(label + ": real compiler did not emit define i64 @__oreslang_guest_main()")
-    renamed = CALL.sub("@oreslang_os_main", ir)
+    # Rename exactly the i32 OS wrapper, not arbitrary mentions of @main
+    # in comments, other signatures, globals, or potential diagnostics.
+    renamed, wrapper_count = HOST_WRAPPER.subn(
+        r"\1@oreslang_os_main", ir)
+    if wrapper_count != 1:
+        raise AssertionError(label + ": expected exactly one checked OS wrapper")
     object_file = folder / "case.o"
     object_result = run([clang, "-x", "ir", "-c", "-o", str(object_file), "-"], input=renamed)
     if object_result.returncode:
