@@ -36,9 +36,11 @@ def main():
     check("NUL instance", lambda x: x["graph"]["stages"][1].update(id="bad" + chr(0)))
     check("invalid UTF-8 scalar", lambda x: x["operations"]["by_key"][3].update(key=chr(0xd800)))
     check("oversize key", lambda x: x["operations"]["by_key"][0].update(key="k"*4097))
+    check("transform with no actual outgoing edge",
+          lambda x: x["graph"]["stages"][1].update(role="transform", outbound="Event"))
     check("unknown destination", lambda x: x["graph"]["connections"][0].update(target="missing"))
     check("wrong RR order", lambda x: x["operations"]["forward_round_robin"].reverse())
-    print("ORES_ACTOR_PIPELINE_CONTRACT_NEGATIVE_PASS cases=10")
+    print("ORES_ACTOR_PIPELINE_CONTRACT_NEGATIVE_PASS cases=11")
 
 if __name__ == "__main__":
     main()
