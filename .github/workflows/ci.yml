@@ -50,7 +50,13 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build --output-on-failure --timeout 240 --no-tests=error \
-            -R '^numeric_experimental_checked_(i64_status_abi|pure_function_graph|result_function_graph)
+            -R '^numeric_experimental_checked_(i64_status_abi|pure_function_graph|result_function_graph)$'
+      - name: Verify registered CTest inventory cannot silently skip native tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_ctest_manifest_gate.py -v
+          python3 tests/ctest_manifest_gate.py --build-dir build --min-tests 250
+      - name: Verify parser, IR and native execution
         run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2
       - name: Repeat actor stress and cancellation races
         run: ctest --test-dir build -R hungry_carrier_async_bounded_cancel --repeat until-fail:12 --output-on-failure
