@@ -552,6 +552,16 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_scoped_borrow_parameter_refresh unsupported-borrow-param.ores
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    oreslang_contract_test(native_scalar_value_pipeline value-pipe-scalar-main.ores
+        --ir "call i64 @plus")
+    oreslang_contract_test(native_value_pipeline_noncall_rejected value-pipe-noncall-reject.ores
+        --diagnostic "native pipeline stage requires a named scalar callable")
+    oreslang_contract_test(native_result_pipeline_requires_tagged_values value-pipe-result-unsupported.ores
+        --diagnostic "native pipeline stage requires a named scalar callable")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_scalar_value_pipeline_executed value-pipe-scalar-main.ores
+            --run 7 --clang "${ORE_CLANG}")
+    endif()
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
