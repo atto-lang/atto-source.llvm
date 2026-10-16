@@ -151,6 +151,14 @@ constructor with independent bounded mailboxes and implements:
 - Each edge enforces a 16 MiB buffered-payload byte credit across already
   admitted messages AND suspended writers, in addition to the existing
   1 MiB individual payload and message/pending-writer count limits.
+- Empty-message/host metadata safety: the trusted transport constructor
+  rejects edge queue capacity outside **1..4096**, worker capacity outside
+  **1..4096**, or more than **65,536 configured edge queue slots** in total
+  (`number_of_edges * edge_capacity`, checked by division before any
+  per-edge allocations). Per-edge pending readers and writers each also
+  have at most `edge_capacity` slots. These limits prevent tiny/zero-byte
+  payloads from bypassing the byte-credit policy; they are not guarantees of
+  a total-process heap quota, and do not authorize guest-controlled sizing.
   Direct handoff to a waiting reader does not consume buffer credit;
   draining a message or cancelling a pending writer returns its credit.
   Exhaustion yields a failed per-edge admission Future and does not
