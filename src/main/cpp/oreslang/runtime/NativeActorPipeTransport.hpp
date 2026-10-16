@@ -177,9 +177,11 @@ public:
     /** Compatibility host entry point: report futures in approved edge order. */
     std::vector<std::shared_future<void>> write_all_async(
             const std::string& source, const std::string& payload) {
-        auto report = write_all_report_async(source, payload);
         std::vector<std::shared_future<void>> results;
-        results.reserve(report.size());
+        // Allocate receipt slots BEFORE any admission. Preserve the report
+        // path's per-edge exception-to-Future conversion on partial failure.
+        results.reserve(connected_outlets(source).size());
+        auto report = write_all_report_async(source, payload);
         for (auto& entry : report)
             results.push_back(std::move(entry.admission));
         return results;
