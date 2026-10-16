@@ -69,14 +69,20 @@ if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   done
 fi
 
-for compiler in g++ clang++; do
-  "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
-    -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -DORES_ACTOR_PIPE_TEST_FAULT_INJECTION -Isrc/main/cpp \
-    tests/native_actor_pipe_writer_promotion_fault_test.cpp \
-    -o "$work/writer-promotion-injected-$compiler"
-  "$work/writer-promotion-injected-$compiler"
-  echo "ORES_WRITER_PROMOTION_FAULT_PASS compiler=$compiler"
-done
+# The isolated writer-promotion sanitizer proof is optional for the same
+# reason as the routing sanitizer matrix above: a sanitizer-disabled run
+# must not silently require sanitizer toolchains at the very end.
+if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
+  for compiler in g++ clang++; do
+    "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+      -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -DORES_ACTOR_PIPE_TEST_FAULT_INJECTION -Isrc/main/cpp \
+      tests/native_actor_pipe_writer_promotion_fault_test.cpp \
+      -o "$work/writer-promotion-injected-$compiler"
+    ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+      "$work/writer-promotion-injected-$compiler"
+    echo "ORES_WRITER_PROMOTION_FAULT_PASS compiler=$compiler"
+  done
+fi
 
 echo "ORES_ACTOR_PIPELINE_HOST_MATRIX_PASS"
