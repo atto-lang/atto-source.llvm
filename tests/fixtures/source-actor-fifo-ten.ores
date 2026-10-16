@@ -1,0 +1,23 @@
+// Executed native guest regression: FIFO message order and completion-before-STOP.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  worker.send(2);
+  worker.send(3);
+  worker.send(4);
+  worker.send(5);
+  worker.send(6);
+  worker.send(7);
+  worker.send(8);
+  worker.send(9);
+  worker.send(10);
+  stop worker;
+  return 43;
+}
