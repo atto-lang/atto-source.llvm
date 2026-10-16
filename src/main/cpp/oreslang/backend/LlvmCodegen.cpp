@@ -348,7 +348,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         const auto& fn = source.functions.front();
         if (fn.name != "checked" || fn.returns_void || !fn.result ||
                 fn.parameters.size() > 4 || !fn.generic_parameters.empty() ||
-                fn.scalar_while || !fn.locals.empty() || !fn.statements.empty() ||
+                fn.has_declared_effects || fn.scalar_while ||
+                !fn.locals.empty() || !fn.statements.empty() ||
                 !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
                 !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                 !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
