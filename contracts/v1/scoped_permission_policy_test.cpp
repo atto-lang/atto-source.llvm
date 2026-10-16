@@ -87,6 +87,24 @@ int main() {
             }
     require(host.allows(Permission::Net,std::string(321, 'a')),false,
             "oversized endpoint rejected before allocating parser state");
+    // Canonical IPv6 string equivalence and deny precedence; no DNS needed.
+#if defined(__unix__) || defined(__APPLE__)
+    auto ipv6 = make(Permission::Net, {
+        scope(Permission::Net,"[0:0:0:0:0:0:0:1]:443")});
+    require(ipv6.allows(Permission::Net,"[::1]:443"),true,"IPv6 compression canonical");
+    require(ipv6.allows(Permission::Net,"[::1]:444"),false,"IPv6 port isolation");
+    auto ipv6deny = make(Permission::Net, {
+        scope(Permission::Net,"*"),scope(Permission::Net,"[::1]:443",true)});
+    require(ipv6deny.allows(Permission::Net,"[0:0:0:0:0:0:0:1]:443"),false,
+            "IPv6 expanded spelling cannot evade deny");
+    require(ipv6deny.allows(Permission::Net,"[::1]"),false,
+            "IPv6 portless request cannot evade port-specific deny");
+    for (const char* bad : {"::1:443", "[::1", "[::1]:", "[::1]:0",
+                            "[::1]:65536", "[::1]x:443", "[::1]:-1",
+                            "[fe80::1%eth0]:443", "[::ffff:127.0.0.1]:443"}) {
+        require(ipv6deny.allows(Permission::Net,bad),false,"reject unsafe IPv6 syntax");
+    }
+#endif
     auto sub = make(Permission::Net,{scope(Permission::Net,"*.example.com:443")});
     require(sub.allows(Permission::Net,"a.example.com:443"),true,"wildcard subdomain");
     require(sub.allows(Permission::Net,"example.com:443"),false,"no apex");
