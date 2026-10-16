@@ -10,9 +10,14 @@ The component provides:
   `../`, bare dot-prefixed and ordinary names, absolute paths, and
   `java:` (classified only; native host interop is unsupported).
 - Strict alias syntax and a 4,096-byte import path limit.
+- ASCII control-byte rejection for classified imports, rooted path suffixes,
+  configured filesystem roots, and ambient path lists (including embedded NUL).
+  Rooted-path suffixes are also bounded at 4,096 bytes.
 - Lexically bounded rooted-path joins with component-aware ancestry,
   forward/backslash normalization, and rejection of `..` traversal
-  outside a declared root.
+  outside a declared root. The exported `beneath()` ancestry helper
+  normalizes **both** arguments before the component comparison, so callers
+  cannot bypass it by passing unnormalized `..` components.
 - Ordered, de-duplicated search roots: project `source.roots`,
   `source.import_paths`, colon-separated `ORES_PATHS`, then
   legacy `ORESLANG_PATH` with caller-selected OS separator.
@@ -33,9 +38,22 @@ g++ -std=c++17 -O1 -g -fsanitize=address,undefined \
 ASAN_OPTIONS=detect_leaks=1 ./native_import_path_policy_sanitizer_test
 ```
 
-Both independent host-only binary invocations passed with zero reported
-sanitizer errors. The committed header and test file blob identities were
-compared to the exact locally tested bytes.
+Additional exact-byte tests (2026-10-16): GCC 14.2.0 and Clang 17 both
+compiled and ran the hardened host test with `-Wall -Wextra -Wpedantic -Werror`.
+AddressSanitizer and UndefinedBehaviorSanitizer also passed, and isolated
+CMake/CTest passed **1/1**. The regression suite checks all ASCII control bytes,
+embedded NUL, normalized ancestry bypasses, trailing separators, root
+prefix attacks and **729 deterministic enumerated rooted paths**.
+
+Before hardening, the exact prior header accepted an unnormalized `/../` ancestry
+escape and embedded NUL bytes in rooted and manifest paths. Those inputs now
+reject as regression cases. The hardened exact tested file Git blob SHAs are:
+
+- `ImportPathPolicy.hpp`: `d55b4cb57f3b030d6011b787ee1552d13f5fb93d`
+- `native_import_path_policy_test.cpp`: `e2ea2c9c0a8de4c2e51f6ddd68ec52dd9161fc36`
+
+All these tests exercise a **host-only policy helper**, not LLVM `.ores`
+import linking, runtime initialization or filesystem confinement.
 
 ## Required integration work
 
@@ -57,5 +75,10 @@ and the five-backend
 [conformance umbrella #39](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/39).
 
 **Security:** lexical path normalization does not confine a symlink or
-protect against filesystem mutation races. No Java source, tokens, or private
-cross-organization artifacts are involved in this change.
+protect against filesystem mutation races. Cross-org GitHub Actions canary
+[run #38848228875](https://github.com/ores-dummy-org-oreslang-stack/ores-dummy-org-oreslang-stack-lambdas/actions/runs/38848228875)
+was rerun successfully on an authorized private destination with a **synthetic
+fixture only**, proving runner execution and policy-fixture behavior, **not**
+this C++ code or compiler tests. The Java source-export approval PR #1062 and
+destination PR #5 remain unmerged, so **no private Java or LLVM source** was
+mirrored into another organization.
