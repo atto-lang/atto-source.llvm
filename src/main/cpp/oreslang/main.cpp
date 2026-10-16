@@ -5,6 +5,7 @@
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -117,9 +118,26 @@ int main(int argc, char** argv) {
                  experimental_rt_scalar_loop))
             throw std::runtime_error("experimental scalar imports require host-only, plain int mode");
         std::optional<oreslang::imports::ScalarImportClosure> import_closure;
-        if (experimental_scalar_imports)
+        if (experimental_scalar_imports) {
+            // Ambient import roots are not enabled outside this experimental path.
+            const auto env_roots = [](const char* name) {
+                const char* raw = std::getenv(name);
+                const std::string value = raw == nullptr ? "" : std::string(raw);
+                if (value.size() > 65536)
+                    throw std::runtime_error(std::string(name) + " exceeds 64 KiB");
+                return value;
+            };
+            const auto ores_paths = env_roots("ORES_PATHS");
+            const auto legacy_paths = env_roots("ORESLANG_PATH");
+#if defined(_WIN32)
+            constexpr char legacy_separator = ';';
+#else
+            constexpr char legacy_separator = ':';
+#endif
             import_closure.emplace(oreslang::imports::assemble_scalar_import_closure(
-                path, require_valid_source_utf8));
+                path, require_valid_source_utf8, ores_paths, legacy_paths,
+                legacy_separator, std::filesystem::current_path()));
+        }
         const auto text = import_closure
             ? import_closure->source
             : read_regular_source(path, kMaxSourceBytes, cortex_m_target
