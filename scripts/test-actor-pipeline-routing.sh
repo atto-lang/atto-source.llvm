@@ -36,4 +36,13 @@ if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   done
 fi
 
+for compiler in g++ clang++; do
+  "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+    -pthread -DORES_ACTOR_PIPE_TEST_FAULT_INJECTION -Isrc/main/cpp \
+    tests/native_actor_pipe_writer_promotion_fault_test.cpp \
+    -o "$work/writer-promotion-injected-$compiler"
+  "$work/writer-promotion-injected-$compiler"
+  echo "ORES_WRITER_PROMOTION_FAULT_PASS compiler=$compiler"
+done
+
 echo "ORES_ACTOR_PIPELINE_HOST_MATRIX_PASS"
