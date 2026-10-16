@@ -252,3 +252,29 @@ recent source-free alternate-private-org jobs demonstrate a working runner,
 but do not establish current paid minute balance or permission to transfer
 LLVM private code. Security authorization for any cross-organization source
 publication is tracked independently in LLVM issue #475.
+
+## Stacked canonical named function import (experimental)
+
+A narrowly executable Java-shaped source import is now available on the
+experimental **host-only** scalar closure path:
+
+```ores
+import fnc helper from "+/src/helper";
+pub fnc main(): int { return helper(40); }
+```
+
+With `oreslang-llvmc --experimental-scalar-imports`, the physical source file
+is resolved under the nearest `.ores.pkg.toml`, added to the bounded graph,
+and its AST is checked for the exact named **public** `fnc`. A named source
+file with additional unrequested functions is rejected rather than silently
+exporting their names through source concatenation. Legacy experimental
+`import "path";` continues for older fixture compatibility. The retired
+`@/` spelling remains invalid.
+
+This is not a general `import module` implementation, namespace isolation,
+aliasing, cycles, cross-package effects, actor code, wasm32 source-graph
+linking, or guest filesystem authority. Tests cover real LLVM IR + Clang
+linked execution, wrong symbol, accidental visibility, malformed selectors,
+and canonical-path rejection. Tests are **authored, not proven executed**
+until CI runs on the exact feature head. The implementation is stacked
+on native import PR #466; it is not safe to merge independently.
