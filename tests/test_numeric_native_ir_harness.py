@@ -34,6 +34,43 @@ class NativeNumericHarnessSelfTest(unittest.TestCase):
         bogus = "; define i64 @__oreslang_guest_main()\n"
         self.assertIsNone(H.ENTRY.search(bogus))
 
+    def test_checked_overflow_trap_must_follow_exact_intrinsic_flag(self):
+        # Synthetic IR only: verifies the harness cannot count a generic
+        # process signal without a checked overflow guard in compiler IR.
+        valid = (
+            'target triple = "x86_64-pc-linux-gnu"\n'
+            'declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64,i64)\n'
+            'declare void @llvm.trap()\n'
+            'define i64 @__oreslang_guest_main() {\n'
+            'entry:\n'
+            '  %i64.checked.pair = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 1,i64 2)\n'
+            '  %i64.checked.value = extractvalue { i64, i1 } %i64.checked.pair, 0\n'
+            '  %i64.checked.overflow = extractvalue { i64, i1 } %i64.checked.pair, 1\n'
+            '  br i1 %i64.checked.overflow, label %i64.overflow.trap, label %i64.checked.continue\n'
+            'i64.overflow.trap: ; preds = %entry\n'
+            '  call void @llvm.trap()\n'
+            '  unreachable\n'
+            'i64.checked.continue: ; preds = %entry\n'
+            '  ret i64 %i64.checked.value\n'
+            '}\n')
+        H.assert_checked_overflow_path(valid, "sadd")
+        mutants = (
+            (valid, "smul"),
+            (valid.replace("call void @llvm.trap()", "call void @other()"), "sadd"),
+            (valid.replace("br i1 %i64.checked.overflow",
+                           "br i1 %unrelated.condition"), "sadd"),
+            (valid.replace("extractvalue { i64, i1 } %i64.checked.pair, 1",
+                           "extractvalue { i64, i1 } %unrelated.pair, 1"), "sadd"),
+            (valid.replace("  ret i64 %i64.checked.value",
+                           "  call void @llvm.trap()\n  unreachable\n"
+                           "  ret i64 %i64.checked.value"), "sadd")
+        )
+        for mutant, operation in mutants:
+            with self.subTest(operation=operation, excerpt=mutant[-50:]):
+                with self.assertRaises(AssertionError):
+                    H.assert_checked_overflow_path(mutant, operation)
+
+
 
 if __name__ == "__main__":
     unittest.main()
