@@ -135,10 +135,19 @@ def run(argv, timeout, cwd):
                     proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     pass
+    # A malformed UTF-8 stream is not a compiler diagnostic and must not
+    # become a false success or a compiler-rejected fixture.
+    try:
+        decoded_stdout = buffers["stdout"].decode("utf-8", errors="strict")
+        decoded_stderr = buffers["stderr"].decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        code = None
+        decoded_stdout = ""
+        decoded_stderr = "invalid UTF-8 in compiler process output"
     return {
         "argv": argv, "exit_code": code,
-        "stdout": buffers["stdout"].decode("utf-8", errors="replace"),
-        "stderr": (buffers["stderr"].decode("utf-8", errors="replace") + error_text)[:MAX_OUTPUT],
+        "stdout": decoded_stdout,
+        "stderr": (decoded_stderr + error_text)[:MAX_OUTPUT],
         "output_truncated": truncated, "timeout": expired,
         "duration_ms": int((time.monotonic() - start) * 1000),
     }
