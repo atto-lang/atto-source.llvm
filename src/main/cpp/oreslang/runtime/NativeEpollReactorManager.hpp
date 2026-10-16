@@ -66,6 +66,13 @@ public:
         if (!gate.owns_lock() || stopped_) return std::nullopt;
         auto count = started_.load(std::memory_order_relaxed);
         if (count == 0) return std::nullopt;
+        // One FD can only have one outstanding readiness owner in this
+        // process-level manager, even if two different epoll instances could
+        // each register that descriptor independently. Otherwise read/write
+        // consumers might race across reactors and violate socket ownership.
+        for (const auto& claim : claimed_fds_) {
+            if (claim.occupied && claim.fd == fd) return std::nullopt;
+        }
         maybe_expand_locked();
         count = started_.load(std::memory_order_relaxed);
         std::size_t best = 0;
@@ -75,7 +82,19 @@ public:
         for (std::size_t i = 0; i < count; ++i) {
             const std::size_t index = (best + i) % count;
             auto token = reactors_[index]->try_watch(fd, events);
-            if (token) return Watch{static_cast<std::uint8_t>(index), *token};
+            if (token) {
+                const Watch result{static_cast<std::uint8_t>(index), *token};
+                for (auto& claim : claimed_fds_) {
+                    if (claim.occupied) continue;
+                    claim = FdClaim{true, fd, result};
+                    return result;
+                }
+                // With per-reactor capacity and one claim per active slot this
+                // must be unreachable. Revoke rather than expose an untracked
+                // readiness token if an internal accounting invariant breaks.
+                (void)reactors_[index]->try_cancel(*token);
+                return std::nullopt;
+            }
         }
         return std::nullopt;
     }
@@ -87,13 +106,24 @@ public:
     }
 
     std::optional<Completion> try_pop() noexcept {
+        // Never wait behind producer registration or shutdown on a carrier.
+        std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
+        if (!gate.owns_lock()) return std::nullopt;
         const auto count = started_.load(std::memory_order_acquire);
         if (count == 0) return std::nullopt;
         const auto first = next_completion_.fetch_add(1, std::memory_order_relaxed) % count;
         for (std::size_t i = 0; i < count; ++i) {
             const auto index = (first + i) % count;
             auto event = reactors_[index]->try_pop();
-            if (event) return Completion{static_cast<std::uint8_t>(index), *event};
+            if (event) {
+                for (auto& claim : claimed_fds_) {
+                    if (!claim.occupied || claim.watch.reactor != index
+                        || claim.watch.ticket.value != event->ticket.value) continue;
+                    claim.occupied = false;
+                    break;
+                }
+                return Completion{static_cast<std::uint8_t>(index), *event};
+            }
         }
         return std::nullopt;
     }
@@ -137,6 +167,16 @@ private:
         }
     }
 
+    struct FdClaim {
+        bool occupied = false;
+        int fd = -1;
+        Watch watch{};
+    };
+    // Fixed-size, process-local ownership table. No allocation on reactor
+    // registration/completion paths; protected by mu_ with try-lock admission.
+    static constexpr std::size_t maximum_claims =
+        maximum_reactors * NativeEpollReactor::capacity;
+    std::array<FdClaim, maximum_claims> claimed_fds_{};
     const std::size_t limit_;
     const Profile profile_;
     std::array<std::unique_ptr<NativeEpollReactor>, maximum_reactors> reactors_{};
