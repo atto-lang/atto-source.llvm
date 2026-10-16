@@ -863,6 +863,21 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    # Independent multicore transport proof: sends are move-only,
+    # saturated admission cannot consume a producer's payload, and only
+    # receiver acknowledgement refunds queue/checked-out resource credits.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-bounded-actor-port-concurrency-test
+        tests/bounded_actor_port_concurrency_test.cpp)
+    target_include_directories(oreslang-bounded-actor-port-concurrency-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-bounded-actor-port-concurrency-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-bounded-actor-port-concurrency-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_port_owned_transport_concurrency
+        COMMAND oreslang-bounded-actor-port-concurrency-test)
+    set_tests_properties(native_actor_port_owned_transport_concurrency
+        PROPERTIES TIMEOUT 60)
     # Prove control-plane stop requests honor existing loan-gated native heaps.
     add_executable(oreslang-actor-group-heap-quiescence-test
         tests/actor_group_heap_quiescence_test.cpp
