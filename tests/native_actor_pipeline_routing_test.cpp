@@ -94,6 +94,18 @@ int main() {
             {"source-1", "worker-b", "Event"}
         };
         NativeActorPipeTransport pipe(registry, supervisor, stages, edges, 2, 4);
+        // Unknown sources fail before inspecting malformed routing keys.
+        bool denied_unknown_source_first = false;
+        try {
+            pipe.write_by_key_async("nonexistent-source",
+                    std::string(1, char(0x80)), "bad");
+        } catch (const std::invalid_argument& rejected_source) {
+            denied_unknown_source_first =
+                std::string(rejected_source.what()).find("no downstream") !=
+                std::string::npos;
+        }
+        check(denied_unknown_source_first,
+              "invalid key masked unauthorized routing source");
         auto batch = pipe.write_all_report_async("source-1", "fanout");
         check(batch.size() == 2 && batch[0].target == "worker-a" &&
               batch[1].target == "worker-b",
