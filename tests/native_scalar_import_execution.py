@@ -63,6 +63,17 @@ def main():
         write(root / "cycle_a.ores", 'import "./cycle_b";\npub fnc main(): int { return 42; }\n')
         write(root / "cycle_b.ores", 'import "./cycle_a";\nfnc unused(): int { return 1; }\n')
         expect_failure(args.compiler, root / "cycle_a.ores", "cyclic native scalar imports")
+        # Target directives must be diagnosed before source-line stripping.
+        write(root / "directive_entry.ores",
+              'import "./helper"; // ores:target=unsupported\npub fnc main(): int {return add(40, 2);}\n')
+        expect_failure(args.compiler, root / "directive_entry.ores",
+                       "native target admission unsupported")
+        write(root / "directive_dependency.ores",
+              'import "./extra"; // ores:target=unsupported\npub fnc forwarded(): int {return extra(41);}\n')
+        write(root / "directive_caller.ores",
+              'import "./directive_dependency";\npub fnc main(): int {return forwarded();}\n')
+        expect_failure(args.compiler, root / "directive_caller.ores",
+                       "native target admission unsupported")
         write(root / "bad.ores", 'import "./missing";\npub fnc main(): int {return 0;}\n')
         expect_failure(args.compiler, root / "bad.ores", "native scalar import source not found")
         write(root / "absolute.ores", 'import "/tmp/outside";\npub fnc main(): int {return 0;}\n')
