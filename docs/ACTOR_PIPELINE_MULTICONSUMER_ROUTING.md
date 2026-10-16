@@ -145,6 +145,33 @@ These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
 isolate memory ownership, or guest compiler lowering.
 
+### Native aggregate payload accounting (2026-10-15 hardening)
+
+The native transport now accepts an optional graph-wide **buffered byte
+capacity**, defaulting to **64 MiB** and restricted to **1..64 MiB**.
+An individual DATA payload is limited to **1 MiB**, while the edge and
+supervisor worker capacities are each restricted to **1..4096**. The byte
+budget is a second, independent pressure gate shared atomically across
+*all* graph edges: an overloaded producer cannot allocate unlimited DATA
+behind otherwise separate consumer queues.
+
+Bytes are charged only for a buffered message or pending writer, before
+publication; a failed reservation never consumes credits. Reading a queued
+message releases its bytes. Promoting an already charged writer preserves
+the charge until its DATA is read. STOP releases cancelled pending-writer
+credits but preserves credits for previously admitted buffered DATA, which
+remains drainable. A direct handoff to an already-waiting reader is not a
+buffered transport allocation. The host-only
+`buffered_payload_bytes()` diagnostic exposes current charged bytes.
+
+This is **not** a global heap cap on consumers holding already-delivered
+Futures or a claim of guest-level backpressure. The future scheduler
+`RouteReceipt`/typed `ActorMail<T>` integration must enforce the same
+generation-scoped credit policy (including accounting for actual encoded
+payload sizes) on Java/GraalVM, LLVM and other backends. It must also
+preserve one failure receipt per fan-out destination under byte pressure.
+
+
 ## Mandatory release gates
 
 - Compile and execute the new host graph/routing C++ CTests with both
