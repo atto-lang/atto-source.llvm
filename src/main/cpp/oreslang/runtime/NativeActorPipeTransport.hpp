@@ -10,6 +10,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
@@ -74,6 +75,14 @@ public:
     std::size_t buffered_payload_bytes() const noexcept {
         return total_buffered_bytes_.load(std::memory_order_relaxed);
     }
+
+#if defined(ORESLANG_NATIVE_PIPE_TEST_FAULT_INJECTION)
+    // Only the isolated native CTest target enables this compiler define.
+    // Production builds have no fault injection hook or extra read-path work.
+    void fail_next_promotion_for_test() noexcept {
+        fail_next_promotion_.store(true, std::memory_order_relaxed);
+    }
+#endif
     bool closed() const noexcept { return closed_.load(std::memory_order_acquire); }
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
@@ -162,6 +171,11 @@ public:
                 // must NOT orphan an unresolved Future or leak graph quota.
                 auto waiting = link.writers.front();
                 try {
+#if defined(ORESLANG_NATIVE_PIPE_TEST_FAULT_INJECTION)
+                    if (fail_next_promotion_.exchange(
+                            false, std::memory_order_relaxed))
+                        throw std::bad_alloc();
+#endif
                     link.messages.push_back(std::move(waiting->payload));
                 } catch (...) {
                     // Single-element deque append has the strong exception
@@ -459,6 +473,9 @@ private:
     std::shared_mutex publication_mutex_;
     std::atomic<bool> closed_{false};
     std::atomic<std::size_t> total_buffered_bytes_{0};
+#if defined(ORESLANG_NATIVE_PIPE_TEST_FAULT_INJECTION)
+    std::atomic<bool> fail_next_promotion_{false};
+#endif
 };
 
 } // namespace oreslang::runtime
