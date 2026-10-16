@@ -144,6 +144,27 @@ int main() {
         {colorF64, modeF64}, {{Kind::Enum, "unit::Color"},
                               {Kind::Primitive, "int"}}, eligibleIds); });
 
+    // Public C++ aggregate constructors must not bypass the eligibility
+    // registry, primitive canonicalization or maximum arity.
+    Signature forgedEnum{"go", {{Kind::Enum, "attacker::Fake"},
+                                 {Kind::Primitive, "int"}}};
+    rejects([&] { (void)selectResolved(
+        {forgedEnum, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
+    Signature forgedPrimitive{"go", {{Kind::Enum, "unit::Color"},
+                                      {Kind::Primitive, "Unknown"}}};
+    rejects([&] { (void)selectResolved(
+        {forgedPrimitive, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
+    Signature uncanonical{"go", {{Kind::Enum, "unit::Color"},
+                                 {Kind::Primitive, "String"}}};
+    rejects([&] { (void)selectResolved(
+        {uncanonical, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
+
     // This deliberately exercises only compiler-side keys, NOT LLVM source
     // parsing, AOT vtables, actor dispatch or guest execution.
     return 0;
