@@ -20,6 +20,8 @@ struct OresNativeVM {
     pthread_mutex_t control_lock;
     unsigned pending_control_wakes;
     int control_retired;
+    void* nio_backend;
+    OresNativeVMNioDestroy nio_destroy;
 };
 
 static int valid_domain(enum OresNativeVMDomain domain) {
@@ -317,6 +319,30 @@ unsigned ores_native_vm_control_pump(OresNativeVM* vm) {
     control_unlock(vm);
     return signalled;
 }
+/* The VM owns the opaque selector backend, but never calls a C++ symbol
+ * from its C scheduler core. This preserves standalone C-only host tests.
+ * Attachment is linearized against retirement under the VM CONTROL lock.
+ */
+int ores_native_vm_attach_nio(
+    OresNativeVM* vm, void* backend, OresNativeVMNioDestroy destroy) {
+    if (!vm || !backend || !destroy) return 0;
+    control_lock(vm);
+    const int accepted = !vm->control_retired && !vm->nio_backend;
+    if (accepted) {
+        vm->nio_backend = backend;
+        vm->nio_destroy = destroy;
+    }
+    control_unlock(vm);
+    return accepted;
+}
+void* ores_native_vm_nio_backend(OresNativeVM* vm) {
+    if (!vm) return NULL;
+    control_lock(vm);
+    void* backend = vm->control_retired ? NULL : vm->nio_backend;
+    control_unlock(vm);
+    return backend;
+}
+
 void ores_native_vm_retire(OresNativeVM* vm) {
     if (!vm) return;
     control_lock(vm);
@@ -344,6 +370,14 @@ int ores_native_vm_close(OresNativeVM* vm) {
     /* Caller-owned API/producer fence is required before memory reclamation. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
+    // Actor callbacks and VM CONTROL have drained. The externally fenced
+    // host thread may now join selector threads and reclaim preallocated
+    // readiness tickets; no I/O reactor is allowed to execute guest code.
+    if (vm->nio_backend) {
+        vm->nio_destroy(vm->nio_backend);
+        vm->nio_backend = NULL;
+        vm->nio_destroy = NULL;
+    }
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         free(vm->supervisors[i]);
