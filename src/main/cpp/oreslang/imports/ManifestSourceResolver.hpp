@@ -163,7 +163,10 @@ inline std::optional<fs::path> find_manifest(const fs::path& start,
     const fs::path physical_boundary=boundary.empty()?fs::path{}:fs::canonical(boundary);
     auto point=fs::canonical(start);
     auto cursor=fs::is_directory(point)?point:point.parent_path();
-    if(!physical_boundary.empty()&&!beneath(physical_boundary,cursor))cursor=physical_boundary;
+    // A mismatched caller-supplied boundary is a programming or authority
+    // error, not an instruction to discover the boundary's manifest instead.
+    if(!physical_boundary.empty()&&!beneath(physical_boundary,cursor))
+        throw std::invalid_argument("source outside package discovery boundary");
     std::optional<fs::path> legacy;
     while(!cursor.empty() && (physical_boundary.empty()||beneath(physical_boundary,cursor))){
         auto pkg=cursor/".ores.pkg.toml", old=cursor/".oreslangc.cfg.toml";
@@ -264,10 +267,14 @@ inline std::optional<fs::path> existing_source(const fs::path& candidate){
     std::vector<fs::path> candidates={candidate};
     if(candidate.extension().empty()){
         candidates.push_back(fs::path(candidate.string()+".ores"));
+        // Never mistake discoverable Java sources for compilable LLVM units.
         candidates.push_back(fs::path(candidate.string()+".java"));
     }
     for(const auto& path:candidates){
-        if(fs::is_regular_file(path))return fs::canonical(path);
+        if(!fs::is_regular_file(path))continue;
+        if(path.extension()!=".ores")
+            throw std::invalid_argument("native imports support only .ores sources");
+        return fs::canonical(path);
     }
     return std::nullopt;
 }
@@ -284,6 +291,20 @@ inline void verify_installed_package(const fs::path& directory) {
     if(identity!=expected)
         throw std::invalid_argument("installed zed package identity mismatch");
 }
+
+// A single physical file may not be silently imported under two package
+// contexts. The future graph linker must register every resolved source.
+struct SourceIdentityRegistry {
+    std::map<fs::path,fs::path> contexts;
+    fs::path register_source(const SourceConfig& config,const fs::path& source){
+        auto physical=fs::canonical(source);
+        auto project=fs::canonical(config.root);
+        const auto [it,inserted]=contexts.emplace(physical,project);
+        if(!inserted && it->second!=project)
+            throw std::invalid_argument("same source resolved under conflicting package contexts");
+        return physical;
+    }
+};
 inline std::optional<fs::path> resolve_source(const SourceConfig& config,
                                               const fs::path& importer,
                                               std::string_view raw,
@@ -293,7 +314,8 @@ inline std::optional<fs::path> resolve_source(const SourceConfig& config,
                                               const fs::path& cwd=fs::current_path()){
     auto input=classify(raw);
     switch(input.kind){
-        case Kind::HostJava:return std::nullopt;
+        case Kind::HostJava:
+            throw std::invalid_argument("native Java host imports require unsupported backend lowering");
         case Kind::Root:
             if(!config.package_manifest)throw std::invalid_argument("@/ requires .ores.pkg.toml");
             return existing_source(rooted_path(config.root,input.suffix));
