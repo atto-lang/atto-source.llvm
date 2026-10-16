@@ -229,6 +229,33 @@ public:
         for (const auto& allow : allowed_[i]) if (matches(kind, resource, allow)) return true;
         return false;
     }
+
+    // A *trusted* socket adapter must pass the actual DNS result selected for
+    // the socket, including the chosen port, immediately before connect().
+    // An allowed hostname must not override a denied resolved IP. This is
+    // policy-only: it does not perform DNS, create a socket, pin an address,
+    // or intercept guest calls. Noncanonical/IPv6 values fail closed for now.
+    bool allows_network_connection(std::string_view requested,
+                                   std::string_view selected_ipv4) const {
+        if (!allows(Permission::Net, requested)) return false;
+        Endpoint target, resolved;
+        if (!network_parse(requested, false, target) ||
+            !network_parse(selected_ipv4, false, resolved) ||
+            !target.has_port || !resolved.has_port ||
+            target.port != resolved.port) return false;
+        // network_parse already enforces exact 4-octet decimal canonicality
+        // for all-numeric hosts. Reject every nonnumeric DNS host here.
+        unsigned dots = 0;
+        for (char c : resolved.host) {
+            if (c == '.') ++dots;
+            else if (c < '0' || c > '9') return false;
+        }
+        if (dots != 3) return false;
+        for (const auto& blocked : denied_[index(Permission::Net)]) {
+            if (matches(Permission::Net, selected_ipv4, blocked)) return false;
+        }
+        return true;
+    }
 };
 
 } // namespace oreslang::permissions
