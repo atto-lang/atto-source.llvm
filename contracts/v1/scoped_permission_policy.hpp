@@ -9,6 +9,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <arpa/inet.h>  // Numeric address parsing only; NO DNS lookup.
+#endif
+
 // Native host policy substrate only. This does not intercept OS syscalls,
 // guest code or an actor's I/O; callers must enforce it at every boundary.
 namespace oreslang::permissions {
@@ -76,7 +80,47 @@ class ScopedPolicy final {
         std::string s(raw);
         for (auto& c : s) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
         if (scope && s == "*") { out.host = "*"; return true; }
-        if (s.front() == '[') return false; // IPv6 requires a separate binary-address parser.
+        if (s.front() == '[') {
+#if defined(__unix__) || defined(__APPLE__)
+            // Require brackets around all IPv6 endpoints. Parse binary identity
+            // without DNS or libc hostname resolution; deny mapped IPv4 and
+            // zone-scoped addresses until separately authorized.
+            const auto closing = s.find(']');
+            if (closing == s.npos || closing <= 1) return false;
+            const std::string literal = s.substr(1, closing - 1);
+            std::array<unsigned char, 16> addr{};
+            if (inet_pton(AF_INET6, literal.c_str(), addr.data()) != 1)
+                return false;
+            bool mapped = true;
+            for (std::size_t i = 0; i < 10; ++i)
+                mapped = mapped && addr[i] == 0;
+            if (mapped && addr[10] == 0xff && addr[11] == 0xff)
+                return false;
+            if (closing + 1 < s.size()) {
+                if (s[closing + 1] != ':' || closing + 2 == s.size())
+                    return false;
+                unsigned port = 0;
+                for (std::size_t i = closing + 2; i < s.size(); ++i) {
+                    if (s[i] < '0' || s[i] > '9') return false;
+                    port = port * 10 + static_cast<unsigned>(s[i] - '0');
+                    if (port > 65535) return false;
+                }
+                if (port == 0) return false;
+                out.port = port;
+                out.has_port = true;
+            }
+            static constexpr char hex[] = "0123456789abcdef";
+            out.host = "[";
+            for (unsigned char byte : addr) {
+                out.host.push_back(hex[byte >> 4]);
+                out.host.push_back(hex[byte & 0xf]);
+            }
+            out.host += "]";
+            return true;
+#else
+            return false; // Explicitly unsupported platform: deny.
+#endif
+        }
         auto colon = s.find(':');
         if (colon != s.npos) {
             if (s.find(':', colon + 1) != s.npos || colon + 1 == s.size()) return false;
