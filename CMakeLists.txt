@@ -740,8 +740,15 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" --sanitize)
+        # Python -O removes language-level asserts: run the exact native
+        # move/borrow proof in optimized mode to prevent vacuous CI passes.
+        add_test(NAME native_class_move_source_python_opt
+            COMMAND "${Python3_EXECUTABLE}" -O
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
         set_tests_properties(native_class_move_source_execution
-            native_class_move_source_asan_ubsan PROPERTIES TIMEOUT 180)
+            native_class_move_source_asan_ubsan
+            native_class_move_source_python_opt PROPERTIES TIMEOUT 180)
     endif()
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
