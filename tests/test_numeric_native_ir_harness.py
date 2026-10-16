@@ -54,6 +54,16 @@ class NativeNumericHarnessSelfTest(unittest.TestCase):
             '  ret i64 %i64.checked.value\n'
             '}\n')
         H.assert_checked_overflow_path(valid, "sadd")
+        decoy = valid.replace(
+            "define i64 @__oreslang_guest_main() {",
+            "define i64 @decoy() {") + (
+                "define i64 @__oreslang_guest_main() {\n"
+                "entry:\n"
+                "  ret i64 42\n}\n")
+        with self.assertRaisesRegex(AssertionError, "intrinsic absent"):
+            H.assert_checked_overflow_path(decoy, "sadd")
+        with self.assertRaisesRegex(AssertionError, "exactly one guest main"):
+            H.assert_checked_overflow_path(valid + valid, "sadd")
         mutants = (
             (valid, "smul"),
             (valid.replace("call void @llvm.trap()", "call void @other()"), "sadd"),
