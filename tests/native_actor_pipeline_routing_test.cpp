@@ -2,6 +2,8 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <limits>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -40,6 +42,46 @@ static std::size_t key_slot(const std::string& key) {
 int main() {
     NativeSupervisorRegistry registry(25, 25, 25);
     auto supervisor = registry.create_child(registry.root());
+
+    // Cross-backend v1 selector fixture: Java, .NET, WASM, Forge and LLVM
+    // share these unsigned UTF-8 FNV-1a64 modulo-3 expected destinations.
+    {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event", "source"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-b"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-c"}
+        };
+        std::vector<PipeConnection> edges = {
+            {"source","worker-a","Event"}, {"source","worker-b","Event"},
+            {"source","worker-c","Event"}
+        };
+        NativeActorPipeTransport pipe(registry, supervisor, stages, edges, 4, 4);
+        struct Vector { std::string key; std::size_t slot; };
+        const std::vector<Vector> keys = {
+            {"customer-7",0}, {"alpha",0}, {"beta",2},
+            {"\xf0\x9f\x8c\x8d",0}, {"",2}, {std::string(1, '\0'),0}
+        };
+        for (const auto& item : keys) {
+            pipe.write_by_key_async("source", item.key, "v").get();
+            check(pipe.read_async(item.slot).get()=="v",
+                  "five-backend canonical keyed routing vector changed");
+        }
+        for (int i=0; i<999; ++i) {
+            pipe.write_round_robin_async("source","r").get();
+            check(pipe.read_async(static_cast<std::size_t>(i%3)).get()=="r",
+                  "five-backend three-consumer RR order changed");
+        }
+        auto broadcast=pipe.write_all_report_async("source","fanout");
+        check(broadcast.size()==3 && broadcast[0].target=="worker-a" &&
+              broadcast[1].target=="worker-b" && broadcast[2].target=="worker-c",
+              "five-backend three-consumer broadcast order changed");
+        for (std::size_t i=0; i<broadcast.size(); ++i) {
+            broadcast[i].admission.get();
+            check(pipe.read_async(i).get()=="fanout","fanout missing consumer");
+        }
+        pipe.close();
+    }
 
     // A real checked DAG, not a fictitious list of linear pipe edges.
     {
@@ -264,6 +306,25 @@ int main() {
         pipe.write_by_key_async("Producer", unicode_key, "valid-unicode").get();
         check(pipe.read_async(key_slot(unicode_key)).get() == "valid-unicode",
               "valid non-ASCII UTF-8 key was misrouted");
+        // Independent FNV-1a 64-bit known-slot fixtures also pinned by the
+        // Java host routing smoke. Edges: [ConsumerA, ConsumerB].
+        const std::string partition_key = "partition-\xf0\x9f\x8c\x8d";
+        check(partition_key.size() == 14 &&
+              static_cast<unsigned char>(partition_key[10]) == 0xf0,
+              "Unicode partition fixture accidentally escaped as ASCII");
+        pipe.write_by_key_async("Producer", partition_key, "slot-zero").get();
+        check(pipe.read_async(0).get() == "slot-zero",
+              "UTF-8 partition fixture drifted from Java slot zero");
+        const std::string accented_key = "caf\xc3\xa9";
+        check(accented_key.size() == 5 &&
+              static_cast<unsigned char>(accented_key[3]) == 0xc3,
+              "Unicode accent fixture accidentally escaped as ASCII");
+        pipe.write_by_key_async("Producer", accented_key, "slot-one").get();
+        check(pipe.read_async(1).get() == "slot-one",
+              "accented UTF-8 partition fixture drifted from Java slot one");
+        pipe.write_by_key_async("Producer", "device-42", "ascii-zero").get();
+        check(pipe.read_async(0).get() == "ascii-zero",
+              "ASCII partition fixture drifted from Java slot zero");
         pipe.close();
         bool denied = false;
         try { pipe.write_round_robin_async("Producer", "after-close").get(); }
@@ -348,6 +409,639 @@ int main() {
         pipe.close();
     }
 
+
+    // Empty data consumes queue/writer slots even though buffered bytes are 0.
+    // Pending writes remain FIFO; excess admissions fail independently.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4);
+        pipe.write_to_async("Producer", "ConsumerB", "").get();
+        pipe.write_to_async("Producer", "ConsumerB", "").get();
+        auto pending0 = pipe.write_to_async("Producer", "ConsumerB", "");
+        auto pending1 = pipe.write_to_async("Producer", "ConsumerB", "");
+        check(pending0.wait_for(0ms) == std::future_status::timeout &&
+              pending1.wait_for(0ms) == std::future_status::timeout,
+              "zero-byte writer unexpectedly bypassed queue slots");
+        bool denied_empty = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", "").get(); }
+        catch (const std::logic_error&) { denied_empty = true; }
+        check(denied_empty, "zero-byte payload bypassed bounded pending writers");
+        check(pipe.read_async(1).get().empty() && pipe.read_async(1).get().empty(),
+              "admitted empty messages missing");
+        pending0.get(); pending1.get();
+        check(pipe.read_async(1).get().empty() && pipe.read_async(1).get().empty(),
+              "pending empty-message queue did not drain");
+        pipe.close();
+    }
+
+    // 16-MiB payload credits alone cannot limit empty-message metadata.
+    // Reject malformed or excessive queue config before allocating edges.
+    {
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 0, 4);
+        }, "zero edge capacity accepted");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 4097, 4);
+        }, "unbounded empty-message capacity accepted");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(),
+                std::numeric_limits<std::size_t>::max(), 4);
+        }, "size_t overflow capacity was not rejected");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 4, 0);
+        }, "zero worker capacity accepted");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(), 4, 4097);
+        }, "unbounded worker capacity accepted");
+
+        std::vector<PipeStage> many = {
+            {"Producer", PipeRole::readable, "", "Event"}
+        };
+        std::vector<PipeConnection> links;
+        for (int i = 0; i < 17; ++i) {
+            std::string sink = "sink-" + std::to_string(i);
+            many.push_back({"Worker", PipeRole::writable, "Event", "", sink});
+            links.push_back({"Producer", sink, "Event"});
+        }
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, many, links, 4096, 4);
+        }, "aggregate empty-message slot amplification accepted");
+        // Boundary: exactly 16 * 4,096 = 65,536 graph slots is valid.
+        many.pop_back();
+        links.pop_back();
+        {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, many, links, 4096, 4);
+            check(pipe.edge_count() == 16,
+                  "legal aggregate slot boundary rejected");
+            pipe.close();
+        }
+    }
+
+    // Graph-wide resident-payload budget is shared across otherwise healthy
+    // edges. Per-edge limits alone would permit 4096 * 16 MiB = 64 GiB.
+    {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event"}
+        };
+        std::vector<PipeConnection> links;
+        for (int i = 0; i < 5; ++i) {
+            const std::string name = "consumer-" + std::to_string(i);
+            stages.push_back({"Worker", PipeRole::writable, "Event", "", name});
+            links.push_back({"Producer", name, "Event"});
+        }
+        NativeActorPipeTransport pipe(registry, supervisor, stages, links, 32, 4);
+        const std::string megabyte(1024 * 1024, 'G');
+        for (int e = 0; e < 4; ++e) {
+            for (int i = 0; i < 16; ++i)
+                pipe.write_to_async("Producer",
+                    "consumer-" + std::to_string(e), megabyte).get();
+        }
+        check(pipe.buffered_payload_bytes() == 64ULL * 1024 * 1024,
+              "graph payload telemetry did not reflect full budget");
+        // Every individual edge still has credits, but the graph has none.
+        auto receipts = pipe.write_all_report_async("Producer", megabyte);
+        check(receipts.size() == 5, "graph-credit fanout dropped a receipt");
+        for (auto& entry : receipts) {
+            bool exhausted = false;
+            try { entry.admission.get(); }
+            catch (const std::logic_error&) { exhausted = true; }
+            check(exhausted, "global credit was bypassed by fanout");
+        }
+        bool graph_full = false;
+        try { pipe.write_to_async("Producer", "consumer-4", megabyte).get(); }
+        catch (const std::logic_error&) { graph_full = true; }
+        check(graph_full, "healthy edge bypassed global byte budget");
+        // Direct handoff retains no bytes: a ready consumer can still
+        // receive even when every buffer credit is exhausted. Fanout must
+        // report the one success and four failures independently.
+        auto waiting = pipe.read_async(4);
+        auto partial = pipe.write_all_report_async("Producer", megabyte);
+        check(partial.size() == 5,
+              "graph-exhausted direct-handoff fanout lost receipt labels");
+        for (std::size_t i = 0; i < partial.size(); ++i) {
+            bool admitted = true;
+            try { partial[i].admission.get(); }
+            catch (const std::logic_error&) { admitted = false; }
+            check(admitted == (i == 4),
+                  "graph-wide pressure misreported independently admitted fanout");
+        }
+        check(waiting.get() == megabyte &&
+              pipe.buffered_payload_bytes() == 64ULL * 1024 * 1024,
+              "zero-buffer direct delivery consumed graph payload credits");
+        // Consuming one queued message returns its graph-wide credit.
+        check(pipe.read_async(0).get() == megabyte, "graph credit drain lost data");
+        check(pipe.buffered_payload_bytes() == 63ULL * 1024 * 1024,
+              "cross-edge read did not return graph credit");
+        pipe.write_to_async("Producer", "consumer-4", megabyte).get();
+        check(pipe.read_async(4).get() == megabyte,
+              "global byte credit was not returned to another edge");
+        check(pipe.buffered_payload_bytes() == 63ULL * 1024 * 1024,
+              "global credit was double-charged across edge transfer");
+        // After STOP, admitted messages remain readable but new writes fail.
+        pipe.close();
+        bool stopped = false;
+        try { pipe.write_to_async("Producer", "consumer-4", "late").get(); }
+        catch (const std::logic_error&) { stopped = true; }
+        check(stopped, "STOP reopened global byte credit for new writes");
+    }
+
+    // Stress concurrent graph-global credit reservations. Even if all
+    // producers race to different edges, at most 64 * 1 MiB may be retained.
+    {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event"}
+        };
+        std::vector<PipeConnection> links;
+        for (int i = 0; i < 5; ++i) {
+            const std::string target = "race-" + std::to_string(i);
+            stages.push_back({"Worker", PipeRole::writable, "Event", "", target});
+            links.push_back({"Producer", target, "Event"});
+        }
+        NativeActorPipeTransport pipe(registry, supervisor, stages, links, 32, 4);
+        const std::string megabyte(1024 * 1024, 'R');
+        std::atomic<int> success{0};
+        std::atomic<int> failures{0};
+        std::atomic<int> edge_success[5] = {};
+        std::vector<std::thread> senders;
+        for (int worker = 0; worker < 8; ++worker) {
+            senders.emplace_back([&, worker] {
+                for (int i = 0; i < 25; ++i) {
+                    const int target = (worker * 25 + i) % 5;
+                    try {
+                        pipe.write_to_async("Producer",
+                            "race-" + std::to_string(target), megabyte).get();
+                        ++success;
+                        ++edge_success[target];
+                    } catch (const std::logic_error&) {
+                        ++failures;
+                    }
+                }
+            });
+        }
+        for (auto& sender : senders) sender.join();
+        check(success.load() == 64 && failures.load() == 136,
+              "racing writers bypassed or prematurely exhausted graph credits");
+        check(pipe.buffered_payload_bytes() == 64ULL * 1024 * 1024,
+              "racing admissions did not reserve exactly one global byte credit");
+        for (int edge = 0; edge < 5; ++edge) {
+            for (int i = 0; i < edge_success[edge].load(); ++i)
+                check(pipe.read_async(static_cast<std::size_t>(edge)).get() == megabyte,
+                      "concurrent global-credit delivery dropped payload");
+        }
+        check(pipe.buffered_payload_bytes() == 0,
+              "concurrent graph-credit read path leaked reservations");
+        // Refill to prove every drained reservation becomes available again.
+        for (int i = 0; i < 16; ++i)
+            pipe.write_to_async("Producer", "race-0", megabyte).get();
+        for (int i = 0; i < 16; ++i)
+            check(pipe.read_async(0).get() == megabyte,
+                  "global-credit race left leaked reservations after draining");
+        check(pipe.buffered_payload_bytes() == 0,
+              "refilled queue did not return all graph reservations");
+        pipe.close();
+    }
+
+    // Per-edge byte credit applies to accepted messages and to pending
+    // writes, not just to the maximum size of one individual payload.
+    // Exhausting one branch must not consume another branch's byte credit.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 32, 4);
+        const std::string megabyte(1024 * 1024, 'B');
+        for (int i = 0; i < 16; ++i)
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        bool denied_bytes = false;
+        try {
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        } catch (const std::logic_error&) { denied_bytes = true; }
+        check(denied_bytes, "edge accepted more than 16 MiB resident bytes");
+
+        auto batch = pipe.write_all_report_async("Producer", megabyte);
+        check(batch.size() == 2 && batch[0].target == "ConsumerA" &&
+              batch[1].target == "ConsumerB",
+              "byte-exhausted branch lost stable fanout receipts");
+        batch[0].admission.get();
+        bool rejected_branch = false;
+        try { batch[1].admission.get(); }
+        catch (const std::logic_error&) { rejected_branch = true; }
+        check(rejected_branch, "fanout concealed the exhausted byte-credit branch");
+        check(pipe.read_async(0).get() == megabyte,
+              "healthy branch failed when peer byte credit was exhausted");
+
+        check(pipe.read_async(1).get() == megabyte,
+              "byte credit could not be released by consuming a message");
+        pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        for (int i = 0; i < 16; ++i)
+            check(pipe.read_async(1).get() == megabyte,
+                  "byte-credit recovery corrupted per-edge FIFO");
+        pipe.close();
+    }
+
+
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // First branch is an eager-reader direct handoff, middle branch fails
+    // while enqueuing, last branch must still admit. Check all receipts,
+    // stable graph order, and byte/message/reader resource accounting.
+    {
+        const std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event", "source"},
+            {"Worker", PipeRole::writable, "Event", "", "sink-a"},
+            {"Worker", PipeRole::writable, "Event", "", "sink-b"},
+            {"Worker", PipeRole::writable, "Event", "", "sink-c"}
+        };
+        const std::vector<PipeConnection> edges = {
+            {"source", "sink-a", "Event"},
+            {"source", "sink-b", "Event"},
+            {"source", "sink-c", "Event"}
+        };
+        NativeActorPipeTransport pipe(registry, supervisor, stages, edges, 2, 4, 16, 2);
+        auto first = pipe.read_async(0);
+        check(pipe.pending_reader_count() == 1,
+              "middle-OOM setup did not reserve first pending reader");
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto report = pipe.write_all_report_async("source", "abc");
+        check(report.size() == 3 &&
+              report[0].target == "sink-a" &&
+              report[1].target == "sink-b" &&
+              report[2].target == "sink-c",
+              "middle-OOM corrupted target-labelled fanout results");
+        report[0].admission.get();
+        bool oom = false;
+        try { report[1].admission.get(); }
+        catch (const std::bad_alloc&) { oom = true; }
+        check(oom, "middle-OOM was not reported on branch's Future");
+        report[2].admission.get();
+        check(first.get() == "abc" && pipe.read_async(2).get() == "abc",
+              "middle-OOM broke successful deliveries surrounding failure");
+        check(pipe.pending_reader_count() == 0 &&
+              pipe.buffered_message_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0,
+              "middle-OOM leaked byte/message/reader credits");
+        pipe.close();
+    }
+
+    // The original vector-of-Futures compatibility API must retain
+    // failure/success positions without losing later healthy branches.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 16, 2);
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto receipts = pipe.write_all_async("Producer", "legacy");
+        check(receipts.size() == 2,
+              "compatibility fanout dropped a receipt after enqueue OOM");
+        bool oom = false;
+        try { receipts[0].get(); }
+        catch (const std::bad_alloc&) { oom = true; }
+        check(oom, "compatibility fanout hid first branch allocation failure");
+        receipts[1].get();
+        check(pipe.read_async(1).get() == "legacy",
+              "compatibility fanout lost healthy later branch");
+        check(pipe.buffered_message_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0,
+              "compatibility fanout OOM left charged graph credits");
+        pipe.close();
+    }
+#endif
+
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // Partial fan-out must preserve a successfully delivered first branch
+    // when a later branch throws after graph-wide credit reservation.
+    // The failed branch remains target-labelled and subsequent admission
+    // recovers without leaked message or byte reservations.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4);
+        auto direct = pipe.read_async(0);
+        check(direct.wait_for(0ms) == std::future_status::timeout &&
+              pipe.pending_reader_count() == 1,
+              "partial fan-out fixture did not reserve direct reader");
+        pipe.fail_next_buffered_enqueue_for_test();
+        auto receipts = pipe.write_all_report_async("Producer", "first-good");
+        check(receipts.size() == 2 &&
+              receipts[0].target == "ConsumerA" &&
+              receipts[1].target == "ConsumerB",
+              "allocation failure discarded target-labelled fan-out receipts");
+        receipts[0].admission.get();
+        check(direct.get() == "first-good",
+              "later failing fan-out branch erased prior direct delivery");
+        bool failed = false;
+        try { receipts[1].admission.get(); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "buffered fan-out OOM did not settle failed branch");
+        check(pipe.pending_reader_count() == 0 &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "partial fan-out OOM leaked graph-wide reader or buffer credits");
+        pipe.write_to_async("Producer", "ConsumerB", "recovered").get();
+        check(pipe.read_async(1).get() == "recovered" &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "partial fan-out OOM poisoned subsequent branch admission");
+        pipe.close();
+    }
+
+    // PendingWrite and Future shared-state allocation happens AFTER graph
+    // admission credits are obtained. Inject failure at that boundary to
+    // prove both credits are rolled back, even with a full mailbox.
+    for (int trial = 0; trial < 16; ++trial) {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4, 16, 2);
+        pipe.fail_next_pending_allocation_for_test();
+        bool first_oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "fail"); }
+        catch (const std::bad_alloc&) { first_oom = true; }
+        check(first_oom && pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "pending shared-state OOM retained first admission credits");
+
+        pipe.write_to_async("Producer", "ConsumerA", "held").get();
+        pipe.fail_next_pending_allocation_for_test();
+        bool writer_oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "bad"); }
+        catch (const std::bad_alloc&) { writer_oom = true; }
+        check(writer_oom && pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 1,
+              "pending-writer allocation OOM leaked graph credits");
+        auto queued = pipe.write_to_async("Producer", "ConsumerA", "later");
+        check(queued.wait_for(0ms) == std::future_status::timeout &&
+              pipe.buffered_payload_bytes() == 9 &&
+              pipe.buffered_message_count() == 2,
+              "failed shared-state allocation poisoned pending-writer admission");
+        check(pipe.read_async(0).get() == "held",
+              "pending allocation failure corrupted FIFO");
+        queued.get();
+        check(pipe.read_async(0).get() == "later" &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "pending allocation error prevented complete credit recovery");
+        pipe.close();
+    }
+
+    // Quota rejection is checked before allocating a PendingWrite, so it
+    // cannot consume the next injected allocation failure. Once credits are
+    // released, the exact next accepted attempt must receive that failure.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 8, 1);
+        pipe.write_to_async("Producer", "ConsumerA", "full").get();
+        pipe.fail_next_pending_allocation_for_test();
+        bool denied = false;
+        try { pipe.write_to_async("Producer", "ConsumerA", "denied").get(); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied && pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 1,
+              "over-budget writer incorrectly consumed pending-allocation fault");
+        check(pipe.read_async(0).get() == "full",
+              "over-budget allocation preflight corrupted buffered DATA");
+        bool deferred_oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "now"); }
+        catch (const std::bad_alloc&) { deferred_oom = true; }
+        check(deferred_oom && pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "denied write consumed fault or next reserved allocation leaked");
+        pipe.write_to_async("Producer", "ConsumerA", "recovered").get();
+        check(pipe.read_async(0).get() == "recovered",
+              "quota denial poisoned later admission");
+        pipe.close();
+    }
+
+    // Failed direct-handoff allocation must not pop or cancel a pending
+    // reader; it owns no buffered byte or message credits.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4, 16, 2);
+        auto waiting = pipe.read_async(0);
+        pipe.fail_next_pending_allocation_for_test();
+        bool oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "drop"); }
+        catch (const std::bad_alloc&) { oom = true; }
+        check(oom && pipe.pending_reader_count() == 1 &&
+              waiting.wait_for(0ms) == std::future_status::timeout &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "direct pending-allocation fault lost reader or charged credits");
+        pipe.write_to_async("Producer", "ConsumerA", "recover").get();
+        check(waiting.get() == "recover" &&
+              pipe.pending_reader_count() == 0,
+              "reader could not recover from direct pending-allocation failure");
+        pipe.close();
+    }
+
+    // Concurrency regression: a single admission-allocation fault amid
+    // graph quota contention must neither over-admit nor strand a slot.
+    // Every later rejected write must fail without allocating PendingWrite.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 16, 4, 4, 4);
+        pipe.fail_next_pending_allocation_for_test();
+        std::atomic<int> admitted{0};
+        std::atomic<int> first_a{0};
+        std::atomic<int> second_b{0};
+        std::atomic<int> oom{0};
+        std::atomic<int> denied{0};
+        std::atomic<int> unexpected{0};
+        std::vector<std::thread> writers;
+        for (int producer = 0; producer < 8; ++producer) {
+            writers.emplace_back([&, producer] {
+                const bool a = producer % 2 == 0;
+                for (int msg = 0; msg < 80; ++msg) {
+                    try {
+                        pipe.write_to_async("Producer",
+                            a ? "ConsumerA" : "ConsumerB", "x").get();
+                        ++admitted;
+                        if (a) ++first_a;
+                        else ++second_b;
+                    } catch (const std::bad_alloc&) {
+                        ++oom;
+                    } catch (const std::logic_error&) {
+                        ++denied;
+                    } catch (...) {
+                        ++unexpected;
+                    }
+                }
+            });
+        }
+        for (auto& writer : writers) writer.join();
+        check(unexpected.load() == 0 &&
+              oom.load() == 1 &&
+              admitted.load() == 4 &&
+              denied.load() == 635 &&
+              pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 4,
+              "racing pending allocation OOM overcommitted or leaked graph quotas");
+        for (int edge = 0; edge < 2; ++edge) {
+            const int accepted = edge == 0 ? first_a.load() : second_b.load();
+            for (int msg = 0; msg < accepted; ++msg)
+                check(pipe.read_async(static_cast<std::size_t>(edge)).get() == "x",
+                      "concurrent OOM recovery lost admitted DATA");
+        }
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "racing allocation fault failed to reclaim drained credits");
+        pipe.close();
+    }
+
+    // Buffered insertion can fail after credit reservation. The queue and
+    // pending-writer paths must both roll back graph bytes/message credits,
+    // and a subsequent write must use the same mailbox successfully.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4, 32, 2);
+        pipe.fail_next_buffered_enqueue_for_test();
+        bool queued_oom = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", "drop").get(); }
+        catch (const std::bad_alloc&) { queued_oom = true; }
+        check(queued_oom && pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "failed queue insertion retained graph reservations");
+        pipe.write_to_async("Producer", "ConsumerB", "hold").get();
+        check(pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 1,
+              "queue failed to recover after insertion allocation error");
+        pipe.fail_next_buffered_enqueue_for_test();
+        bool writer_oom = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", "drop2").get(); }
+        catch (const std::bad_alloc&) { writer_oom = true; }
+        check(writer_oom && pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 1,
+              "failed pending-writer insertion leaked credit");
+        auto pending = pipe.write_to_async("Producer", "ConsumerB", "later");
+        check(pending.wait_for(0ms) == std::future_status::timeout &&
+              pipe.buffered_payload_bytes() == 9 &&
+              pipe.buffered_message_count() == 2,
+              "failed enqueue poisoned subsequent pending admission");
+        check(pipe.read_async(1).get() == "hold",
+              "queued admission lost after rollback");
+        pending.get();
+        check(pipe.read_async(1).get() == "later" &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "enqueue rollback failed to preserve FIFO or reusable credits");
+        pipe.close();
+    }
+
+    // Deterministic bad_alloc at the deque-promotion boundary. A reader has
+    // already consumed an admitted payload; the failed pending writer must
+    // receive a terminal exception and release both its byte reservations.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4);
+        pipe.write_to_async("Producer", "ConsumerB", "ready").get();
+        auto pending = pipe.write_to_async("Producer", "ConsumerB", "queued");
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "promotion fault fixture did not create a pending writer");
+        check(pipe.buffered_payload_bytes() == 11,
+              "promotion fault fixture charged wrong initial bytes");
+        pipe.fail_next_writer_promotion_for_test();
+        check(pipe.read_async(1).get() == "ready",
+              "promotion allocation failure lost an admitted reader message");
+        bool promotion_failed = false;
+        try { pending.get(); }
+        catch (const std::bad_alloc&) { promotion_failed = true; }
+        check(promotion_failed,
+              "pending writer did not receive its promotion allocation failure");
+        check(pipe.buffered_payload_bytes() == 0,
+              "failed promotion leaked graph buffered-byte reservation");
+        pipe.write_to_async("Producer", "ConsumerB", "reuse").get();
+        check(pipe.read_async(1).get() == "reuse",
+              "failed promotion poisoned subsequent edge admissions");
+        check(pipe.buffered_payload_bytes() == 0,
+              "reused mailbox did not release its charged payload");
+        pipe.close();
+    }
+
+    // Catch an invisible per-edge credit leak even if graph-wide telemetry
+    // appears correct: after a failed pending promotion, drain all admitted
+    // data and refill the same edge to its precise 16 MiB byte ceiling.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 16, 4);
+        const std::string megabyte(1024 * 1024, 'F');
+        for (int i = 0; i < 15; ++i)
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        pipe.write_to_async("Producer", "ConsumerB", "r").get();
+        auto pending = pipe.write_to_async("Producer", "ConsumerB", "p");
+        check(pending.wait_for(0ms) == std::future_status::timeout,
+              "byte-credit fault fixture failed to queue a writer");
+        pipe.fail_next_writer_promotion_for_test();
+        check(pipe.read_async(1).get() == megabyte,
+              "byte-credit fault fixture dropped its acknowledged reader");
+        bool failed = false;
+        try { pending.get(); }
+        catch (const std::bad_alloc&) { failed = true; }
+        check(failed, "promotion error was not reported on the pending future");
+        for (int i = 0; i < 14; ++i)
+            check(pipe.read_async(1).get() == megabyte,
+                  "failed promotion corrupted retained mailbox FIFO");
+        check(pipe.read_async(1).get() == "r",
+              "failed promotion corrupted terminal mailbox payload");
+        check(pipe.buffered_payload_bytes() == 0,
+              "fault path leaked graph credit after complete drain");
+        for (int i = 0; i < 16; ++i)
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        check(pipe.buffered_payload_bytes() == 16ULL * 1024 * 1024,
+              "fault path did not restore full edge byte-credit capacity");
+        bool denied = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", megabyte).get(); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied, "recovered edge exceeded its 16 MiB byte budget");
+        pipe.close();
+    }
+#endif
+
+    // Pending writers consume the SAME byte credit as accepted messages.
+    // Promotion from a pending writer to the mailbox transfers (rather
+    // than duplicates) that credit, and the read frees one message's bytes.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 10, 4);
+        const std::string megabyte(1024 * 1024, 'Q');
+        for (int i = 0; i < 10; ++i)
+            pipe.write_to_async("Producer", "ConsumerB", megabyte).get();
+        std::vector<std::shared_future<void>> pending_writers;
+        for (int i = 0; i < 6; ++i) {
+            auto future = pipe.write_to_async("Producer", "ConsumerB", megabyte);
+            check(future.wait_for(0ms) == std::future_status::timeout,
+                  "saturated mailbox unexpectedly admitted pending writer");
+            pending_writers.push_back(std::move(future));
+        }
+        check(pipe.buffered_payload_bytes() == 16ULL * 1024 * 1024,
+              "pending writers were not charged against graph payload credit");
+        bool denied_writer = false;
+        try { pipe.write_to_async("Producer", "ConsumerB", megabyte).get(); }
+        catch (const std::logic_error&) { denied_writer = true; }
+        check(denied_writer, "pending writers bypassed resident byte cap");
+        check(pipe.read_async(1).get() == megabyte,
+              "byte-credit drain missed queued payload");
+        check(pipe.buffered_payload_bytes() == 15ULL * 1024 * 1024,
+              "promoting a pending writer duplicated or leaked byte credit");
+        pending_writers[0].get();
+        auto recovered = pipe.write_to_async("Producer", "ConsumerB", megabyte);
+        check(recovered.wait_for(0ms) == std::future_status::timeout,
+              "byte-credit recovery should still respect mailbox backpressure");
+        check(pipe.buffered_payload_bytes() == 16ULL * 1024 * 1024,
+              "recovered pending writer was not charged exactly once");
+        pipe.close();
+        check(pipe.buffered_payload_bytes() == 10ULL * 1024 * 1024,
+              "STOP did not release credits for cancelled pending writers");
+        bool cancelled = false;
+        try { recovered.get(); }
+        catch (const std::logic_error&) { cancelled = true; }
+        check(cancelled, "STOP failed to cancel byte-accounted pending writer");
+        for (int i = 0; i < 10; ++i)
+            check(pipe.read_async(1).get() == megabyte,
+                  "post-STOP drain lost an already-admitted message");
+        check(pipe.buffered_payload_bytes() == 0,
+              "post-STOP drain leaked graph payload credit");
+    }
+
     // An attacker must not queue O(number_of_edges * edge_capacity)
     // unresolved read promises; a separate graph-wide reader quota is
     // required even if zero-byte DATA/message credits are also bounded.
@@ -394,6 +1088,39 @@ int main() {
                 1024, 16, 65537);
         }, "oversized graph reader budget accepted");
     }
+
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // Reader enqueue allocation failure must not strand an aggregate reader
+    // permit. The next pending reader must be deliverable and STOP must
+    // leave the ledger at zero.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+            32, 2, 1);
+        pipe.fail_next_reader_enqueue_for_test();
+        bool reader_oom = false;
+        try { (void)pipe.read_async(0); }
+        catch (const std::bad_alloc&) { reader_oom = true; }
+        check(reader_oom && pipe.pending_reader_count() == 0,
+              "reader allocation failure retained a global reader slot");
+        const auto waiting = pipe.read_async(1);
+        check(waiting.wait_for(0ms) == std::future_status::timeout &&
+              pipe.pending_reader_count() == 1,
+              "failed reader enqueue poisoned the next admission");
+        bool denied = false;
+        try { pipe.read_async(0).get(); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied && pipe.pending_reader_count() == 1,
+              "reader quota bypassed after allocation failure");
+        pipe.write_to_async("Producer", "ConsumerB", "recovered").get();
+        check(waiting.get() == "recovered" &&
+              pipe.pending_reader_count() == 0,
+              "reader allocation fault poisoned direct delivery or leaked slot");
+        pipe.close();
+        check(pipe.pending_reader_count() == 0,
+              "STOP retained a reader slot after allocation failure");
+    }
+#endif
 
     // Graph-wide byte credits count BOTH buffered messages and suspended
     // writers. Exhausting one edge must not steal bytes from another; STOP
