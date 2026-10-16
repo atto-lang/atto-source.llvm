@@ -34,12 +34,18 @@ struct PipeConnection {
 
 inline std::vector<PipeConnection> check_actor_pipeline(
         const std::vector<PipeStage>& stages) {
-    if (stages.size() < 2)
-        throw std::invalid_argument("actor pipeline requires at least two stages");
+    if (stages.size() < 2 || stages.size() > 1024)
+        throw std::invalid_argument("actor pipeline requires 2..1024 stages");
+    std::unordered_set<std::string> instance_ids;
     for (std::size_t i = 0; i < stages.size(); ++i) {
         const auto& stage = stages[i];
-        if (stage.actor_type.empty())
-            throw std::invalid_argument("pipeline actor type cannot be blank");
+        const auto& actor_id =
+                stage.instance_id.empty() ? stage.actor_type : stage.instance_id;
+        if (stage.actor_type.empty() || actor_id.empty()
+                || stage.actor_type.size() > 256 || actor_id.size() > 256
+                || !instance_ids.insert(actor_id).second)
+            throw std::invalid_argument(
+                    "linear pipeline requires unique bounded actor instance IDs");
         if (stage.role == PipeRole::supervisor_actor)
             throw std::invalid_argument("supervisor actors cannot be pipeline stages");
         if (stage.role == PipeRole::ordinary_actor)
@@ -81,7 +87,10 @@ inline std::vector<PipeConnection> check_actor_pipeline(
             throw std::invalid_argument("actor pipe payload mismatch: "
                     + source.actor_type + " emits " + source.outbound
                     + " but " + target.actor_type + " requires " + target.inbound);
-        connections.push_back({source.actor_type, target.actor_type, source.outbound});
+        connections.push_back({
+                source.instance_id.empty() ? source.actor_type : source.instance_id,
+                target.instance_id.empty() ? target.actor_type : target.instance_id,
+                source.outbound});
     }
     return connections;
 }
