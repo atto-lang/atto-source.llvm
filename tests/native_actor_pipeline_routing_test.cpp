@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -321,6 +322,11 @@ int main() {
             NativeActorPipeTransport pipe(
                 registry, supervisor, graph_stages(), graph_edges(), 4097, 4);
         }, "unbounded empty-message capacity accepted");
+        rejected([&] {
+            NativeActorPipeTransport pipe(
+                registry, supervisor, graph_stages(), graph_edges(),
+                std::numeric_limits<std::size_t>::max(), 4);
+        }, "size_t overflow capacity was not rejected");
         rejected([&] {
             NativeActorPipeTransport pipe(
                 registry, supervisor, graph_stages(), graph_edges(), 4, 0);
