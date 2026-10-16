@@ -1,0 +1,11 @@
+define class Pair as
+  pub let int left = 20;
+  pub let int right = 22;
+end
+fnc view(borrow int value): int {
+  return value;
+}
+pub fnc main(): int {
+  let Pair pair = new Pair();
+  return view(rt borrow pair.left) + view(rt borrow pair.right);
+}

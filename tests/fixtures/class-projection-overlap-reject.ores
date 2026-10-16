@@ -1,0 +1,11 @@
+define class Pair as
+  pub let int left = 20;
+  pub let int right = 22;
+end
+fnc conflict(borrow int a, borrow mut int b): int {
+  return a + b;
+}
+pub fnc main(): int {
+  let mut Pair pair = new Pair();
+  return conflict(rt borrow pair.left, rt borrow mut pair.right);
+}
