@@ -140,6 +140,14 @@ constructor with independent bounded mailboxes and implements:
 - `write_by_key_async(source, key, payload)` — stable FNV-1a edge selection;
   rejects malformed/overlong UTF-8, surrogates and oversize keys. Unicode
   normalization (NFC), if required, belongs to the typed key codec upstream.
+- Each edge enforces a 16 MiB buffered-payload byte credit across already
+  admitted messages AND suspended writers, in addition to the existing
+  1 MiB individual payload and message/pending-writer count limits.
+  Direct handoff to a waiting reader does not consume buffer credit;
+  draining a message or cancelling a pending writer returns its credit.
+  Exhaustion yields a failed per-edge admission Future and does not
+  block or consume other edges' byte credits. This is a per-edge limit,
+  NOT a whole-graph or actor-process memory limit.
 
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
