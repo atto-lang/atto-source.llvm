@@ -16,15 +16,15 @@ import tempfile
 LO, HI = -(1 << 63), (1 << 63) - 1
 BOUNDS = (LO, LO + 1, -3037000500, -2, -1, 0, 1, 2, 3037000500, HI - 1, HI)
 SOURCE = """
-fnc add(int a,int b):int{return a+b;}
-fnc sub(int a,int b):int{return a-b;}
-fnc mul(int a,int b):int{return a*b;}
-fnc neg(int a):int{return -a;}
+pub fnc add(int a,int b):int{return a+b;}
+pub fnc sub(int a,int b):int{return a-b;}
+pub fnc mul(int a,int b):int{return a*b;}
+pub fnc neg(int a):int{return -a;}
 fnc inc(int a):int{return a+1;}
-fnc twice(int a):int{return inc(inc(a));}
+pub fnc twice(int a):int{return inc(inc(a));}
 fnc combine(int a,int b):int{return a+b;}
-fnc nested(int a,int b):int{return combine(inc(a),inc(b));}
-fnc intermediate(int a,int b):int{return (a+b)*3;}
+pub fnc nested(int a,int b):int{return combine(inc(a),inc(b));}
+pub fnc intermediate(int a,int b):int{return (a+b)*3;}
 """
 HOST = r"""
 #include <stdint.h>
@@ -223,6 +223,16 @@ def main():
             if not re.search(r"(?m)^define\s+i32\s+@__oreslang_checked_v2_" +
                              symbol + r"\s*\(", ir):
                 raise AssertionError("missing checked result callable " + symbol)
+        # Only explicitly public functions are C-callable. Private
+        # helpers remain defined for internal checked-result calls, but
+        # must not leak as external ABI entrypoints.
+        for helper in ("inc_1", "combine_2"):
+            if not re.search(r"(?m)^define\s+private\s+i32\s+@__oreslang_checked_v2_" +
+                             helper + r"\s*\(", ir):
+                raise AssertionError("checked result private helper exported or absent: " + helper)
+            if re.search(r"(?m)^define\s+i32\s+@__oreslang_checked_v2_" +
+                         helper + r"\s*\(", ir):
+                raise AssertionError("checked result leaked private helper: " + helper)
         for intrinsic in ("sadd", "ssub", "smul"):
             if "llvm." + intrinsic + ".with.overflow.i64" not in ir:
                 raise AssertionError("missing signed overflow intrinsic " + intrinsic)
