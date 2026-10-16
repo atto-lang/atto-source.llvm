@@ -19,22 +19,22 @@ ACTIONS = (
 
 def problems(text):
     errors = []
-    found = re.findall(r"(?m)^\\s*- uses:\\s*(\\S+)", text)
+    found = re.findall(r"(?m)^\s*- uses:\s*(\S+)", text)
     if tuple(found) != ACTIONS:
         errors.append("workflow actions must be exactly the reviewed immutable SHAs")
     if "permissions:\n  contents: read\n" not in text:
         errors.append("workflow must use minimum read-only repository permissions")
-    if re.search(r"(?m)^\\s*(?:pull_request_target|id-token:\\s*write|contents:\\s*write)\\b", text):
+    if re.search(r"(?m)^\s*(?:pull_request_target|id-token:\s*write|contents:\s*write)\b", text):
         errors.append("privileged workflow event or permission is forbidden")
     if "${{ secrets." in text:
         errors.append("conformance tests must not receive GitHub secrets")
     checkout = re.search(
-        r"(?m)^      - uses: actions/checkout@[0-9a-f]{40}[^\\n]*\\n"
-        r"        with:\\n          persist-credentials: false(?:\\n|$)", text
+        r"(?m)^      - uses: actions/checkout@[0-9a-f]{40}[^\n]*\n"
+        r"        with:\n          persist-credentials: false(?:\n|$)", text
     )
     if checkout is None:
         errors.append("checkout must explicitly disable persisted credentials")
-    if re.search(r"(?m)^\\s*persist-credentials:\\s*(?!false\\s*$)\\S+", text):
+    if re.search(r"(?m)^\s*persist-credentials:\s*(?!false\s*$)\S+", text):
         errors.append("persist-credentials must never be enabled")
     return errors
 
