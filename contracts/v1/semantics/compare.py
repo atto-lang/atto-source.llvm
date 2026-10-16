@@ -39,6 +39,10 @@ def compare(suite, digest, llvm, graal, *, require_suite_parity=False, expected_
     missing = 0
     defects = []
     for case in suite["cases"]:
+        # A PASS label by itself is not verified evidence. Only count a
+        # mutually required case if both report records pass every contract
+        # check below (including observed exit/diagnostic class and detail).
+        defects_before_case = len(defects)
         statuses = []
         for backend in ("llvm", "graal"):
             record = records[backend][case["id"]]
@@ -64,7 +68,7 @@ def compare(suite, digest, llvm, graal, *, require_suite_parity=False, expected_
                     defects.append(f"{case['id']} {backend}: passing record contains an error detail")
             statuses.append(status)
         if case["backends"]["llvm"] == "required" and case["backends"]["graal"] == "required":
-            if statuses == ["pass", "pass"]:
+            if statuses == ["pass", "pass"] and len(defects) == defects_before_case:
                 common += 1
     suite_complete = common == len(suite["cases"]) and missing == 0 and not defects
     if require_suite_parity and not suite_complete:
