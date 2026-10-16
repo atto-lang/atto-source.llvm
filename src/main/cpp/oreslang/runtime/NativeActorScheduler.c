@@ -36,6 +36,9 @@ struct OresNativeActorScheduler {
     pthread_t* threads;
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     size_t next_actor, outstanding, runnable_lanes;
+    /* One-way bootstrap profile: all worker pthreads already exist before
+     * DATA/CONTROL admission, and hot path cannot create new pthreads. */
+    int realtime_preallocated;
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
@@ -259,6 +262,9 @@ static int create_carrier(pthread_t* tid, void* context) {
 }
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
+    /* Real-time service must not allocate stacks or pthread metadata when
+     * processing live messages. Profile preparation happens before admission. */
+    if (s->realtime_preallocated) return s->started_workers >= required;
     while (s->started_workers < required) {
         if (create_carrier(&s->threads[s->started_workers], s) != 0)
             break;
@@ -267,6 +273,20 @@ static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     /* An existing busy carrier cannot be counted as additional capacity.
      * Never acknowledge another independent lane on a failed growth step. */
     return s->started_workers >= required;
+}
+/* Trusted host bootstrap only. No actor may have admitted runnable work.
+ * Thread allocation/attachment is outside the later deadline-sensitive path.
+ * On partial pthread creation failure return 0 and require VM teardown.
+ */
+int ores_native_actor_scheduler_prestart_realtime(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int ok = !s->retired && !s->realtime_preallocated
+        && s->accepted == 0 && s->outstanding == 0
+        && ensure_workers_locked(s, s->worker_count);
+    if (ok) s->realtime_preallocated = 1;
+    unlock(s);
+    return ok;
 }
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
