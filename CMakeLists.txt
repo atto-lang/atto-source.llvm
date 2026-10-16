@@ -1891,4 +1891,9 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/value_boundaries.py"
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
+  add_test(NAME cpu_gpu_nb_source_fail_closed
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_gpu_nb_admission.py"
+      --compiler "$<TARGET_FILE:oreslang-llvmc>")
+  set_tests_properties(cpu_gpu_nb_source_fail_closed PROPERTIES TIMEOUT 150)
 endif()
