@@ -62,6 +62,17 @@ int main(void) {
     close(pipe_fd[0]);
     close(pipe_fd[1]);
 
+    // Once the first actor is admitted, adding a reactor is no longer a
+    // legal VM bootstrap operation. No late selector thread may be created.
+    OresNativeVM* live = ores_native_vm_open(&cfg);
+    check(live != NULL);
+    const OresNativeActorRef actor =
+        ores_native_vm_spawn(live, ORES_NATIVE_VM_MAIN, 0);
+    check(actor.scheduler_domain != 0);
+    check(!ores_native_vm_nio_can_attach(live));
+    check(!ores_native_vm_enable_nio(live, 4, 0, 1));
+    check(ores_native_vm_close(live));
+
     // Fully preallocated RT bootstrap does not spawn network workers on its
     // deadline-governed operation path. This is not a WCET certification.
     vm = ores_native_vm_open_realtime(&cfg);
