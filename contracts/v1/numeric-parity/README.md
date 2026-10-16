@@ -79,6 +79,23 @@ owners, borrows, stateful code, effects, source-level errors and suspension.
 It does not implement cleanup, supervision, a guest Result type, or portable
 cross-backend public function ABI. Named call labels are not accepted in v2.
 
+The source-to-ABI visibility contract is now checked explicitly:
+`pub fnc` exports its result ABI entrypoint, while an ordinary `fnc`
+used as an internal callee is lowered with `PrivateLinkage`. The guest
+regression asserts both symbol types and fails if private helpers accidentally
+become C-callable. All negative fixtures, except the dedicated private-only
+rejection case, declare public entrypoints so one admission failure cannot
+mask unrelated failures. Named-call, recursion, and missing-public cases
+also verify specific diagnostics.
+
+An independent **source-free** alternate-org LLVM shared-library test,
+[run #38949404481](https://github.com/cliptown/cliptown-e2e/actions/runs/38949404481),
+passed checked-result arithmetic at `-O0` and `-O2` (371 controls at
+each level) plus dynamic-symbol visibility and nested-error checks for
+private helpers at both optimization levels. These tests validate LLVM
+linkage behavior, **not the real Oreslang compiler's emitted IR**. No private
+source was transferred; the approval blocker remains Java issue #962.
+
 The CTest `numeric_experimental_checked_result_function_graph` compiles
 the guest source through the actual Oreslang LLVM compiler and links the IR
 using Clang at `-O0`, `-O2`, and `-O3`. Its 11-point signed-i64 boundary
