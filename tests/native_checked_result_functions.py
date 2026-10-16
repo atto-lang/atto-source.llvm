@@ -202,6 +202,15 @@ def fanout_source(depth):
     return "\n".join(lines)
 
 
+def linear_source(depth):
+    """A single-call chain: depth 30 admits 32 frames; 31 denies 33."""
+    lines = ["pub fnc entry(int a):int{return f0(a);}"]
+    for i in range(depth):
+        lines.append("fnc f%d(int a):int{return f%d(a);}" % (i, i + 1))
+    lines.append("fnc f%d(int a):int{return a;}" % depth)
+    return "\n".join(lines)
+
+
 def rejected(compiler, work, label, source, flags=None, expected_error=None):
     file = work / (label + ".ores")
     file.write_text(source + "\n", encoding="utf-8")
@@ -296,6 +305,8 @@ def main():
             "named-arguments": ("fnc inc(int a):int{return a+1;}"
                                 "pub fnc twice(int a):int{return inc(a:a);}"),
             "exponential-call-work": fanout_source(18),
+            "first-fanout-over-budget": fanout_source(14),
+            "depth-over-budget": linear_source(31),
         }
         reasons = {
             "only-private": "requires at least one pub function",
@@ -303,19 +314,25 @@ def main():
             "indirect-cycle": "recursive call graph unsupported",
             "named-arguments": "requires positional-only calls",
             "exponential-call-work": "evaluation work exceeds 65536-node call budget",
+            "first-fanout-over-budget": "evaluation work exceeds 65536-node call budget",
+            "depth-over-budget": "call depth exceeds 32",
         }
         for label, code in negatives.items():
             rejected(compiler, work, label, code, expected_error=reasons.get(label))
         # A small acyclic call graph is still admitted; reject only
         # genuinely excessive transitive work, not every multi-call AST.
         bounded = work / "bounded-fanout.ores"
-        bounded.write_text(fanout_source(8), encoding="utf-8")
-        allowed = run([compiler, "--target=host",
-                       "--experimental-checked-i64-result-functions",
-                       str(bounded)])
-        if allowed.returncode or allowed.stderr or (
-                "__oreslang_checked_v2_entry_1" not in allowed.stdout):
-            raise AssertionError("safe bounded fanout graph was rejected: " + repr(allowed))
+        for label, code in (("small-fanout", fanout_source(8)),
+                            ("largest-binary-fanout-under-cap", fanout_source(13)),
+                            ("maximum-call-depth", linear_source(30))):
+            bounded.write_text(code, encoding="utf-8")
+            allowed = run([compiler, "--target=host",
+                           "--experimental-checked-i64-result-functions",
+                           str(bounded)])
+            if allowed.returncode or allowed.stderr or (
+                    "__oreslang_checked_v2_entry_1" not in allowed.stdout):
+                raise AssertionError(
+                    label + ": safe bounded graph was rejected: " + repr(allowed))
         rejected(compiler, work, "mixed-trap", SOURCE,
                  ["--experimental-checked-i64-functions"])
         rejected(compiler, work, "mixed-status", SOURCE,
