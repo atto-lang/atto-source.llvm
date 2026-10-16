@@ -110,7 +110,7 @@ public:
                 next_route_ + prepared.size(), std::move(path), frame->path_.size(), false)));
         }
         try {
-            for (const auto& value : prepared) active_.insert(value.get());
+            for (const auto& value : prepared) active_.emplace(value.get(), value);
         } catch (...) {
             for (const auto& value : prepared) active_.erase(value.get());
             throw;
@@ -157,7 +157,7 @@ public:
         reserve_routes(1);
         auto next = Handle(new Frame(this, generation_, frame->flow_, next_route_,
                                      frame->path_, frame->at_ - 1, true));
-        active_.insert(next.get());
+        active_.emplace(next.get(), next);
         active_.erase(frame.get());
         ++next_route_;
         return next;
@@ -209,7 +209,9 @@ private:
     std::unordered_map<std::string, std::vector<std::size_t>> outgoing_;
     std::unordered_set<std::string> roots_;
     mutable std::mutex mutex_;
-    std::unordered_set<const Frame*> active_;
+    // An active frame must be strongly owned by this ledger. Otherwise,
+    // discarding the external Handle creates an ABA authorization hazard.
+    std::unordered_map<const Frame*, Handle> active_;
     std::unordered_map<std::string, std::size_t> cursors_;
     std::uint64_t generation_;
     const std::size_t max_frames_;
@@ -253,7 +255,7 @@ private:
         reserve_routes(1);
         auto frame = Handle(new Frame(this, generation_, flow, next_route_,
                                       std::move(path), at, returning));
-        active_.insert(frame.get());
+        active_.emplace(frame.get(), frame);
         ++next_route_;
         return frame;
     }
