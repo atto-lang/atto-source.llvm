@@ -121,7 +121,7 @@ def main():
         write(root / "foreign_import.ores", 'import "./foreign";\npub fnc main(): int {return 0;}\n')
         expect_failure(args.compiler, root / "foreign_import.ores", "native imports support only .ores sources")
         write(root / "package" / ".ores.pkg.toml", 'schema_version = "1"\n[source]\nroots = ["src"]\n')
-        write(root / "package" / "src" / "main.ores", 'import "@/src/util";\npub fnc main(): int { return helper(40); }\n')
+        write(root / "package" / "src" / "main.ores", 'import "+/src/util";\npub fnc main(): int { return helper(40); }\n')
         write(root / "package" / "src" / "util.ores", 'pub fnc helper(int a): int {return a + 2;}\n')
         expect_success(args.compiler, args.clang, root / "package" / "src" / "main.ores", required_calls=("helper",))
         # One installed zed-pkg alias, with physical package metadata checked.
