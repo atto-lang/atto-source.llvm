@@ -70,46 +70,67 @@ public:
     std::uint64_t group_id() const noexcept { return group_->group_id(); }
     std::uint64_t supervisor_id() const noexcept { return group_->supervisor_id(); }
     std::size_t edge_count() const noexcept { return edges_.size(); }
+    /** Host diagnostics: retained payload bytes across all graph edges. */
+    std::size_t buffered_payload_bytes() const noexcept {
+        return total_buffered_bytes_.load(std::memory_order_relaxed);
+    }
     bool closed() const noexcept { return closed_.load(std::memory_order_acquire); }
 
     /** Write acknowledgement means mailbox admission, NOT actor execution. */
     std::shared_future<void> write_async(std::size_t edge, std::string payload) {
-        // Shared admission and exclusive closure share one barrier. Writes
-        // on independent edges proceed concurrently, but none can publish
-        // DATA after terminal close begins, even on another edge.
+        // The publication barrier fences DATA admission against terminal STOP.
+        // Edge and aggregate byte credits are reserved before retaining a
+        // payload, then rolled back if any allocation or insertion throws.
         std::shared_lock<std::shared_mutex> publication(publication_mutex_);
         auto& link = at(edge);
         std::lock_guard<std::mutex> lock(link.mutex);
         if (closed_.load(std::memory_order_acquire) || link.closed)
             return failed_void("native actor pipe is closed");
-        if (payload.size() > max_payload_bytes)
+        const auto bytes = payload.size();
+        if (bytes > max_payload_bytes)
             return failed_void("native actor pipe payload exceeds byte budget");
-        // Enforce bytes across BOTH admitted mailbox entries and pending
-        // writers. Message-count limits alone can retain gigabytes when
-        // every individual payload is within the one-message cap.
-        // Direct handoff to an already-waiting reader buffers no bytes.
-        if (link.readers.empty() &&
-                payload.size() > max_edge_buffered_bytes - link.buffered_bytes)
+
+        const bool buffered = link.readers.empty();
+        if (buffered && bytes > max_edge_buffered_bytes - link.buffered_bytes)
             return failed_void("native actor pipe edge byte credit exhausted");
-        if (link.messages.size() == link.capacity
-                && link.readers.empty()
-                && link.writers.size() >= link.capacity)
+        if (buffered && link.messages.size() == link.capacity &&
+                link.writers.size() >= link.capacity)
             return failed_void("native actor pipe pending-write budget exceeded");
-        auto pending = std::make_shared<PendingWrite>(std::move(payload));
-        auto future = pending->promise.get_future().share();
-        if (!link.readers.empty()) {
+        if (buffered && !reserve_total_bytes(bytes))
+            return failed_void("native actor pipe aggregate byte credit exhausted");
+
+        std::shared_ptr<PendingWrite> pending;
+        std::shared_future<void> future;
+        try {
+            pending = std::make_shared<PendingWrite>(std::move(payload));
+            future = pending->promise.get_future().share();
+        } catch (...) {
+            if (buffered) release_total_bytes(bytes);
+            throw;
+        }
+
+        if (!buffered) {
+            // Direct receiver handoff does not retain buffered payloads.
             auto recipient = std::move(link.readers.front());
             link.readers.pop_front();
             recipient->set_value(std::move(pending->payload));
             pending->promise.set_value();
         } else if (link.messages.size() < link.capacity) {
-            const auto bytes = pending->payload.size();
-            link.messages.push_back(std::move(pending->payload));
+            try {
+                link.messages.push_back(std::move(pending->payload));
+            } catch (...) {
+                release_total_bytes(bytes);
+                throw;
+            }
             link.buffered_bytes += bytes;
             pending->promise.set_value();
         } else {
-            const auto bytes = pending->payload.size();
-            link.writers.push_back(std::move(pending));
+            try {
+                link.writers.push_back(std::move(pending));
+            } catch (...) {
+                release_total_bytes(bytes);
+                throw;
+            }
             link.buffered_bytes += bytes;
         }
         return future;
@@ -128,6 +149,7 @@ public:
             auto payload = std::move(link.messages.front());
             link.messages.pop_front();
             link.buffered_bytes -= payload.size();
+            release_total_bytes(payload.size());
             receiver->set_value(std::move(payload));
             // close() publishes cancellation before visiting every edge. An
             // overlapping read may still drain already-admitted data, but
@@ -268,6 +290,7 @@ public:
                 // Buffered admitted payloads remain readable after closure.
                 for (auto& waiting : edge->writers) {
                     edge->buffered_bytes -= waiting->payload.size();
+                    release_total_bytes(waiting->payload.size());
                     try { waiting->promise.set_exception(std::make_exception_ptr(
                             std::logic_error("native actor pipe is closed"))); }
                     catch (...) { }
@@ -315,6 +338,30 @@ private:
     // Per-edge resident byte bound, in addition to capacity for queued
     // messages and pending writers. This is not a whole-graph memory quota.
     static constexpr std::size_t max_edge_buffered_bytes = 16 * 1024 * 1024;
+    static constexpr std::size_t max_total_buffered_bytes = 32 * 1024 * 1024;
+
+    // Independent edge mutexes cannot enforce a whole-graph budget on their
+    // own. Reserve by CAS, without blocking native threads or overcommitting
+    // two concurrent producers on different edges. Subtraction is paired
+    // with the exact queued/pending payload lifetime, not Future lifetime.
+    bool reserve_total_bytes(std::size_t bytes) noexcept {
+        if (bytes == 0) return true;
+        auto used = total_buffered_bytes_.load(std::memory_order_relaxed);
+        while (true) {
+            if (used > max_total_buffered_bytes ||
+                    bytes > max_total_buffered_bytes - used)
+                return false;
+            if (total_buffered_bytes_.compare_exchange_weak(
+                    used, used + bytes,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return true;
+        }
+    }
+
+    void release_total_bytes(std::size_t bytes) noexcept {
+        if (bytes) total_buffered_bytes_.fetch_sub(
+                bytes, std::memory_order_relaxed);
+    }
 
     /** Reject overlong encodings, surrogate code points, truncated sequences
      * and out-of-range Unicode before hashing. Key byte identity remains
@@ -389,6 +436,7 @@ private:
     // the exclusive terminal publication barrier. Never held for host STOP.
     std::shared_mutex publication_mutex_;
     std::atomic<bool> closed_{false};
+    std::atomic<std::size_t> total_buffered_bytes_{0};
 };
 
 } // namespace oreslang::runtime
