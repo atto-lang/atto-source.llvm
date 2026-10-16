@@ -83,6 +83,58 @@ class DiagnosticProof(unittest.TestCase):
         self.assertIn("SUMMARY pass=0 pending=1 fail=0", stdout.getvalue())
         self.assertIn("zero conformance cases passed", stderr.getvalue())
 
+    def test_diagnostic_pass_cannot_hide_pending_native_execution(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        suite = {"cases": [
+            {"id": "diagnostic.synthetic", "kind": "diagnostic",
+             "source": "fixtures/unknown.ores",
+             "diagnostic_class": "unknown_name",
+             "backends": {"llvm": "required", "graal": "required"}},
+            {"id": "native.pending", "kind": "native_exit",
+             "source": "fixtures/add.ores", "expected_exit": 42,
+             "backends": {"llvm": "pending", "graal": "required"},
+             "pending_reason": "synthetic native guest is not implemented"},
+        ]}
+        fake = {"id": "diagnostic.synthetic", "status": "pass",
+                "diagnostic_class": "unknown_name", "detail": ""}
+        argv = ["run.py", "--backend", "llvm",
+                "--command", "compiler {source}", "--revision", "a" * 40]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(sys, "argv", argv), \
+             patch.object(run, "validate_suite", return_value=(suite, "0" * 64)), \
+             patch.object(run, "run_case", return_value=fake) as mock_case, \
+             redirect_stdout(output), redirect_stderr(errors):
+            self.assertEqual(run.main(), 1)
+        mock_case.assert_called_once()
+        self.assertIn("SUMMARY pass=1 pending=1 fail=0", output.getvalue())
+        self.assertIn("no required native_exit", errors.getvalue())
+
+    def test_native_execution_evidence_requires_observed_expected_exit(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        suite = {"cases": [{
+            "id": "native.synthetic", "kind": "native_exit",
+            "source": "fixtures/add.ores", "expected_exit": 42,
+            "backends": {"llvm": "required", "graal": "required"},
+        }]}
+        argv = ["run.py", "--backend", "llvm",
+                "--command", "compiler {source}", "--revision", "a" * 40]
+        for observed, expected_result in ((None, 1), (41, 1), (42, 0)):
+            with self.subTest(observed=observed):
+                fake = {"id": "native.synthetic", "status": "pass",
+                        "detail": ""}
+                if observed is not None:
+                    fake["observed_exit"] = observed
+                with patch.object(sys, "argv", argv), \
+                     patch.object(run, "validate_suite",
+                                  return_value=(suite, "0" * 64)), \
+                     patch.object(run, "run_case", return_value=fake), \
+                     redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    self.assertEqual(run.main(), expected_result)
+
     def test_validates_strict_schema_fixture_inventory(self):
         suite, digest = run.validate_suite()
         self.assertGreaterEqual(len(suite["cases"]), 10)
