@@ -1,9 +1,9 @@
 // Executed native guest regression: order-sensitive FIFO and drain-before-STOP.
-// Rolling base-3 digest distinguishes permutations that share the same sum.
+// Rolling base-11 digest distinguishes permutations that share the same sum.
 define actor Worker as {
   let total: int = 0;
   pub fnc on_message(int n): int {
-    total = total * 3 + n;
+    total = total * 11 + n;
     return total;
   }
 }
