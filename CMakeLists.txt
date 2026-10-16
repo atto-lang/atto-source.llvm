@@ -1913,3 +1913,16 @@ if(BUILD_TESTING)
     COMMAND oreslang-execution-graph-v1-test)
   set_tests_properties(native_execution_graph_v1_host_only PROPERTIES TIMEOUT 45)
 endif()
+
+# Typed CPU/GPU plan constructor admission and malformed-IR fuzz matrix.
+if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
+  add_executable(oreslang-typed-graph-security tests/execution_graph_v1_admission_security_test.cpp)
+  target_include_directories(oreslang-typed-graph-security PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(oreslang-typed-graph-security PRIVATE cxx_std_17)
+  target_compile_options(oreslang-typed-graph-security PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  target_link_libraries(oreslang-typed-graph-security PRIVATE Threads::Threads)
+  add_test(NAME native_typed_graph_malformed_admission COMMAND oreslang-typed-graph-security)
+  set_tests_properties(native_typed_graph_malformed_admission PROPERTIES TIMEOUT 45)
+endif()
