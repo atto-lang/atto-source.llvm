@@ -847,6 +847,39 @@ int main() {
         }, "oversized graph reader budget accepted");
     }
 
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // Reader enqueue allocation failure must not strand an aggregate reader
+    // permit. The next pending reader must be deliverable and STOP must
+    // leave the ledger at zero.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4,
+            32, 2, 1);
+        pipe.fail_next_reader_enqueue_for_test();
+        bool reader_oom = false;
+        try { (void)pipe.read_async(0); }
+        catch (const std::bad_alloc&) { reader_oom = true; }
+        check(reader_oom && pipe.pending_reader_count() == 0,
+              "reader allocation failure retained a global reader slot");
+        const auto waiting = pipe.read_async(1);
+        check(waiting.wait_for(0ms) == std::future_status::timeout &&
+              pipe.pending_reader_count() == 1,
+              "failed reader enqueue poisoned the next admission");
+        bool denied = false;
+        try { pipe.read_async(0).get(); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied && pipe.pending_reader_count() == 1,
+              "reader quota bypassed after allocation failure");
+        pipe.write_to_async("Producer", "ConsumerB", "recovered").get();
+        check(waiting.get() == "recovered" &&
+              pipe.pending_reader_count() == 0,
+              "reader allocation fault poisoned direct delivery or leaked slot");
+        pipe.close();
+        check(pipe.pending_reader_count() == 0,
+              "STOP retained a reader slot after allocation failure");
+    }
+#endif
+
     // Graph-wide byte credits count BOTH buffered messages and suspended
     // writers. Exhausting one edge must not steal bytes from another; STOP
     // releases only pending writes, while already-admitted buffered DATA can
