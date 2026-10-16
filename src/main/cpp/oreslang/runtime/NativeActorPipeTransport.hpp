@@ -303,17 +303,10 @@ public:
     std::shared_future<void> write_by_key_async(
             const std::string& source, const std::string& key,
             std::string payload) {
-        if (key.size() > 4096 || !valid_utf8_key(key))
-            throw std::invalid_argument(
-                "native actor pipe route key must be bounded canonical UTF-8");
         const auto& destinations = connected_outlets(source);
-        std::uint64_t digest = UINT64_C(14695981039346656037);
-        for (const unsigned char byte : key) {
-            digest ^= byte;
-            digest *= UINT64_C(1099511628211);
-        }
-        return write_async(destinations[digest % destinations.size()],
-                           std::move(payload));
+        return write_async(
+            destinations[actor_pipe_key_slot(key, destinations.size())],
+            std::move(payload));
     }
 
     void close() noexcept {
@@ -416,33 +409,6 @@ private:
                     std::memory_order_relaxed)) return true;
         }
         return false;
-    }
-
-    /** Reject overlong encodings, surrogate code points, truncated sequences
-     * and out-of-range Unicode before hashing. Key byte identity remains
-     * caller-defined; normalization (NFC) is an upstream typed-codec duty. */
-    static bool valid_utf8_key(const std::string& key) noexcept {
-        for (std::size_t i = 0; i < key.size();) {
-            const auto lead = static_cast<unsigned char>(key[i]);
-            if (lead <= 0x7f) { ++i; continue; }
-            std::size_t width = 0;
-            if (lead >= 0xc2 && lead <= 0xdf) width = 2;
-            else if (lead >= 0xe0 && lead <= 0xef) width = 3;
-            else if (lead >= 0xf0 && lead <= 0xf4) width = 4;
-            else return false;
-            if (width > key.size() - i) return false;
-            for (std::size_t j = 1; j < width; ++j) {
-                const auto byte = static_cast<unsigned char>(key[i + j]);
-                if ((byte & 0xc0) != 0x80) return false;
-            }
-            const auto second = static_cast<unsigned char>(key[i + 1]);
-            if ((lead == 0xe0 && second < 0xa0) ||
-                (lead == 0xed && second > 0x9f) ||
-                (lead == 0xf0 && second < 0x90) ||
-                (lead == 0xf4 && second > 0x8f)) return false;
-            i += width;
-        }
-        return true;
     }
 
     struct PendingWrite {
