@@ -47,6 +47,14 @@ into current round-robin semantics.
    only for backward compatibility. In production the supervisor must bind
    these identifiers to authenticated runtime actor identities/epochs.
    No caller-supplied actor name grants authority to another actor's port.
+   **Java/LLVM identity parity:** graph instance IDs, nominal actor type names,
+   inbound/outbound type tags, and every link source/target/payload component
+   are each limited to **256 UTF-8 bytes**. Reject embedded NUL, malformed
+   Unicode, invalid UTF-8, overlong encodings and surrogate codepoints; count
+   bytes, not Java UTF-16 code units. Optional empty inbound/outbound ports
+   remain valid only where the stage role permits them. Reject these values
+   before building route maps or admitting any message. This check is graph
+   validation, **not** an actor identity/capability authentication substitute.
 2. **Single physical execution.** Routing-policy mutation (RR cursor,
    subscription membership, reply correlation) belongs to the VM scheduler,
    **not** a guest-writable global or hidden ordinary actor instance field.
