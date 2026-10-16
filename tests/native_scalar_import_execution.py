@@ -124,6 +124,19 @@ def main():
         write(root / "package" / "src" / "main.ores", 'import "+/src/util";\npub fnc main(): int { return helper(40); }\n')
         write(root / "package" / "src" / "util.ores", 'pub fnc helper(int a): int {return a + 2;}\n')
         expect_success(args.compiler, args.clang, root / "package" / "src" / "main.ores", required_calls=("helper",))
+        # The canonical root marker is +/; the retired @/ marker must never
+        # gain authority through the experimental import concatenation path.
+        write(root / "package" / "src" / "retired.ores",
+              'import "@/src/util";\npub fnc main(): int { return helper(40); }\n')
+        expect_failure(args.compiler, root / "package" / "src" / "retired.ores",
+                       "invalid project-root import prefix")
+        for marker in ("+/src/./util", "+/src//util", "+/src/../src/util",
+                       "+/src\\util"):
+            write(root / "package" / "src" / "noncanonical.ores",
+                  f'import "{marker}";\npub fnc main(): int {{ return helper(40); }}\n')
+            expect_failure(args.compiler, root / "package" / "src" / "noncanonical.ores",
+                           "rooted import")
+
         # One installed zed-pkg alias, with physical package metadata checked.
         write(root / "package" / ".ores.pkg.toml",
               'schema_version = "1"\n[source]\nroots = ["src"]\n[dependencies]\nmath = { zed = "acme/math" }\n')
