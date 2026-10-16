@@ -35,7 +35,7 @@ def main():
         for case in UNSUPPORTED:
             result = compile_source(compiler, case, source)
             if (result.returncode != 1 or result.stdout
-                    or not re.search(r"\\b(cpu|gpu|nb|nonblocking)\\b|execution[- ]domain",
+                    or not re.search(r"\b(cpu|gpu|nb|nonblocking)\b|execution[- ]domain",
                                      result.stderr, re.IGNORECASE)):
                 raise AssertionError(
                     f"unsupported CPU/GPU/nb source did not produce a domain-specific refusal: {case!r}; "
