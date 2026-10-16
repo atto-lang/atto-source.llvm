@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <limits>
@@ -10,26 +11,46 @@
 
 namespace oreslang::dop {
 
-// Compiler/runtime planning only. A Root token is minted by trusted host code;
-// it is not a guest capability, allocation handle, or proof of physical aliasing.
+// Synthetic planner roots have no physical authority. Only HostBuffer may
+// mint bound identities, which are retired when storage is closed.
+class HostBuffer;
 class RegionRoot {
     struct Identity {
         std::uint64_t rows;
         std::uint32_t fields;
+        const bool allocation_bound;
+        std::atomic<bool> retired{false};
+        Identity(std::uint64_t r, std::uint32_t f, bool bound) noexcept
+            : rows(r), fields(f), allocation_bound(bound) {}
     };
-    std::shared_ptr<const Identity> token_;
-    explicit RegionRoot(std::shared_ptr<const Identity> token) : token_(std::move(token)) {}
-public:
-    static RegionRoot trusted_create(std::uint64_t rows, std::uint32_t fields) {
+    std::shared_ptr<Identity> token_;
+    explicit RegionRoot(std::shared_ptr<Identity> token) : token_(std::move(token)) {}
+    static void check_shape(std::uint64_t rows, std::uint32_t fields) {
         if (fields == 0 || fields > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())
                 || rows > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
             throw std::invalid_argument("region shape exceeds shared signed ABI");
-        return RegionRoot(std::make_shared<const Identity>(Identity{rows, fields}));
+    }
+    static RegionRoot create_bound(std::uint64_t rows, std::uint32_t fields) {
+        check_shape(rows, fields);
+        return RegionRoot(std::make_shared<Identity>(rows, fields, true));
+    }
+    void retire_bound() const noexcept {
+        token_->retired.store(true, std::memory_order_release);
+    }
+    friend class HostBuffer;
+public:
+    static RegionRoot trusted_create(std::uint64_t rows, std::uint32_t fields) {
+        check_shape(rows, fields);
+        return RegionRoot(std::make_shared<Identity>(rows, fields, false));
     }
     std::uint64_t rows() const noexcept { return token_->rows; }
     std::uint32_t fields() const noexcept { return token_->fields; }
     bool same_root(const RegionRoot& other) const noexcept {
         return token_ == other.token_;
+    }
+    bool is_live_owned() const noexcept {
+        return token_->allocation_bound
+            && !token_->retired.load(std::memory_order_acquire);
     }
 };
 
@@ -100,6 +121,15 @@ inline bool independent(const RegionTask& left, const RegionTask& right) {
         for (const auto& b : right.accesses)
             if (!independent(a, b)) return false;
     return true;
+}
+
+// Checked physical admission is not an execution lease. The executor must
+// acquire buffer read/write loans for the *entire* task before dispatch.
+inline void require_live_owned(const RegionTask& task) {
+    for (const auto& access : task.accesses) {
+        if (!access.root.is_live_owned())
+            throw std::logic_error("DOP region has no live owned allocation");
+    }
 }
 
 // Stable DAG levels: a later task is ordered behind every earlier conflicting
