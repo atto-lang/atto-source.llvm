@@ -154,6 +154,62 @@ int main() {
             ::close(pipefd[1]);
         }
     }
+    {
+        // Capacity is a hard bound, not a suggestion to grow threads for idle
+        // socket watches. Releasing a terminal completion must restore one
+        // exactly-once FD claim and permit safe admission again.
+        NativeEpollReactorManager manager(1);
+        constexpr std::size_t count = NativeEpollReactor::capacity;
+        std::array<std::array<int, 2>, count + 1> fds{};
+        for (auto& p : fds) p = {-1, -1};
+        for (auto& p : fds)
+            check(::pipe2(p.data(), O_NONBLOCK | O_CLOEXEC) == 0);
+        std::array<NativeEpollReactorManager::Watch, count> tickets{};
+        for (std::size_t i = 0; i < count; ++i) {
+            std::optional<NativeEpollReactorManager::Watch> watch;
+            // try_watch is intentionally nonparking, so lock contention can
+            // reject an individual test-host attempt; a test driver may retry.
+            for (int retry = 0; retry < 2000 && !watch; ++retry) {
+                watch = manager.try_watch(fds[i][0], EPOLLIN);
+                if (!watch) std::this_thread::yield();
+            }
+            check(watch.has_value());
+            tickets[i] = *watch;
+        }
+        check(manager.started_threads() == 1);
+        check(!manager.try_watch(fds[count][0], EPOLLIN).has_value());
+        bool cancelled = false;
+        for (int retry = 0; retry < 2000 && !cancelled; ++retry) {
+            cancelled = manager.try_cancel(tickets[0]);
+            if (!cancelled) std::this_thread::yield();
+        }
+        check(cancelled);
+        std::optional<NativeEpollReactorManager::Completion> terminal;
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(3);
+        while (!terminal && std::chrono::steady_clock::now() < deadline) {
+            terminal = manager.try_pop();
+            if (!terminal) std::this_thread::yield();
+        }
+        check(terminal.has_value());
+        check(terminal->event.ticket.value == tickets[0].ticket.value);
+        check(terminal->event.outcome == NativeEpollReactor::Outcome::cancelled);
+        std::optional<NativeEpollReactorManager::Watch> recycled;
+        for (int retry = 0; retry < 2000 && !recycled; ++retry) {
+            recycled = manager.try_watch(fds[count][0], EPOLLIN);
+            if (!recycled) std::this_thread::yield();
+        }
+        check(recycled.has_value());
+        check(recycled->ticket.value != tickets[0].ticket.value);
+        manager.stop();
+        std::size_t stopped_records = 0;
+        while (auto completion = manager.try_pop()) {
+            check(completion->event.outcome == NativeEpollReactor::Outcome::stopped);
+            ++stopped_records;
+        }
+        check(stopped_records == count);
+        for (auto& p : fds) { ::close(p[0]); ::close(p[1]); }
+    }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
     catch (const std::invalid_argument&) { bad = true; }
