@@ -16,3 +16,12 @@ Persistent shared-region slots are generation checked, bounded and zeroed on rel
 This is a **trusted host API**: public C++ grant structs are not cryptographic tokens and must never become a guest-facing `rt share` API as-is. Admission currently requires a trusted actor identity argument; integration must derive identity from the scheduler rather than guest input, bind incarnation, and add a supervisor-managed domain owner, real I/O/continuation quiescence, per-tenant aggregate accounting, typed destructor lowering, actor join/leave authorization and guest source fixtures.
 
 The native test is wired into CTest and additionally executed directly against exact Git blob hashes with Clang/GCC and Clang ASan+UBSan. No full LLVM/Ores source compiler CI or untrusted sandbox claim is implied.
+
+
+## Shared-domain CONTROL and asynchronous lifetime hardening — 2026-10-17
+
+The current shared-domain prototype no longer treats possession of a `SharedDomainArena&` as sufficient CONTROL authority. A domain issues exactly one opaque, non-copyable/non-movable `Control` capability; membership grant, revocation, and domain retirement require that exact capability. A CONTROL token from a sibling domain is rejected. This is still trusted-host authority, not guest-visible `rt share` lowering.
+
+The domain also has bounded move-only `LifetimePin` capabilities for continuation, FFI, and I/O owners. Acquiring a pin validates a live member grant but confers no handle, slot, read, write, allocate, or drop authority. Pins do not hold the reader/writer mutex and may be released from a different completion carrier. Logical retirement seals new authority immediately, while physical scrub/reclaim remains deferred until both critical leases and lifetime pins are quiescent. Pin release is idempotent, bounded by `MaxLifetimePins`, and retirement remains retryable and idempotent.
+
+This closes two host-substrate gaps only. Source `critical-read`/`critical-write` lowering, scheduler-derived actor identity, domain-owner construction, aggregate tenant accounting, and automatic continuation/FFI/I/O pin attachment are still required before `rt share` can be considered implemented.
