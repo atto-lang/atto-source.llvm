@@ -99,6 +99,23 @@ int main() {
         const AsyncIoTicket ticket{actor, 1, round};
         PinnedContinuationGate frame(ticket, heap, init);
         check(frame.lifetime_pinned(), "continuation did not pin actor heap lifetime");
+        // Matching turn identity alone must never authorize a foreign or
+        // stale async operation to borrow, settle, or retire this frame.
+        const AsyncIoTicket wrongActor{actor + 1, 1, round};
+        const AsyncIoTicket wrongGeneration{actor, 2, round};
+        const AsyncIoTicket wrongOperation{actor, 1, round + 1};
+        for (const AsyncIoTicket wrong : {wrongActor, wrongGeneration, wrongOperation}) {
+            check(!frame.acquire(wrong, PinnedContinuationGate::Loan::shared),
+                  "foreign ticket acquired a continuation loan");
+            check(!frame.settle(wrong, AsyncIoTerminal::closed),
+                  "foreign ticket settled the continuation");
+            check(!frame.broker_acknowledge(wrong),
+                  "foreign ticket ACKed the broker");
+            check(!frame.try_claim_resume(wrong),
+                  "foreign ticket claimed cleanup");
+            check(!frame.try_retire(wrong),
+                  "foreign ticket retired the heap pin");
+        }
         ores_actor_i64_heap_leave(heap, init);
 
         // An actor's shared loan survives physical carrier turnover, but it
@@ -132,13 +149,19 @@ int main() {
         ores_actor_i64_heap_retire(other);
         check(ores_actor_i64_heap_try_destroy(other), "unrelated actor heap not reclaimed");
 
+        const AsyncIoTerminal outcome = round % 5 == 0 ? AsyncIoTerminal::success
+            : round % 5 == 1 ? AsyncIoTerminal::failure
+            : round % 5 == 2 ? AsyncIoTerminal::cancelled
+            : round % 5 == 3 ? AsyncIoTerminal::timed_out
+                             : AsyncIoTerminal::closed;
         std::thread broker([&] {
-            check(frame.settle(ticket, AsyncIoTerminal::cancelled), "terminal cancellation lost");
+            check(frame.settle(ticket, outcome), "terminal outcome lost");
             check(frame.broker_acknowledge(ticket), "broker quiescence ACK missing");
         });
         broker.join();
         check(!frame.settle(ticket, AsyncIoTerminal::success),
-              "late success overwrote cancellation");
+              "late terminal event overwrote the winner");
+        check(frame.terminal() == outcome, "terminal winner was overwritten");
         check(frame.try_claim_resume(ticket) && !frame.try_claim_resume(ticket),
               "cancellation cleanup resumed twice");
         check(!frame.try_retire(ticket), "unfinished cleanup retired actor frame");
