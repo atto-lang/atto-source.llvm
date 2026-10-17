@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Compile Oreslang Boolean literal functions to real native LLVM machine code.
+"""Compile closed Oreslang Boolean/logical functions to native LLVM machine code.
 
-This intentionally does NOT exercise imported Assert, Any, Option or trap.
-Each export is compiled from source using oreslang-llvmc, and called by a
-separate native fixture, avoiding a handwritten implementation of its result.
+This intentionally does NOT exercise imported Assert, Any, Option, trap, bool
+parameters, locals, or bool-returning calls. Each export is compiled from source
+using oreslang-llvmc and called by a separate native fixture.
 """
 import argparse
 import os
@@ -32,13 +32,19 @@ def main():
     emitted = invoke(a.compiler, source).stdout
     if "ret i1 true" not in emitted or "ret i1 false" not in emitted:
         raise AssertionError("native bool result must use LLVM i1, not i64")
-    # This fixture must be two closed, no-call i1 exports. Searching only
-    # for malloc names misses indirect allocation, runtime helpers, and GC
-    # calls with other symbol names. A later typed Boolean feature must
-    # explicitly revise this contract rather than silently broaden it.
-    if ("define i1 @BoolProbe.yes()" not in emitted or
-            "define i1 @BoolProbe.no()" not in emitted):
-        raise AssertionError("missing native Boolean guest exports")
+    # This fixture remains a closed, no-call i1 module. Logical AND/OR must
+    # produce explicit short-circuit CFG; XOR may constant-fold in this closed
+    # literal-only slice even though the backend lowers it through CreateXor.
+    required = (
+        "BoolProbe.yes", "BoolProbe.no", "BoolProbe.and_word",
+        "BoolProbe.and_symbol", "BoolProbe.or_word", "BoolProbe.or_symbol",
+        "BoolProbe.xor_symbol", "BoolProbe.nested",
+    )
+    for symbol in required:
+        if f"define i1 @{symbol}()" not in emitted:
+            raise AssertionError(f"missing native Boolean guest export {symbol}")
+    if "br i1" not in emitted or "phi i1" not in emitted:
+        raise AssertionError("native and/or must lower to short-circuit i1 CFG")
     if re.search(r"(?m)^\s*declare\b", emitted):
         raise AssertionError("pure Boolean guest declares an external dependency")
     if re.search(r"(?m)^\s*(?:[%@][^=\n]*=\s*)?"
