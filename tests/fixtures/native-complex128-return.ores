@@ -2,6 +2,6 @@ pub fnc complex_add_sub(): complex {
   return (1.5 + 2.0i) - (0.25 + 0.5i);
 }
 
-pub fnc complex_signed_zero(): complex {
-  return -0.0 - 0.0i;
+pub fnc complex_negate(): complex {
+  return -(1.0 + 2.0i);
 }
