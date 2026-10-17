@@ -1846,4 +1846,11 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
     return program;
 }
 
+Program parse_program_bpf_xdp(std::string_view source) {
+    // XdpContext is a kernel-provided opaque capability, not an Oreslang class.
+    // Preserve parser/name/arity checks while leaving the target-specific,
+    // fail-closed AST admission to emit_verified_bpf_xdp_ir().
+    return Parser(source, false, false).parse();
+}
+
 } // namespace oreslang
