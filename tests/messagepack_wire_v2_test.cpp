@@ -27,6 +27,22 @@ static std::pair<Shape, Value> specimen(const std::string& name) {
                 Value(Value::Items{Value("a"),Value("b")})};
     if (name == "demo.String.v1")
         return {Shape::string(),Value("foo")};
+    if (name == "demo.I64Edges.v1")
+        return {Shape::list(Shape::integer()),
+                Value(Value::Items{Value(std::numeric_limits<std::int64_t>::min()),
+                                   Value(static_cast<std::int64_t>(-32769)),
+                                   Value(static_cast<std::int64_t>(-33)),
+                                   Value(static_cast<std::int64_t>(-32)),
+                                   Value(static_cast<std::int64_t>(127)),
+                                   Value(static_cast<std::int64_t>(128)),
+                                   Value(std::numeric_limits<std::int64_t>::max())})};
+    if (name == "demo.Unicode.v1")
+        return {Shape::string(),
+                Value(std::string("A\\xc3\\xa9\\xf0\\x9f\\x91\\x8b\\xe4\\xb8\\xad"))};
+    if (name == "demo.F64SignedZero.v1")
+        return {Shape::floating(),Value(-0.0)};
+    if (name == "demo.EmptyTuple.v1")
+        return {Shape::tuple({}),Value(Value::Items{})};
     throw std::invalid_argument("unknown golden fixture " + name);
 }
 
