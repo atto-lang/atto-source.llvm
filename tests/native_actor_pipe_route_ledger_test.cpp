@@ -145,6 +145,72 @@ int main() {
         retained.close();
     }
 
+    // Metadata credits bound independent route-path copies even when count
+    // slots remain. Failed fan-out must be all-or-none and preserve source
+    // authority. Return frames must reuse the consumed forward-frame credits.
+    {
+        ActorPipeRouteLedger measure(stages(), edges(), 40, 8);
+        const auto probe = measure.ingress("source");
+        const auto source_charge = measure.metadata_bytes();
+        const auto probe_child = measure.forward_to(probe, "worker-a");
+        const auto worker_charge = measure.metadata_bytes() - source_charge;
+        check(source_charge > 0 && worker_charge > source_charge,
+              "route metadata path charge did not grow on forwarding");
+
+        ActorPipeRouteLedger budgeted(stages(), edges(), 41, 8,
+                                      source_charge + worker_charge);
+        const auto root = budgeted.ingress("source");
+        check(budgeted.metadata_bytes() == source_charge,
+              "ingress metadata was not charged");
+        rejected([&] { (void)budgeted.forward_all(root); },
+                 "fan-out bypassed whole-graph metadata credits");
+        check(budgeted.outstanding() == 1 &&
+              budgeted.metadata_bytes() == source_charge,
+              "failed fan-out partially published route credits");
+        const auto child = budgeted.forward_to(root, "worker-a");
+        check(budgeted.outstanding() == 2 &&
+              budgeted.metadata_bytes() <= source_charge + worker_charge,
+              "single child bypassed metadata cap");
+        rejected([&] { (void)budgeted.round_robin(root); },
+                 "failed child metadata allocation bypassed live quota");
+        const auto reply = budgeted.backward(child);
+        check(reply->receiver() == "source" &&
+              budgeted.outstanding() == 2 &&
+              budgeted.metadata_bytes() <= source_charge + worker_charge,
+              "reverse replacement leaked or overcharged metadata");
+        rejected([&] { budgeted.complete(child); },
+                 "replaced forward frame remained live");
+        budgeted.retire_if_active(reply);
+        check(budgeted.metadata_bytes() == source_charge,
+              "reverse retirement failed to refund bytes");
+        check(budgeted.abort_and_advance(42) == 1 &&
+              budgeted.metadata_bytes() == 0,
+              "generation abort leaked route metadata credits");
+        rejected([&] { budgeted.complete(root); },
+                 "aborted generation still accepted stale frame");
+        const auto fresh = budgeted.ingress("source");
+        check(budgeted.metadata_bytes() == source_charge,
+              "fresh generation failed to reacquire metadata credits");
+        budgeted.close();
+        check(budgeted.metadata_bytes() == 0,
+              "STOP failed to release all route metadata");
+
+        rejected([&] {
+            ActorPipeRouteLedger invalid(stages(), edges(), 2, 5, 0);
+        }, "zero route metadata budget accepted");
+        rejected([&] {
+            ActorPipeRouteLedger invalid(stages(), edges(), 2, 5,
+                                         64 * 1024 * 1024 + 1);
+        }, "oversized route metadata budget accepted");
+        ActorPipeRouteLedger too_tight(stages(), edges(), 44, 8, 1);
+        rejected([&] { (void)too_tight.ingress("source"); },
+                 "ingress exceeded metadata budget without rejection");
+        check(too_tight.outstanding() == 0 &&
+              too_tight.metadata_bytes() == 0,
+              "failed ingress leaked metadata credits");
+        (void)fresh;
+    }
+
     // Selection/retirement of 2000 independent child frames is synchronized.
     ActorPipeRouteLedger parallel(stages(), edges(), 9, 2001);
     const auto parent = parallel.ingress("source");
