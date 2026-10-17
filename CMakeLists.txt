@@ -1943,3 +1943,18 @@ if(BUILD_TESTING)
     COMMAND oreslang-dop-owned-graph-bridge-test)
   set_tests_properties(dop_owned_f32_cpu_host_i64_graph_bridge PROPERTIES TIMEOUT 25)
 endif()
+
+# Real frontend refusal gate: unsupported guest cpu/gpu/nb syntax must not
+# emit any native IR. Source-free classifier tests are recorded separately.
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME cpu_gpu_nb_source_fail_closed
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_gpu_nb_admission.py"
+      --compiler "$<TARGET_FILE:oreslang-llvmc>")
+  set_tests_properties(cpu_gpu_nb_source_fail_closed PROPERTIES TIMEOUT 150)
+  add_test(NAME cpu_gpu_nb_diagnostic_refusal_classifier
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cpu_gpu_nb_admission.py")
+  set_tests_properties(cpu_gpu_nb_diagnostic_refusal_classifier PROPERTIES TIMEOUT 15)
+endif()
