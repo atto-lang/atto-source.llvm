@@ -1,5 +1,5 @@
 // Two fire-and-forget guest messages; stop drains the bounded FIFO.
-define actor Worker from private actor with threads(min: 1, max: 0) as {
+define actor Worker with threads(max: 0) as {
   let total: int = 0;
   pub fnc on_message(int n): int {
     total = total + n;
