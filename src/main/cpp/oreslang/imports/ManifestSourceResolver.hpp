@@ -167,7 +167,10 @@ inline std::optional<fs::path> find_manifest(const fs::path& start,
     // error, not an instruction to discover the boundary's manifest instead.
     if(!physical_boundary.empty()&&!beneath(physical_boundary,cursor))
         throw std::invalid_argument("source outside package discovery boundary");
-    std::optional<fs::path> legacy;
+    // The nearest directory declaring a manifest owns source discovery.
+    // Modern beats legacy only *within that same directory*, never across
+    // ancestor levels: a closer legacy package is not owned by a parent
+    // modern package.
     while(!cursor.empty() && (physical_boundary.empty()||beneath(physical_boundary,cursor))){
         auto pkg=cursor/".ores.pkg.toml", old=cursor/".oreslangc.cfg.toml";
         // The presence of a higher-priority modern marker shadows legacy
@@ -181,18 +184,18 @@ inline std::optional<fs::path> find_manifest(const fs::path& start,
                 throw std::invalid_argument("package manifest escapes discovery directory");
             return pkg;
         }
-        if(!legacy && fs::symlink_status(old).type()!=fs::file_type::not_found){
+        if(fs::symlink_status(old).type()!=fs::file_type::not_found){
             if(fs::is_symlink(old)||!fs::is_regular_file(old))
                 throw std::invalid_argument("invalid legacy manifest marker");
             if(!beneath(cursor,fs::canonical(old)))
                 throw std::invalid_argument("legacy manifest escapes discovery directory");
-            legacy=old;
+            return old;
         }
         auto parent=cursor.parent_path();
         if(parent==cursor)break;
         cursor=parent;
     }
-    return legacy;
+    return std::nullopt;
 }
 inline SourceConfig read_project(const fs::path& source,
                                  const fs::path& boundary={}) {
