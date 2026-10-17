@@ -38,6 +38,23 @@ recursive code, nonliteral return expressions and all unsupported
 features. Source size is capped at 4096 bytes before parsing. There is no
 host main wrapper or host runtime linkage. No automatic fallback occurs.
 
+## Current focused evidence (2026-10-17)
+
+Private exact-blob run
+[39070176041](https://github.com/ores-dummy-org-oreslang-stack/ores-dummy-org-oreslang-stack-lambdas/actions/runs/39070176041)
+verified 20/20 mirrored Git blobs from source head
+`9d18c9fb9b14951f40237022cd15bad79085223f`, built the compiler,
+passed the hardened source/object and target-ABI tests, then loaded every
+generated XDP action 0..4 into a real Linux 6.17.0-1022-azure kernel and
+executed each with `BPF_PROG_RUN`. A deliberately invalid one-instruction
+XDP program that exits with uninitialized R0 was rejected by the real kernel
+verifier with a verifier log.
+
+This is **focused exact-blob evidence, not full repository tree evidence**.
+It does not yet prove source-tree-wide CTest, multiple kernel versions,
+packet/context reads, maps, helpers, BTF/CO-RE, live attachment, or network
+namespace behavior.
+
 ## Evidence boundary
 
 The dedicated CTest checks positive XDP actions, negative source admission,
@@ -45,18 +62,20 @@ actual Clang BPF object generation, ELF architecture, and required sections.
 It requires a Clang distribution with the BPF backend and binutils readelf.
 A successful IR verifier result alone is **not** sufficient evidence.
 
-Separate, **still missing** milestones, in order:
-1. Run an exact-tree build, CTest and cross-target object test on CI.
-2. Use Linux CAP_BPF/CAP_NET_ADMIN (as applicable) and libbpf to load a
-   test program, record verifier logs, and attach in an isolated network
-   namespace; unload and clean up on every exit path.
+Remaining milestones, in order:
+1. Run an **exact full-tree** build and complete CTest inventory; the current
+   passing evidence is a focused 20-blob compiler/XDP slice.
+2. Repeat verifier/test-run evidence across an explicit supported Linux
+   kernel matrix, and separately test live attach/detach in an isolated
+   network namespace with deterministic cleanup.
 3. Define dedicated typed packet/context access and bounds proofs (no
    integer reinterpretation of verifier pointer types).
-4. Add map definitions, helper/kfunc gating, BTF and CO-RE only with
-   versioned kernel ABI contracts and negative verifier fixtures.
-5. Add differential XDP test-run fixtures, verifier rejection corpus,
-   kernel/version matrix, and privilege-safe loader policy.
-6. Expand to TC/tracing independently after program-type-specific proofs.
+4. Add map definitions, helper/kfunc gating, explicit source/deployment
+   licensing policy, BTF and CO-RE only with versioned kernel ABI contracts.
+5. Expand the negative verifier corpus beyond uninitialized-register proof,
+   including bad context bounds, illegal helper capability and map lifetime.
+6. Expand to socket/TC/tracing independently after program-type-specific
+   admission and verifier proofs; keep `bpfel` itself a generic target.
 
 **AF_XDP is a user-space packet I/O facility and does not itself certify
 eBPF code.** BPF is a kernel execution target, not an actor scheduler:
