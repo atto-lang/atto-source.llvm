@@ -13,13 +13,15 @@ work uses a distinct future source capability, `RawPointer<T>`, guarded by the
   `unsafe.memory` are part of the native effect bitset.
 - `TrustedRawPointer<T>` provides a no-tracing, allocation-free native proof
   object for trivially-copyable element types.
-- Bounded pointers created from existing spans retain a provenance token,
-  element count, address space and current index.
+- Bounded pointers created from existing spans require an explicit nonzero
+  compiler/runtime provenance token; a numeric address is never substituted for
+  region identity. They retain element count, address space and current index.
 - Element arithmetic checks signed underflow/overflow and bounded OOB.
 - One-past-end addresses are representable for comparison/difference but cannot
   be loaded or stored.
-- Pointer subtraction requires the same provenance/address-space and returns an
-  element distance, never an arbitrary unrelated-address difference.
+- Pointer subtraction requires bounded compiler provenance plus the same
+  provenance/address-space and returns an element distance. Integer-fabricated
+  pointers cannot be subtracted merely because their numeric addresses match.
 - Integer-created raw pointers reject null, alignment violations and arithmetic
   overflow. They are intentionally unbounded: memory validity remains the
   caller/target contract.
@@ -44,8 +46,9 @@ serialization, `Send`, or `Share` values by default.
 A raw view derived from an owning pointer/arena does not erase its original
 loan. Owner move, `rt unref`, arena retirement, reallocating mutation, actor
 teardown and hot reload must remain blocked while descendant raw leases live.
-Integer-fabricated addresses cannot claim this provenance and therefore remain
-an explicitly unsafe boundary.
+Integer-fabricated addresses carry no safe provenance, cannot participate in
+provenance-based pointer subtraction/ordering, and remain an explicitly unsafe
+boundary even if an address is later reused by another object.
 
 ## Intended source semantics
 
@@ -60,7 +63,9 @@ fnc checksum(Pointer<byte> owner, int n): int using unsafe.memory {
 }
 ```
 
-Mutable formation is `rt raw mut owner` and requires exclusive ownership.
+Mutable formation is `rt raw mut owner` and requires a distinct exclusive
+ownership/loan proof in addition to trusted-domain admission and
+`unsafe.memory`; the effect alone cannot upgrade a read-only raw capability.
 `p.addr()` exposes a `uintptr` only inside `unsafe.memory`. A reviewed
 `RawPointer<T>.from_addr(uintptr)` path is intended for FFI/MMIO/embedded
 targets. Safe `Pointer<T>` itself never becomes an integer and never supports
