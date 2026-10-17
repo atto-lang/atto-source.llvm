@@ -52,6 +52,7 @@ static void gate_fairness_regression() {
 
 struct Context {
     SharedDomainSchedulerBridge* bridge = nullptr;
+    OresNativeActorScheduler* scheduler = nullptr;
     std::optional<SharedDomainSchedulerBridge::Permit> writer;
     std::optional<SharedDomainSchedulerBridge::Permit> reader;
     std::optional<SharedDomainSchedulerBridge::Request> reader_request;
@@ -74,7 +75,7 @@ static void on_message(void* raw, std::size_t actor, std::uint64_t payload) {
     if (actor == 0 && payload == 1) {
         const OresNativeActorCapabilityWake fake{1, 1, ORES_NATIVE_CAPABILITY_READY};
         ctx.fake_wake_denied.store(
-            !ores_native_actor_scheduler_is_current_capability_wake(nullptr, fake),
+            !ores_native_actor_scheduler_is_current_capability_wake(ctx.scheduler, fake),
             std::memory_order_release);
 
         reject([&] {
@@ -156,6 +157,7 @@ int main() {
     auto* scheduler = ores_native_actor_scheduler_open_capability_wakes(
         2, 8, 2, on_message, nullptr, nullptr, on_capability, &ctx);
     require(scheduler != nullptr);
+    ctx.scheduler = scheduler;
     const auto writer_ref = ores_native_actor_scheduler_spawn(scheduler, 0);
     const auto reader_ref = ores_native_actor_scheduler_spawn(scheduler, 1);
     require(writer_ref.scheduler_domain && reader_ref.scheduler_domain);
