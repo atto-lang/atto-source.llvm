@@ -25,8 +25,8 @@ def main():
             "generated IR lacks typed complex128 aggregate return")
     require("define { double, double } @complex_add_sub()" in compiled.stdout,
             "complex_add_sub has the wrong LLVM ABI")
-    require("define { double, double } @complex_signed_zero()" in compiled.stdout,
-            "complex_signed_zero has the wrong LLVM ABI")
+    require("define { double, double } @complex_negate()" in compiled.stdout,
+            "complex_negate has the wrong LLVM ABI")
 
     harness = r'''
 #include <stdint.h>
@@ -38,7 +38,7 @@ typedef struct {
 } ores_complex128;
 
 extern ores_complex128 complex_add_sub(void);
-extern ores_complex128 complex_signed_zero(void);
+extern ores_complex128 complex_negate(void);
 
 static uint64_t bits(double value) {
     uint64_t raw = 0;
@@ -51,9 +51,9 @@ int main(void) {
     if (bits(arithmetic.real) != UINT64_C(0x3ff4000000000000)) return 11;
     if (bits(arithmetic.imaginary) != UINT64_C(0x3ff8000000000000)) return 12;
 
-    ores_complex128 zero = complex_signed_zero();
-    if (bits(zero.real) != UINT64_C(0x8000000000000000)) return 13;
-    if (bits(zero.imaginary) != UINT64_C(0x8000000000000000)) return 14;
+    ores_complex128 negated = complex_negate();
+    if (bits(negated.real) != UINT64_C(0xbff0000000000000)) return 13;
+    if (bits(negated.imaginary) != UINT64_C(0xc000000000000000)) return 14;
     return 0;
 }
 '''
