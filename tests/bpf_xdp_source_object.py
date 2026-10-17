@@ -20,11 +20,14 @@ def require(ok, message):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--compiler", required=True)
+    p.add_argument("--output-dir", type=pathlib.Path)
     args = p.parse_args()
     clang = shutil.which("clang")
     require(bool(clang), "Clang with BPF backend required for eBPF object test")
     readelf = shutil.which("readelf")
     require(bool(readelf), "readelf required to inspect eBPF ELF sections")
+    if args.output_dir:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ores-bpf-") as tmp:
         root = pathlib.Path(tmp)
         src = root / "probe.ores"
@@ -86,6 +89,8 @@ def main():
             compact = re.sub(r"[^0-9a-f]", "", license_dump.stdout.lower())
             require(license_dump.returncode == 0 and "50726f707269657461727900" in compact,
                     "stage-0 license marker is not Proprietary\\0")
+            if args.output_dir:
+                shutil.copyfile(objfile, args.output_dir / ("xdp-%d.o" % action))
 
         reject("pub fnc main(): int { return 2; }")
         reject("fnc ores_xdp(): int { return 2; }")
