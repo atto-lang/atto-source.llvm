@@ -54,6 +54,18 @@ COMPLEX_NEGATIVE_FIXTURES = {
         "native-complex128-imag-int-narrow-reject.ores",
         "native complex128 imaginary integer promotion exceeds exact binary64 range",
     ),
+    "native_complex128_local_failclosed": (
+        "native-complex128-local-reject.ores",
+        "native complex128 is currently supported only as a zero-argument return type",
+    ),
+    "native_complex128_call_from_int_failclosed": (
+        "native-complex128-call-from-int-reject.ores",
+        "native complex128 call results require typed complex call ABI lowering",
+    ),
+    "native_complex128_call_from_complex_failclosed": (
+        "native-complex128-call-from-complex-reject.ores",
+        "native complex128 calls require typed complex call ABI lowering",
+    ),
 }
 COMPLEX_POSITIVE_IR = "native_complex128_return_ir_verifies"
 COMPLEX_POSITIVE_AOT = "native_complex128_return_aot_raw_bits"
