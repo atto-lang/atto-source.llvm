@@ -800,6 +800,27 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
 
+
+    # Shared-domain proxy source admission. Proxy<T> is deliberately distinct
+    # from the scalar i64 ABI: syntax/ownership/effect rules execute now, but
+    # codegen remains fail-closed until the opaque scheduler/runtime bridge is
+    # compiler-lowered. Never accept a numeric domain/permit as Proxy<T>.
+    oreslang_contract_test(native_rt_proxy_opaque_lowering_pending
+        native-rt-proxy-opaque-lowering-pending.ores
+        --diagnostic "native Proxy<T> opaque runtime lowering is pending")
+    oreslang_contract_test(native_rt_proxy_requires_suspend_effect
+        native-rt-proxy-missing-suspend-reject.ores
+        --diagnostic "rt proxy admission may suspend and requires using suspend")
+    oreslang_contract_test(native_rt_proxy_type_mismatch_reject
+        native-rt-proxy-type-mismatch-reject.ores
+        --diagnostic "rt proxy requires a live unique class owner of matching Proxy<T> type")
+    oreslang_contract_test(native_rt_proxy_use_after_consume_reject
+        native-rt-proxy-use-after-consume-reject.ores
+        --diagnostic "rt proxy consumed owner is no longer usable")
+    oreslang_contract_test(native_rt_proxy_double_consume_reject
+        native-rt-proxy-double-consume-reject.ores
+        --diagnostic "rt proxy consumed owner is no longer usable")
+
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
     # Source await/select/Futures still fail closed pending pinned-frame lowering.
