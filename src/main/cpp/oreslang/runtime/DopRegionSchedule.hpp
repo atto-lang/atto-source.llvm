@@ -11,6 +11,15 @@
 
 namespace oreslang::dop {
 
+// Reject embedded ASCII C0/DEL controls that can spoof diagnostic lines,
+ // operator names or task identities; non-ASCII labels remain unchanged.
+inline bool has_ascii_control(const std::string& label) noexcept {
+    for (unsigned char ch : label) {
+        if (ch < 0x20 || ch == 0x7f) return true;
+    }
+    return false;
+}
+
 // Synthetic planner roots have no physical authority. Only HostBuffer may
 // mint bound identities, which are retired when storage is closed.
 class HostBuffer;
@@ -87,7 +96,8 @@ struct RegionAccess {
         // control/space codepoint <= U+0020 at either end (not just CR/LF/TAB).
         const bool valid_operator = !reduction.empty()
             && static_cast<unsigned char>(reduction.front()) > 0x20
-            && static_cast<unsigned char>(reduction.back()) > 0x20;
+            && static_cast<unsigned char>(reduction.back()) > 0x20
+            && !has_ascii_control(reduction);
         if ((mode == RegionMode::Reduce && !valid_operator)
                 || (mode != RegionMode::Reduce && !reduction.empty()))
             throw std::invalid_argument("reduction requires exactly one named operator");
@@ -101,7 +111,8 @@ struct RegionTask {
         : name(std::move(task_name)), accesses(std::move(task_accesses)) {
         if (name.empty()
                 || static_cast<unsigned char>(name.front()) <= 0x20
-                || static_cast<unsigned char>(name.back()) <= 0x20)
+                || static_cast<unsigned char>(name.back()) <= 0x20
+                || has_ascii_control(name))
             throw std::invalid_argument("invalid DOP task name");
     }
 };
