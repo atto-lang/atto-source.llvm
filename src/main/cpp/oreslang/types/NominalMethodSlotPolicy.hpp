@@ -31,6 +31,32 @@ struct Slot {
     Signature signature;
 };
 
+/**
+ * Receiver ownership is checked separately from overload identity.
+ * An implicit/explicit self marker never contributes to arity or mangling.
+ */
+enum class ReceiverMode { None, Shared, Mutable };
+
+inline void validateReceiverPolicy(Domain domain, ReceiverMode receiver) {
+    if (domain == Domain::Static) {
+        if (receiver != ReceiverMode::None) {
+            throw std::invalid_argument("static method cannot carry a self receiver");
+        }
+        return;
+    }
+    if (receiver == ReceiverMode::None) {
+        throw std::invalid_argument("instance method requires a self receiver");
+    }
+    if (receiver != ReceiverMode::Shared && receiver != ReceiverMode::Mutable) {
+        throw std::invalid_argument("invalid instance receiver ownership mode");
+    }
+}
+
+struct MethodAdmission {
+    Slot slot;
+    ReceiverMode receiver;
+};
+
 inline void requireValidUtf8(const std::string& value) {
     for (std::size_t i = 0; i < value.size();) {
         unsigned char first = static_cast<unsigned char>(value[i]);
@@ -124,6 +150,18 @@ inline std::string linkSymbol(const std::string& ownerId, const Slot& slot) {
         appendPart(out, parameter.id);
     }
     return out;
+}
+
+/**
+ * Validate receiver authority, then produce the same owner/domain/name/arity
+ * slot regardless of shared vs mutable self. Receiver mode constrains body
+ * mutation; it must never create another overload.
+ */
+inline std::string admittedLinkSymbol(
+        const std::string& ownerId,
+        const MethodAdmission& method) {
+    validateReceiverPolicy(method.slot.domain, method.receiver);
+    return linkSymbol(ownerId, method.slot);
 }
 
 // A conservative proof oracle for local same-arity class families. This does
