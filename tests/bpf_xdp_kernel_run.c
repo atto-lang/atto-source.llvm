@@ -51,10 +51,12 @@ static int prove_negative_verifier(void) {
           .dst_reg = BPF_REG_0, .src_reg = BPF_REG_1, .off = 4096 },
         { .code = BPF_JMP | BPF_EXIT }
     };
-    // 3. Stack slots are unreadable until initialized.
-    const struct bpf_insn uninitialized_stack[] = {
+    // 3. The BPF stack is bounded to 512 bytes below R10. An access below
+    // that floor is invalid regardless of whether a kernel zero-initializes
+    // otherwise in-range stack slots for privileged programs.
+    const struct bpf_insn out_of_bounds_stack[] = {
         { .code = BPF_LDX | BPF_MEM | BPF_DW,
-          .dst_reg = BPF_REG_0, .src_reg = BPF_REG_10, .off = -8 },
+          .dst_reg = BPF_REG_0, .src_reg = BPF_REG_10, .off = -520 },
         { .code = BPF_JMP | BPF_EXIT }
     };
     // 4. Unknown helper IDs must never be callable merely because a BPF CALL
@@ -68,8 +70,8 @@ static int prove_negative_verifier(void) {
                                sizeof(uninitialized_r0) / sizeof(uninitialized_r0[0])) ||
         reject_invalid_program("bad_ctx", invalid_context_read,
                                sizeof(invalid_context_read) / sizeof(invalid_context_read[0])) ||
-        reject_invalid_program("bad_stack", uninitialized_stack,
-                               sizeof(uninitialized_stack) / sizeof(uninitialized_stack[0])) ||
+        reject_invalid_program("bad_stack", out_of_bounds_stack,
+                               sizeof(out_of_bounds_stack) / sizeof(out_of_bounds_stack[0])) ||
         reject_invalid_program("bad_helper", unknown_helper,
                                sizeof(unknown_helper) / sizeof(unknown_helper[0])))
         return 1;
