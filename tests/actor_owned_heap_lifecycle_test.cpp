@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <atomic>
 #include <thread>
 #if defined(__unix__) || defined(__APPLE__)
 #include <signal.h>
@@ -195,6 +196,65 @@ int main(void) {
     CHECK(current_lease.domain == 0 && current_lease.index == 0
           && current_lease.generation == 0);
     CHECK(ores_actor_i64_heap_try_destroy(reused_heap) == 1);
+
+    /* Retain the current routing integration's real three-way race:
+     * distinct completion owners can release concurrently with CONTROL's
+     * physical destruction loop. Generation-fenced tokens are independent,
+     * so a release from one carrier must never free memory still owned by
+     * the other carrier. Each caller ceases touching the heap after release. */
+    for (unsigned iteration = 0; iteration < 24; ++iteration) {
+        OresActorI64Heap* racing_heap =
+            ores_actor_i64_heap_open(600 + iteration, 1, 2);
+        OresActorTurn racing_turn =
+            ores_actor_i64_heap_enter(racing_heap, 600 + iteration, 1);
+        OresActorExternalLease completion_a =
+            ores_actor_i64_heap_external_acquire(racing_heap, racing_turn);
+        OresActorExternalLease completion_b =
+            ores_actor_i64_heap_external_acquire(racing_heap, racing_turn);
+        CHECK(completion_a.domain == completion_b.domain);
+        CHECK(completion_a.index != completion_b.index);
+        ores_actor_i64_heap_leave(racing_heap, racing_turn);
+        ores_actor_i64_heap_retire(racing_heap);
+        CHECK(ores_actor_i64_heap_try_destroy(racing_heap) == 0);
+
+        std::atomic<unsigned> ready{0};
+        std::atomic<bool> go{false};
+        std::atomic<bool> destroyed{false};
+        std::thread carrier_a([&] {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            ores_actor_i64_heap_external_release(racing_heap, &completion_a);
+        });
+        std::thread carrier_b([&] {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            ores_actor_i64_heap_external_release(racing_heap, &completion_b);
+        });
+        std::thread control([&] {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            while (!ores_actor_i64_heap_try_destroy(racing_heap))
+                std::this_thread::yield();
+            destroyed.store(true, std::memory_order_release);
+        });
+        while (ready.load(std::memory_order_acquire) != 3)
+            std::this_thread::yield();
+        go.store(true, std::memory_order_release);
+        carrier_a.join();
+        carrier_b.join();
+        control.join();
+        CHECK(destroyed.load(std::memory_order_acquire));
+        CHECK(completion_a.domain == 0 && completion_a.index == 0
+              && completion_a.generation == 0);
+        CHECK(completion_b.domain == 0 && completion_b.index == 0
+              && completion_b.generation == 0);
+        racing_heap = nullptr;
+        ores_actor_i64_heap_external_release(racing_heap, &completion_a);
+        ores_actor_i64_heap_external_release(racing_heap, &completion_b);
+    }
 #if defined(__unix__) || defined(__APPLE__)
     CHECK(rejects(WRONG_OWNER));
     CHECK(rejects(WRONG_EPOCH));
