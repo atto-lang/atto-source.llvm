@@ -702,15 +702,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 // never expose private parameter slots as class fields.
                 std::unordered_map<std::string, llvm::Value*> ctor_storage;
                 if (binding.new_class) {
-                    if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
+                    const std::size_t arity = binding.constructor_arguments.size();
+                    const ScalarConstructor* ctor = cls->constructor_for_arity(arity);
+                    if (ctor == nullptr && (!cls->constructors.empty() || arity != 0))
                         throw std::runtime_error("native class constructor argument arity mismatch");
-                    for (std::size_t ai = 0; ai < binding.constructor_arguments.size(); ++ai) {
+                    for (std::size_t ai = 0; ai < arity; ++ai) {
                         llvm::Value* value = lower(*binding.constructor_arguments[ai],
                             builder, i64, storage, field_storage, declarations, &region_moves);
                         llvm::Value* arg_slot = builder.CreateAlloca(i64, nullptr,
-                            binding.name + ".constructor." + cls->constructor_parameters[ai]);
+                            binding.name + ".constructor." + ctor->parameters[ai]);
                         builder.CreateStore(value, arg_slot);
-                        ctor_storage.emplace(cls->constructor_parameters[ai], arg_slot);
+                        ctor_storage.emplace(ctor->parameters[ai], arg_slot);
                     }
                 }
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
