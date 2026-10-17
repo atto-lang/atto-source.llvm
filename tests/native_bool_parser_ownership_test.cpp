@@ -94,6 +94,15 @@ int main() {
     }
 
     rejected(R"(
+        fnc And(bool value): bool {
+            return value;
+        }
+        fnc probe(bool left, bool right): bool {
+            return And(left, right);
+        }
+    )", "unknown bool function or wrong arity 'And'");
+
+    rejected(R"(
         fnc bad(bool a, bool b, bool c): bool {
             return Xor(a, b, c);
         }
