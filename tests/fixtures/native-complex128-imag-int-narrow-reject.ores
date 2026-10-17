@@ -1,3 +1,0 @@
-pub fnc bad(): complex {
-  return 9007199254740993i;
-}
