@@ -44,6 +44,28 @@ int main() {
     check(m::linkSymbol("root.Picker", color) !=
           m::linkSymbol("root.Other", color), "owner collision");
 
+    const std::string sharedReceiver = m::admittedLinkSymbol(
+        "root.Picker", {color, m::ReceiverMode::Shared});
+    const std::string mutableReceiver = m::admittedLinkSymbol(
+        "root.Picker", {color, m::ReceiverMode::Mutable});
+    check(sharedReceiver == mutableReceiver,
+          "receiver ownership incorrectly changed method slot identity");
+    check(sharedReceiver == m::linkSymbol("root.Picker", color),
+          "implicit self incorrectly changed method arity or ABI");
+    check(m::admittedLinkSymbol(
+              "root.Picker", {staticColor, m::ReceiverMode::None})
+          == m::linkSymbol("root.Picker", staticColor),
+          "static no-self admission changed slot identity");
+    denied([&] { (void)m::admittedLinkSymbol(
+        "root.Picker", {color, m::ReceiverMode::None}); },
+        "instance method admitted without self receiver");
+    denied([&] { (void)m::admittedLinkSymbol(
+        "root.Picker", {staticColor, m::ReceiverMode::Shared}); },
+        "static method admitted shared self receiver");
+    denied([&] { (void)m::admittedLinkSymbol(
+        "root.Picker", {staticColor, m::ReceiverMode::Mutable}); },
+        "static method admitted mutable self receiver");
+
     const m::Slot primitive{m::Domain::Instance,
         signature("choose", {{Kind::Primitive, "int"}}, ids)};
     denied([&] { (void)m::proveLocalSameArityFamilies({primitive, color}, ids); },
