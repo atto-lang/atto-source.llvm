@@ -1392,6 +1392,15 @@ if(BUILD_TESTING)
             class-constructor-overload-extra-arity-reject.ores --diagnostic "native class constructor argument arity mismatch")
         oreslang_contract_test(reject_constructor_self_not_leading
             class-constructor-self-not-leading-reject.ores --diagnostic "expected 'int'")
+        # The restricted native frontend must not compile comma indexing or
+        # method-index syntax as a one-dimensional array/method fallback.
+        # Replace these denials with positive guest parity when complete.
+        oreslang_contract_test(reject_unlowered_comma_index_get
+            class-comma-index-unlowered-reject.ores --diagnostic "unsupported Oreslang token")
+        oreslang_contract_test(reject_unlowered_comma_index_set
+            class-comma-index-set-unlowered-reject.ores --diagnostic "unsupported Oreslang token")
+        oreslang_contract_test(reject_unlowered_index_symbol
+            class-symbol-index-unlowered-reject.ores --diagnostic "unsupported Oreslang token")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
