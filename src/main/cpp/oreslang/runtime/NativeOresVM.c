@@ -22,6 +22,7 @@ struct OresNativeVM {
     int control_retired;
     int guest_actor_admitted; /* NIO bootstrap barrier: no late reactor creation */
     int nio_bootstrap_in_progress; /* CONTROL-gated cold-start reservation */
+    pthread_t nio_bootstrap_owner; /* only the reserver may complete/abort */
     void* nio_backend;
     OresNativeVMNioDestroy nio_destroy;
     /* Under control_lock. A backend borrow pins accepted host operations
@@ -367,14 +368,23 @@ int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm) {
     control_lock(vm);
     int granted = !vm->control_retired && !vm->guest_actor_admitted
         && !vm->nio_backend && !vm->nio_bootstrap_in_progress;
-    if (granted) vm->nio_bootstrap_in_progress = 1;
+    if (granted) {
+        vm->nio_bootstrap_in_progress = 1;
+        vm->nio_bootstrap_owner = pthread_self();
+    }
     control_unlock(vm);
     return granted;
 }
 void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm) {
     if (!vm) return;
     control_lock(vm);
-    vm->nio_bootstrap_in_progress = 0;
+    // A foreign host cannot revoke another host's in-flight cold-start.
+    if (vm->nio_bootstrap_in_progress &&
+        pthread_equal(vm->nio_bootstrap_owner, pthread_self())) {
+        vm->nio_bootstrap_in_progress = 0;
+        if (vm->control_retired &&
+            pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
     control_unlock(vm);
 }
 
@@ -387,12 +397,18 @@ int ores_native_vm_attach_nio(
     if (!vm || !backend || !destroy) return 0;
     control_lock(vm);
     const int accepted = vm->nio_bootstrap_in_progress
+        && pthread_equal(vm->nio_bootstrap_owner, pthread_self())
         && !vm->control_retired && !vm->guest_actor_admitted && !vm->nio_backend;
     if (accepted) {
         vm->nio_backend = backend;
         vm->nio_destroy = destroy;
     }
-    vm->nio_bootstrap_in_progress = 0;
+    if (vm->nio_bootstrap_in_progress &&
+        pthread_equal(vm->nio_bootstrap_owner, pthread_self())) {
+        vm->nio_bootstrap_in_progress = 0;
+        if (vm->control_retired &&
+            pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
     control_unlock(vm);
     return accepted;
 }
@@ -451,7 +467,7 @@ int ores_native_vm_close(OresNativeVM* vm) {
     // Only the externally fenced host closer waits here; actor, CONTROL and
     // epoll carriers never park while attempting guest I/O admission.
     control_lock(vm);
-    while (vm->nio_borrows) {
+    while (vm->nio_borrows || vm->nio_bootstrap_in_progress) {
         if (pthread_cond_wait(&vm->nio_idle, &vm->control_lock) != 0) abort();
     }
     void* backend = vm->nio_backend;
