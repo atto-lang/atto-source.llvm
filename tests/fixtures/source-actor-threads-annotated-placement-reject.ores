@@ -1,0 +1,2 @@
+@ActorThreads(max = 1)
+pub fnc main(): int { return 42; }
