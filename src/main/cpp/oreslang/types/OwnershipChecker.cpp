@@ -25,6 +25,7 @@ struct LocalOwnership {
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
+    bool proxy_capability = false; // Opaque Proxy<T>; never a scalar/source pointer.
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -224,6 +225,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             return;
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
+            if (source.proxy_capability)
+                reject(expr, "Proxy<T> capability cannot be used as a scalar value");
             if (source.moved)
                 reject(expr, "use of explicitly moved int '" + expr.name + "'");
             if (source.exclusive_loan)
@@ -456,8 +459,16 @@ void validate_i64_ownership(const Program& program) {
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
+            entry.proxy_capability = !binding.proxy_class_name.empty();
             entry.class_name = binding.class_name;
-            if (binding.int_array) {
+            if (entry.proxy_capability) {
+                // Parser/source validation owns Proxy<T> admission today. If
+                // that boundary is ever reordered, ownership checking still
+                // refuses to treat the capability initializer as scalar i64.
+                if (!binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::Proxy)
+                    throw std::runtime_error("invalid native Proxy<T> owner");
+            } else if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.new_class) {
