@@ -175,6 +175,10 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+        case Expression::Kind::Proxy:
+            throw std::runtime_error(
+                "native Proxy<T> opaque runtime lowering is pending; "
+                "proxy capabilities may not be encoded as scalar i64");
         case Expression::Kind::Take: {
             // Native owned-int transfer reads the scalar before destroying
             // the old heap allocation. It then disables the exit-time drop.
