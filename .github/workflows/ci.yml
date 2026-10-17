@@ -27,6 +27,8 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Self-test fail-closed Option-pattern evidence harness (synthetic only)
+        run: python3 -m unittest discover -s scripts -p test_option_pattern_contract.py -v
       - name: Reject unsupported Option pattern syntax using real LLVM compiler
         run: |
           python3 scripts/check_option_pattern_contract.py --backend llvm \
