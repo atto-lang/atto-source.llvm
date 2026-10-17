@@ -188,7 +188,7 @@ def main():
         # inserts the bounds branch before the packet load.
         packet_source = (
             "pub fnc ores_xdp(borrow XdpContext ctx): int {\n"
-            "  if (ctx.packet_u8(12) == 8) { return 1; } fi\n"
+            "  if (ctx.packet_u8(14) == 8) { return 1; } fi\n"
             "  return 2;\n"
             "}\n"
         )
