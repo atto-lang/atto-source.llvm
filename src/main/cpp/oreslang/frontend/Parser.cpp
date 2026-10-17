@@ -15,7 +15,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, Symbol, End };
+enum class Kind { Identifier, Integer, Floating, Imaginary, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -114,15 +114,31 @@ public:
             while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) {
                 ++at_;
             }
-            if (at_ < source_.size()) {
-                const char suffix = source_[at_];
-                if (suffix == '.' || suffix == 'e' || suffix == 'E' || suffix == 'i') {
-                    throw std::runtime_error(
-                        "native complex128/f64 literal requires verified LLVM numeric lowering at byte "
-                        + std::to_string(start));
-                }
+            bool floating = false;
+            if (at_ < source_.size() && source_[at_] == '.') {
+                floating = true;
+                ++at_;
+                while (at_ < source_.size() &&
+                        (digit(source_[at_]) || source_[at_] == '_')) ++at_;
             }
-            return {Kind::Integer, source_.substr(start, at_ - start), start};
+            if (at_ < source_.size() &&
+                    (source_[at_] == 'e' || source_[at_] == 'E')) {
+                floating = true;
+                ++at_;
+                if (at_ < source_.size() &&
+                        (source_[at_] == '+' || source_[at_] == '-')) ++at_;
+                const std::size_t exponent_start = at_;
+                while (at_ < source_.size() &&
+                        (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+                if (at_ == exponent_start)
+                    throw std::runtime_error("malformed floating exponent at byte "
+                                             + std::to_string(start));
+            }
+            const bool imaginary = at_ < source_.size() && source_[at_] == 'i';
+            if (imaginary) ++at_;
+            return {imaginary ? Kind::Imaginary
+                              : (floating ? Kind::Floating : Kind::Integer),
+                    source_.substr(start, at_ - start), start};
         }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
@@ -179,6 +195,7 @@ struct NativeCallSignature {
     std::vector<std::string> parameters;
     std::vector<GenericParameter> generics;
     std::vector<std::string> parameter_generic_types;
+    bool returns_complex = false;
 };
 using NativeSignatures = std::unordered_map<
     std::string, std::unordered_map<std::size_t, NativeCallSignature>>;
@@ -485,6 +502,33 @@ private:
         return value;
     }
 
+    double floating_literal(bool imaginary) {
+        if (token_.kind != (imaginary ? Kind::Imaginary : Kind::Floating))
+            fail(imaginary ? "expected imaginary literal" : "expected floating literal");
+        std::string digits(token_.text);
+        if (imaginary) {
+            if (digits.empty() || digits.back() != 'i')
+                fail("malformed imaginary literal");
+            digits.pop_back();
+        }
+        for (std::size_t i = 0; i < digits.size(); ++i) {
+            if (digits[i] != '_') continue;
+            if (i == 0 || i + 1 == digits.size() ||
+                    !digit(digits[i - 1]) || !digit(digits[i + 1]))
+                fail("malformed numeric separator");
+        }
+        digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        double value = 0.0;
+        const auto parsed = std::from_chars(
+                digits.data(), digits.data() + digits.size(), value,
+                std::chars_format::general);
+        if (parsed.ec != std::errc{} ||
+                parsed.ptr != digits.data() + digits.size())
+            fail("floating literal is not representable as binary64");
+        advance();
+        return value;
+    }
+
     CooperativeScalarLoop cooperative_scalar_loop() {
         // Explicitly narrow syntax avoids accidentally accepting unpinned
         // loans, exception cleanup, arbitrary calls or nonresumable CFG.
@@ -588,6 +632,8 @@ private:
                                                     : Parameter::Mode::Borrow;
                 }
                 if (!accept("int")) {
+                    if (token_.text == "complex")
+                        fail("native complex128 parameters require typed complex ABI lowering");
                     const std::string type = identifier();
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
@@ -602,12 +648,23 @@ private:
         }
         require(":");
         value.returns_void = accept("void");
-        if (!value.returns_void && !accept("int")) {
-            const std::string type = identifier();
-            const bool generic = std::any_of(value.generic_parameters.begin(),
-                value.generic_parameters.end(),
-                [&](const GenericParameter& p) { return p.name == type; });
-            if (!generic) fail("native return type requires int or scalar generic slot");
+        if (!value.returns_void) {
+            if (accept("complex")) {
+                value.returns_complex = true;
+                if (value.name == "main")
+                    fail("native entrypoint main cannot return complex128");
+                if (!value.parameters.empty())
+                    fail("native complex128 first slice requires zero parameters");
+                if (!value.generic_parameters.empty())
+                    fail("native complex128 first slice does not support generics");
+            } else if (!accept("int")) {
+                const std::string type = identifier();
+                const bool generic = std::any_of(value.generic_parameters.begin(),
+                    value.generic_parameters.end(),
+                    [&](const GenericParameter& p) { return p.name == type; });
+                if (!generic)
+                    fail("native return type requires int, complex or scalar generic slot");
+            }
         }
         if (accept("using")) {
             value.has_declared_effects = true;
@@ -630,6 +687,15 @@ private:
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
         require("{");
+        if (value.returns_complex) {
+            if (value.has_declared_effects)
+                fail("native complex128 first slice is pure and cannot declare effects");
+            require("return");
+            value.result = expression();
+            require(";");
+            require("}");
+            return value;
+        }
         while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
             LocalBinding binding;
             binding.offset = token_.offset;
@@ -1250,6 +1316,16 @@ private:
             expr->integer = integer_literal();
             return expr;
         }
+        if (token_.kind == Kind::Floating) {
+            auto expr = make_expression(Expression::Kind::Floating, offset);
+            expr->floating = floating_literal(false);
+            return expr;
+        }
+        if (token_.kind == Kind::Imaginary) {
+            auto expr = make_expression(Expression::Kind::Imaginary, offset);
+            expr->floating = floating_literal(true);
+            return expr;
+        }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
         if (token_.text == "ActorGroup" ||
@@ -1378,7 +1454,7 @@ private:
 
     void require(std::string_view text) {
         if (text == "int" && token_.text == "complex") {
-            fail("native complex128 type requires verified LLVM scalar lowering");
+            fail("native complex128 is currently supported only as a zero-argument return type");
         }
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
@@ -1408,6 +1484,11 @@ private:
                                     const NativeSignatures& functions) {
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
+            case Expression::Kind::Floating:
+            case Expression::Kind::Imaginary:
+                throw std::runtime_error(
+                    "native floating/imaginary literal requires complex128 return context at byte "
+                    + std::to_string(expr.offset));
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
@@ -1434,6 +1515,9 @@ private:
                     expr.argument_names.size() != expr.arguments.size())
                     throw std::runtime_error("invalid named call argument layout");
                 const auto& signature = found->second.at(expr.arguments.size());
+                if (signature.returns_complex)
+                    throw std::runtime_error(
+                        "native complex128 call results require typed complex call ABI lowering");
                 const auto& formals = signature.parameters;
                 if (expr.type_arguments_present && signature.generics.empty())
                     throw std::runtime_error("call-site type arguments require generic function");
@@ -1526,6 +1610,31 @@ private:
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
+    }
+
+    static void validate_complex_expression(const Expression& expr) {
+        switch (expr.kind) {
+            case Expression::Kind::Integer:
+            case Expression::Kind::Floating:
+            case Expression::Kind::Imaginary:
+                return;
+            case Expression::Kind::Negate:
+                validate_complex_expression(*expr.left);
+                return;
+            case Expression::Kind::Add:
+            case Expression::Kind::Subtract:
+                validate_complex_expression(*expr.left);
+                validate_complex_expression(*expr.right);
+                return;
+            case Expression::Kind::Multiply:
+                throw std::runtime_error(
+                    "native complex128 multiplication requires exact once-rounded lowering at byte "
+                    + std::to_string(expr.offset));
+            default:
+                throw std::runtime_error(
+                    "native complex128 first slice supports only numeric literals, unary minus, add and subtract at byte "
+                    + std::to_string(expr.offset));
+        }
     }
 
     static bool contains_callable_invocation(const Expression* expr) {
@@ -1626,6 +1735,7 @@ private:
                 throw std::runtime_error("duplicate native entrypoint 'main'; main cannot be overloaded");
             NativeCallSignature signature;
             signature.generics = fn.generic_parameters;
+            signature.returns_complex = fn.returns_complex;
             for (const auto& param : fn.parameters) {
                 signature.parameters.push_back(param.name);
                 signature.parameter_generic_types.push_back(param.generic_type);
@@ -1798,7 +1908,10 @@ private:
                 validate_expression(*guard.rhs, params, functions);
                 validate_expression(*guard.result, params, functions);
             }
-            if (fn.result) validate_expression(*fn.result, params, functions);
+            if (fn.result) {
+                if (fn.returns_complex) validate_complex_expression(*fn.result);
+                else validate_expression(*fn.result, params, functions);
+            }
         }
     }
 
