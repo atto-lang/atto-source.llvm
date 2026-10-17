@@ -30,6 +30,20 @@ int main() {
         TrustedPointerWindow::Mode::ReadWrite); });
     auto grant = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite);
+    // Even distinct actor identities cannot obtain aliased grants over the
+    // same backing bytes. Read-only aliasing also requires explicit sharing.
+    reject([&] { (void)registry.issue(NativeRegionRegistry::Trust::Trusted,
+        other, 11, 4, bytes.data(), sizeof(bytes),
+        TrustedPointerWindow::Mode::ReadOnly); });
+    reject([&] { (void)registry.issue(NativeRegionRegistry::Trust::Trusted,
+        owner, 12, 5, bytes.data() + 1, sizeof(std::uint32_t),
+        TrustedPointerWindow::Mode::ReadWrite); });
+    // Disjoint adjacent windows are permitted and must not be mistaken for
+    // overlapping ranges.
+    auto adjacent = registry.issue(NativeRegionRegistry::Trust::Trusted, other,
+        13, 6, bytes.data() + 4, sizeof(std::uint32_t),
+        TrustedPointerWindow::Mode::ReadOnly);
+    registry.revoke(adjacent);
     auto p = registry.at<std::uint32_t>(grant, owner);
     if (p.offset(owner, 2).load(owner) != 30) throw std::runtime_error("bad pointer");
     reject([&] { (void)registry.at<std::uint32_t>(grant, other); });
