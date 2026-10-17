@@ -435,10 +435,14 @@ void validate_i64_ownership(const Program& program) {
     }
     for (const auto& function : program.functions) {
         if (function.returns_complex) {
-            if (!function.parameters.empty() || !function.locals.empty() ||
+            if (function.returns_void || !function.result ||
+                    !function.parameters.empty() || !function.locals.empty() ||
                     !function.statements.empty() || !function.early_returns.empty() ||
-                    !function.actor_spawns.empty() || !function.actor_actions.empty() ||
-                    function.caught_throw_value)
+                    !function.actor_spawns.empty() || !function.actor_sends.empty() ||
+                    !function.actor_stops.empty() || !function.actor_actions.empty() ||
+                    !function.actor_field_writes.empty() || function.scalar_while ||
+                    function.caught_throw_value || !function.caught_throw_defers.empty() ||
+                    function.has_declared_effects)
                 throw std::runtime_error(
                     "internal complex128 ownership boundary contains unsupported state");
             continue;
