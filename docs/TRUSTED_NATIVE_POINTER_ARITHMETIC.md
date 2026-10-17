@@ -129,10 +129,12 @@ against the private branch before building:
 For these exact file blobs, both host test executables **passed locally**
 with Clang C++17 ASan+UBSan, GCC C++17 Release -O2 -DNDEBUG,
 and GCC C++17 TSan (each compiled with strict warnings and -Werror).
+A separate minimal host-only CMake harness configured successfully and its
+CTest run passed both tests (2/2) using those exact source/header blobs.
 Three compile-negative configurations were also checked with both
 GCC and Clang: private issuance, forbidden bool access and forbidden float access.
 
-This is *not* a full LLVM compiler build, project CMake/CTest run,
+This is *not* a full LLVM compiler build or its official project CMake/CTest run,
 guest-source test, CI runner pass or production authorization proof.
 GitHub Actions run #39058450205 created three matrix jobs, but each
 failed with no recorded steps; it provides no executed test evidence.
