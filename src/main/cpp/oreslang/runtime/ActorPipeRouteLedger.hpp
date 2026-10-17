@@ -36,6 +36,15 @@ public:
         const std::vector<std::string> path_;
         const std::size_t at_;
         const bool returning_;
+        // Conservative accounting of the owned frame and its immutable
+        // path buffers. Actual allocator bookkeeping is implementation
+        // dependent and therefore not claimed as a hard heap-byte cap.
+        std::size_t metadata_charge() const noexcept {
+            std::size_t bytes = sizeof(Frame)
+                + path_.capacity() * sizeof(std::string) + 64;
+            for (const auto& name : path_) bytes += name.capacity();
+            return bytes;
+        }
     public:
         Frame(const Frame&) = delete;
         Frame& operator=(const Frame&) = delete;
@@ -49,11 +58,15 @@ public:
 
     ActorPipeRouteLedger(const std::vector<PipeStage>& stages,
                          const std::vector<PipeConnection>& edges,
-                         std::uint64_t generation, std::size_t max_frames)
+                         std::uint64_t generation, std::size_t max_frames,
+                         std::size_t max_metadata_bytes = 64 * 1024 * 1024)
         : edges_(check_actor_pipeline_graph(stages, edges)),
-          generation_(generation), max_frames_(max_frames) {
+          generation_(generation), max_frames_(max_frames),
+          max_metadata_bytes_(max_metadata_bytes) {
         if (!generation_ || !max_frames_ || max_frames_ > 65536)
             throw std::invalid_argument("invalid route generation or frame budget");
+        if (!max_metadata_bytes_ || max_metadata_bytes_ > 64 * 1024 * 1024)
+            throw std::invalid_argument("invalid route frame metadata byte budget");
         std::unordered_map<std::string, std::size_t> inbound;
         std::unordered_map<std::string, PipeRole> roles;
         for (const auto& stage : stages) {
@@ -102,12 +115,20 @@ public:
         reserve_routes(out.size());
         std::vector<Handle> prepared;
         prepared.reserve(out.size());
+        std::size_t reserved_bytes = 0;
         for (const auto i : out) {
             auto path = frame->path_;
             if (path.size() >= 1024) throw std::length_error("route path too deep");
             path.push_back(edges_[i].target);
-            prepared.push_back(Handle(new Frame(this, generation_, frame->flow_,
-                next_route_ + prepared.size(), std::move(path), frame->path_.size(), false)));
+            auto child = Handle(new Frame(this, generation_, frame->flow_,
+                next_route_ + prepared.size(), std::move(path), frame->path_.size(), false));
+            const auto charge = child->metadata_charge();
+            // All-or-none: check tentative batch credits before publication.
+            // Previously published branches are never silently rolled back.
+            if (charge > max_metadata_bytes_ - active_metadata_bytes_ - reserved_bytes)
+                throw std::length_error("route frame metadata budget exhausted");
+            reserved_bytes += charge;
+            prepared.push_back(std::move(child));
         }
         try {
             for (const auto& value : prepared) active_.emplace(value.get(), value);
@@ -115,6 +136,7 @@ public:
             for (const auto& value : prepared) active_.erase(value.get());
             throw;
         }
+        active_metadata_bytes_ += reserved_bytes;
         next_route_ += prepared.size();
         return prepared;
     }
@@ -127,17 +149,6 @@ public:
         const auto selected = out[cursor];
         cursor = (cursor + 1) % out.size(); // failed attempt consumes turn
         return child(frame, selected);
-    }
-
-    /** Same v1 key/UTF-8 algorithm as NativeActorPipeTransport; selection
-     * is scoped to the authenticated graph edge order, never a global actor
-     * name and never an authorization mechanism. */
-    Handle forward_by_key(const Handle& frame, const std::string& key) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        require_forward(frame);
-        const auto& out = connected(frame->receiver());
-        const auto slot = actor_pipe_key_slot(key, out.size());
-        return child(frame, out[slot]);
     }
 
     Handle forward_to(const Handle& frame, const std::string& target) {
@@ -157,50 +168,47 @@ public:
         reserve_routes(1);
         auto next = Handle(new Frame(this, generation_, frame->flow_, next_route_,
                                      frame->path_, frame->at_ - 1, true));
-        active_.emplace(next.get(), next);
-        active_.erase(frame.get());
+        replace_active(frame, next);
         ++next_route_;
         return next;
     }
 
-    /** One-shot terminal reply directly to the ORIGINAL authenticated
-     * ingress instance. Unlike backward(), no intermediary handler runs.
-     * The immutable full branch path remains attached for correlation;
-     * a returning frame cannot manufacture a second terminal reply.
-     *
-     * HOST-ONLY: caller identity and actual mailbox publication must still
-     * be enforced by the scheduler transport, not by this selector. */
+    /** VM-owned one-shot reply directly to the immutable ingress origin.
+     * The full branch path remains sealed inside the frame for audit and
+     * correlation. Intermediate actors need not execute synthetic backward
+     * turns; a returning frame may never be replied or forwarded again. */
     Handle reply(const Handle& frame) {
         std::lock_guard<std::mutex> lock(mutex_);
         require_forward(frame);
         if (frame->at_ == 0)
-            throw std::logic_error("pipeline origin cannot reply to itself");
+            throw std::logic_error("origin cannot reply to itself");
         reserve_routes(1);
-        auto terminal = Handle(new Frame(this, generation_, frame->flow_,
-                                         next_route_, frame->path_, 0, true));
-        // Allocate the new active entry before consuming the parent; on
-        // bad_alloc the original is still an authorized live frame.
-        active_.emplace(terminal.get(), terminal);
-        active_.erase(frame.get());
+        auto next = Handle(new Frame(this, generation_, frame->flow_,
+                                     next_route_, frame->path_, 0, true));
+        replace_active(frame, next);
         ++next_route_;
-        return terminal;
+        return next;
     }
 
     void complete(const Handle& frame) {
         std::lock_guard<std::mutex> lock(mutex_);
         require_active(frame);
-        active_.erase(frame.get());
+        retire(frame.get());
     }
 
     void retire_if_active(const Handle& frame) noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
         if (frame && frame->owner_ == this && frame->generation_ == generation_)
-            active_.erase(frame.get());
+            retire(frame.get());
     }
 
     std::size_t outstanding() const noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
         return active_.size();
+    }
+    std::size_t metadata_bytes() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return active_metadata_bytes_;
     }
 
     void advance_generation(std::uint64_t next) {
@@ -216,6 +224,7 @@ public:
         ensure_successor(next);
         const auto cancelled = active_.size();
         active_.clear();
+        active_metadata_bytes_ = 0;
         cursors_.clear();
         generation_ = next;
         return cancelled;
@@ -225,6 +234,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         closed_ = true;
         active_.clear();
+        active_metadata_bytes_ = 0;
     }
 
 private:
@@ -232,12 +242,16 @@ private:
     std::unordered_map<std::string, std::vector<std::size_t>> outgoing_;
     std::unordered_set<std::string> roots_;
     mutable std::mutex mutex_;
-    // An active frame must be strongly owned by this ledger. Otherwise,
-    // discarding the external Handle creates an ABA authorization hazard.
+    // The active ledger MUST retain owning references. A raw-pointer set
+    // can preserve a dangling address when callers drop their Handle;
+    // allocator reuse would then make a different frame appear active.
+    // Releasing a frame is a one-shot completion, cancellation, or STOP.
     std::unordered_map<const Frame*, Handle> active_;
     std::unordered_map<std::string, std::size_t> cursors_;
     std::uint64_t generation_;
     const std::size_t max_frames_;
+    const std::size_t max_metadata_bytes_;
+    std::size_t active_metadata_bytes_{0};
     std::uint64_t next_flow_{1};
     std::uint64_t next_route_{1};
     bool closed_{false};
@@ -256,6 +270,30 @@ private:
     void reserve_routes(std::size_t amount) const {
         if (amount > std::numeric_limits<std::uint64_t>::max() - next_route_)
             throw std::overflow_error("route ids exhausted");
+    }
+    void reserve_metadata(std::size_t charge) const {
+        if (charge > max_metadata_bytes_ - active_metadata_bytes_)
+            throw std::length_error("route frame metadata budget exhausted");
+    }
+    void retire(const Frame* frame) noexcept {
+        const auto it = active_.find(frame);
+        if (it != active_.end()) {
+            active_metadata_bytes_ -= it->second->metadata_charge();
+            active_.erase(it);
+        }
+    }
+    // Replacing a DATA frame with a return frame consumes the old frame's
+    // credit only after the new frame is successfully installed.
+    // Admission failures preserve the old active frame and its authority.
+    void replace_active(const Handle& original, const Handle& next) {
+        const auto previous = original->metadata_charge();
+        const auto replacement = next->metadata_charge();
+        const auto remaining = active_metadata_bytes_ - previous;
+        if (replacement > max_metadata_bytes_ - remaining)
+            throw std::length_error("route frame metadata budget exhausted");
+        active_.emplace(next.get(), next);
+        active_.erase(original.get());
+        active_metadata_bytes_ = remaining + replacement;
     }
     void require_active(const Handle& frame) const {
         ensure_open();
@@ -278,7 +316,10 @@ private:
         reserve_routes(1);
         auto frame = Handle(new Frame(this, generation_, flow, next_route_,
                                       std::move(path), at, returning));
+        const auto charge = frame->metadata_charge();
+        reserve_metadata(charge);
         active_.emplace(frame.get(), frame);
+        active_metadata_bytes_ += charge;
         ++next_route_;
         return frame;
     }
