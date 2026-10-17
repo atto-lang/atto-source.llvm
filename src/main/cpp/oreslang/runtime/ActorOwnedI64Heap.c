@@ -132,6 +132,9 @@ OresActorTryEnterResult ores_actor_i64_heap_try_enter(
                                     uint64_t actor_id, uint64_t incarnation,
                                     OresActorTurn* out) {
     if (!heap || !out || !actor_id || !incarnation) rejected();
+    /* Every non-success path must fail closed even if the scheduler reuses
+     * storage that previously held a valid turn token. */
+    *out = (OresActorTurn){0, 0};
     if (carrier_heap != NULL) return ORES_ACTOR_TRY_CARRIER_OCCUPIED;
     if (!try_lock_heap(heap)) return ORES_ACTOR_TRY_LOCK_BUSY;
     if (actor_id != heap->owner || incarnation != heap->incarnation)
