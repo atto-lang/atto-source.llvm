@@ -1,0 +1,64 @@
+name: DOP native CPU exact-head verification
+
+on:
+  push:
+    branches:
+      - harden/dop-cpu-exclusive-kernel-loans-20261015
+    paths:
+      - 'src/main/cpp/oreslang/runtime/Dop*.hpp'
+      - 'src/main/cpp/oreslang/runtime/DataOrientedLayout.hpp'
+      - 'tests/dop_region_schedule_test.cpp'
+      - 'tests/dop_cpu_region_execution_test.cpp'
+      - '.github/workflows/dop-native-cpu-exact-head.yml'
+      - 'CMakeLists.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  native-cpu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['g++', 'clang++']
+        mode: ['release', 'sanitized']
+    steps:
+      - name: Checkout exact private source commit, no persisted credential
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact source SHA and origin
+        shell: bash
+        env:
+          EXPECTED: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test "$(git remote get-url origin | sed -E 's#^https://github.com/##; s#\.git$##')" = 'ores-truffle-oreslang/oreslang-source.llvm'
+      - name: Compile and execute native DOP ownership regressions
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          BUILD_MODE: ${{ matrix.mode }}
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          flags=(-std=c++20 -pthread -Isrc/main/cpp -Wall -Wextra)
+          if [[ "$BUILD_MODE" == sanitized ]]; then
+            flags+=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
+          else
+            flags+=(-O2 -DNDEBUG)
+          fi
+          work_dir="$(mktemp -d)"
+          trap 'rm -rf "$work_dir"' EXIT
+          "$CXX" "${flags[@]}" tests/dop_region_schedule_test.cpp -o "$work_dir/dop-region"
+          "$work_dir/dop-region"
+          "$CXX" "${flags[@]}" tests/dop_cpu_region_execution_test.cpp -o "$work_dir/dop-cpu"
+          "$work_dir/dop-cpu"
+          printf 'SOURCE_COMMIT=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+          printf '%s\n' 'SCOPE=native header tests; full LLVM CMake/CTest and .ores compiler unverified'
