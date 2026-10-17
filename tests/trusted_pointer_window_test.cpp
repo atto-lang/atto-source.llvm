@@ -61,6 +61,8 @@ int main() {
     auto ro = read_only.at<std::uint32_t>(actor);
     require(ro.load(actor) == 11);
     denied([&] { ro.store(actor, 99); });
+    denied([&] { ro.with_ffi_address(actor, [](std::uint32_t* ptr) { *ptr = 99; }); });
+    require(values[0] == 11);
 
     alignas(std::uint32_t) std::uint32_t device_register = 0;
     TrustedPointerWindow mmio(actor, &device_register, sizeof(device_register), TrustedPointerWindow::Mode::MmioReadWrite);
