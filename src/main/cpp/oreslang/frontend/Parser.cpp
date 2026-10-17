@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <charconv>
 #include <functional>
+#include <limits>
 #include <cctype>
 #include <stdexcept>
 #include <string>
@@ -115,7 +116,8 @@ public:
                 ++at_;
             }
             bool floating = false;
-            if (at_ < source_.size() && source_[at_] == '.') {
+            if (at_ + 1 < source_.size() && source_[at_] == '.'
+                    && digit(source_[at_ + 1])) {
                 floating = true;
                 ++at_;
                 while (at_ < source_.size() &&
@@ -522,9 +524,64 @@ private:
         const auto parsed = std::from_chars(
                 digits.data(), digits.data() + digits.size(), value,
                 std::chars_format::general);
-        if (parsed.ec != std::errc{} ||
-                parsed.ptr != digits.data() + digits.size())
-            fail("floating literal is not representable as binary64");
+        if (parsed.ptr != digits.data() + digits.size())
+            fail("malformed binary64 literal");
+        if (parsed.ec == std::errc::result_out_of_range) {
+            // Java/Graal uses Double.parseDouble for FLOAT/IMAG tokens:
+            // decimal overflow rounds to +Infinity and extreme underflow to
+            // +0.0. std::from_chars instead reports result_out_of_range, so
+            // recover the same binary64 classification from the decimal order.
+            const auto exponent_at = digits.find_first_of("eE");
+            const std::string_view significand(
+                    digits.data(),
+                    exponent_at == std::string::npos ? digits.size() : exponent_at);
+            long long explicit_exponent = 0;
+            if (exponent_at != std::string::npos) {
+                std::size_t i = exponent_at + 1;
+                bool negative = false;
+                if (i < digits.size() && (digits[i] == '+' || digits[i] == '-')) {
+                    negative = digits[i] == '-';
+                    ++i;
+                }
+                for (; i < digits.size(); ++i) {
+                    if (!digit(digits[i])) fail("malformed floating exponent");
+                    if (explicit_exponent < 100000)
+                        explicit_exponent = explicit_exponent * 10 + (digits[i] - '0');
+                }
+                if (negative) explicit_exponent = -explicit_exponent;
+            }
+            std::size_t digits_before_dot = 0;
+            std::size_t digit_ordinal = 0;
+            std::size_t first_nonzero = std::string::npos;
+            for (const char ch : significand) {
+                if (ch == '.') {
+                    digits_before_dot = digit_ordinal;
+                    continue;
+                }
+                if (first_nonzero == std::string::npos && ch != '0')
+                    first_nonzero = digit_ordinal;
+                ++digit_ordinal;
+            }
+            if (significand.find('.') == std::string::npos)
+                digits_before_dot = digit_ordinal;
+            if (first_nonzero == std::string::npos) {
+                value = 0.0;
+            } else {
+                const long long decimal_order =
+                    explicit_exponent
+                    + static_cast<long long>(digits_before_dot)
+                    - static_cast<long long>(first_nonzero) - 1;
+                if (decimal_order <= -324) {
+                    value = 0.0;
+                } else if (decimal_order >= 308) {
+                    value = std::numeric_limits<double>::infinity();
+                } else {
+                    fail("binary64 literal out of range with ambiguous decimal order");
+                }
+            }
+        } else if (parsed.ec != std::errc{}) {
+            fail("malformed binary64 literal");
+        }
         advance();
         return value;
     }
