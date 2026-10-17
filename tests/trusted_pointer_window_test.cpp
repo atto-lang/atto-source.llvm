@@ -29,6 +29,20 @@ int main() {
     denied([&] { (void)NativeRegionIdentity::supervisor_minted(0, 11, 13); });
     denied([&] { (void)NativeRegionIdentity::supervisor_minted(7, 0, 13); });
     denied([&] { (void)NativeRegionIdentity::supervisor_minted(7, 11, 0); });
+    // The public POD identity can be constructed directly by host code;
+    // the window must still reject the trivially forged zero sentinel.
+    denied([&] {
+        (void)TrustedPointerWindow(actor, NativeRegionIdentity{0, 11, 13},
+            values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
+    });
+    denied([&] {
+        (void)TrustedPointerWindow(actor, NativeRegionIdentity{7, 0, 13},
+            values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
+    });
+    denied([&] {
+        (void)TrustedPointerWindow(actor, NativeRegionIdentity{7, 11, 0},
+            values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
+    });
     auto p = region.at<std::uint32_t>(actor);
     require(p.load(actor) == 11);
     require(p.offset(actor, 2).load(actor) == 33);
