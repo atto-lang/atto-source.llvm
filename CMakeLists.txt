@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only trusted pointer substrate. This is NOT a source-level unsafe
+    # pointer permission, compiler lowering, or LLVM guest execution proof.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-trusted-native-pointer-window-test
+        tests/trusted_pointer_window_test.cpp)
+    target_include_directories(oreslang-trusted-native-pointer-window-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-trusted-native-pointer-window-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-native-pointer-window-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME trusted_native_pointer_window_host_only
+        COMMAND oreslang-trusted-native-pointer-window-test)
+    set_tests_properties(trusted_native_pointer_window_host_only PROPERTIES TIMEOUT 20)
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
