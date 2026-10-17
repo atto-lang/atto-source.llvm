@@ -7,10 +7,19 @@
 #include <limits>
 #include <stdexcept>
 
+using oreslang::runtime::TrustedExclusiveRawMemoryAuthority;
 using oreslang::runtime::TrustedRawPointer;
+using oreslang::runtime::TrustedRawProvenance;
 using oreslang::runtime::TrustedUnsafeMemoryAuthority;
 
 namespace {
+struct NoDefault final {
+    int value;
+    NoDefault() = delete;
+    explicit NoDefault(int input) noexcept : value(input) {}
+};
+static_assert(std::is_trivially_copyable_v<NoDefault>);
+
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -30,10 +39,17 @@ void require_throws(F&& fn, const char* message) {
 int main() {
     try {
         const auto authority = TrustedUnsafeMemoryAuthority::compiler_trusted();
+        const auto exclusive = TrustedExclusiveRawMemoryAuthority::compiler_trusted();
+        const auto provenance = TrustedRawProvenance::compiler_trusted(0xA11CEu);
+
+        require_throws<std::invalid_argument>(
+            [&] { (void)TrustedRawProvenance::compiler_trusted(0); },
+            "zero provenance identity must reject");
 
         std::array<std::int32_t, 4> values{{10, 20, 30, 40}};
         auto readonly = TrustedRawPointer<std::int32_t>::from_span(
-            values.data(), values.size(), authority, 0xA11CEu);
+            values.data(), values.size(), authority, provenance);
+        require(readonly.has_provenance(), "safe-derived span must carry explicit provenance");
         require(readonly.load() == 10, "base load");
         require(!readonly.writable(), "ordinary raw formation must be read-only");
         require_throws<std::logic_error>(
@@ -41,7 +57,7 @@ int main() {
             "read-only raw pointer must reject store");
 
         auto base = TrustedRawPointer<std::int32_t>::from_mut_span(
-            values.data(), values.size(), authority, 0xA11CEu);
+            values.data(), values.size(), authority, exclusive, provenance);
         require(base.writable(), "mutable raw formation must carry write authority");
         auto third = base.offset_elements(2);
         require(third.writable(), "pointer arithmetic must preserve write authority");
@@ -87,13 +103,14 @@ int main() {
 
         std::array<std::int32_t, 2> other_values{{1, 2}};
         auto other = TrustedRawPointer<std::int32_t>::from_span(
-            other_values.data(), other_values.size(), authority, 0xB0Bu);
+            other_values.data(), other_values.size(), authority,
+            TrustedRawProvenance::compiler_trusted(0xB0Bu));
         require_throws<std::invalid_argument>(
             [&] { (void)base.distance_elements(other); },
             "unrelated provenance subtraction must reject");
 
         auto other_address_space = TrustedRawPointer<std::int32_t>::from_span(
-            values.data(), values.size(), authority, 0xA11CEu, 7);
+            values.data(), values.size(), authority, provenance, 7);
         require_throws<std::invalid_argument>(
             [&] { (void)base.distance_elements(other_address_space); },
             "cross-address-space subtraction must reject");
@@ -101,13 +118,23 @@ int main() {
         auto raw = TrustedRawPointer<std::int32_t>::from_address(
             reinterpret_cast<std::uintptr_t>(values.data()), authority);
         auto raw_next = raw.offset_elements(1);
+        require(!raw.has_provenance() && !raw_next.has_provenance(),
+                "integer-fabricated pointers must not gain safe provenance");
         require(!raw_next.writable(), "read-only address arithmetic must remain read-only");
         require(raw_next.load() == 20, "integer-made pointer element offset");
-        require(raw_next.distance_elements(raw) == 1, "integer-made derived distance");
+        require_throws<std::invalid_argument>(
+            [&] { (void)raw_next.distance_elements(raw); },
+            "integer-fabricated pointer subtraction must reject without provenance");
+        auto independently_fabricated = TrustedRawPointer<std::int32_t>::from_address(
+            reinterpret_cast<std::uintptr_t>(values.data()), authority);
+        require_throws<std::invalid_argument>(
+            [&] { (void)independently_fabricated.distance_elements(raw); },
+            "same numeric address must not manufacture common provenance");
 
         volatile std::int32_t mmio_cell = 9;
         auto mmio = TrustedRawPointer<std::int32_t>::from_mut_address(
-            reinterpret_cast<std::uintptr_t>(const_cast<std::int32_t*>(&mmio_cell)), authority);
+            reinterpret_cast<std::uintptr_t>(const_cast<std::int32_t*>(&mmio_cell)),
+            authority, exclusive);
         require(mmio.load_volatile() == 9, "volatile raw load");
         mmio.store_volatile(11);
         require(mmio_cell == 11, "volatile raw store");
@@ -137,6 +164,13 @@ int main() {
                     std::numeric_limits<std::ptrdiff_t>::min());
             },
             "PTRDIFF_MIN element arithmetic must reject without signed overflow");
+
+        NoDefault non_default(1234);
+        auto non_default_raw = TrustedRawPointer<NoDefault>::from_span(
+            &non_default, 1, authority,
+            TrustedRawProvenance::compiler_trusted(0xD3FA017u));
+        require(non_default_raw.load().value == 1234,
+                "trivially-copyable non-default-constructible load must work");
 
         std::cout << "trusted raw pointer arithmetic/provenance contract: PASS\n";
         return 0;
