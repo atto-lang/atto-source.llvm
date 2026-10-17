@@ -126,8 +126,15 @@ int main(void) {
     OresActorSlot saved = ores_actor_i64_heap_new(heap, first, 40);
     CHECK(ores_actor_i64_heap_read(heap, first, saved) == 40);
     OresActorLoan suspended = ores_actor_i64_heap_borrow(heap, first, saved);
+    /* A live actor cannot take a second physical turn, even on its
+     * current native carrier. Busy admission leaves its output untouched. */
+    OresActorTurn denied = {0, 0};
+    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &denied) == 0);
+    CHECK(denied.domain == 0 && denied.epoch == 0);
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
-    OresActorTurn next = ores_actor_i64_heap_enter(heap, 29, 7);
+    OresActorTurn next = {0, 0};
+    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &next) == 1);
+    CHECK(next.domain == first.domain && next.epoch > first.epoch);
     CHECK(ores_actor_i64_heap_read(heap, next, saved) == 40);
     ores_actor_i64_heap_leave(heap, next); /* shared loan still protects saved */
     /* A different native thread executes the next actor turn. */
