@@ -1909,6 +1909,19 @@ endif()
 
 # Fail-closed eBPF XDP source/LLVM IR and real EM_BPF object gate.
 if(BUILD_TESTING)
+    add_executable(oreslang-bpf-xdp-lowering-test
+        tests/bpf_xdp_lowering_test.cpp
+        src/main/cpp/oreslang/backend/BpfXdpLowering.cpp)
+    target_include_directories(oreslang-bpf-xdp-lowering-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-bpf-xdp-lowering-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-bpf-xdp-lowering-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME bpf_xdp_backend_direct_ast_failclosed
+        COMMAND oreslang-bpf-xdp-lowering-test)
+    set_tests_properties(bpf_xdp_backend_direct_ast_failclosed PROPERTIES TIMEOUT 30)
+
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME bpf_xdp_source_object
         COMMAND "${Python3_EXECUTABLE}"
