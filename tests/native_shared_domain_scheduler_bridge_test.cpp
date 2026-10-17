@@ -53,6 +53,8 @@ static void gate_fairness_regression() {
 
 struct Context {
     SharedDomainSchedulerBridge* bridge = nullptr;
+    SharedDomainSchedulerBridge* creation_bridge = nullptr;
+    SharedDomainArena::Control* creation_control = nullptr;
     OresNativeActorScheduler* scheduler = nullptr;
     std::optional<SharedDomainSchedulerBridge::Permit> writer;
     std::optional<SharedDomainSchedulerBridge::Permit> reader;
@@ -66,6 +68,8 @@ struct Context {
     std::atomic<bool> completion_started{false};
     std::atomic<bool> release_completion{false};
     std::atomic<bool> completion_released{false};
+    std::atomic<bool> current_ref_resolved{false};
+    std::atomic<bool> current_member_granted{false};
     std::atomic<std::uint64_t> observed{0};
     std::thread completion;
 };
@@ -122,6 +126,35 @@ static void on_message(void* raw, std::size_t actor, std::uint64_t payload) {
             });
         return;
     }
+    if (actor == 0 && payload == 3) {
+        require(ctx.creation_bridge != nullptr);
+        require(ctx.creation_control != nullptr);
+        OresNativeActorRef current{0, 0, 0};
+        require(ores_native_actor_scheduler_current_actor_ref(
+            ctx.scheduler, &current));
+        require(current.scheduler_domain != 0);
+        require(current.actor_slot == actor);
+        require(current.generation != 0);
+        ctx.current_ref_resolved.store(true, std::memory_order_release);
+
+        auto permit = ctx.creation_bridge->grant_current_member(
+            *ctx.creation_control, true, true);
+        const auto request = ctx.creation_bridge->request(
+            permit, SharedDomainSchedulerBridge::Mode::Write);
+        require(request.acquired());
+        {
+            auto access = ctx.creation_bridge->enter(permit, request);
+            const auto handle = access.allocate(sizeof(std::uint64_t));
+            const std::uint64_t expected = 0xA5A55A5AF0F00F0FULL;
+            access.write(handle, &expected, sizeof(expected));
+            std::uint64_t observed = 0;
+            access.read(handle, &observed, sizeof(observed));
+            require(observed == expected);
+            access.drop(handle);
+        }
+        ctx.current_member_granted.store(true, std::memory_order_release);
+        return;
+    }
     throw std::runtime_error("unexpected scheduler DATA callback");
 }
 
@@ -176,11 +209,26 @@ int main() {
     require(!ores_native_actor_scheduler_current_actor_identity(
         scheduler, &outside));
     require(outside.principal == 0 && outside.incarnation == 0);
+    OresNativeActorRef outside_ref{123, 456, 789};
+    require(!ores_native_actor_scheduler_current_actor_ref(
+        scheduler, &outside_ref));
+    require(outside_ref.scheduler_domain == 0 &&
+            outside_ref.actor_slot == 0 && outside_ref.generation == 0);
 
     SharedDomainSchedulerBridge bridge(arena, scheduler);
     ctx.bridge = &bridge;
     ctx.writer = bridge.grant_member(control, writer_ref, true, true);
     ctx.reader = bridge.grant_member(control, reader_ref, true, false);
+
+    SharedDomainArena creation_arena;
+    auto creation_control = creation_arena.take_control();
+    SharedDomainSchedulerBridge creation_bridge(creation_arena, scheduler);
+    ctx.creation_bridge = &creation_bridge;
+    ctx.creation_control = &creation_control;
+    reject([&] {
+        (void)creation_bridge.grant_current_member(
+            creation_control, true, true);
+    });
 
     reject([&] {
         (void)bridge.request(*ctx.writer, SharedDomainSchedulerBridge::Mode::Write);
@@ -211,6 +259,12 @@ int main() {
     ctx.completion.join();
     require(arena.try_retire(control));
     require(arena.try_retire(control));
+
+    require(ores_native_actor_scheduler_send(scheduler, writer_ref, 3));
+    wait_for(ctx.current_ref_resolved, "current ActorRef resolution");
+    wait_for(ctx.current_member_granted, "current actor membership grant");
+    require(creation_arena.try_retire(creation_control));
+    require(creation_arena.try_retire(creation_control));
 
     ores_native_actor_scheduler_retire(scheduler);
     require(ores_native_actor_scheduler_drain(scheduler));
