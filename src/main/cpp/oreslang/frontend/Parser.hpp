@@ -71,13 +71,25 @@ struct ClassField {
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
 };
 
+// Constructors have no source-executable body in the restricted native
+// subset. Their identity is solely their caller-visible scalar value arity.
+// The optional leading 'self' marker is erased by the parser.
+struct ScalarConstructor {
+    std::vector<std::string> parameters;
+};
+
 struct ClassDecl {
     std::string name;
     // Up to 16 scalar i64 or owned Array<int> fields.
     // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
-    bool explicit_constructor = false;
-    std::vector<std::string> constructor_parameters;
+    std::vector<ScalarConstructor> constructors;
+
+    const ScalarConstructor* constructor_for_arity(std::size_t arity) const {
+        for (const auto& ctor : constructors)
+            if (ctor.parameters.size() == arity) return &ctor;
+        return nullptr;
+    }
 };
 
 // Native source value categories. Future<T> remains a no-IR boundary
