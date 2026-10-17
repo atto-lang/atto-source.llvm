@@ -44,12 +44,17 @@ int main() {
         ores_actor_i64_heap_field_init(heap, init.domain, init.epoch, 1, 5);
         const OresActorSlot slot = {init.domain, 0, 1};
         const OresActorLoan loan = ores_actor_i64_heap_borrow(heap, init, slot);
+
+        // Continuation lifetime authority must be minted while this exact
+        // actor turn is admitted. It is independent of the data borrow below
+        // and carries no slot/memory dereference capability.
+        const AsyncIoTicket ticket{actor, 1, round};
+        PinnedContinuationGate frame(ticket, heap, init);
+        check(frame.lifetime_pinned(), "continuation did not pin actor heap lifetime");
         ores_actor_i64_heap_leave(heap, init);
 
         // An actor's shared loan survives physical carrier turnover, but it
         // cannot be dereferenced or mutated by the asynchronous I/O worker.
-        const AsyncIoTicket ticket{actor, 1, round};
-        PinnedContinuationGate frame(ticket);
         check(frame.acquire(ticket, PinnedContinuationGate::Loan::shared),
               "pinned continuation failed to acquire matching loan");
         check(!frame.try_retire(ticket), "pending actor frame retired");
@@ -101,9 +106,13 @@ int main() {
         check(frame.release(ticket, PinnedContinuationGate::Loan::shared),
               "metadata loan did not release");
         ores_actor_i64_heap_release(heap, loan);
+        check(!ores_actor_i64_heap_try_destroy(heap),
+              "continuation lifetime lease disappeared before frame retirement");
         check(frame.try_retire(ticket) && !frame.try_retire(ticket),
               "pinned continuation double-retired");
+        check(!frame.lifetime_pinned(),
+              "retired continuation retained actor heap lifetime authority");
         check(ores_actor_i64_heap_try_destroy(heap),
-              "actor heap remained allocated after quiescence");
+              "actor heap remained allocated after continuation quiescence");
     }
 }
