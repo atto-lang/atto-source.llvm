@@ -87,6 +87,21 @@ int main(void) {
     check(!ores_native_vm_enable_nio(live, 4, 0, 1));
     check(ores_native_vm_close(live));
 
+    // Explicit cold-start reservation must prevent actor admission during
+    // selector creation, including a competing initializer.
+    OresNativeVM* cold = ores_native_vm_open(&cfg);
+    check(cold != NULL);
+    check(ores_native_vm_nio_begin_bootstrap(cold));
+    check(!ores_native_vm_nio_begin_bootstrap(cold));
+    const OresNativeActorRef denied =
+        ores_native_vm_spawn(cold, ORES_NATIVE_VM_MAIN, 0);
+    check(denied.scheduler_domain == 0);
+    ores_native_vm_nio_cancel_bootstrap(cold);
+    check(ores_native_vm_nio_can_attach(cold));
+    check(ores_native_vm_enable_nio(cold, 2, 0, 1));
+    check(ores_native_vm_nio_started(cold) == 1);
+    check(ores_native_vm_close(cold));
+
     // Fully preallocated RT bootstrap does not spawn network workers on its
     // deadline-governed operation path. This is not a WCET certification.
     vm = ores_native_vm_open_realtime(&cfg);
