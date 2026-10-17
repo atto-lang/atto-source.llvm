@@ -92,6 +92,67 @@ int main(void) {
     close(pipe_fd[0]);
     close(pipe_fd[1]);
 
+    // Bounded, caller-owned completion batches are a scheduler handoff
+    // substrate, not an execution callback: five pending kernel operations
+    // still use one epoll thread and no actor carrier is needed to drain.
+    {
+        OresNativeVM* batch_vm = ores_native_vm_open(&cfg);
+        check(batch_vm != NULL);
+        check(ores_native_vm_enable_nio(batch_vm, 1, 0, 1));
+        int pipes[5][2] = {{-1, -1}};
+        OresNativeNioWatch tickets[5] = {{0}};
+        for (size_t i = 0; i < 5; ++i) {
+            check(pipe2(pipes[i], O_NONBLOCK | O_CLOEXEC) == 0);
+            int admitted = 0;
+            for (int retry = 0; retry < 2000 && !admitted; ++retry)
+                admitted = ores_native_vm_nio_try_watch(
+                    batch_vm, pipes[i][0], EPOLLIN, &tickets[i]);
+            check(admitted);
+        }
+        check(ores_native_vm_nio_started(batch_vm) == 1);
+        check(ores_native_vm_nio_try_pop_batch(batch_vm, NULL, 5) == 0);
+        OresNativeNioCompletion completions[5] = {{0}};
+        check(ores_native_vm_nio_try_pop_batch(batch_vm, completions, 0) == 0);
+        for (size_t i = 0; i < 5; ++i)
+            check(write(pipes[i][1], "x", 1) == 1);
+        size_t consumed = 0;
+        int seen[5] = {0};
+        struct timespec pause = {0, 1000000};
+        for (int retry = 0; retry < 3000 && consumed < 5; ++retry) {
+            // Explicitly cap each host poll to 2 records. The runtime must
+            // neither drop records nor exceed caller-provided output storage.
+            const size_t room = (5 - consumed) < 2 ? (5 - consumed) : 2;
+            const size_t got = ores_native_vm_nio_try_pop_batch(
+                batch_vm, &completions[consumed], room);
+            check(got <= room);
+            for (size_t offset = 0; offset < got; ++offset) {
+                const OresNativeNioCompletion* event =
+                    &completions[consumed + offset];
+                check(event->outcome == ORES_NATIVE_NIO_READY);
+                int matched = 0;
+                for (size_t i = 0; i < 5; ++i) {
+                    if (event->watch.ticket != tickets[i].ticket
+                            || event->watch.reactor != tickets[i].reactor)
+                        continue;
+                    check(!seen[i]);
+                    seen[i] = 1;
+                    matched = 1;
+                    break;
+                }
+                check(matched);
+            }
+            consumed += got;
+            if (!got) nanosleep(&pause, NULL); // trusted host test only
+        }
+        check(consumed == 5);
+        check(ores_native_vm_nio_try_pop_batch(batch_vm, completions, 5) == 0);
+        for (size_t i = 0; i < 5; ++i) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+        check(ores_native_vm_close(batch_vm));
+    }
+
     // Once the first actor is admitted, adding a reactor is no longer a
     // legal VM bootstrap operation. No late selector thread may be created.
     OresNativeVM* live = ores_native_vm_open(&cfg);
