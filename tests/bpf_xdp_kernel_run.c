@@ -2,6 +2,7 @@
  * Privileged Linux verifier and BPF_PROG_RUN proof for the stage-0 XDP object.
  * This test must fail, never skip, when kernel BPF admission is unavailable.
  */
+#include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <linux/bpf.h>
 #include <errno.h>
