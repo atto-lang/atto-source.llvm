@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <charconv>
 #include <functional>
+#include <limits>
 #include <cctype>
 #include <stdexcept>
 #include <string>
@@ -121,7 +122,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -222,7 +223,14 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            if (accept("define")) {
+            if (accept("@")) {
+                require("ActorThreads");
+                const auto annotation = token_.text == "("
+                        ? actor_thread_arguments("=") : std::pair<int, int>{1, 1};
+                require("define");
+                require("actor");
+                program.actors.push_back(actor_declaration(annotation));
+            } else if (accept("define")) {
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
@@ -254,10 +262,62 @@ public:
     }
 
 private:
-    ActorDecl actor_declaration() {
+    // The LLVM source subset retains this metadata but is not yet allowed
+    // to lower genuinely concurrent actor-owned guest execution.
+    std::pair<int, int> actor_thread_arguments(std::string_view assignment) {
+        require("(");
+        int min = 1, max = 1;
+        std::unordered_set<std::string> seen;
+        if (token_.text != ")") {
+            do {
+                const auto key = identifier();
+                if (key != "min" && key != "max")
+                    fail("unknown actor thread setting '" + key + "'");
+                if (!seen.insert(key).second)
+                    fail("duplicate actor thread setting '" + key + "'");
+                require(assignment);
+                if (token_.kind != Kind::Integer)
+                    fail("actor thread limits require positive integer literals");
+                std::string digits;
+                for (char ch : token_.text) if (ch != '_') digits.push_back(ch);
+                std::int64_t value = 0;
+                const auto [end, error] = std::from_chars(
+                        digits.data(), digits.data() + digits.size(), value);
+                if (error != std::errc{} || end != digits.data() + digits.size()
+                        || value < 1 || value > std::numeric_limits<int>::max())
+                    fail("actor thread limit is out of range");
+                advance();
+                if (key == "min") min = static_cast<int>(value);
+                else max = static_cast<int>(value);
+            } while (accept(","));
+        }
+        require(")");
+        if (max < min) fail("actor threads require 1 <= min <= max");
+        if (max > 1) fail("parallel actor threads require state effects and "
+                          "scheduler admission; max > 1 is not yet supported");
+        return {min, max};
+    }
+
+    ActorDecl actor_declaration(std::pair<int, int> annotation = {0, 0}) {
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (accept("from")) {
+            if (!accept("private"))
+                fail("native scalar actors currently support only 'from private actor'");
+            require("actor");
+        }
+        std::pair<int, int> native = {0, 0};
+        if (accept("with")) {
+            require("threads");
+            native = actor_thread_arguments(":");
+        }
+        if (annotation.first != 0 && native.first != 0)
+            fail("duplicate actor thread policy: @ActorThreads and with threads");
+        const auto policy = native.first != 0 ? native : annotation.first != 0
+                ? annotation : std::pair<int, int>{1, 1};
+        actor.min_threads = policy.first;
+        actor.max_threads = policy.second;
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
