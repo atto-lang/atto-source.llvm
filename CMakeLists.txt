@@ -872,14 +872,18 @@ if(BUILD_TESTING)
     add_test(NAME native_pinned_actor_future_control_continuation
         COMMAND oreslang-actor-lifecycle-await-test)
     set_tests_properties(native_pinned_actor_future_control_continuation PROPERTIES TIMEOUT 15)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    # A recursive payload move used to deadlock this test; fail explicitly
+    # rather than consuming an entire CI runner on a blocked mutex.
+    set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 25)
     # Independent multicore transport proof: sends are move-only,
     # saturated admission cannot consume a producer's payload, and only
     # receiver acknowledgement refunds queue/checked-out resource credits.
-    find_package(Threads REQUIRED)
     add_executable(oreslang-bounded-actor-port-concurrency-test
         tests/bounded_actor_port_concurrency_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-concurrency-test PRIVATE
