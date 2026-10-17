@@ -27,8 +27,10 @@ struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
     std::string class_name; // nonempty means native class pointer
-    bool boolean = false;   // primitive LLVM i1; otherwise primitive i64
     Mode mode = Mode::Value;
+    // Keep this after the legacy fields so existing aggregate initializers
+    // {name, class_name, mode} retain their exact positional meaning.
+    bool boolean = false;   // primitive LLVM i1; otherwise primitive i64
 };
 
 // Immutable, lexical i64 slot with initializer-before-publication semantics.
