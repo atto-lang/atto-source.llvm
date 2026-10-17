@@ -1,6 +1,7 @@
 #include "oreslang/runtime/SharedDomainSchedulerBridge.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -139,12 +140,13 @@ static void on_capability(
     ctx.reader_resumed.store(true, std::memory_order_release);
 }
 
-static void wait_for(const std::atomic<bool>& flag) {
-    for (std::size_t i = 0; i < 2'000'000; ++i) {
+static void wait_for(const std::atomic<bool>& flag, const char* label) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (std::chrono::steady_clock::now() < deadline) {
         if (flag.load(std::memory_order_acquire)) return;
         std::this_thread::yield();
     }
-    throw std::runtime_error("timed out waiting for scheduler regression");
+    throw std::runtime_error(std::string("timed out waiting for ") + label);
 }
 
 int main() {
@@ -185,10 +187,10 @@ int main() {
     });
 
     require(ores_native_actor_scheduler_send(scheduler, writer_ref, 1));
-    wait_for(ctx.writer_entered);
+    wait_for(ctx.writer_entered, "writer entry");
     require(ores_native_actor_scheduler_send(scheduler, reader_ref, 1));
-    wait_for(ctx.reader_queued);
-    wait_for(ctx.reader_resumed);
+    wait_for(ctx.reader_queued, "reader queue");
+    wait_for(ctx.reader_resumed, "reader resume");
     require(ctx.wrong_permit_denied.load(std::memory_order_acquire));
     require(ctx.fake_wake_denied.load(std::memory_order_acquire));
     require(ctx.observed.load(std::memory_order_acquire)
@@ -199,13 +201,13 @@ int main() {
      * actor turn exits. Logical retirement seals new byte authority but
      * physical reclaim remains blocked until the completion carrier releases. */
     require(ores_native_actor_scheduler_send(scheduler, writer_ref, 2));
-    wait_for(ctx.completion_started);
+    wait_for(ctx.completion_started, "completion registration");
     require(!arena.try_retire(control));
     reject([&] {
         (void)bridge.request(*ctx.writer, SharedDomainSchedulerBridge::Mode::Read);
     });
     ctx.release_completion.store(true, std::memory_order_release);
-    wait_for(ctx.completion_released);
+    wait_for(ctx.completion_released, "completion release");
     ctx.completion.join();
     require(arena.try_retire(control));
     require(arena.try_retire(control));
