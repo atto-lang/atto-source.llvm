@@ -1373,6 +1373,25 @@ if(BUILD_TESTING)
             class-scalar-constructor-owned-arg-reject.ores --experimental-owned-int --diagnostic "native scalar constructor arguments require plain stack i64 values")
         oreslang_contract_test(reject_scalar_constructor_effect_body
             class-scalar-constructor-effectful-body-reject.ores --diagnostic "native scalar constructor body must be empty or contain only")
+        # Caller-visible value-arity is the sole constructor selection key.
+        # Self is an erased construction receiver; each selected parameter
+        # environment must independently validate all scalar field initializers.
+        oreslang_contract_test(native_constructor_arity_overloads
+            class-constructor-arity-overloads-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_constructor_arity_self_zero
+            class-constructor-arity-self-zero-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_constructor_duplicate_value_arity
+            class-constructor-duplicate-value-arity-reject.ores --diagnostic "duplicate native constructor arity 1")
+        oreslang_contract_test(reject_constructor_duplicate_zero_arity
+            class-constructor-duplicate-zero-arity-reject.ores --diagnostic "duplicate native constructor arity 0")
+        oreslang_contract_test(reject_constructor_overload_missing_initializer_param
+            class-constructor-overload-missing-field-param-reject.ores --diagnostic "unknown parameter 'value'")
+        oreslang_contract_test(reject_constructor_implicit_zero
+            class-constructor-explicit-no-zero-reject.ores --diagnostic "native class constructor argument arity mismatch")
+        oreslang_contract_test(reject_constructor_extra_arguments
+            class-constructor-overload-extra-arity-reject.ores --diagnostic "native class constructor argument arity mismatch")
+        oreslang_contract_test(reject_constructor_self_not_leading
+            class-constructor-self-not-leading-reject.ores --diagnostic "expected 'int'")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_forward_call forward-call-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_arithmetic return-arithmetic.ores --run 28 --clang "${ORE_CLANG}")
