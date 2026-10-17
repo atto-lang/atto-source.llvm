@@ -75,6 +75,27 @@ int main() {
 
     {
         Program program = oreslang::parse_program(R"(
+            define module BooleanOps as
+                pub fnc And(bool left, bool right): bool {
+                    return left;
+                }
+                pub fnc probe(bool left, bool right): bool {
+                    return BooleanOps.And(left, right);
+                }
+            end
+        )");
+        require(program.module == "BooleanOps",
+                "qualified shadow module identity lost");
+        require(program.functions.size() == 2,
+                "qualified shadow program shape mismatch");
+        const auto& call = *program.functions[1].result;
+        require(call.kind == Expression::Kind::Call &&
+                call.name == "BooleanOps.And",
+                "real BooleanOps.And source call was stolen by intrinsic");
+    }
+
+    {
+        Program program = oreslang::parse_program(R"(
             fnc And(bool left, bool right): bool {
                 return left;
             }
