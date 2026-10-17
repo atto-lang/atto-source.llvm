@@ -24,6 +24,14 @@ if scalar:
     sys.exit(0)
 if mode == "artifact":
     Path("partial-output.ll").write_text("bad")
+if mode == "clobber-input":
+    Path(sys.argv[-1]).write_text("overwritten despite compiler rejection\\n")
+if mode == "clobber-prior":
+    # Existing fixture is already present by the time later negative cases run.
+    for previous in sorted(Path(".").glob("*.ores")):
+        if previous.name != Path(sys.argv[-1]).name:
+            previous.write_text("previous input silently damaged\\n")
+            break
 if mode == "stdout-leak":
     print("partial LLVM IR")
 if mode != "missing-diagnostic":
@@ -38,7 +46,8 @@ sys.exit(1)
 class NativeStructuralGateAdversarialTests(unittest.TestCase):
     def test_real_harness_denies_false_green_compilers(self):
         for mode in ("correct", "always-reject", "always-accept",
-                     "artifact", "stdout-leak", "missing-diagnostic"):
+                     "artifact", "clobber-input", "clobber-prior",
+                     "stdout-leak", "missing-diagnostic"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
                 fake = Path(temp) / mode
                 fake.write_text(MOCK, encoding="utf-8")
