@@ -123,6 +123,43 @@ def assert_replay_and_retirement():
     return "PASS stale/double/cross-carrier release, same-carrier ABA, sealed retirement, incarnation fencing"
 
 
+
+def explore_cross_actor_carriers(*, allow_nested=False):
+    """Explore two distinct actor incarnations sharing four platform carriers.
+
+    A platform carrier must not own simultaneous grants for separate actors,
+    even when the individual actor capacity limits would allow it.
+    """
+    initial = frozenset()
+    pending = deque([(initial, ())])
+    seen = {initial}
+    caps = {"A": 2, "B": 3}
+    while pending:
+        owners, trace = pending.popleft()
+        carriers = [worker for _, worker in owners]
+        if len(set(carriers)) != len(carriers):
+            return len(seen), trace
+        for actor in ("A", "B"):
+            if sum(a == actor for a, _ in owners) >= caps[actor]:
+                continue
+            for worker in WORKERS:
+                pair = (actor, worker)
+                if pair in owners:
+                    continue
+                if not allow_nested and worker in carriers:
+                    continue
+                newer = owners | {pair}
+                if newer not in seen:
+                    seen.add(newer)
+                    pending.append((newer, trace + (f"{actor}:claim({worker})",)))
+        for pair in owners:
+            newer = owners - {pair}
+            if newer not in seen:
+                seen.add(newer)
+                pending.append((newer, trace + (f"{pair[0]}:release({pair[1]})",)))
+    return len(seen), None
+
+
 def main():
     if not __debug__:
         raise SystemExit("actor grant contract tests must not run with Python -O")
@@ -132,6 +169,14 @@ def main():
             raise AssertionError(f"capacity {cap} violated after {violation}")
         print(f"PASS cap={cap} finite states={states}")
     print(assert_replay_and_retirement())
+    states, violation = explore_cross_actor_carriers()
+    if violation is not None:
+        raise AssertionError(f"platform carrier admitted by multiple actors: {violation}")
+    print(f"PASS two-actor shared carrier discipline: {states} finite states")
+    states, violation = explore_cross_actor_carriers(allow_nested=True)
+    if violation is None:
+        raise AssertionError("cross-actor carrier exclusion mutation was not detected")
+    print(f"PASS cross-actor exclusion mutation: {len(violation)}-step counterexample")
     states, violation = explore(3, guard_capacity=False)
     if violation is None:
         raise AssertionError("capacity guard-removal mutation was not caught")
