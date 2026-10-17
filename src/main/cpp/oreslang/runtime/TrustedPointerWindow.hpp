@@ -122,18 +122,20 @@ public:
     TrustedPointerWindow& operator=(TrustedPointerWindow&&) = delete;
     ~TrustedPointerWindow() { revoke(); }
 
-    void revoke() noexcept {
+    // True means the caller may now release the backing allocation. False
+    // means revocation was requested from inside this window's active FFI
+    // callback; the raw address is still borrowed and must remain mapped.
+    // Callers that own backing memory must retry after the callback returns.
+    bool revoke() noexcept {
         if (auto s = state_) {
             std::lock_guard<std::recursive_mutex> lock(s->mu);
             if (s->ffi_active && s->ffi_owner == std::this_thread::get_id()) {
-                // Never deadlock a callback by waiting on itself. Its raw
-                // address remains valid until callback return; cleanup below
-                // applies the requested revocation before releasing the lock.
                 s->revoke_pending = true;
-                return;
+                return false;
             }
             s->live = false;
         }
+        return true;
     }
 
     template<class T> class Cursor final {
