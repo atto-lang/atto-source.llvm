@@ -1,0 +1,9 @@
+define class Bound as
+  pub final int answer: value;
+  constructor(int value) { return; }
+  constructor(self, int ignored0, int ignored1, int ignored2, int ignored3, int ignored4, int ignored5, int ignored6, int ignored7, int ignored8, int ignored9, int ignored10, int ignored11, int ignored12, int ignored13, int ignored14, int value) { return; }
+end
+pub fnc main(): int {
+  let Bound answer = new Bound(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 42);
+  return answer.answer;
+}
