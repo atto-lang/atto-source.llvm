@@ -414,6 +414,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_complex128_literal_in_int_failclosed
         native-complex-literal-reject.ores
         --diagnostic "native floating/imaginary literal requires complex128 return context")
+    oreslang_contract_test(native_complex128_multiply_failclosed
+        native-complex128-multiply-reject.ores
+        --diagnostic "native complex128 multiplication requires exact once-rounded lowering")
+    oreslang_contract_test(native_complex128_divide_failclosed
+        native-complex128-divide-reject.ores
+        --diagnostic "native complex128 division requires exact once-rounded lowering")
+    oreslang_contract_test(native_complex128_integer_narrowing_failclosed
+        native-complex128-int-narrow-reject.ores
+        --diagnostic "native complex128 integer promotion exceeds exact binary64 range")
     if(ORE_CLANG)
         oreslang_contract_test(native_complex128_return_ir_verifies
             native-complex128-return.ores
