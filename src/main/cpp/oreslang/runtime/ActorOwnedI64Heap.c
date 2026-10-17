@@ -276,25 +276,35 @@ OresActorExternalLease ores_actor_i64_heap_external_acquire(
 }
 
 void ores_actor_i64_heap_external_release(
-    OresActorI64Heap* heap, OresActorExternalLease lease) {
+    OresActorI64Heap* heap, OresActorExternalLease* lease) {
+    if (!lease) rejected();
+
+    /* Same-token cleanup retry after successful release must not even inspect
+     * heap: CONTROL may already have reclaimed it. The scheduler must serialize
+     * ownership of this mutable token; copied tokens are stale-replay evidence,
+     * not independent lifetime owners. */
+    if (lease->domain == 0 && lease->index == 0 && lease->generation == 0) return;
+
     lock_heap(heap);
-    if (lease.domain != heap->domain || lease.index >= MAX_EXTERNAL_LEASES
-        || lease.generation == 0) {
+    if (lease->domain != heap->domain || lease->index >= MAX_EXTERNAL_LEASES
+        || lease->generation == 0) {
         rejected();
     }
 
-    ActorExternalLeaseEntry* entry = &heap->external_leases[lease.index];
-    if (lease.generation > entry->generation) rejected();
+    ActorExternalLeaseEntry* entry = &heap->external_leases[lease->index];
+    if (lease->generation > entry->generation) rejected();
 
-    /* An older generation, or the current generation after it was already
-     * released, is an idempotent cleanup retry and cannot affect a newer lease. */
-    if (lease.generation < entry->generation || !entry->active) {
+    /* An older generation cannot affect a newer lease occupying this bounded
+     * slot. Consume the stale token so further cleanup retries become no-ops. */
+    if (lease->generation < entry->generation || !entry->active) {
+        memset(lease, 0, sizeof(*lease));
         unlock_heap(heap);
         return;
     }
     if (!heap->active_external_leases) rejected();
     entry->active = 0;
     --heap->active_external_leases;
+    memset(lease, 0, sizeof(*lease));
     unlock_heap(heap);
 }
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
