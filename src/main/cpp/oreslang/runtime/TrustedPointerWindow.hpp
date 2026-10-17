@@ -162,6 +162,10 @@ public:
             return inspect(actor, true, false, [&](State& s) {
                 if (mmio(s.mode))
                     throw std::logic_error("MMIO address cannot escape into ordinary FFI");
+                // FFI receives T*, which can mutate. Never expose writable
+                // native addresses from a read-only grant.
+                if (!writable(s.mode))
+                    throw std::logic_error("read-only native region cannot export mutable FFI address");
                 return f(reinterpret_cast<T*>(s.base + byte_offset_));
             });
         }
