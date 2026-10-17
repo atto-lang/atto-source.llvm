@@ -1,8 +1,8 @@
 # Logical word operators: native parity gate (2026-10-17)
 
-Java/GraalVM defines reserved, case-sensitive infix `and` and `or` as aliases for `&&` and `||`. They operate only on `bool`, short-circuit left to right and share precedence with their symbolic counterparts. Core Boolean intrinsics support `And(bool, bool, ...)`, `Or(bool, bool, ...)` with two or more scalar arguments; `Xor(bool, bool)` requires exactly two scalar arguments. The existing one-argument `Xor(Array<bool>)` parity reducer remains an explicitly distinct compatibility overload.
+Java/GraalVM defines reserved, case-sensitive infix `and`, `or`, and `xor` as aliases for `&&`, `||`, and `^^`. All three require `bool`; only `and`/`or` short-circuit, while `xor` eagerly evaluates both operands. Each has the same precedence as its symbolic counterpart. Core Boolean intrinsics support `And(bool, bool, ...)`, `Or(bool, bool, ...)` with two or more scalar arguments; `Xor(bool, bool)` requires exactly two scalar arguments. The existing one-argument `Xor(Array<bool>)` parity reducer remains an explicitly distinct compatibility overload.
 
-The LLVM signed-i64 source frontend does **not** have typed bool lowering, full Boolean expressions, or BooleanOps intrinsics. Reserve `and` and `or` now to prevent them from being admitted as ordinary identifiers on native while Java treats them as operators. Do not accept source expressions containing these operators until LLVM supports Boolean IR, short-circuit CFG edges, effect/ownership sequencing, and scalar/intrinsic call dispatch.
+The LLVM signed-i64 source frontend does **not** have typed bool lowering, full Boolean expressions, or BooleanOps intrinsics. Reserve `and`, `or`, and `xor` now to prevent them from being admitted as ordinary identifiers on native while Java treats them as operators. Do not accept source expressions containing these operators until LLVM supports Boolean IR, short-circuit CFG edges, effect/ownership sequencing, and scalar/intrinsic call dispatch.
 
 Parity exit criteria:
 1. Typed native Boolean constants and expressions are representable end to end.
