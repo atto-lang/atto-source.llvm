@@ -250,10 +250,13 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
     rejected();
 }
 
-OresActorExternalLease ores_actor_i64_heap_external_acquire(
-    OresActorI64Heap* heap, OresActorTurn turn) {
+static OresActorExternalLease external_acquire_checked(
+    OresActorI64Heap* heap, OresActorTurn turn,
+    uint64_t ticket_actor_id, int check_ticket_owner) {
     lock_heap(heap);
     require_turn(heap, turn);
+    if (check_ticket_owner && (ticket_actor_id == 0 || heap->owner != ticket_actor_id))
+        rejected();
     if (heap->active_external_leases >= MAX_EXTERNAL_LEASES) rejected();
 
     unsigned found = MAX_EXTERNAL_LEASES;
@@ -281,6 +284,16 @@ OresActorExternalLease ores_actor_i64_heap_external_acquire(
     };
     unlock_heap(heap);
     return lease;
+}
+
+OresActorExternalLease ores_actor_i64_heap_external_acquire(
+    OresActorI64Heap* heap, OresActorTurn turn) {
+    return external_acquire_checked(heap, turn, 0, 0);
+}
+
+OresActorExternalLease ores_actor_i64_heap_external_acquire_for_actor(
+    OresActorI64Heap* heap, OresActorTurn turn, uint64_t ticket_actor_id) {
+    return external_acquire_checked(heap, turn, ticket_actor_id, 1);
 }
 
 void ores_actor_i64_heap_external_release(

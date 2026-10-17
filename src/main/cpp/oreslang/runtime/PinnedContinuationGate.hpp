@@ -35,7 +35,11 @@ public:
             std::abort();
         }
         lifetime_heap_ = heap;
-        lifetime_lease_ = ores_actor_i64_heap_external_acquire(heap, turn);
+        // Bind the ticket's actor identity to the heap owner in the same
+        // locked admission as the lifetime lease; generation belongs to the
+        // async operation and is not assumed equal to the heap incarnation.
+        lifetime_lease_ = ores_actor_i64_heap_external_acquire_for_actor(
+                heap, turn, ticket.actor_id);
     }
 
     PinnedContinuationGate(const PinnedContinuationGate&) = delete;

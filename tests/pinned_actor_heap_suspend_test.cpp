@@ -42,6 +42,28 @@ static void expect_unretired_frame_abort() {
           "unretired pinned continuation did not fail closed");
 }
 
+// A valid heap turn is not enough: a continuation ticket for a
+// different actor must never pin this heap's physical lifetime.
+static void expect_foreign_ticket_abort() {
+    const pid_t child = fork();
+    check(child >= 0, "fork failed");
+    if (child == 0) {
+        struct rlimit limit = {0, 0};
+        (void) setrlimit(RLIMIT_CORE, &limit);
+        const std::uint64_t actor = 900002;
+        OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 1);
+        const OresActorTurn turn = ores_actor_i64_heap_enter(heap, actor, 1);
+        const AsyncIoTicket foreign{actor + 1, 1, 1};
+        PinnedContinuationGate frame(foreign, heap, turn);
+        (void)frame;
+        _exit(0); // MUST never reach this point.
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child, "waitpid failed");
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "foreign actor's continuation ticket was permitted to pin heap");
+}
+
 static void expect_field_write_abort(OresActorI64Heap* heap,
                                      std::uint64_t actor, std::uint64_t index) {
     const pid_t child = fork();
@@ -61,6 +83,7 @@ static void expect_field_write_abort(OresActorI64Heap* heap,
 
 int main() {
     expect_unretired_frame_abort();
+    expect_foreign_ticket_abort();
     for (std::uint64_t round = 1; round <= 128; ++round) {
         const std::uint64_t actor = round + 400;
         OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 2);
