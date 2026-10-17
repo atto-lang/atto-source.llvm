@@ -6,6 +6,37 @@ import sys
 import tempfile
 
 CASES = {
+    # any/unknown are language type keywords. The native backend reserves the
+    # surface now but must reject values of those types until it has a genuine
+    # tagged opaque-value ABI and runtime descriptors.
+    "any-function-name": (
+        "pub fnc any(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "unknown-function-name": (
+        "pub fnc unknown(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "any-parameter-type": (
+        "pub fnc normalize(any value): int { return 0; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "unknown-parameter-type": (
+        "pub fnc normalize(unknown value): int { return 0; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "any-return-type": (
+        "pub fnc normalize(int value): any { return value; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "any-local-type": (
+        "pub fnc main(): int { const value: any = 1; return 0; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "ternary-expression": (
+        "pub fnc choose(int value): int { return value ? 1 : 0; }",
+        "native ternary expression requires typed bool conditions and branch-merge lowering",
+    ),
     # Enum/pattern declaration kinds are reserved; not executable source support yet.
     "enum-function": (
         "pub fnc enum(): int { return 42; }",
