@@ -1,5 +1,6 @@
-// Closed native typed Boolean source slice: literal and logical i1 trees.
-// No imported std/assert/Option/GC/actor functionality is inferred.
+// Native typed Boolean source slice: literals, i1 parameters, calls and
+// scalar compiler intrinsics. No bool locals, imported stdlib, ownership,
+// suspension, actor state or host callbacks are admitted here.
 define module BoolProbe as
     pub fnc yes(): bool {
         return true;
@@ -24,5 +25,35 @@ define module BoolProbe as
     }
     pub fnc nested(): bool {
         return false or true and (true ^^ false);
+    }
+
+    pub fnc and_args(bool a, bool b): bool {
+        return a and b;
+    }
+    pub fnc or_args(bool a, bool b): bool {
+        return a || b;
+    }
+    pub fnc xor_args(bool a, bool b): bool {
+        return a ^^ b;
+    }
+
+    pub fnc builtin_and(bool a, bool b, bool c): bool {
+        return And(a, b, c);
+    }
+    pub fnc builtin_or(bool a, bool b, bool c): bool {
+        return Or(a, b, c);
+    }
+    pub fnc builtin_xor(bool a, bool b): bool {
+        return Xor(a, b);
+    }
+
+    pub fnc forward(bool a, bool b): bool {
+        return and_args(a, b);
+    }
+    pub fnc named_forward(bool a, bool b): bool {
+        return and_args(b: b, a: a);
+    }
+    pub fnc compose(bool a, bool b, bool c): bool {
+        return Or(And(a, b), Xor(b, c));
     }
 end
