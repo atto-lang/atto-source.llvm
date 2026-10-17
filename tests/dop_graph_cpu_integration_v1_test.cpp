@@ -5,6 +5,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -106,6 +107,37 @@ int main() {
         output->write(2, 1, 99);
         queued();
         require(output->read(2, 1) == 99, "late rejected task mutated buffer");
+
+        // Match the Java/.NET/Forge one-shot scheduling stress intent:
+        // two simultaneous deliveries cannot re-run the claimed native kernel.
+        for (int trial = 0; trial < 128; ++trial) {
+            queued = nullptr;
+            auto raced = submit_owned_cpu_graph(kernel, input, output,
+                source, destination, answer(), scheduler);
+            require(static_cast<bool>(queued), "missing race task");
+            std::thread first([&] { queued(); });
+            std::thread second([&] { queued(); });
+            first.join();
+            second.join();
+            require(raced.get() == 42, "duplicate native delivery lost result");
+        }
+        // The worker-claim/cancel race must have a terminal outcome. Once the
+        // kernel starts, cancellation is allowed to suppress result publication
+        // but must not pretend to undo already committed destination bytes.
+        for (int trial = 0; trial < 64; ++trial) {
+            queued = nullptr;
+            auto raced = submit_owned_cpu_graph(kernel, input, output,
+                source, destination, answer(), scheduler);
+            std::thread worker([&] { queued(); });
+            (void) raced.cancel();
+            worker.join();
+            require(raced.ready(), "native claim/cancel race remained pending");
+            try {
+                require(raced.get() == 42, "unexpected completed race result");
+            } catch (const graph::Cancellation&) {
+                require(raced.ready(), "cancelled task should be terminal");
+            }
+        }
 
         // C++ queued work must retain native owners, not dangling references.
         queued = nullptr;
