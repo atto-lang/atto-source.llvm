@@ -343,34 +343,39 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (accept("constructor")) {
-                if (result.explicit_constructor)
-                    fail("native class may declare only one scalar constructor");
-                result.explicit_constructor = true;
+                ScalarConstructor ctor;
                 require("(");
                 std::unordered_set<std::string> params;
-                if (!accept(")")) {
+                // A leading bare 'self' is a construction-only receiver
+                // marker, erased before caller-visible arity selection.
+                const bool explicit_self = accept("self");
+                bool closed = accept(")");
+                if (!closed) {
+                    if (explicit_self) require(",");
                     do {
-                        if (result.constructor_parameters.size() == 16)
+                        if (ctor.parameters.size() == 16)
                             fail("native scalar constructor parameter limit exceeded (16)");
                         require("int");
                         std::string name = identifier();
                         if (!params.insert(name).second)
                             fail("duplicate native constructor parameter '" + name + "'");
-                        result.constructor_parameters.push_back(std::move(name));
+                        ctor.parameters.push_back(std::move(name));
                     } while (accept(","));
                     require(")");
                 }
+                if (result.constructor_for_arity(ctor.parameters.size()) != nullptr)
+                    fail("duplicate native constructor arity " +
+                         std::to_string(ctor.parameters.size()) + " for class '" + result.name + "'");
                 require("{");
                 if (accept("return")) require(";");
                 if (token_.text != "}")
                     fail("native scalar constructor body must be empty or contain only 'return;'");
                 require("}");
-                if (token_.text != "end")
-                    fail("native scalar constructor must be the last class member");
+                result.constructors.push_back(std::move(ctor));
                 continue;
             }
-            if (result.explicit_constructor)
-                fail("native scalar constructor must be the last class member");
+            if (!result.constructors.empty())
+                fail("native scalar constructors must follow all class fields");
             if (result.fields.size() == 16)
                 fail("native class field limit exceeded (16)");
             const bool legacy_let = accept("let");
@@ -435,16 +440,24 @@ private:
             result.fields.push_back(std::move(field));
         }
         if (result.fields.empty()) fail("native class requires at least one field");
-        std::unordered_set<std::string> allowed(
-            result.constructor_parameters.begin(), result.constructor_parameters.end());
+        // Every constructor overload must independently initialize all
+        // fields. A shared field initializer may reference only parameters
+        // present in every overload, never a parameter from another slot.
         for (const auto& field : result.fields) {
-            if (field.int_array && result.explicit_constructor)
+            if (field.int_array && !result.constructors.empty())
                 fail("native owned Array<int> constructor requires checked failure cleanup");
             if (!field.initializer_expression) continue;
-            if (!result.explicit_constructor &&
-                    field.initializer_expression->kind != Expression::Kind::Integer)
-                fail("native nonliteral class field initializer requires explicit scalar constructor");
-            validate_expression(*field.initializer_expression, allowed, {});
+            if (result.constructors.empty()) {
+                if (field.initializer_expression->kind != Expression::Kind::Integer)
+                    fail("native nonliteral class field initializer requires explicit scalar constructor");
+                validate_expression(*field.initializer_expression, {}, {});
+            } else {
+                for (const auto& ctor : result.constructors) {
+                    std::unordered_set<std::string> allowed(
+                        ctor.parameters.begin(), ctor.parameters.end());
+                    validate_expression(*field.initializer_expression, allowed, {});
+                }
+            }
         }
         require("end");
         return result;
@@ -1694,9 +1707,11 @@ private:
                             [&](const ClassDecl& c) { return c.name == binding.class_name; });
                         if (cls == program.classes.end())
                             throw std::runtime_error("unknown class constructor");
-                        if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
+                        const std::size_t arity = binding.constructor_arguments.size();
+                        if (cls->constructors.empty() ? arity != 0 :
+                                cls->constructor_for_arity(arity) == nullptr)
                             throw std::runtime_error("native class constructor argument arity mismatch for '" +
-                                                     cls->name + "'");
+                                                     cls->name + "' (got " + std::to_string(arity) + ")");
                         for (const auto& arg : binding.constructor_arguments) {
                             if (!native_constructor_scalar_tree(*arg))
                                 throw std::runtime_error("native scalar constructor argument requires pure integer expression");
