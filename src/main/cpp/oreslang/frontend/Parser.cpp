@@ -1577,12 +1577,9 @@ private:
     }
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
-        if (!fn.has_declared_effects) return;
-        if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
-                || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
-            throw std::runtime_error(
-                "using effects on actor actions requires trusted actor effect summaries");
-        }
+        // Proxy creation is suspension-capable even when the function omitted
+        // a using clause entirely. Check this before the ordinary no-effects
+        // fast path so ownership checking cannot obscure the missing effect.
         for (const auto& local : fn.locals) {
             if (!local.proxy_class_name.empty()) {
                 if (!fn.has_declared_effects ||
@@ -1593,6 +1590,14 @@ private:
                     "native Proxy<T> opaque runtime lowering is pending; "
                     "proxy capabilities may not be encoded as scalar i64");
             }
+        }
+        if (!fn.has_declared_effects) return;
+        if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
+                || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
+            throw std::runtime_error(
+                "using effects on actor actions requires trusted actor effect summaries");
+        }
+        for (const auto& local : fn.locals) {
             bool allocates_class_array = false;
             if (local.new_class) {
                 const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
