@@ -258,9 +258,17 @@ int main() {
         {"run-prefix-no-match", Permission::Run, "curl", true, {"git*"}, {}, false},
         {"path-child-allowed", Permission::Read, "/workspace/data/file.txt", true, {"/workspace/data"}, {}, true},
         {"path-prefix-no-match", Permission::Read, "/workspace/database/file.txt", true, {"/workspace/data"}, {}, false},
-        {"path-whitespace-exact", Permission::Read, "/workspace/data ", true, {"/workspace/data"}, {}, false}
+        {"path-whitespace-exact", Permission::Read, "/workspace/data ", true, {"/workspace/data"}, {}, false},
+        {"env-padded-grant-literal", Permission::Env, "API_KEY ", true, {"API_KEY "}, {}, true},
+        {"env-padded-grant-not-trimmed", Permission::Env, "API_KEY", true, {"API_KEY "}, {}, false},
+        {"env-padded-deny-literal", Permission::Env, "API_KEY ", true, {"*"}, {"API_KEY "}, false},
+        {"env-padded-deny-not-trimmed", Permission::Env, "API_KEY", true, {"*"}, {"API_KEY "}, true},
+        {"run-padded-grant-not-trimmed", Permission::Run, "git", true, {"git "}, {}, false},
+        {"run-padded-deny-not-trimmed", Permission::Run, "git", true, {"*"}, {"git "}, true},
+        {"sys-padded-grant-not-trimmed", Permission::Sys, "os", true, {"os "}, {}, false},
+        {"sys-padded-deny-not-trimmed", Permission::Sys, "os", true, {"*"}, {"os "}, true}
     };
-    require(goldenAuthorizations.size() == 37, true, "canonical authorization case count");
+    require(goldenAuthorizations.size() == 45, true, "canonical authorization case count");
     for (const auto& golden : goldenAuthorizations) {
         std::vector<Permission> ceiling;
         if (golden.coarse) ceiling.push_back(golden.permission);
