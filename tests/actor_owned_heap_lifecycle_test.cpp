@@ -139,6 +139,23 @@ int main(void) {
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 0); /* outstanding loan */
     ores_actor_i64_heap_release(heap, shutdown_hold);
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 1);
+    /* A slotless lifetime pin models a continuation/FFI/I/O completion.
+     * It is registered on the actor carrier, then safely released elsewhere
+     * after logical retirement without granting memory access. */
+    OresActorI64Heap* completion_heap = ores_actor_i64_heap_open(31, 9, 1);
+    OresActorTurn completion_turn =
+        ores_actor_i64_heap_enter(completion_heap, 31, 9);
+    OresActorLifetimePin completion_pin =
+        ores_actor_i64_heap_pin_external(completion_heap, completion_turn);
+    ores_actor_i64_heap_leave(completion_heap, completion_turn);
+    ores_actor_i64_heap_retire(completion_heap);
+    CHECK(ores_actor_i64_heap_try_destroy(completion_heap) == 0);
+    std::thread completion_carrier([&] {
+        ores_actor_i64_heap_release_external(completion_heap, completion_pin);
+    });
+    completion_carrier.join();
+    CHECK(ores_actor_i64_heap_try_destroy(completion_heap) == 1);
+
 #if defined(__unix__) || defined(__APPLE__)
     CHECK(rejects(WRONG_OWNER));
     CHECK(rejects(WRONG_EPOCH));
