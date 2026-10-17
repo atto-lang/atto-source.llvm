@@ -147,3 +147,38 @@ compiler or actor Git tree was exported.
 
 A green fixture/reference oracle by itself does not prove that the
 compiler/guest tests have run or that actor cleanup is safe.
+
+## Release CTest inventory admission hardening
+
+The exact-source LLVM CI **must fail** before expensive numerical guest tests
+if any of the following three registered CTests is absent, disabled,
+expected-to-fail, silently skipped, or pointed at a different executable
+harness: `numeric_experimental_checked_i64_status_abi`,
+`numeric_experimental_checked_pure_function_graph`, and
+`numeric_experimental_checked_result_function_graph`.
+
+The `tests/ctest_manifest_gate.py` release check now makes all three
+mandatory, verifies the expected Python guest harness path,
+`--compiler oreslang-llvmc` and `--clang` arguments, and rejects
+unsafe/missing CTest timeouts. New adversarial tests reject missing cases,
+no-op substitutions, wrong compiler/script options and inverted/skipped
+tests. The exact-source workflow runs the inventory gate **before**
+the selected CTest run, so an incomplete targeted CTest selection
+cannot be reported as a green compiler result.
+
+An independent **source-free** admission model (not the actual Oreslang
+manifest parser) passed six hosted adversarial unittest methods in
+[ClipTown run #38991528146](https://github.com/cliptown/cliptown-e2e/actions/runs/38991528146),
+SHA `bf150926e75e6de86d9ed4ed7f7adb0f65b01893`, with allocated
+runner ID `1000005498`, all hosted steps passing, and archived
+three-day evidence artifact ID `12085561480`. The same run exercised
+the independently authored bounded-fanout host model using GCC and Clang
+at -O0/-O2 with sanitizers and genuine SIGILL traps. No private
+compiler-source Git tree was transported across organizations.
+
+**Limitations:** the newly edited Python manifest gate, its real CTest
+configuration, full Oreslang guest compiler, and all other backend runtime
+suites have **not** executed successfully on source-org Actions.
+Synthetic tests cannot promote compiled parity or authorize private export;
+Java security issue #962 and platform-conformance incident #22 remain
+unresolved.
