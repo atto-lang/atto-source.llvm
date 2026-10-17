@@ -71,6 +71,22 @@ int main() {
         throw std::runtime_error("adjacent window not readable");
     registry.revoke(adjacentRight);
     registry.revoke(adjacentLeft);
+    // Independent registry instances must not accept grants that coincidentally
+    // share slot, generation, region, allocation and actor identifiers.
+    NativeRegionRegistry foreignRegistry;
+    std::array<std::uint32_t, 4> foreignBytes{{10, 20, 30, 40}};
+    auto foreignGrant = NativeRegionRegistryTestAccess::issue(foreignRegistry,
+        NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
+        foreignBytes.data(), sizeof(foreignBytes),
+        TrustedPointerWindow::Mode::ReadOnly);
+    if (foreignGrant.slot != grant.slot ||
+        foreignGrant.provenance != grant.provenance ||
+        foreignGrant.registry_id == grant.registry_id)
+        throw std::runtime_error("cross-registry replay fixture invalid");
+    reject([&] { (void)foreignRegistry.at<std::uint32_t>(grant, owner); });
+    reject([&] { (void)registry.at<std::uint32_t>(foreignGrant, owner); });
+    reject([&] { foreignRegistry.revoke(grant); });
+    foreignRegistry.revoke(foreignGrant);
     auto p = registry.at<std::uint32_t>(grant, owner);
     if (p.offset(owner, 2).load(owner) != 30) throw std::runtime_error("bad pointer");
     reject([&] { (void)registry.at<std::uint32_t>(grant, other); });
