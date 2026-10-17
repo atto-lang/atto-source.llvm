@@ -42,7 +42,7 @@ for toolchain in gcc clang; do
   for name in NativeOresVM NativeActorScheduler; do
     "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c "$runtime/$name.c" -o "$dest/$name.o"
   done
-  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c "$test_source" -o "$dest/lifecycle.o"
+  "$cc" -std=c11 "${shared[@]}" -c "$test_source" -o "$dest/lifecycle.o"
   for name in NativeOresVMNio NativeEpollReactorABI; do
     "$cxx" -std=c++17 "${shared[@]}" -c "$runtime/$name.cpp" -o "$dest/$name.o"
   done
