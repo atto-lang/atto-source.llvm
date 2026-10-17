@@ -13,3 +13,7 @@ pub fnc complex_conj(): complex {
 pub fnc complex_conjugate(): complex {
   return (3.0 + 4.0i).conjugate();
 }
+
+pub fnc complex_imag_exact_limit(): complex {
+  return 9007199254740992i;
+}
