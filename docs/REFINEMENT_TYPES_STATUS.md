@@ -39,3 +39,18 @@ LLVM refinement support includes emitting/consuming the same reflection-free Zor
 ## Inclusive comparison spelling
 
 Canonical textual inclusive bounds are `gte` and `lte`; symbolic `>=` and `<=` are equivalent source spellings. Legacy `ge` and `le` are deliberately invalid and must never be accepted as aliases. Until this backend implements checked refinement lowering, both canonical/symbolic valid refinements and legacy-invalid refinements remain fail-closed admission cases rather than erased base types.
+
+## Zorde core/std-lib validation parity
+
+Oreslang standard-library `std/zorde` is the eventual public schema API;
+core provides the same normalized predicates for compile-time annotation proofs
+and runtime validation. `@MinLength(N)`/`@MaxLength(N)` and
+`@Size(min=,max=)`/`@Length(min=,max=,eq=)` lower to string Unicode
+scalar `length` comparisons. `@Min(N)`/`@Max(N)`/`@Range(min=,max=)`
+lower to integer-exact `value` bounds. Textual `gte/lte` and symbolic
+`>=/<=` must be equivalent. A float-number coercion is not acceptable for
+signed-int64 range checks.
+
+Until LLVM has exact compilation and enforced boundary schemas, all these
+annotations are included in the native fail-closed admission gate as
+unsupported. This is rejection parity only, not Zorde execution support.
