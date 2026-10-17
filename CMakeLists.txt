@@ -1856,6 +1856,17 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-nominal-enum-overload-policy-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    # Compiler-only nominal method/static slot oracle; not guest dispatch.
+    add_executable(oreslang-nominal-method-slot-policy-test
+        tests/nominal_method_slot_policy_test.cpp)
+    target_include_directories(oreslang-nominal-method-slot-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-nominal-method-slot-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nominal_method_slot_static_policy
+        COMMAND oreslang-nominal-method-slot-policy-test)
+    set_tests_properties(native_nominal_method_slot_static_policy
+        PROPERTIES TIMEOUT 10)
     add_test(NAME native_nominal_enum_overload_static_policy
         COMMAND oreslang-nominal-enum-overload-policy-test)
     set_tests_properties(native_nominal_enum_overload_static_policy
