@@ -8,6 +8,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 head_sha="$(git rev-parse --verify HEAD)"
 tree_sha="$(git rev-parse --verify "HEAD^{tree}")"
+# An immutable HEAD check alone is not evidence of the tested bytes if the
+# checkout is dirty or contains untracked source shadowing tracked headers.
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  printf 'Refusing exact-head test: checkout has modified or untracked files\n' >&2
+  exit 2
+fi
 if [[ -n "${ORES_NIO_EXPECT_HEAD:-}" && "$head_sha" != "$ORES_NIO_EXPECT_HEAD" ]]; then
   printf 'Exact-head mismatch: expected %s, checked out %s\n' "$ORES_NIO_EXPECT_HEAD" "$head_sha" >&2
   exit 2
@@ -34,9 +40,9 @@ for toolchain in gcc clang; do
   shared=(-O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer
           -Wall -Wextra -Wpedantic -Werror -I"$source_root")
   for name in NativeOresVM NativeActorScheduler; do
-    "$cc" -std=c11 "${shared[@]}" -c "$runtime/$name.c" -o "$dest/$name.o"
+    "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c "$runtime/$name.c" -o "$dest/$name.o"
   done
-  "$cc" -std=c11 "${shared[@]}" -c "$test_source" -o "$dest/lifecycle.o"
+  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c "$test_source" -o "$dest/lifecycle.o"
   for name in NativeOresVMNio NativeEpollReactorABI; do
     "$cxx" -std=c++17 "${shared[@]}" -c "$runtime/$name.cpp" -o "$dest/$name.o"
   done
