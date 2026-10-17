@@ -28,7 +28,7 @@ public:
         if (triple == "armv7-unknown-linux-gnueabihf")
             return {"armv7-unknown-linux-gnueabihf", 32, "little", "aapcs32-hardfp", "unimplemented"};
         if (triple == "bpfel")
-            return {"bpfel", 64, "little", "bpf", "experimental-bpf-xdp-ir"};
+            return {"bpfel", 64, "little", "bpf", "experimental-bpf-ir"};
         if (triple == "thumbv7m-none-eabi")
             return {"thumbv7m-none-eabi", 32, "little", "aapcs32-soft", "experimental-cortexm-scalar-ir"};
         if (triple == "wasm32-unknown-unknown")
@@ -40,8 +40,8 @@ public:
         return emission_ == "experimental-cortexm-scalar-ir";
     }
 
-    bool experimental_bpf_xdp_ir() const noexcept {
-        return emission_ == "experimental-bpf-xdp-ir";
+    bool experimental_bpf_ir() const noexcept {
+        return emission_ == "experimental-bpf-ir";
     }
 
     bool experimental_wasm32_ir() const noexcept {
