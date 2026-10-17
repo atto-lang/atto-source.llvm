@@ -1634,6 +1634,15 @@ private:
                 validate_complex_expression(*expr.left);
                 validate_complex_expression(*expr.right);
                 return;
+            case Expression::Kind::ArrayCall:
+                if (expr.left && expr.arguments.empty() &&
+                        (expr.name == "conj" || expr.name == "conjugate")) {
+                    validate_complex_expression(*expr.left);
+                    return;
+                }
+                throw std::runtime_error(
+                    "native complex128 first slice supports only .conj()/.conjugate() zero-argument members at byte "
+                    + std::to_string(expr.offset));
             case Expression::Kind::Multiply:
                 throw std::runtime_error(
                     "native complex128 multiplication requires exact once-rounded lowering at byte "
