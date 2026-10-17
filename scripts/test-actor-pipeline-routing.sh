@@ -16,34 +16,73 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 for compiler in g++ clang++; do
   for opt in 0 2; do
     for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_route_ledger_test native_actor_pipe_writer_promotion_fault_test; do
+      set --
+      if [ "$test" = native_actor_pipeline_routing_test ]; then
+        set -- -DORESLANG_ACTOR_PIPE_FAULT_TESTS=1 -DORES_ACTOR_PIPE_TEST_FAULT_INJECTION=1
+      fi
       "$compiler" -std=c++17 "-O$opt" -g -Wall -Wextra -Wpedantic -Werror \
-        -pthread -Isrc/main/cpp "tests/$test.cpp" -o "$work/$test-$compiler-O$opt"
+        -pthread "$@" -Isrc/main/cpp "tests/$test.cpp" -o "$work/$test-$compiler-O$opt"
       "$work/$test-$compiler-O$opt"
       echo "ORES_ACTOR_PIPELINE_HOST_PASS compiler=$compiler opt=$opt test=$test"
     done
   done
 done
 
+# Run the same real host transport test WITHOUT test-only allocator seams.
+# Test executables with fault injection enabled are not proof that the
+# production build compiles or that normal STOP/admission paths work.
+for compiler in g++ clang++; do
+  for opt in 0 2; do
+    "$compiler" -std=c++17 "-O$opt" -g -Wall -Wextra -Wpedantic -Werror \
+      -pthread -Isrc/main/cpp tests/native_actor_pipeline_routing_test.cpp \
+      -o "$work/native-routing-production-$compiler-O$opt"
+    "$work/native-routing-production-$compiler-O$opt"
+    echo "ORES_ACTOR_PIPELINE_PRODUCTION_PASS compiler=$compiler opt=$opt"
+  done
+done
+
 if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   for compiler in g++ clang++; do
     for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_route_ledger_test native_actor_pipe_writer_promotion_fault_test; do
+      set --
+      if [ "$test" = native_actor_pipeline_routing_test ]; then
+        set -- -DORESLANG_ACTOR_PIPE_FAULT_TESTS=1 -DORES_ACTOR_PIPE_TEST_FAULT_INJECTION=1
+      fi
       "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
         -fsanitize=address,undefined -fno-omit-frame-pointer \
-        -pthread -Isrc/main/cpp "tests/$test.cpp" -o "$work/$test-$compiler-sanitize"
+        -pthread "$@" -Isrc/main/cpp "tests/$test.cpp" -o "$work/$test-$compiler-sanitize"
       ASAN_OPTIONS=detect_leaks=1 "$work/$test-$compiler-sanitize"
       echo "ORES_ACTOR_PIPELINE_SANITIZER_PASS compiler=$compiler test=$test"
     done
   done
 fi
 
-for compiler in g++ clang++; do
-  "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
-    -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -DORES_ACTOR_PIPE_TEST_FAULT_INJECTION -Isrc/main/cpp \
-    tests/native_actor_pipe_writer_promotion_fault_test.cpp \
-    -o "$work/writer-promotion-injected-$compiler"
-  "$work/writer-promotion-injected-$compiler"
-  echo "ORES_WRITER_PROMOTION_FAULT_PASS compiler=$compiler"
-done
+if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
+  for compiler in g++ clang++; do
+    "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+      -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -pthread -Isrc/main/cpp tests/native_actor_pipeline_routing_test.cpp \
+      -o "$work/native-routing-production-$compiler-sanitize"
+    ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+      "$work/native-routing-production-$compiler-sanitize"
+    echo "ORES_ACTOR_PIPELINE_PRODUCTION_SANITIZER_PASS compiler=$compiler"
+  done
+fi
+
+# The isolated writer-promotion sanitizer proof is optional for the same
+# reason as the routing sanitizer matrix above: a sanitizer-disabled run
+# must not silently require sanitizer toolchains at the very end.
+if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
+  for compiler in g++ clang++; do
+    "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+      -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -DORES_ACTOR_PIPE_TEST_FAULT_INJECTION -Isrc/main/cpp \
+      tests/native_actor_pipe_writer_promotion_fault_test.cpp \
+      -o "$work/writer-promotion-injected-$compiler"
+    ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+      "$work/writer-promotion-injected-$compiler"
+    echo "ORES_WRITER_PROMOTION_FAULT_PASS compiler=$compiler"
+  done
+fi
 
 echo "ORES_ACTOR_PIPELINE_HOST_MATRIX_PASS"
