@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeOresVM.h"
 #include <pthread.h>
+#include <errno.h>
 #include <stdlib.h>
 
 typedef struct {
@@ -418,7 +419,12 @@ int ores_native_vm_attach_nio(
  */
 void* ores_native_vm_nio_acquire(OresNativeVM* vm) {
     if (!vm) return NULL;
-    control_lock(vm);
+    // This is a try-admission hot path, not a CONTROL wait. A contended
+    // lifecycle lock must reject immediately; the owning scheduler may
+    // arrange a later retry without parking an actor/carrier thread.
+    int lock_status = pthread_mutex_trylock(&vm->control_lock);
+    if (lock_status == EBUSY) return NULL;
+    if (lock_status != 0) abort();
     void* backend = NULL;
     if (!vm->control_retired && vm->nio_backend && vm->nio_borrows != (size_t)-1) {
         ++vm->nio_borrows;
