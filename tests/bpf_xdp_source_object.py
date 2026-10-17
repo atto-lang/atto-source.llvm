@@ -195,6 +195,10 @@ def main():
         src.write_text(packet_source, encoding="utf-8")
         packet_result = run(cmd)
         require(packet_result.returncode == 0, packet_result.stderr)
+        host_packet = run([args.compiler, str(src)])
+        require(host_packet.returncode != 0 and not host_packet.stdout and
+                "unknown parameter class" in host_packet.stderr.lower(),
+                "host/native compilation must not admit XdpContext")
         packet_ir = packet_result.stdout
         require("packet.load.0" in packet_ir and "packet.next.0" in packet_ir,
                 "packet_u8 lowering lacks explicit checked CFG")
