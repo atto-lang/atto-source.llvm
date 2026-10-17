@@ -20,7 +20,7 @@ The native test is wired into CTest and additionally executed directly against e
 
 ## Shared-domain CONTROL and asynchronous lifetime hardening — 2026-10-17
 
-The current shared-domain prototype no longer treats possession of a `SharedDomainArena&` as sufficient CONTROL authority. A domain issues exactly one opaque, non-copyable/non-movable `Control` capability; membership grant, revocation, and domain retirement require that exact capability. A CONTROL token from a sibling domain is rejected. This is still trusted-host authority, not guest-visible `rt share` lowering.
+The current shared-domain prototype no longer treats possession of a `SharedDomainArena&` as sufficient CONTROL authority. A domain issues exactly one opaque, non-copyable/non-movable `Control` capability; membership grant, revocation, and domain retirement require that exact capability. CONTROL is bound to the arena's globally non-recycling domain identity as well as its object reference, so a stale token cannot regain authority if a later arena reuses the same address. A CONTROL token from a sibling domain is rejected. This is still trusted-host authority, not guest-visible `rt share` lowering.
 
 The domain also has bounded move-only `LifetimePin` capabilities for continuation, FFI, and I/O owners. Acquiring a pin validates a live member grant but confers no handle, slot, read, write, allocate, or drop authority. Pins do not hold the reader/writer mutex and may be released from a different completion carrier. Logical retirement seals new authority immediately, while physical scrub/reclaim remains deferred until both critical leases and lifetime pins are quiescent. Pin release is idempotent, bounded by `MaxLifetimePins`, and retirement remains retryable and idempotent.
 
