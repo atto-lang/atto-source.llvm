@@ -30,7 +30,16 @@ VISIBILITY_NEGATIVE_FIXTURES = {
 VISIBILITY_POSITIVE = "native_public_class_field_read"
 
 
+# Native checked-i64 CTest registrations are release evidence, not optional.
+# An incomplete three-way filtered CTest run could otherwise exit green.
+CHECKED_I64_GUEST_TESTS = {
+    "numeric_experimental_checked_i64_status_abi": "native_checked_scalar_experimental.py",
+    "numeric_experimental_checked_pure_function_graph": "native_checked_pure_functions.py",
+    "numeric_experimental_checked_result_function_graph": "native_checked_result_functions.py",
+}
+
 CRITICAL_TESTS = (
+    *CHECKED_I64_GUEST_TESTS,
     "native_contract_harness_optimize_failclosed",
     "native_contract_harness_python_O",
     "native_contract_harness_python_OO",
@@ -61,7 +70,7 @@ CRITICAL_TESTS = (
     VISIBILITY_POSITIVE,
 )
 
-TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
+TIMED_TESTS = frozenset(CRITICAL_TESTS[:7])
 # Bind critical CTest *names* to the real commands in CMakeLists.txt. A
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
@@ -114,6 +123,18 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
     This is deliberately a manifest check, not binary provenance or evidence
     that the command executed. Full CTest and independent CI remain mandatory.
     """
+    if name in CHECKED_I64_GUEST_TESTS:
+        # Require *actual* guest compiler -> LLVM IR -> Clang harnesses,
+        # not a harmless no-op CTest with a familiar display name.
+        expected = CHECKED_I64_GUEST_TESTS[name]
+        if (len(command) != 6 or not python_program(command[0])
+                or not command[1].endswith("/tests/" + expected)
+                or command[2] != "--compiler"
+                or Path(command[3]).name != "oreslang-llvmc"
+                or command[4] != "--clang"
+                or not command[5] or command[5].startswith("-")):
+            raise ManifestFailure(f"checked-i64 guest CTest targets wrong harness: {name}")
+        return
     if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
         positive = name == VISIBILITY_POSITIVE
         fixture = ("class-public-field-read-native.ores" if positive
