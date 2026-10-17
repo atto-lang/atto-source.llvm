@@ -48,6 +48,9 @@ def main():
         "BoolProbe.builtin_xor", "BoolProbe.forward",
         "BoolProbe.named_forward", "BoolProbe.compose",
         "BoolProbe.builtin_and8", "BoolProbe.builtin_or8",
+        "BoolProbe.left_bool", "BoolProbe.right_bool",
+        "BoolProbe.lazy_and_call", "BoolProbe.lazy_or_call",
+        "BoolProbe.eager_xor_calls",
     )
     for symbol in required_param:
         if not re.search(rf"define i1 @{re.escape(symbol)}\(i1 ", emitted):
@@ -61,6 +64,32 @@ def main():
         raise AssertionError("same-module bool call did not lower to call i1")
     if re.search(r"(?m)^\s*declare\b", emitted):
         raise AssertionError("pure Boolean guest declares an external dependency")
+
+    def body(symbol):
+        marker = f"define i1 @{symbol}"
+        start = emitted.find(marker)
+        if start < 0:
+            raise AssertionError(f"missing function body {symbol}")
+        end = emitted.find("\n}", start)
+        if end < 0:
+            raise AssertionError(f"unterminated function body {symbol}")
+        return emitted[start:end + 2]
+
+    for symbol in ("BoolProbe.lazy_and_call", "BoolProbe.lazy_or_call"):
+        block = body(symbol)
+        branch = block.find("br i1")
+        rhs_call = block.find("call i1 @BoolProbe.right_bool")
+        if branch < 0 or rhs_call < 0 or rhs_call < branch:
+            raise AssertionError(
+                f"{symbol} RHS call must be emitted only after short-circuit branch")
+
+    xor_block = body("BoolProbe.eager_xor_calls")
+    left_call = xor_block.find("call i1 @BoolProbe.left_bool")
+    right_call = xor_block.find("call i1 @BoolProbe.right_bool")
+    xor_inst = xor_block.find("xor i1")
+    if not (0 <= left_call < right_call < xor_inst):
+        raise AssertionError(
+            "Xor calls must execute eagerly once each in lexical left-to-right order")
 
     # Calls are permitted only between source-owned BoolProbe definitions.
     for line in emitted.splitlines():
