@@ -1,4 +1,4 @@
-// Initial native typed Boolean source slice: zero args, pure literal returns.
+// Closed native typed Boolean source slice: literal and logical i1 trees.
 // No imported std/assert/Option/GC/actor functionality is inferred.
 define module BoolProbe as
     pub fnc yes(): bool {
@@ -6,5 +6,23 @@ define module BoolProbe as
     }
     pub fnc no(): bool {
         return false;
+    }
+    pub fnc and_word(): bool {
+        return true and false;
+    }
+    pub fnc and_symbol(): bool {
+        return true && true;
+    }
+    pub fnc or_word(): bool {
+        return false or true;
+    }
+    pub fnc or_symbol(): bool {
+        return false || false;
+    }
+    pub fnc xor_symbol(): bool {
+        return true ^^ false;
+    }
+    pub fnc nested(): bool {
+        return false or true and (true ^^ false);
     }
 end
