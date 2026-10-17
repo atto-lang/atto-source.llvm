@@ -531,6 +531,15 @@ void validate_i64_ownership(const Program& program) {
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
         if (boolean_intrinsic_name(function.name))
             shadowed_intrinsics.insert(function.name);
+        if (program.module == "BooleanOps" &&
+                (function.name == "And" || function.name == "Or" ||
+                 function.name == "Xor")) {
+            const std::string qualified = "BooleanOps." + function.name;
+            functions.emplace(
+                native_function_slot(qualified, function.parameters.size()),
+                &function);
+            shadowed_intrinsics.insert(qualified);
+        }
     }
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
