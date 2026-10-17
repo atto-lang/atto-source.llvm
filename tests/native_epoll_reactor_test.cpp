@@ -126,11 +126,14 @@ int main() {
     expect(replacement.has_value() && replacement->value != previous_ticket.value, "new generation");
     expect(!reactor.try_cancel(*cancelled), "old ticket must not cancel new operation");
     reactor.stop();
+    expect(!reactor.try_cancel(*replacement),
+           "shutdown fence must reject late cancellation of stopped ticket");
     auto stopped = until_completion(reactor);
     expect(stopped.has_value() && stopped->ticket.value == replacement->value
            && stopped->outcome == NativeEpollReactor::Outcome::stopped, "stop completion");
     expect(reactor.pending() == 0, "fully drained");
     expect(!reactor.try_watch(accepted, EPOLLIN).has_value(), "admission fenced after shutdown");
+    reactor.stop(); // idempotent host teardown must preserve terminal state
     ::close(accepted); ::close(client); ::close(server);
     return 0;
 }
