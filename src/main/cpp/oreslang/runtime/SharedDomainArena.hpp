@@ -11,6 +11,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <stdexcept>
+#include <thread>
 
 namespace oreslang::runtime {
 class SharedDomainArena final {
@@ -24,11 +25,13 @@ public:
     class Lease final {
         friend class SharedDomainArena;
         SharedDomainArena* arena_;
+        // A std::shared_mutex must be unlocked by the same thread that locked it.
+        std::thread::id owner_thread_;
         std::shared_lock<std::shared_mutex> read_;
         std::unique_lock<std::shared_mutex> write_;
         bool exclusive_;
         Lease(SharedDomainArena& arena, std::uint64_t actor, Grant grant, bool exclusive)
-            : arena_(&arena), exclusive_(exclusive) {
+            : arena_(&arena), owner_thread_(std::this_thread::get_id()), exclusive_(exclusive) {
             if (!actor) throw std::logic_error("shared region actor identity required");
             // Actor carrier threads must not park behind another actor's
             // critical lease. Admission is fail-fast; the scheduler may
@@ -43,7 +46,8 @@ public:
             arena.validate_grant(grant, actor, exclusive_);
         }
         void require_live(bool write = false) const {
-            if (!arena_ || arena_->closing_.load(std::memory_order_acquire) ||
+            if (!arena_ || owner_thread_ != std::this_thread::get_id() ||
+                arena_->closing_.load(std::memory_order_acquire) ||
                 (write && !exclusive_))
                 throw std::logic_error("shared region lease revoked or insufficient rights");
         }
@@ -61,6 +65,11 @@ public:
         Lease& operator=(const Lease&) = delete;
         Lease(Lease&&) = delete; // moved-from lease must never outlive its lock
         Lease& operator=(Lease&&) = delete;
+        ~Lease() noexcept {
+            // Destructing on a foreign carrier would unlock a shared_mutex
+            // from the wrong thread (undefined behavior), so fail closed.
+            if (owner_thread_ != std::this_thread::get_id()) std::terminate();
+        }
         Handle allocate(std::size_t bytes) {
             require_live(true);
             if (bytes == 0 || bytes > SlotBytes) throw std::out_of_range("shared region slot bytes");
