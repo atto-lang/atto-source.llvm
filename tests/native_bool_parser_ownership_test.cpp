@@ -45,6 +45,19 @@ int main() {
 
     {
         Program program = oreslang::parse_program(R"(
+            fnc qualified(bool a, bool b, bool c): bool {
+                return BooleanOps.And(a, b, c);
+            }
+        )");
+        const auto& call = *program.functions.front().result;
+        require(call.kind == Expression::Kind::Call &&
+                call.name == "BooleanOps.And" &&
+                call.arguments.size() == 3,
+                "qualified BooleanOps.And call shape mismatch");
+    }
+
+    {
+        Program program = oreslang::parse_program(R"(
             fnc precedence(): bool {
                 return true or true ^^ true and false;
             }
@@ -107,6 +120,24 @@ int main() {
             return Xor(a, b, c);
         }
     )", "native Xor expects exactly two scalar bool arguments");
+
+    rejected(R"(
+        fnc bad(bool a, bool b, bool c): bool {
+            return BooleanOps.Xor(a, b, c);
+        }
+    )", "native Xor expects exactly two scalar bool arguments");
+
+    rejected(R"(
+        fnc bad(bool a, bool b): bool {
+            return BooleanOps.And(left: a, right: b);
+        }
+    )", "native Boolean intrinsics do not accept named arguments");
+
+    rejected(R"(
+        fnc bad(bool a, bool b): bool {
+            return BooleanOps.Nand(a, b);
+        }
+    )", "unknown native BooleanOps member 'Nand'");
 
     rejected(R"(
         fnc bad(bool a): bool {
