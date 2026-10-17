@@ -40,10 +40,17 @@ int main() {
         TrustedPointerWindow::Mode::ReadWrite); });
     // Disjoint adjacent windows are permitted and must not be mistaken for
     // overlapping ranges.
-    auto adjacent = registry.issue(NativeRegionRegistry::Trust::Trusted, other,
-        13, 6, bytes.data() + 4, sizeof(std::uint32_t),
+    std::array<std::uint32_t, 2> adjacentBacking{{55, 66}};
+    auto adjacentLeft = registry.issue(NativeRegionRegistry::Trust::Trusted,
+        owner, 13, 6, adjacentBacking.data(), sizeof(std::uint32_t),
         TrustedPointerWindow::Mode::ReadOnly);
-    registry.revoke(adjacent);
+    auto adjacentRight = registry.issue(NativeRegionRegistry::Trust::Trusted,
+        other, 14, 7, adjacentBacking.data() + 1, sizeof(std::uint32_t),
+        TrustedPointerWindow::Mode::ReadOnly);
+    if (registry.at<std::uint32_t>(adjacentRight, other).load(other) != 66)
+        throw std::runtime_error("adjacent window not readable");
+    registry.revoke(adjacentRight);
+    registry.revoke(adjacentLeft);
     auto p = registry.at<std::uint32_t>(grant, owner);
     if (p.offset(owner, 2).load(owner) != 30) throw std::runtime_error("bad pointer");
     reject([&] { (void)registry.at<std::uint32_t>(grant, other); });
