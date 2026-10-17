@@ -1494,6 +1494,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # Compiler-only adapter: one persistent ActorArena record contains the
+    # complete bounded scalar field image for a source actor incarnation.
+    add_executable(oreslang-actor-packed-state-test
+        tests/actor_packed_state_test.cpp
+        src/main/cpp/oreslang/runtime/ActorPackedState.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-actor-packed-state-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-packed-state-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-packed-state-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_source_actor_packed_state_record
+        COMMAND oreslang-actor-packed-state-test)
+    set_tests_properties(native_source_actor_packed_state_record PROPERTIES TIMEOUT 25)
+
     # Trusted host-only shared-region capability and read/write lease prototype.
     add_executable(oreslang-native-shared-domain-arena-test
         tests/native_shared_domain_arena_test.cpp)
