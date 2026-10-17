@@ -79,6 +79,26 @@ class RunContract(unittest.TestCase):
         with self.assertRaises(module.Denied):
             self.validate()
 
+    def test_disguised_runner_housekeeping_cannot_count_as_execution(self):
+        for disguised in (" ", "\t", "  Set up job ", "set UP job",
+                          " POST Checkout", "pre Setup", " Complete job "):
+            with self.subTest(step=disguised):
+                self.assertFalse(module.executable_step_name(disguised))
+        self.assertTrue(module.executable_step_name("Prepare build"))
+        self.assertTrue(module.executable_step_name("Execute test suite"))
+
+    def test_whitespace_only_job_name_denied_with_real_test_step(self):
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        self.values[page]["jobs"][0]["name"] = " \t "
+        with self.assertRaisesRegex(module.Denied, "missing workflow job name"):
+            self.validate()
+
+    def test_whitespace_only_step_name_denied_despite_real_test_step(self):
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        self.values[page]["jobs"][0]["steps"][0]["name"] = "  \t  "
+        with self.assertRaisesRegex(module.Denied, "no name"):
+            self.validate()
+
 
     def _switch_fixture_to_run_id_one(self):
         old = self.prefix + "/actions/runs/17"
@@ -793,14 +813,53 @@ class StrictApiJSONContract(unittest.TestCase):
                 return self.body[:length]
 
         with patch.dict("os.environ", {"GH_TOKEN": "synthetic-only"}, clear=True):
-            with patch.object(module.urllib.request, "urlopen",
-                              return_value=Response(b'{"id":17,"id":18}')):
+            with patch.object(module.urllib.request, "build_opener") as builder:
+                builder.return_value.open.return_value = Response(b'{"id":17,"id":18}')
                 with self.assertRaisesRegex(module.Denied, "duplicate"):
                     module._api_get("repos/example/repo")
-            with patch.object(module.urllib.request, "urlopen",
-                              return_value=Response(b'{"id":17}')):
+                self.assertIs(builder.call_args.args[0], module._DenyRedirects)
+                builder.return_value.open.return_value = Response(b'{"id":17}')
                 self.assertEqual(module._api_get("repos/example/repo"), {"id":17})
+                self.assertIs(builder.call_args.args[0], module._DenyRedirects)
 
+    def test_authenticated_redirect_cannot_forward_bearer_token(self):
+        class RedirectingOpener:
+            def __init__(self, handler):
+                self.handler = handler
+                self.forwarded = False
+            def open(self, req, timeout):
+                self.assertion = req.get_header("Authorization")
+                # This simulates the first redirect in urllib without any
+                # network request to another organization or host.
+                self.handler.redirect_request(
+                    req, None, 302, "Found", {},
+                    "https://outside.example.invalid/collect")
+                self.forwarded = True
+                raise AssertionError("redirect unexpectedly followed")
+
+        instances = []
+        def opener_factory(handler):
+            instance = RedirectingOpener(handler())
+            instances.append(instance)
+            return instance
+
+        with patch.dict("os.environ", {"GH_TOKEN": "synthetic-only"}, clear=True):
+            with patch.object(module.urllib.request, "build_opener",
+                              side_effect=opener_factory):
+                with self.assertRaisesRegex(module.Denied, "redirect denied"):
+                    module._api_get("repos/example/repo")
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0].assertion, "Bearer synthetic-only")
+        self.assertFalse(instances[0].forwarded)
+        for status in (301, 302, 303, 307, 308):
+            with self.subTest(status=status):
+                with self.assertRaisesRegex(module.Denied, "redirect denied"):
+                    module._DenyRedirects().redirect_request(
+                        module.urllib.request.Request(
+                            "https://api.github.com/repos/example/repo",
+                            headers={"Authorization": "Bearer synthetic-only"}),
+                        None, status, "Redirect", {},
+                        "https://other.example.invalid/capture")
 
 
 class WorkflowIsolationContract(unittest.TestCase):
@@ -871,6 +930,17 @@ class WorkflowIsolationContract(unittest.TestCase):
                 self.assertIs(report["trigger_sha_matches_reported_checkout"], expected)
                 self.assertIs(report["verified_execution_claim"], False)
 
+
+    def test_workflow_checkout_is_pinned_and_uncredentialed(self):
+        workflow = self.workflow_text()
+        self.assertIn(
+            "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+            workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
+        self.assertIn("contents: read", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertNotIn("secrets.", workflow)
 
 
 if __name__ == "__main__":

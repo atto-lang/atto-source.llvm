@@ -330,3 +330,34 @@ ID to an equivalent float only on the final API response. The shared
 source-free gate requires at least **77** unittest methods across each
 of three no-skip rounds. This is metadata verification, not Oreslang runtime
 certification or authorization to export private source.
+
+## Five-backend integration security gate (2026-10-17)
+
+At the audited integration heads, the harmonized source-free verifier has 86
+unique regression methods. It rejects whitespace-only job and step names,
+case/padding-disguised GitHub runner housekeeping, malformed or ambiguous API
+JSON, inexact source HEAD/tree/workflow identity, and synthetic-merge SHA
+misattribution. The source-local workflow requires at least 86 completed,
+no-skip tests for each of three independent rounds and uploads only
+metadata-classified, non-certifying evidence. GitHub workflow/job/step records
+and test artifacts must still be verified for the exact current PR head.
+This contract does **not** prove source backend compiler, runtime, AOT,
+sanitizer or guest conformance, and grants no authorization to export private
+source. Cross-organization mirroring remains suspended pending explicit
+protected-main approval and closure of exposure incident #22.
+
+## Current five-backend CI evidence gate — 17 October 2026
+
+**Integration-branch minimum: 87 distinct source-free regression cases per
+round, three rounds, no skips.** This supersedes earlier 73/77/83/86-case
+historical descriptions in this document for these specific integration PRs.
+All five backends now use matching exact Git blobs for the verifier, tests and
+source-local workflow. The verifier rejects ambiguous and nonfinite API JSON,
+wrong source/run/workflow identity, blank or disguised runner-housekeeping
+steps, and unexpected redirects carrying API bearer credentials. The workflow
+keeps checkout credentials unpersisted and writes a metadata-only,
+non-certifying evidence report. Repository native Actions at the audited heads
+failed with no observed execution steps or uploaded artifacts, so no Python
+suite or compiler/guest run is certified. Private-source cross-organization
+transfer remains prohibited pending protected-branch independent approval and
+containment of security incident #22.
