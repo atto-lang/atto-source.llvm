@@ -901,8 +901,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     std::unordered_set<std::string> shadowed_intrinsics;
     for (const auto& fn : source.functions) {
         ++family_sizes[fn.name];
-        if (fn.name == "And" || fn.name == "Or" || fn.name == "Xor")
+        if (fn.name == "And" || fn.name == "Or" || fn.name == "Xor") {
             shadowed_intrinsics.insert(fn.name);
+            if (source.module == "BooleanOps")
+                shadowed_intrinsics.insert("BooleanOps." + fn.name);
+        }
     }
     std::unordered_set<std::string> emitted_slots;
     for (const auto& fn : source.functions) {
@@ -955,6 +958,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             formal.setName(fn.parameters[label_index++].name);
         if (!declarations.emplace(slot, declaration).second)
             throw std::runtime_error("duplicate native function declaration slot");
+        if (source.module == "BooleanOps" &&
+                (fn.name == "And" || fn.name == "Or" || fn.name == "Xor")) {
+            const std::string qualified_slot =
+                native_function_slot("BooleanOps." + fn.name, fn.parameters.size());
+            if (!declarations.emplace(qualified_slot, declaration).second)
+                throw std::runtime_error(
+                    "duplicate qualified BooleanOps function declaration slot");
+        }
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
