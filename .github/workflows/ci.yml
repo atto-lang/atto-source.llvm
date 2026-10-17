@@ -27,6 +27,18 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Reject unsupported Option pattern syntax using real LLVM compiler
+        run: |
+          python3 scripts/check_option_pattern_contract.py --backend llvm \
+            --revision "${{ github.sha }}" --report build/option-pattern-llvm.json \
+            -- ./build/oreslang-llvmc '{source}'
+      - name: Preserve Option-pattern admission report (not parity)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: option-pattern-llvm-admission
+          path: build/option-pattern-llvm.json
+          if-no-files-found: ignore
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
