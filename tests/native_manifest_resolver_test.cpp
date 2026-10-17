@@ -40,6 +40,40 @@ math = { zed = "acme/math" }
         write(nested/".ores.pkg.toml","schema_version=\"1\"\n[source]\nroots=[\"src\"]\n");
         write(nested/"src/leaf.ores","leaf");
         write(shared/"util.ores","ambient");
+        // In the shared project-root contract +/ is relative to [project].root,
+        // including when the package manifest is physically above that root.
+        const auto configured=tmp/"configured";
+        fs::create_directories(configured/"app/src");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app\"\n[source]\nroots=[\"src\"]\n");
+        write(configured/"app/src/main.ores","main");
+        write(configured/"app/src/helper.ores","helper");
+        write(configured/"outside.ores","wrong owner");
+        auto configured_project=read_project(configured/"app/src/main.ores");
+        require(configured_project.root==configured/"app",
+                "package project.root did not move +/ anchor");
+        require(resolve_source(configured_project,configured/"app/src/main.ores",
+                               "+/src/helper")==
+                fs::canonical(configured/"app/src/helper.ores"),
+                "configured root import did not resolve source");
+        require(!resolve_source(configured_project,configured/"app/src/main.ores",
+                                "+/outside"),"root import escaped configured project root");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"../ambient\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "package project.root traversal admitted");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app/../ambient\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "package project.root dot normalization admitted");
+        fs::create_directories(configured/"app/child");
+        write(configured/"app/child/.ores.pkg.toml","schema_version=\"1\"\n");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app/child\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "package project.root crossed nested package authority");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app\"\n");
         auto config=read_project(app/"src/main.ores");
         require(config.package_manifest,"not package manifest");
         require(config.root==app,"bad package root");
