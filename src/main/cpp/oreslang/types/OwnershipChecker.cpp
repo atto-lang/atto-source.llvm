@@ -321,6 +321,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 reject(expr, "void call cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
+        case Expression::Kind::Proxy:
+            reject(expr, "Proxy<T> is an opaque capability and cannot be used as an int expression");
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "borrowed reference may only be passed to a borrowed parameter");
@@ -350,6 +352,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             check_pure_guard(*expr.right, locals, functions);
             return;
         case Expression::Kind::Take:
+        case Expression::Kind::Proxy:
         case Expression::Kind::Call:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
