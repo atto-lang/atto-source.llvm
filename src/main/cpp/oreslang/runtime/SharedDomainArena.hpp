@@ -108,11 +108,7 @@ public:
         }
     };
 
-    SharedDomainArena()
-        : identity_(next_identity_.fetch_add(1, std::memory_order_relaxed)) {
-        if (!identity_ || identity_ == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("shared region identity exhausted");
-    }
+    SharedDomainArena() : identity_(allocate_identity()) {}
     SharedDomainArena(const SharedDomainArena&) = delete;
     SharedDomainArena& operator=(const SharedDomainArena&) = delete;
     ~SharedDomainArena() noexcept {
@@ -194,6 +190,19 @@ private:
     struct Slot { std::array<std::byte, SlotBytes> data{}; std::uint64_t generation = 1; std::size_t length = 0; bool live = false; };
     struct Member { std::uint64_t actor = 0, incarnation = 0, generation = 1; bool active = false, read = false, write = false; };
     inline static std::atomic<std::uint64_t> next_identity_{1};
+    // Saturate rather than wrapping the identity counter: a wrapped value
+    // could eventually reauthorize stale cross-domain grants or handles.
+    static std::uint64_t allocate_identity() {
+        auto current = next_identity_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (current == 0 || current == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("shared region identity exhausted");
+            if (next_identity_.compare_exchange_weak(
+                    current, current + 1, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                return current;
+        }
+    }
     const std::uint64_t identity_;
     std::shared_mutex mutex_;
     std::atomic<bool> closing_{false};
