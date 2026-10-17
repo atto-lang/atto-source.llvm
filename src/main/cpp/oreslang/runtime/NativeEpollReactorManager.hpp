@@ -16,8 +16,9 @@ namespace oreslang::runtime {
 
 /**
  * Bounded host reactor domain. Reactor objects/FDs are allocated during
- * manager construction. Normal throughput starts exactly one epoll thread
- * and may add up to four when sustained event processing justifies it.
+ * manager construction, but normal throughput starts with zero epoll threads.
+ * The first valid readiness watch starts reactor #0; sustained event processing
+ * may later add reactors up to the configured bound.
  * RT-preallocated mode starts its fixed thread set before any guest work;
  * no runtime thread provisioning is permitted in that mode.
  *
@@ -42,7 +43,8 @@ public:
         // a single scheduler/guest turn may be admitted.
         for (std::size_t i = 0; i < limit_; ++i)
             reactors_[i] = std::make_unique<NativeEpollReactor>();
-        const std::size_t required = profile_ == Profile::preallocated_rt ? rt_reactors : 1;
+        const std::size_t required =
+            profile_ == Profile::preallocated_rt ? rt_reactors : 0;
         for (std::size_t i = 0; i < required; ++i) {
             if (!reactors_[i]->start()) {
                 stop(); // constructor bootstrap failure; no guest work yet
@@ -64,8 +66,16 @@ public:
     std::optional<Watch> try_watch(int fd, std::uint32_t events) noexcept {
         std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
         if (!gate.owns_lock() || stopped_) return std::nullopt;
+        // Invalid/blocking descriptors must not cause cold-start thread
+        // creation. Validate before provisioning the first throughput reactor.
+        if (!NativeEpollReactor::can_watch(fd, events)) return std::nullopt;
         auto count = started_.load(std::memory_order_relaxed);
-        if (count == 0) return std::nullopt;
+        if (count == 0) {
+            if (profile_ != Profile::throughput || !reactors_[0]->start())
+                return std::nullopt;
+            started_.store(1, std::memory_order_release);
+            count = 1;
+        }
         // One FD can only have one outstanding readiness owner in this
         // process-level manager, even if two different epoll instances could
         // each register that descriptor independently. Otherwise read/write
