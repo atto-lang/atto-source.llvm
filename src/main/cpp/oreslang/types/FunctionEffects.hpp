@@ -16,7 +16,8 @@ enum class FunctionEffect : std::uint32_t {
     Ffi = 1u << 6,
     Throw = 1u << 7,
     Raise = 1u << 8,
-    Panic = 1u << 9
+    Panic = 1u << 9,
+    UnsafeMemory = 1u << 10
 };
 
 struct FunctionEffects {
@@ -32,7 +33,8 @@ struct FunctionEffects {
         static_cast<std::uint32_t>(FunctionEffect::Ffi) |
         static_cast<std::uint32_t>(FunctionEffect::Throw) |
         static_cast<std::uint32_t>(FunctionEffect::Raise) |
-        static_cast<std::uint32_t>(FunctionEffect::Panic);
+        static_cast<std::uint32_t>(FunctionEffect::Panic) |
+        static_cast<std::uint32_t>(FunctionEffect::UnsafeMemory);
 
     std::uint32_t bits = 0;
     constexpr bool valid() const noexcept {
@@ -64,6 +66,7 @@ struct FunctionEffects {
         if (name == "throw") return FunctionEffect::Throw;
         if (name == "raise") return FunctionEffect::Raise;
         if (name == "panic") return FunctionEffect::Panic;
+        if (name == "unsafe.memory") return FunctionEffect::UnsafeMemory;
         throw std::invalid_argument("unknown Oreslang function effect");
     }
 };
