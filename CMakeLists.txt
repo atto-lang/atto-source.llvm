@@ -2010,3 +2010,22 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(native_vm_nio_lifecycle_and_rt_prestart
         PROPERTIES TIMEOUT 30)
 endif()
+
+# This compiles the REAL native frontend parser and ownership checker,
+# independent of LLVM IR emission. LOW is executable; MEDIUM/HIGH fail closed
+# before codegen until safe per-turn actor frames and state loans exist.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-actor-max-threads-admission-test
+        tests/actor_max_threads_source_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-actor-max-threads-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-max-threads-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-max-threads-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_max_threads_source_admission
+        COMMAND oreslang-native-actor-max-threads-admission-test)
+    set_tests_properties(native_actor_max_threads_source_admission
+        PROPERTIES TIMEOUT 20)
+endif()
