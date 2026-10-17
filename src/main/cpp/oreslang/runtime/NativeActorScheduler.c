@@ -201,7 +201,7 @@ static void* carrier(void* raw) {
         if (kind == 1) ++s->capability_wakes_completed;
         if (lane->queued || lane->has_control || lane->has_capability_wake)
             pthread_cond_signal(&s->ready);
-        if (lane->retired && !lane->active && !lane->queued && !lane->has_capability_wake
+        if (lane->retired && !lane->active && !lane->queued
             && !lane->has_control && !lane->has_capability_wake) {
             if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
                 && !ores_execution_retired(&lane->authority, lane->generation))
@@ -331,7 +331,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         return 0;
     }
     ActorLane* a = &s->actors[i];
-    const int new_lane = !a->active && !a->queued && !a->has_capability_wake && !a->has_control && !a->has_capability_wake;
+    const int new_lane = !a->active && !a->queued
+        && !a->has_control && !a->has_capability_wake;
     if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
         if (s->rejected != UINT64_MAX) ++s->rejected;
         return 0;
@@ -532,7 +533,8 @@ int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
     ActorLane* lane = &s->actors[actor.actor_slot];
     lane->retired = 1;
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
-    if (!lane->active && !lane->queued && !lane->has_capability_wake && !lane->has_control && !lane->has_capability_wake)
+    if (!lane->active && !lane->queued
+        && !lane->has_control && !lane->has_capability_wake)
         if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
     unlock(s);
     return 1;
@@ -584,7 +586,8 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
             if (ores_execution_phase(&lane->authority) != ORES_EXEC_STOPPING
                 && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
                 if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
-            if (!lane->active && !lane->queued && !lane->has_capability_wake && !lane->has_control
+            if (!lane->active && !lane->queued && !lane->has_control
+                && !lane->has_capability_wake
                 && ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING)
                 if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
         }
