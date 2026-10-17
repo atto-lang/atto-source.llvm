@@ -1,0 +1,3 @@
+fnc bad(bool a, bool b, bool c): bool {
+    return Xor(a, b, c);
+}
