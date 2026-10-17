@@ -209,11 +209,36 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
         release(*it, locals);
 }
 
+void check_pure_bool_tree(const Expression& expr) {
+    if (expr.kind == Expression::Kind::Boolean) {
+        if ((expr.integer != 0 && expr.integer != 1) ||
+                !expr.name.empty() || expr.left || expr.right ||
+                !expr.arguments.empty() || !expr.argument_names.empty())
+            reject(expr, "unverified native bool literal AST");
+        return;
+    }
+    if (expr.kind == Expression::Kind::LogicalAnd ||
+            expr.kind == Expression::Kind::LogicalOr ||
+            expr.kind == Expression::Kind::LogicalXor) {
+        if (!expr.left || !expr.right || expr.integer != 0 ||
+                !expr.name.empty() || !expr.arguments.empty() ||
+                !expr.argument_names.empty())
+            reject(expr, "unverified native logical bool AST");
+        check_pure_bool_tree(*expr.left);
+        check_pure_bool_tree(*expr.right);
+        return;
+    }
+    reject(expr, "native bool result contains non-bool value or effect");
+}
+
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return;
         case Expression::Kind::Boolean:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
             reject(expr, "typed bool cannot be used as native int");
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
@@ -352,6 +377,9 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             check_pure_guard(*expr.right, locals, functions);
             return;
         case Expression::Kind::Boolean:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
         case Expression::Kind::Take:
         case Expression::Kind::Call:
         case Expression::Kind::ModuleCall:
@@ -698,9 +726,10 @@ void validate_i64_ownership(const Program& program) {
             check_deferred_exit(taken);
         }
         if (function.result) {
-            if (function.returns_bool &&
-                function.result->kind == Expression::Kind::Boolean) {
-                // Pure literal i1 needs no loan, heap, drop or ownership transfer.
+            if (function.returns_bool) {
+                // Closed logical i1 trees carry no owner, loan, heap or drop
+                // state. Validate crafted ASTs here as well as in the parser.
+                check_pure_bool_tree(*function.result);
             } else if (function.caught_throw_value) {
                 check_caught_throw_scalar_read(*function.result, locals, functions);
             } else {
