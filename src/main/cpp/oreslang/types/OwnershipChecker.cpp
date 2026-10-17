@@ -160,6 +160,8 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
     const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
     if (found == functions.end())
         reject(expr, "internal ownership error: unresolved function");
+    if (found->second->returns_complex)
+        reject(expr, "native complex128 calls require typed complex call ABI lowering");
     const auto& parameters = found->second->parameters;
     if (parameters.size() != expr.arguments.size())
         reject(expr, "internal ownership error: call arity mismatch");
@@ -222,6 +224,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return;
+        case Expression::Kind::Floating:
+        case Expression::Kind::Imaginary:
+            reject(expr, "floating/imaginary value escaped complex128 return-only boundary");
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
             if (source.moved)
@@ -316,11 +321,16 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
-        case Expression::Kind::Call:
-            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
+        case Expression::Kind::Call: {
+            const auto* callee =
+                functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            if (callee->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
+            if (callee->returns_complex)
+                reject(expr, "complex128 call cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
+        }
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "borrowed reference may only be passed to a borrowed parameter");
@@ -349,6 +359,8 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             check_pure_guard(*expr.left, locals, functions);
             check_pure_guard(*expr.right, locals, functions);
             return;
+        case Expression::Kind::Floating:
+        case Expression::Kind::Imaginary:
         case Expression::Kind::Take:
         case Expression::Kind::Call:
         case Expression::Kind::Borrow:
@@ -422,6 +434,15 @@ void validate_i64_ownership(const Program& program) {
         class_public.emplace(cls.name, std::move(published));
     }
     for (const auto& function : program.functions) {
+        if (function.returns_complex) {
+            if (!function.parameters.empty() || !function.locals.empty() ||
+                    !function.statements.empty() || !function.early_returns.empty() ||
+                    !function.actor_spawns.empty() || !function.actor_actions.empty() ||
+                    function.caught_throw_value)
+                throw std::runtime_error(
+                    "internal complex128 ownership boundary contains unsupported state");
+            continue;
+        }
         Locals locals;
         for (const auto& param : function.parameters) {
             if (!param.class_name.empty()) {
