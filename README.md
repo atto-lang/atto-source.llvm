@@ -125,10 +125,15 @@ aggregate, call, string, conditional and async feature limits.
 
 ## Experimental eBPF / XDP compiler slice
 
-`oreslang-llvmc --target=bpfel --bpf-program=xdp` has an **experimental constant-action XDP
-entrypoint** for one exported `pub fnc ores_xdp(): int { return 2; }`.
+`oreslang-llvmc --target=bpfel --bpf-program=xdp` has an **experimental verifier-aware XDP slice**. It supports constant basic
+actions and a target-scoped `borrow XdpContext ctx` with
+`ctx.packet_u8(literal_offset)` equality guards. Raw packet/kernel pointers
+are never source-visible; the compiler inserts the `data_end` bound before
+each admitted load.
 It emits an XDP-section LLVM function and an ELF license section, with no
-host runtime, actor support or fallback. This is not general BPF, maps,
-packet parsing or Linux kernel verifier/attach validation. See
+host runtime, actor support or fallback. This is not general BPF: maps, helpers/kfuncs, BTF/CO-RE, redirect and general
+packet parsing remain unavailable. The current bounded byte-read slice has
+real Linux verifier/`BPF_PROG_RUN` evidence; live attachment and a kernel
+matrix remain outstanding. See
 [the XDP target contract](docs/EBPF_XDP_EXPERIMENT.md) and the dedicated
 `bpf_xdp_source_object` CTest, which requires a BPF-capable Clang and readelf.
