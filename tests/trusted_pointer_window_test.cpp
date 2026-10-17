@@ -89,6 +89,25 @@ int main() {
     }) == 7);
     denied([&] { (void)reentrant_cursor.load(actor); });
 
+    // Exceptions must release the scoped FFI lease; otherwise later access
+    // or revocation could remain blocked by stale callback state.
+    TrustedPointerWindow throwing(
+        actor, NativeRegionIdentity::supervisor_minted(7, 11, 16),
+        values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
+    auto throwing_cursor = throwing.at<std::uint32_t>(actor);
+    bool caught_callback_error = false;
+    try {
+        throwing_cursor.with_ffi_address(actor, [](std::uint32_t*) -> void {
+            throw std::runtime_error("ffi callback failed");
+        });
+    } catch (const std::runtime_error&) {
+        caught_callback_error = true;
+    }
+    require(caught_callback_error);
+    require(throwing_cursor.load(actor) == 11);
+    throwing.revoke();
+    denied([&] { (void)throwing_cursor.load(actor); });
+
     alignas(std::uint32_t) std::uint32_t device_register = 0;
     TrustedPointerWindow mmio(
         actor, NativeRegionIdentity::supervisor_minted(8, 1, 1),
