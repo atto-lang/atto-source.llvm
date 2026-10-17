@@ -163,6 +163,29 @@ public:
         return next;
     }
 
+    /** One-shot terminal reply directly to the ORIGINAL authenticated
+     * ingress instance. Unlike backward(), no intermediary handler runs.
+     * The immutable full branch path remains attached for correlation;
+     * a returning frame cannot manufacture a second terminal reply.
+     *
+     * HOST-ONLY: caller identity and actual mailbox publication must still
+     * be enforced by the scheduler transport, not by this selector. */
+    Handle reply(const Handle& frame) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        require_forward(frame);
+        if (frame->at_ == 0)
+            throw std::logic_error("pipeline origin cannot reply to itself");
+        reserve_routes(1);
+        auto terminal = Handle(new Frame(this, generation_, frame->flow_,
+                                         next_route_, frame->path_, 0, true));
+        // Allocate the new active entry before consuming the parent; on
+        // bad_alloc the original is still an authorized live frame.
+        active_.emplace(terminal.get(), terminal);
+        active_.erase(frame.get());
+        ++next_route_;
+        return terminal;
+    }
+
     void complete(const Handle& frame) {
         std::lock_guard<std::mutex> lock(mutex_);
         require_active(frame);
