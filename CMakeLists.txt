@@ -494,14 +494,33 @@ if(BUILD_TESTING)
         unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
     oreslang_contract_test(reject_unadmitted_nested_core_assert_import
         unsupported-core-assert-nested-import.ores --diagnostic "native module imports must precede declarations")
-    # Source-compiled native i1 Boolean/logical return slice.
-    # It is NOT imported std/assert, Option, trap, bool storage or bool calls.
+    # Source-compiled native i1 Boolean graph: exact i1 parameters,
+    # same-module calls and compiler-owned scalar And/Or/Xor intrinsics.
+    # Bool locals/ownership/effects and aggregate reducers remain gated.
     oreslang_contract_test(native_bool_literal_true_i1
         primitive-bool-aot.ores --ir "ret i1 true")
     oreslang_contract_test(native_bool_literal_false_i1
         primitive-bool-aot.ores --ir "ret i1 false")
     oreslang_contract_test(native_bool_short_circuit_cfg_i1
         primitive-bool-aot.ores --ir "phi i1")
+    oreslang_contract_test(native_bool_parameter_abi_i1
+        primitive-bool-aot.ores --ir "define i1 @BoolProbe.and_args(i1")
+    oreslang_contract_test(native_bool_xor_instruction_i1
+        primitive-bool-aot.ores --ir "xor i1")
+    oreslang_contract_test(native_bool_same_module_call_i1
+        primitive-bool-aot.ores --ir "call i1 @BoolProbe.and_args")
+    oreslang_contract_test(native_bool_xor_arity_failclosed
+        native-bool-xor-arity-reject.ores
+        --diagnostic "native Xor expects exactly two scalar bool arguments")
+    oreslang_contract_test(native_bool_aggregate_intrinsic_failclosed
+        native-bool-and-singleton-reject.ores
+        --diagnostic "native And/Or aggregate reducers are unsupported")
+    oreslang_contract_test(native_bool_reject_i64_parameter
+        native-bool-int-param-reject.ores
+        --diagnostic "native bool functions currently require only by-value bool parameters")
+    oreslang_contract_test(native_i64_reject_bool_parameter
+        native-bool-param-int-result-reject.ores
+        --diagnostic "native bool parameters require a bool-returning pure function")
     add_test(NAME native_bool_logical_guest_aot_asan_ubsan
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_source_execution.py"
@@ -509,7 +528,16 @@ if(BUILD_TESTING)
             --clang "${ORE_NATIVE_ARRAY_CLANG}"
             --cxx "${CMAKE_CXX_COMPILER}"
             --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
-    set_tests_properties(native_bool_logical_guest_aot_asan_ubsan
+    add_test(NAME native_bool_shadow_guest_aot_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_shadow_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --cxx "${CMAKE_CXX_COMPILER}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(
+        native_bool_logical_guest_aot_asan_ubsan
+        native_bool_shadow_guest_aot_asan_ubsan
         PROPERTIES TIMEOUT 180)
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
