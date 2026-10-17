@@ -29,7 +29,7 @@ def is_domain_refusal(stderr):
         r"\\b(unsupported|unavailable|reserved|disabled|unimplemented)\\b"
         r"|not[ -](?:yet[ -])?(?:implemented|supported|lowered)",
         stderr, re.IGNORECASE)
-    return bool(domain and reason)
+    context = re.search(r"\\b(execution|regions?|graph|lowering|source|placement)\\b"\n                        r"|execution[- ]domain", stderr, re.IGNORECASE)\n    return bool(domain and reason and context)
 
 
 def compile_source(compiler, text, path):
