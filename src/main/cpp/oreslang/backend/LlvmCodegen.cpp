@@ -643,8 +643,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         if (fn.returns_complex) {
-            if (!fn.result || !fn.parameters.empty() || !fn.locals.empty() ||
-                    !fn.statements.empty() || !fn.early_returns.empty())
+            if (fn.returns_void || !fn.result ||
+                    !fn.parameters.empty() || !fn.locals.empty() ||
+                    !fn.statements.empty() || !fn.early_returns.empty() ||
+                    !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+                    !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+                    !fn.actor_field_writes.empty() || fn.scalar_while ||
+                    fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
+                    fn.has_declared_effects)
                 throw std::runtime_error(
                     "invalid complex128 return-only function reached LLVM lowering");
             builder.CreateRet(
