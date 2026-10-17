@@ -34,6 +34,9 @@ struct OresActorI64Heap {
     uint64_t capacity;
     uint64_t turn_epoch;
     uint64_t next_loan_nonce;
+    uint64_t next_write_nonce;
+    uint64_t active_write_nonce;
+    int write_active;
     int turn_active;
     int retiring;
     uint32_t active_loans;
@@ -90,6 +93,7 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     heap->incarnation = incarnation;
     heap->capacity = slot_capacity;
     heap->next_loan_nonce = 1;
+    heap->next_write_nonce = 1;
     for (uint64_t i = 0; i < slot_capacity; ++i) heap->slots[i].generation = 1;
     return heap;
 }
@@ -112,6 +116,9 @@ void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn) {
     lock_heap(heap);
     if (!heap->turn_active || turn.domain != heap->domain
             || turn.epoch != heap->turn_epoch) rejected();
+    /* Revoke any abandoned synchronous critical scope at turn exit. */
+    heap->write_active = 0;
+    heap->active_write_nonce = 0;
     heap->turn_active = 0;
     unlock_heap(heap);
 }
@@ -240,15 +247,55 @@ void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
     unlock_heap(heap);
 }
 
+/* Compatibility symbol intentionally aborts: possession of an actor turn
+ * alone must never authorize fixed-state mutation. */
 void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value) {
+    (void)heap; (void)domain; (void)epoch; (void)index; (void)value;
+    rejected();
+}
+
+uint64_t ores_actor_i64_heap_state_write_begin(OresActorI64Heap* heap,
+                                               uint64_t domain, uint64_t epoch) {
     lock_heap(heap);
     OresActorTurn turn = {domain, epoch};
     require_turn(heap, turn);
-    if (index >= heap->capacity) rejected();
+    if (heap->write_active || heap->active_loans
+        || heap->next_write_nonce == 0 || heap->next_write_nonce == UINT64_MAX)
+        rejected();
+    const uint64_t nonce = heap->next_write_nonce++;
+    heap->active_write_nonce = nonce;
+    heap->write_active = 1;
+    unlock_heap(heap);
+    return nonce;
+}
+
+void ores_actor_i64_heap_state_write_end(OresActorI64Heap* heap,
+                                        uint64_t domain, uint64_t epoch,
+                                        uint64_t grant_nonce) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (!grant_nonce || !heap->write_active
+        || grant_nonce != heap->active_write_nonce) rejected();
+    heap->write_active = 0;
+    heap->active_write_nonce = 0;
+    unlock_heap(heap);
+}
+
+void ores_actor_i64_heap_field_write_granted(OresActorI64Heap* heap,
+                                            uint64_t domain, uint64_t epoch,
+                                            uint64_t grant_nonce,
+                                            uint64_t index, int64_t value) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (!heap->write_active || !grant_nonce || grant_nonce != heap->active_write_nonce
+        || heap->active_loans || index >= heap->capacity) rejected();
     ActorSlot* field = &heap->slots[index];
-    if (!field->live || !field->fixed_field || !field->field_mutable || field->loans != 0) rejected();
+    if (!field->live || !field->fixed_field || !field->field_mutable
+        || field->loans != 0) rejected();
     field->value = value;
     unlock_heap(heap);
 }
@@ -269,6 +316,8 @@ int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap) {
     lock_heap(heap);
     heap->retiring = 1; /* no subsequent actor turn may enter */
+    heap->write_active = 0;
+    heap->active_write_nonce = 0; /* STOP revokes outstanding write grants */
     unlock_heap(heap);
 }
 int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
