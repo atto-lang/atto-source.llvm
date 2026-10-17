@@ -130,9 +130,12 @@ int main() {
     auto racingGrant = issue(NativeRegionRegistry::Trust::Trusted, owner, 10, 2,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadOnly);
     auto racingPointer = registry.at<std::uint32_t>(racingGrant, owner);
-    std::atomic<bool> go{false}, stopped{false};
+    std::atomic<bool> go{false}, ready{false}, stopped{false};
     std::thread reader([&] {
         while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+        // Establish a real successful access before initiating revocation.
+        (void)registry.at<std::uint32_t>(racingGrant, owner).load(owner);
+        ready.store(true, std::memory_order_release);
         while (!stopped.load(std::memory_order_acquire)) {
             try {
                 (void)registry.at<std::uint32_t>(racingGrant, owner).load(owner);
@@ -143,6 +146,7 @@ int main() {
         }
     });
     go.store(true, std::memory_order_release);
+    while (!ready.load(std::memory_order_acquire)) std::this_thread::yield();
     registry.revoke(racingGrant);
     stopped.store(true, std::memory_order_release);
     reader.join();
