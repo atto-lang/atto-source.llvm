@@ -11,6 +11,13 @@
 static void require(int condition) { if (!condition) abort(); }
 
 static void positives(void) {
+    require(oreslang_i64_map_storage_bytes(8)
+            == 8 * sizeof(OresNativeI64MapEntry));
+    require(oreslang_i64_map_storage_alignment()
+            == _Alignof(OresNativeI64MapEntry));
+    require(oreslang_i64_map_region_alignment()
+            == _Alignof(OresNativeI64MapRegion));
+
     OresNativeI64MapEntry storage[8];
     OresNativeI64MapRegion map;
     oreslang_i64_map_init(&map, storage, 8);
@@ -135,6 +142,50 @@ static void must_abort(int which) {
                 (void)oreslang_i64_map_entry_at(
                     &map, 0, &key, (int64_t*)&map.size);
             }
+            else if (which == 20) {
+                (void)oreslang_i64_map_storage_bytes(
+                    ORES_NATIVE_I64_MAP_MAX_CAPACITY + UINT64_C(1));
+            }
+            else if (which == 21) {
+                union {
+                    max_align_t align;
+                    unsigned char bytes[sizeof(OresNativeI64MapRegion) + 1];
+                } raw;
+                oreslang_i64_map_init(
+                    (OresNativeI64MapRegion*)(void*)(raw.bytes + 1),
+                    storage,
+                    2);
+            }
+            else if (which == 22) {
+                union {
+                    max_align_t align;
+                    unsigned char bytes[
+                        2 * sizeof(OresNativeI64MapEntry) + 1];
+                } raw;
+                oreslang_i64_map_init(
+                    &map,
+                    (OresNativeI64MapEntry*)(void*)(raw.bytes + 1),
+                    2);
+            }
+            else if (which == 23) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                union {
+                    max_align_t align;
+                    unsigned char bytes[sizeof(int64_t) + 1];
+                } raw;
+                (void)oreslang_i64_map_get(
+                    &map, 1, (int64_t*)(void*)(raw.bytes + 1));
+            }
+            else if (which == 24) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                int64_t key = 0;
+                union {
+                    max_align_t align;
+                    unsigned char bytes[sizeof(int64_t) + 1];
+                } raw;
+                (void)oreslang_i64_map_entry_at(
+                    &map, 0, &key, (int64_t*)(void*)(raw.bytes + 1));
+            }
             else abort();
         }
         _exit(0);
@@ -148,7 +199,7 @@ static void must_abort(int which) {
 int main(void) {
     positives();
 #if defined(__unix__) || defined(__APPLE__)
-    for (int i = 0; i <= 19; ++i) must_abort(i);
+    for (int i = 0; i <= 24; ++i) must_abort(i);
 #endif
     return 0;
 }

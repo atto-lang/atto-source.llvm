@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,17 @@ typedef enum {
     ORES_NATIVE_I64_MAP_OK = 0,
     ORES_NATIVE_I64_MAP_FULL = 1
 } OresNativeI64MapStatus;
+
+/*
+ * Compiler-owned fixed-capacity ABI. Capacity is selected before construction,
+ * must be in [1, ORES_NATIVE_I64_MAP_MAX_CAPACITY], and never grows implicitly.
+ * A full map reports ORES_NATIVE_I64_MAP_FULL without mutating existing state.
+ */
+enum { ORES_NATIVE_I64_MAP_MAX_CAPACITY = 4096 };
+
+size_t oreslang_i64_map_storage_bytes(uint64_t capacity);
+size_t oreslang_i64_map_storage_alignment(void);
+size_t oreslang_i64_map_region_alignment(void);
 
 void oreslang_i64_map_init(
     OresNativeI64MapRegion* region,

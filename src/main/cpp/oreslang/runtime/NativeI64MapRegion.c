@@ -11,10 +11,33 @@ _Static_assert(offsetof(OresNativeI64MapEntry, value) == 8,
 _Static_assert(offsetof(OresNativeI64MapEntry, occupied) == 16,
     "native i64 map occupancy ABI drift");
 
-enum { ORES_NATIVE_I64_MAP_MAX_CAPACITY = 4096 };
 static const uint64_t ORES_NATIVE_I64_MAP_MAGIC = UINT64_C(0x4f52454d41504936);
 
 static void fail_closed(void) { abort(); }
+
+static void validate_capacity(uint64_t capacity) {
+    if (capacity == 0 || capacity > ORES_NATIVE_I64_MAP_MAX_CAPACITY)
+        fail_closed();
+}
+
+static void validate_alignment(const void* pointer, size_t alignment) {
+    if (!pointer || alignment == 0
+            || ((uintptr_t)pointer % (uintptr_t)alignment) != 0)
+        fail_closed();
+}
+
+size_t oreslang_i64_map_storage_bytes(uint64_t capacity) {
+    validate_capacity(capacity);
+    return (size_t)capacity * sizeof(OresNativeI64MapEntry);
+}
+
+size_t oreslang_i64_map_storage_alignment(void) {
+    return _Alignof(OresNativeI64MapEntry);
+}
+
+size_t oreslang_i64_map_region_alignment(void) {
+    return _Alignof(OresNativeI64MapRegion);
+}
 
 static int ranges_overlap(
         const void* left,
@@ -35,8 +58,10 @@ static void validate_region_storage_disjoint(
         const OresNativeI64MapRegion* region,
         const OresNativeI64MapEntry* storage,
         uint64_t capacity) {
-    const size_t storage_bytes =
-        (size_t)capacity * sizeof(OresNativeI64MapEntry);
+    validate_capacity(capacity);
+    validate_alignment(region, _Alignof(OresNativeI64MapRegion));
+    validate_alignment(storage, _Alignof(OresNativeI64MapEntry));
+    const size_t storage_bytes = oreslang_i64_map_storage_bytes(capacity);
     if (ranges_overlap(region, sizeof(*region), storage, storage_bytes))
         fail_closed();
 }
@@ -46,6 +71,7 @@ static void validate_output_pointer(
         const void* output,
         size_t output_size) {
     if (!output) fail_closed();
+    validate_alignment(output, _Alignof(int64_t));
     if (ranges_overlap(output, output_size, region, sizeof(*region)))
         fail_closed();
     const size_t storage_bytes =
@@ -60,7 +86,8 @@ static void erase_bytes(void* data, size_t count) {
 }
 
 static void validate(const OresNativeI64MapRegion* region) {
-    if (!region || region->magic != ORES_NATIVE_I64_MAP_MAGIC ||
+    validate_alignment(region, _Alignof(OresNativeI64MapRegion));
+    if (region->magic != ORES_NATIVE_I64_MAP_MAGIC ||
             !region->entries || region->capacity == 0 ||
             region->capacity > ORES_NATIVE_I64_MAP_MAX_CAPACITY ||
             region->size > region->capacity)
@@ -93,9 +120,9 @@ void oreslang_i64_map_init(
         OresNativeI64MapRegion* region,
         OresNativeI64MapEntry* storage,
         uint64_t capacity) {
-    if (!region || !storage || capacity == 0 ||
-            capacity > ORES_NATIVE_I64_MAP_MAX_CAPACITY)
-        fail_closed();
+    validate_capacity(capacity);
+    validate_alignment(region, _Alignof(OresNativeI64MapRegion));
+    validate_alignment(storage, _Alignof(OresNativeI64MapEntry));
     validate_region_storage_disjoint(region, storage, capacity);
 
     for (uint64_t i = 0; i < capacity; ++i)
