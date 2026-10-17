@@ -22,7 +22,7 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Proxy, Borrow, BorrowMut, Field, ProxyField };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Proxy, Borrow, BorrowMut, Field, ProxyField, ProxyMethodCall };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
