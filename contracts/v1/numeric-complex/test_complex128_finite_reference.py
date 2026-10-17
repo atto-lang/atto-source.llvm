@@ -20,9 +20,30 @@ REQUIRED = frozenset((
     "divide-subnormal-output-exact-rounding",
     "divide-large-avoid-intermediate-overflow",
     "divide-small-avoid-intermediate-underflow", "divide-min-subnormal",
+    "divide-subnormal-normalization-preserves-small-component",
     "multiply-negative-signs", "conjugate",
 ))
 
+
+# Frozen test identities: changing vector inputs requires explicit reviewed v2.
+# The oracle may recompute outputs, but cannot silently replace input meaning.
+PINNED_COMPLEX_INPUTS = {
+    "add-mixed-sign": ["add",["1","2"],["3","-4"]],
+    "subtract-mixed-sign": ["subtract",["1","2"],["3","-4"]],
+    "multiply-cross-terms": ["multiply",["3","4"],["5","-2"]],
+    "multiply-subnormal-imaginary": ["multiply",["1.3e-162","1.3e-162"],["1.3e-162","1.3e-162"]],
+    "divide-basic": ["divide",["3","4"],["1","-2"]],
+    "divide-extreme-exponent-separation-1042": ["divide",["-3.8267306126191597e229","-2.653330234432702e-108"],["4.996866008987324e199","5.230549533052834e-126"]],
+    "divide-compensated-balanced-one-ulp": ["divide",["-1.9297622926115045e138","1.5512392579051227e150"],["-1.4976784258940757e292","-1.8366476025309775e288"]],
+    "divide-subnormal-output-exact-rounding": ["divide",["-4.273780448709542e-254","-2.0788903192019146e-253"],["-1.1323026279913343e49","-1.2990151610525855e55"]],
+    "divide-large-avoid-intermediate-overflow": ["divide",["1e308","1e308"],["1e308","1e308"]],
+    "divide-small-avoid-intermediate-underflow": ["divide",["1e-300","1e-300"],["1e-300","1e-300"]],
+    "divide-min-subnormal": ["divide",["0","5e-324"],["0","5e-324"]],
+    "divide-subnormal-normalization-preserves-small-component": ["divide",["1e300","1e-20"],["0","1"]],
+    "multiply-negative-signs": ["multiply",["-2","3"],["4","-5"]],
+    "conjugate": ["conjugate",["3","4"]],
+}
+PINNED_MATRIX_INPUTS = [[[["1","2"],["3","-1"]]],[[["2","-1"]],[["4","3"]]]]
 
 def real(value):
     if not isinstance(value, str) or len(value) > 40:
@@ -136,10 +157,13 @@ def validate(data):
         raise ValueError("reference contract must not claim guest parity")
     if data["backend_guest_execution"] != dict.fromkeys(BACKENDS, "unverified"):
         raise ValueError("backend execution claims must remain unverified")
-    if not isinstance(data["source_anchors"], dict) or set(data["source_anchors"]) != {
-        "java_complex_reference", "java_precision_hardening", "open_division_issue"
-    }:
-        raise ValueError("missing source issue anchors")
+    required_anchors = {
+        "java_complex_reference": "ores-truffle-oreslang/oreslang-source.java#120",
+        "java_precision_hardening": "ores-truffle-oreslang/oreslang-source.java#1033",
+        "open_division_issue": "ores-truffle-oreslang/oreslang-source.java#1042",
+    }
+    if data["source_anchors"] != required_anchors:
+        raise ValueError("altered numeric source issue anchors")
     if not isinstance(data["pending_explicit_semantics"], list) or len(data["pending_explicit_semantics"]) < 6:
         raise ValueError("unresolved exceptional/GPU semantics must stay visible")
     cases = data["operations"]
@@ -148,6 +172,13 @@ def validate(data):
     ids = [c.get("id") for c in cases if isinstance(c, dict)]
     if len(ids) != len(cases) or set(ids) != REQUIRED or len(set(ids)) != len(ids):
         raise ValueError("missing or duplicated required complex vector")
+    for case in cases:
+        pinned = PINNED_COMPLEX_INPUTS[case["id"]]
+        received = [case["op"], case["a"]]
+        if "b" in case:
+            received.append(case["b"])
+        if received != pinned:
+            raise ValueError("approved complex source inputs have changed")
     if any(not valid_vector(case) for case in cases):
         raise ValueError("finite complex rational reference mismatch")
     matrices = data["matrix_cases"]
@@ -158,6 +189,8 @@ def validate(data):
         raise ValueError("invalid complex matrix record")
     if m["id"] != "complex-matmul-one-by-two-times-two-by-one":
         raise ValueError("unexpected matrix vector identity")
+    if [m["lhs"], m["rhs"]] != PINNED_MATRIX_INPUTS:
+        raise ValueError("approved complex matrix source inputs have changed")
     if matrix_result(m) != m["expected_bits"]:
         raise ValueError("complex matrix multiply reference mismatch")
 
@@ -166,6 +199,38 @@ class ComplexReferenceContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.doc = json.loads(CASES.read_text(encoding="utf-8"))
+
+    def test_self_consistent_rewrite_of_scalar_operands_is_rejected(self):
+        # A regenerated expected output cannot silently redefine an
+        # approved fixed input and preserve the same vector identifier.
+        for idx in range(len(self.doc["operations"])):
+            x = copy.deepcopy(self.doc)
+            candidate = x["operations"][idx]
+            original = candidate["a"][0]
+            # Preserve each vector's exponent scale, otherwise the
+            # mutation itself may overflow before validation can reject it.
+            candidate["a"][0] = ("5e-324" if original == "0"
+                                 else (original[1:] if original.startswith("-")
+                                       else "-" + original))
+            candidate["expected_bits"] = actual_bits(candidate)
+            with self.subTest(id=candidate["id"]), self.assertRaisesRegex(
+                    ValueError, "approved complex source inputs"):
+                validate(x)
+
+    def test_self_consistent_rewrite_of_matrix_operands_is_rejected(self):
+        x = copy.deepcopy(self.doc)
+        candidate = x["matrix_cases"][0]
+        candidate["lhs"][0][0][0] = "7"
+        candidate["expected_bits"] = matrix_result(candidate)
+        with self.assertRaisesRegex(ValueError, "approved complex matrix source inputs"):
+            validate(x)
+
+    def test_known_source_issue_provenance_is_not_interchangeable(self):
+        x = copy.deepcopy(self.doc)
+        x["source_anchors"]["open_division_issue"] = (
+            "ores-truffle-oreslang/oreslang-source.java#1042-fake")
+        with self.assertRaisesRegex(ValueError, "altered numeric source issue anchors"):
+            validate(x)
 
     def test_schema_and_oracles(self):
         validate(self.doc)
