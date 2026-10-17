@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/BpfXdpLowering.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
@@ -65,6 +66,7 @@ int main(int argc, char** argv) {
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
+    bool bpf_target = false;
     bool target_seen = false;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -90,6 +92,8 @@ int main(int argc, char** argv) {
             const std::string target = arg.substr(9);
             if (target == "host") {
                 // Historical default: host triple and ABI remain inferred downstream.
+            } else if (target == "bpfel") {
+                bpf_target = oreslang::TargetAbi::parse(target).experimental_bpf_xdp_ir();
             } else if (target == "thumbv7m-none-eabi") {
                 cortex_m_target = oreslang::TargetAbi::parse(target).experimental_cortexm_ir();
             } else if (target == "wasm32" || target == "wasm32-unknown-unknown") {
@@ -120,16 +124,18 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|bpfel] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
-        const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
-        const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
-            ? "cortex-m source exceeds 128 KiB limit"
-            : "native source exceeds 8 MiB admission limit");
+        const std::size_t kMaxSourceBytes = (cortex_m_target || bpf_target)
+            ? 128u * 1024u : 8u * 1024u * 1024u;
+        const auto text = read_regular_source(path, kMaxSourceBytes, bpf_target
+            ? "eBPF source exceeds 128 KiB limit"
+            : (cortex_m_target ? "cortex-m source exceeds 128 KiB limit"
+            : "native source exceeds 8 MiB admission limit"));
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
@@ -137,12 +143,20 @@ int main(int argc, char** argv) {
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
+        if (bpf_target && (experimental_owned_int || experimental_rt_scalar_loop))
+            throw std::runtime_error("eBPF XDP rejects runtime experiments and ownership extensions");
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
+        if (bpf_target) {
+            std::cout << oreslang::emit_verified_bpf_xdp_ir(ast);
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls
