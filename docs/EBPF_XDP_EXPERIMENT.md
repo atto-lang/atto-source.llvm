@@ -23,7 +23,9 @@ readelf -W -S /tmp/xdp.o  # xdp, license sections
 
 The accepted form must contain one **exported**, top-level,
 zero-parameter function named `ores_xdp` with a literal integer return:
-0=XDP_ABORTED, 1=XDP_DROP, 2=XDP_PASS, 3=XDP_TX, 4=XDP_REDIRECT.
+0=XDP_ABORTED, 1=XDP_DROP, 2=XDP_PASS, 3=XDP_TX.
+`XDP_REDIRECT` is intentionally not admitted: redirect requires state prepared
+by `bpf_redirect()` or `bpf_redirect_map()`, which stage 0 does not expose.
 The compiler emits the kernel entry ABI `i32(ptr ctx)`, marks section
 `xdp`, and emits a `Proprietary\0` license section. This is deliberately a
 **non-GPL kernel capability marker**, not a legal source-license declaration:
@@ -45,7 +47,7 @@ Private exact-blob run
 verified 20/20 mirrored Git blobs from source head
 `9d18c9fb9b14951f40237022cd15bad79085223f`, built the compiler,
 passed the hardened source/object and target-ABI tests, then loaded every
-generated XDP action 0..4 into a real Linux 6.17.0-1022-azure kernel and
+generated basic XDP actions 0..3 into a real Linux 6.17.0-1022-azure kernel and
 executed each with `BPF_PROG_RUN`. A deliberately invalid one-instruction
 XDP program that exits with uninitialized R0 was rejected by the real kernel
 verifier with a verifier log.
