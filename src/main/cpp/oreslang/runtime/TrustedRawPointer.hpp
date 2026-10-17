@@ -48,6 +48,8 @@ class TrustedRawPointer final {
 public:
     using element_type = T;
 
+    template<class> friend class TrustedRawPointer;
+
     static TrustedRawPointer from_span(
             const T* base,
             std::size_t count,
@@ -140,6 +142,47 @@ public:
             provenance_,
             address_space_,
             access_);
+    }
+
+    template<class U>
+    [[nodiscard]] TrustedRawPointer<U> reinterpret_as() const {
+        const auto current = address_;
+        if ((current % alignof(U)) != 0)
+            throw std::invalid_argument("trusted raw pointer cast target is misaligned");
+
+        if (!bounded_) {
+            return TrustedRawPointer<U>(
+                current,
+                base_address_,
+                0,
+                0,
+                false,
+                provenance_,
+                address_space_,
+                access_);
+        }
+
+        if ((base_address_ % alignof(U)) != 0)
+            throw std::invalid_argument("trusted raw pointer cast base is misaligned");
+        const auto extent_bytes = checked_element_bytes(count_);
+        const auto offset_bytes = checked_element_bytes(index_);
+        if ((extent_bytes % sizeof(U)) != 0 || (offset_bytes % sizeof(U)) != 0)
+            throw std::invalid_argument(
+                "trusted raw pointer cast cannot represent bounded provenance in target elements");
+
+        return TrustedRawPointer<U>(
+            current,
+            base_address_,
+            static_cast<std::size_t>(extent_bytes / sizeof(U)),
+            static_cast<std::size_t>(offset_bytes / sizeof(U)),
+            true,
+            provenance_,
+            address_space_,
+            access_);
+    }
+
+    [[nodiscard]] TrustedRawPointer<std::byte> byte_offset(std::ptrdiff_t delta) const {
+        return this->template reinterpret_as<std::byte>().offset_elements(delta);
     }
 
     [[nodiscard]] std::ptrdiff_t distance_elements(const TrustedRawPointer& other) const {
