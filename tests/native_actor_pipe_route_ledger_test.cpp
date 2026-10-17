@@ -76,10 +76,23 @@ int main() {
     const auto next = ledger.ingress("source");
     const auto first = ledger.round_robin(next);
     check(first->receiver() == "worker-a", "RR cursor not reset at generation fence");
+    const auto second = ledger.round_robin(next);
+    check(second->receiver() == "worker-b",
+          "round-robin cursor did not advance to the second edge");
     rejected([&] { (void)ledger.forward_to(next, "sink"); },
              "named routing bypassed authorized edges");
     ledger.complete(first);
+    ledger.complete(second);
     ledger.complete(next);
+    // Normal quiescent epoch transition must reset RR without erasing
+    // constructor-preallocated source selector nodes.
+    ledger.advance_generation(9);
+    const auto epoch_root = ledger.ingress("source");
+    const auto epoch_first = ledger.round_robin(epoch_root);
+    check(epoch_first->receiver() == "worker-a",
+          "second generation failed to reset the round-robin selector");
+    ledger.complete(epoch_first);
+    ledger.complete(epoch_root);
     ledger.close();
     rejected([&] { (void)ledger.ingress("source"); },
              "closed generation accepted new DATA");
@@ -107,6 +120,17 @@ int main() {
         check(weak.expired(), "aborted route frame retained forever");
         rejected([&] { retained.complete(root); },
                  "aborted root remained active");
+        // Forced epoch rollover must also retain/reset selector state.
+        auto restarted = retained.ingress("source");
+        const auto restarted_first = retained.round_robin(restarted);
+        check(restarted_first->receiver() == "worker-a",
+              "aborted generation failed to reset first route");
+        retained.complete(restarted_first);
+        const auto restarted_second = retained.round_robin(restarted);
+        check(restarted_second->receiver() == "worker-b",
+              "aborted generation lost route order");
+        retained.complete(restarted_second);
+        retained.complete(restarted);
         retained.close();
     }
 
