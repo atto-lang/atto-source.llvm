@@ -1884,6 +1884,17 @@ if(BUILD_TESTING)
     set_tests_properties(cortexm_actor_admission_model_matrix PROPERTIES TIMEOUT 180)
 endif()
 
+# Type-only graph contract: this target has NO GPU driver, real source admission,
+# or actor continuation execution. Do not count it as end-to-end GPU parity.
+if(BUILD_TESTING)
+  add_executable(oreslang-execution-region-graph-test tests/execution_region_graph_test.cpp)
+  target_compile_features(oreslang-execution-region-graph-test PRIVATE cxx_std_20)
+  target_include_directories(oreslang-execution-region-graph-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+  add_test(NAME cpu_gpu_typed_graph_reference COMMAND oreslang-execution-region-graph-test)
+  set_tests_properties(cpu_gpu_typed_graph_reference PROPERTIES TIMEOUT 20)
+endif()
+
 # Admission gates for language surfaces that this backend does not lower yet.
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
