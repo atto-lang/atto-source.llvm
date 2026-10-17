@@ -50,6 +50,19 @@ struct ReentrantPayload {
     ~ReentrantPayload() { if (cleanup) cleanup(); }
 };
 
+// A noexcept ownership move may call back into actor-port APIs. The move
+// must run after the admission reservation, but outside the port mutex.
+struct ReentrantMovePayload {
+    std::function<void()> on_move;
+    explicit ReentrantMovePayload(std::function<void()> cb)
+        : on_move(std::move(cb)) {}
+    ReentrantMovePayload(ReentrantMovePayload&& from) noexcept
+        : on_move(std::move(from.on_move)) {
+        if (on_move) on_move();
+    }
+    ReentrantMovePayload(const ReentrantMovePayload&) = delete;
+};
+
 static void check(bool ok) { if (!ok) throw std::runtime_error("port invariant broken"); }
 template<class F> void rejected(F f) {
     try { f(); } catch (const std::exception&) { return; }
@@ -143,6 +156,24 @@ int main() {
     check(reentrantDelivery && reentrantDelivery->acknowledge_released());
     check(cleanup_calls == 1 && !reentrantDelivery->acknowledge_released());
     reentrant.close();
+
+    // Re-entering port accounting and receiving while a T move completes
+    // must not deadlock or expose the pending, not-yet-owned frame.
+    BoundedActorPort<ReentrantMovePayload> reentrantMove(1, 16);
+    bool saw_reserved_quota = false;
+    bool pending_was_hidden = false;
+    ReentrantMovePayload callerOwned([&] {
+        saw_reserved_quota = reentrantMove.used_frames() == 1 &&
+                             reentrantMove.used_bytes() == 8;
+        pending_was_hidden = !reentrantMove.try_receive().has_value();
+    });
+    check(reentrantMove.offer(std::move(callerOwned), 8));
+    check(saw_reserved_quota && pending_was_hidden);
+    auto movedFrame = reentrantMove.try_receive();
+    check(movedFrame.has_value());
+    check(movedFrame->acknowledge_released());
+    check(reentrantMove.used_frames() == 0 && reentrantMove.used_bytes() == 0);
+    reentrantMove.close();
 
     std::cout << "PASS native owned actor port allocation rollback and acknowledged transfer\\n";
 }
