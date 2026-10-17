@@ -46,6 +46,18 @@ COMPLEX_NEGATIVE_FIXTURES = {
         "native-complex128-divide-reject.ores",
         "native complex128 division requires exact once-rounded lowering",
     ),
+    "native_complex128_multiply_scalar_left_failclosed": (
+        "native-complex128-multiply-scalar-left-reject.ores",
+        "native complex128 multiplication requires exact once-rounded lowering",
+    ),
+    "native_complex128_multiply_scalar_right_failclosed": (
+        "native-complex128-multiply-scalar-right-reject.ores",
+        "native complex128 multiplication requires exact once-rounded lowering",
+    ),
+    "native_complex128_divide_scalar_failclosed": (
+        "native-complex128-divide-scalar-reject.ores",
+        "native complex128 division requires exact once-rounded lowering",
+    ),
     "native_complex128_integer_narrowing_failclosed": (
         "native-complex128-int-narrow-reject.ores",
         "native complex128 integer promotion exceeds exact binary64 range",
