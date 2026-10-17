@@ -1,5 +1,6 @@
 #pragma once
 #include "oreslang/runtime/TrustedPointerWindow.hpp"
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -29,6 +30,7 @@ public:
     enum class Trust { Trusted, Untrusted };
     struct Grant final {
         std::uint64_t slot;
+        std::uint64_t registry_id;
         NativeRegionIdentity provenance;
         ActorHeapIdentity owner;
     };
@@ -40,12 +42,17 @@ private:
         std::uintptr_t begin = 0;
         std::uintptr_t end = 0;
     };
+    inline static std::atomic<std::uint64_t> next_registry_id_{1};
+    const std::uint64_t registry_id_;
     std::mutex mu_;
     std::unordered_map<std::uint64_t, Entry> entries_;
     std::uint64_t next_slot_ = 1;
     std::uint64_t next_generation_ = 1;
 public:
-    NativeRegionRegistry() = default;
+    NativeRegionRegistry() : registry_id_(next_registry_id_.fetch_add(1, std::memory_order_relaxed)) {
+        if (registry_id_ == 0 || registry_id_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("native region registry identity exhausted");
+    }
     NativeRegionRegistry(const NativeRegionRegistry&) = delete;
     NativeRegionRegistry& operator=(const NativeRegionRegistry&) = delete;
 
@@ -81,7 +88,7 @@ private:
             region, next_generation_, allocation);
         auto window = std::make_shared<TrustedPointerWindow>(
             owner, provenance, base, bytes, mode);
-        const Grant grant{next_slot_, provenance, owner};
+        const Grant grant{next_slot_, registry_id_, provenance, owner};
         const auto inserted = entries_.emplace(grant.slot, Entry{grant, std::move(window), false, begin, end});
         if (!inserted.second)
             throw std::logic_error("native grant slot collision");
@@ -97,7 +104,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mu_);
             auto it = entries_.find(grant.slot);
-            if (it == entries_.end() || it->second.retiring ||
+            if (it == entries_.end() || grant.registry_id != registry_id_ || it->second.retiring ||
                 it->second.grant.provenance != grant.provenance ||
                 it->second.grant.owner != grant.owner || caller != grant.owner)
                 throw std::logic_error("invalid, retiring or foreign native grant");
@@ -113,7 +120,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mu_);
             auto it = entries_.find(grant.slot);
-            if (it == entries_.end() || it->second.retiring ||
+            if (it == entries_.end() || grant.registry_id != registry_id_ || it->second.retiring ||
                 it->second.grant.provenance != grant.provenance ||
                 it->second.grant.owner != grant.owner)
                 throw std::logic_error("invalid or already retiring native grant");
