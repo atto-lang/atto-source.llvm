@@ -251,18 +251,28 @@ OresActorLifetimePin ores_actor_i64_heap_pin_external(
 void ores_actor_i64_heap_release_external(
         OresActorI64Heap* heap, OresActorLifetimePin pin) {
     lock_heap(heap);
-    if (pin.domain != heap->domain || pin.nonce == 0 || !heap->active_loans)
+    if (pin.domain != heap->domain || pin.nonce == 0
+            || pin.nonce >= heap->next_loan_nonce) {
         rejected();
+    }
     for (unsigned i = 0; i < MAX_LOANS; ++i) {
         ActorLoanEntry* entry = &heap->loan_entries[i];
         if (entry->nonce != pin.nonce) continue;
-        if (entry->index != UINT64_MAX || entry->generation != 0) rejected();
+        if (entry->index != UINT64_MAX || entry->generation != 0
+                || !heap->active_loans) {
+            rejected();
+        }
         --heap->active_loans;
         memset(entry, 0, sizeof(*entry));
         unlock_heap(heap);
         return;
     }
-    rejected();
+    /* Nonces are monotonic and never reused. An issued external pin that is
+     * absent from the active table has already been released. Treat cleanup
+     * retries as a no-op so callback/finally races cannot underflow counts.
+     * An active read-loan nonce would still be found above and rejected by the
+     * sentinel check, so this cannot release slot authority. */
+    unlock_heap(heap);
 }
 
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
