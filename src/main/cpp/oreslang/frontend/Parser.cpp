@@ -233,6 +233,8 @@ public:
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
                 } else fail("expected 'class' or 'actor'");
+            } else if (token_.text == "import") {
+                fail("native module imports unsupported until typed module/linker lowering");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
