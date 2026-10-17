@@ -53,17 +53,25 @@ private:
  */
 class TrustedRawProvenance final {
 public:
-    static TrustedRawProvenance compiler_trusted(std::uintptr_t id) {
-        if (id == 0)
-            throw std::invalid_argument("trusted raw provenance id must be nonzero");
-        return TrustedRawProvenance(id);
+    static TrustedRawProvenance compiler_trusted(
+            std::uintptr_t region_id,
+            std::uint64_t generation) {
+        if (region_id == 0)
+            throw std::invalid_argument("trusted raw provenance region id must be nonzero");
+        return TrustedRawProvenance(region_id, generation);
     }
 
-    [[nodiscard]] std::uintptr_t id() const noexcept { return id_; }
+    [[nodiscard]] std::uintptr_t region_id() const noexcept { return region_id_; }
+    [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
 
 private:
-    explicit TrustedRawProvenance(std::uintptr_t id) noexcept : id_(id) {}
-    std::uintptr_t id_;
+    TrustedRawProvenance(
+            std::uintptr_t region_id,
+            std::uint64_t generation) noexcept
+        : region_id_(region_id), generation_(generation) {}
+
+    std::uintptr_t region_id_;
+    std::uint64_t generation_;
 };
 
 /**
@@ -104,8 +112,9 @@ public:
         const auto bytes = static_cast<std::uintptr_t>(count) * sizeof(T);
         if (address > std::numeric_limits<std::uintptr_t>::max() - bytes)
             throw std::overflow_error("trusted raw span address extent overflow");
-        return TrustedRawPointer(address, address, count, 0, true, provenance.id(), address_space,
-                                 RawPointerAccess::ReadOnly);
+        return TrustedRawPointer(address, address, count, 0, true,
+                                 provenance.region_id(), provenance.generation(),
+                                 address_space, RawPointerAccess::ReadOnly);
     }
 
     static TrustedRawPointer from_mut_span(
@@ -128,7 +137,7 @@ public:
             throw std::invalid_argument("trusted raw address cannot be null");
         if ((address % alignof(T)) != 0)
             throw std::invalid_argument("trusted raw address is misaligned for T");
-        return TrustedRawPointer(address, address, 0, 0, false, 0, address_space,
+        return TrustedRawPointer(address, address, 0, 0, false, 0, 0, address_space,
                                  RawPointerAccess::ReadOnly);
     }
 
@@ -164,6 +173,7 @@ public:
                 next,
                 true,
                 provenance_,
+                provenance_generation_,
                 address_space_,
                 access_);
         }
@@ -179,6 +189,7 @@ public:
             0,
             false,
             provenance_,
+            provenance_generation_,
             address_space_,
             access_);
     }
@@ -197,6 +208,7 @@ public:
                 0,
                 false,
                 provenance_,
+                provenance_generation_,
                 address_space_,
                 access_);
         }
@@ -216,6 +228,7 @@ public:
             static_cast<std::size_t>(offset_bytes / sizeof(U)),
             true,
             provenance_,
+            provenance_generation_,
             address_space_,
             access_);
     }
@@ -228,8 +241,11 @@ public:
         if (!bounded_ || !other.bounded_ || provenance_ == 0 || other.provenance_ == 0)
             throw std::invalid_argument(
                 "trusted raw pointer subtraction requires bounded compiler provenance");
-        if (address_space_ != other.address_space_ || provenance_ != other.provenance_)
-            throw std::invalid_argument("trusted raw pointer subtraction requires common provenance");
+        if (address_space_ != other.address_space_
+                || provenance_ != other.provenance_
+                || provenance_generation_ != other.provenance_generation_)
+            throw std::invalid_argument(
+                "trusted raw pointer subtraction requires common live provenance generation");
 
         {
             if (index_ >= other.index_) {
@@ -276,6 +292,9 @@ public:
 
     [[nodiscard]] std::uintptr_t address() const noexcept { return address_; }
     [[nodiscard]] std::uintptr_t provenance() const noexcept { return provenance_; }
+    [[nodiscard]] std::uint64_t provenance_generation() const noexcept {
+        return provenance_generation_;
+    }
     [[nodiscard]] std::uint32_t address_space() const noexcept { return address_space_; }
     [[nodiscard]] bool bounded() const noexcept { return bounded_; }
     [[nodiscard]] bool has_provenance() const noexcept {
@@ -296,6 +315,7 @@ private:
             std::size_t index,
             bool bounded,
             std::uintptr_t provenance,
+            std::uint64_t provenance_generation,
             std::uint32_t address_space,
             RawPointerAccess access) noexcept
         : address_(address),
@@ -304,6 +324,7 @@ private:
           index_(index),
           bounded_(bounded),
           provenance_(provenance),
+          provenance_generation_(provenance_generation),
           address_space_(address_space),
           access_(access) {}
 
@@ -355,6 +376,7 @@ private:
     std::size_t index_;
     bool bounded_;
     std::uintptr_t provenance_;
+    std::uint64_t provenance_generation_;
     std::uint32_t address_space_;
     RawPointerAccess access_;
 };
