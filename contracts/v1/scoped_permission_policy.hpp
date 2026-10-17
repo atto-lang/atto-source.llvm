@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,6 +34,7 @@ class ScopedPolicy final {
     std::array<bool, count> ceiling_{};
     std::array<std::vector<std::string>, count> allowed_{};
     std::array<std::vector<std::string>, count> denied_{};
+    std::shared_ptr<const ScopedPolicy> build_ceiling_{};
 
     static std::size_t index(Permission p) {
         const auto i = static_cast<unsigned>(p);
@@ -230,6 +232,17 @@ class ScopedPolicy final {
 public:
     ScopedPolicy() = default;  // Standalone default-deny.
 
+    // Effective authority is the intersection of the runtime policy and an
+    // immutable build/host policy. Repeated bounding can only attenuate.
+    ScopedPolicy bounded_by(const ScopedPolicy& ceiling) const {
+        ScopedPolicy result = *this;
+        ScopedPolicy combined = build_ceiling_
+            ? ceiling.bounded_by(*build_ceiling_)
+            : ceiling;
+        result.build_ceiling_ = std::make_shared<ScopedPolicy>(std::move(combined));
+        return result;
+    }
+
     // Only the trusted host supplies the ceiling. Rules can never widen it.
     static ScopedPolicy from_host(std::vector<Permission> capabilities,
                                   std::vector<ScopeRule> rules) {
@@ -248,6 +261,7 @@ public:
     }
 
     bool allows(Permission kind, std::string_view resource) const {
+        if (build_ceiling_ && !build_ceiling_->allows(kind, resource)) return false;
         const auto i = index(kind);
         if (!ceiling_[i] || resource.empty() || control(resource)) return false;
         switch (kind) {
@@ -285,6 +299,9 @@ public:
     // or intercept guest calls. Noncanonical/IPv6 values fail closed for now.
     bool allows_network_connection(std::string_view requested,
                                    std::string_view selected_ipv4) const {
+        if (build_ceiling_ &&
+            !build_ceiling_->allows_network_connection(requested, selected_ipv4))
+            return false;
         if (!allows(Permission::Net, requested)) return false;
         Endpoint target, resolved;
         if (!network_parse(requested, false, target) ||
