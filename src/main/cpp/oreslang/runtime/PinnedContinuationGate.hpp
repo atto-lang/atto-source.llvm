@@ -3,6 +3,7 @@
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 
 namespace oreslang::runtime {
 
@@ -28,9 +29,14 @@ public:
             AsyncIoTicket ticket,
             OresActorI64Heap* heap,
             OresActorTurn turn)
-        : ticket_(ticket),
-          lifetime_heap_(heap),
-          lifetime_lease_(ores_actor_i64_heap_external_acquire(heap, turn)) {}
+        : ticket_(ticket) {
+        if (heap == nullptr || ticket.actor_id == 0
+                || ticket.generation == 0 || ticket.operation_id == 0) {
+            std::abort();
+        }
+        lifetime_heap_ = heap;
+        lifetime_lease_ = ores_actor_i64_heap_external_acquire(heap, turn);
+    }
 
     PinnedContinuationGate(const PinnedContinuationGate&) = delete;
     PinnedContinuationGate& operator=(const PinnedContinuationGate&) = delete;
