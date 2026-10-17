@@ -206,7 +206,9 @@ inline std::int64_t execute_cpu_i64(const Graph& g) {
   }else if(s.opcode==Op::AddI64){
    if(s.type!=Type::I64||s.left<0||s.right<0||s.left>=static_cast<std::int64_t>(i)||s.right>=static_cast<std::int64_t>(i)||
       std::find(s.dependencies.begin(),s.dependencies.end(),static_cast<std::size_t>(s.left))==s.dependencies.end()||
-      std::find(s.dependencies.begin(),s.dependencies.end(),static_cast<std::size_t>(s.right))==s.dependencies.end())
+      std::find(s.dependencies.begin(),s.dependencies.end(),static_cast<std::size_t>(s.right))==s.dependencies.end()||
+      g.steps[static_cast<std::size_t>(s.left)].type!=Type::I64||
+      g.steps[static_cast<std::size_t>(s.right)].type!=Type::I64)
     throw std::invalid_argument("untyped SSA add operands");
    const auto lhs=values[static_cast<std::size_t>(s.left)],rhs=values[static_cast<std::size_t>(s.right)];
    if((rhs>0&&lhs>std::numeric_limits<std::int64_t>::max()-rhs)||
