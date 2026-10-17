@@ -26,6 +26,18 @@ static void* close_while_leased(void* opaque) {
     atomic_store(&race->finished, 1);
     return NULL;
 }
+/* Do not guess with a 10ms sleep that another pthread has reached VM
+ * retirement. While the test owns a backend/bootstrap pin, close cannot free
+ * the VM, so a bounded trusted-host CONTROL probe is safe and deterministic.
+ */
+static void await_retirement(OresNativeVM* vm) {
+    struct timespec pause = {0, 1000000};
+    for (int attempt = 0; attempt < 3000; ++attempt) {
+        if (!ores_native_vm_control_notify(vm, ORES_NATIVE_VM_MAIN)) return;
+        nanosleep(&pause, NULL);
+    }
+    abort();
+}
 static void on_data(void* ignored, size_t slot, uint64_t value) {
     (void)ignored; (void)slot; (void)value;
     abort(); /* no guest callbacks may be delivered on NIO-only test path */
@@ -138,8 +150,7 @@ int main(void) {
             struct timespec delay = {0, 1000000};
             nanosleep(&delay, NULL);
         }
-        struct timespec delay = {0, 10000000};
-        nanosleep(&delay, NULL);
+        await_retirement(creating);
         check(!atomic_load(&race.finished));
         // The owner cancels the bootstrap; external close may now retire it.
         ores_native_vm_nio_cancel_bootstrap(creating);
@@ -165,8 +176,7 @@ int main(void) {
             struct timespec pause = {0, 1000000};
             nanosleep(&pause, NULL);
         }
-        struct timespec pause = {0, 10000000};
-        nanosleep(&pause, NULL);
+        await_retirement(racing);
         check(!atomic_load(&race.finished));
         // VM retirement fences all new NIO acquisition but cannot free this
         // borrowed backend until the accepted operation releases its pin.
