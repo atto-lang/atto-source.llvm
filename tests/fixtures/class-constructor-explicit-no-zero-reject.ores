@@ -1,0 +1,8 @@
+define class NumberBox as
+  pub final int number: 42;
+  constructor(self, int value) { return; }
+end
+pub fnc main(): int {
+  let NumberBox first = new NumberBox();
+  return first.number;
+}
