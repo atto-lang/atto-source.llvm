@@ -31,8 +31,8 @@ def main():
             "complex_conj has the wrong LLVM ABI")
     require("define { double, double } @complex_conjugate()" in compiled.stdout,
             "complex_conjugate has the wrong LLVM ABI")
-    require("define { double, double } @complex_imag_exact_limit()" in compiled.stdout,
-            "complex_imag_exact_limit has the wrong LLVM ABI")
+    require("define { double, double } @complex_imag_binary64_rounding()" in compiled.stdout,
+            "complex_imag_binary64_rounding has the wrong LLVM ABI")
 
     harness = r'''
 #include <stdint.h>
@@ -47,7 +47,7 @@ extern ores_complex128 complex_add_sub(void);
 extern ores_complex128 complex_negate(void);
 extern ores_complex128 complex_conj(void);
 extern ores_complex128 complex_conjugate(void);
-extern ores_complex128 complex_imag_exact_limit(void);
+extern ores_complex128 complex_imag_binary64_rounding(void);
 
 static uint64_t bits(double value) {
     uint64_t raw = 0;
@@ -72,9 +72,9 @@ int main(void) {
     if (bits(long_name.real) != UINT64_C(0x4008000000000000)) return 17;
     if (bits(long_name.imaginary) != UINT64_C(0xc010000000000000)) return 18;
 
-    ores_complex128 exact_limit = complex_imag_exact_limit();
-    if (bits(exact_limit.real) != UINT64_C(0x0000000000000000)) return 19;
-    if (bits(exact_limit.imaginary) != UINT64_C(0x4340000000000000)) return 20;
+    ores_complex128 rounded_literal = complex_imag_binary64_rounding();
+    if (bits(rounded_literal.real) != UINT64_C(0x0000000000000000)) return 19;
+    if (bits(rounded_literal.imaginary) != UINT64_C(0x4340000000000000)) return 20;
     return 0;
 }
 '''
@@ -102,6 +102,7 @@ int main(void) {
 
     print("NATIVE_COMPLEX128_RETURN_CASES=5")
     print("NATIVE_COMPLEX128_RAW_COMPONENTS=10")
+    print("NATIVE_COMPLEX128_IMAG_LITERAL_ROUNDING=JAVA_PARITY")
     print("NATIVE_COMPLEX128_OPT_LEVELS=2")
 
 if __name__ == "__main__":
