@@ -15,6 +15,10 @@ typedef struct {
     atomic_int entered;
     atomic_int finished;
 } NioCloseRace;
+static void* foreign_abort_bootstrap(void* opaque) {
+    ores_native_vm_nio_cancel_bootstrap((OresNativeVM*)opaque);
+    return NULL;
+}
 static void* close_while_leased(void* opaque) {
     NioCloseRace* race = (NioCloseRace*)opaque;
     atomic_store(&race->entered, 1);
@@ -96,6 +100,12 @@ int main(void) {
     const OresNativeActorRef denied =
         ores_native_vm_spawn(cold, ORES_NATIVE_VM_MAIN, 0);
     check(denied.scheduler_domain == 0);
+    pthread_t foreign;
+    check(pthread_create(&foreign, NULL, foreign_abort_bootstrap, cold) == 0);
+    check(pthread_join(foreign, NULL) == 0);
+    check(!ores_native_vm_nio_can_attach(cold));
+    // Only the trusted bootstrap owner can abort, then a fresh owner may
+    // reserve again. This prevents cancellation laundering across carriers.
     ores_native_vm_nio_cancel_bootstrap(cold);
     check(ores_native_vm_nio_can_attach(cold));
     check(ores_native_vm_enable_nio(cold, 2, 0, 1));
@@ -111,6 +121,31 @@ int main(void) {
     check(ores_native_vm_enable_nio(vm, 3, 1, 3));
     check(ores_native_vm_nio_started(vm) == 3);
     check(ores_native_vm_close(vm));
+
+    // Concurrent host shutdown must also wait for an in-progress reactor
+    // bootstrap, even if no backend has been installed yet. A late selector
+    // thread must never materialize inside a VM already freed by close.
+    for (int iteration = 0; iteration < 25; ++iteration) {
+        OresNativeVM* creating = ores_native_vm_open(&cfg);
+        check(creating != NULL);
+        check(ores_native_vm_nio_begin_bootstrap(creating));
+        NioCloseRace race = {.vm = creating};
+        atomic_init(&race.entered, 0);
+        atomic_init(&race.finished, 0);
+        pthread_t closer;
+        check(pthread_create(&closer, NULL, close_while_leased, &race) == 0);
+        while (!atomic_load(&race.entered)) {
+            struct timespec delay = {0, 1000000};
+            nanosleep(&delay, NULL);
+        }
+        struct timespec delay = {0, 10000000};
+        nanosleep(&delay, NULL);
+        check(!atomic_load(&race.finished));
+        // The owner cancels the bootstrap; external close may now retire it.
+        ores_native_vm_nio_cancel_bootstrap(creating);
+        check(pthread_join(closer, NULL) == 0);
+        check(atomic_load(&race.finished));
+    }
 
     // A reactor cannot be destroyed while a concurrent accepted VM host
     // operation still has a borrowed backend. This is a test-only host
