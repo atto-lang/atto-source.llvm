@@ -1,0 +1,27 @@
+name: Actor thread policy v2 abstract safety model
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'feat/actor-thread-policy-*'
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify bounded execution permits and ABA mutation
+        run: python3 scripts/verify_actor_thread_policy_v2.py
+      - name: Assert optimized Python cannot suppress contract tests
+        shell: bash
+        run: |
+          if python3 -O scripts/verify_actor_thread_policy_v2.py; then
+            echo 'Unsafe: optimized Python bypassed assertions' >&2
+            exit 1
+          fi
