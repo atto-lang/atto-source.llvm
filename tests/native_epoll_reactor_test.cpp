@@ -78,6 +78,25 @@ int main() {
     std::array<char, 8> bytes{};
     expect(::recv(accepted, bytes.data(), bytes.size(), MSG_DONTWAIT) == 5, "read bytes");
     expect(std::memcmp(bytes.data(), "hello", 5) == 0, "payload");
+    // One-shot epoll readiness is re-armed only after a terminal ticket
+    // has been consumed. Exercise the same-socket kernel-read path many
+    // times, not just the cancellation/re-registration path below.
+    for (int round = 0; round < 64; ++round) {
+        auto repeated = reactor.try_watch(accepted, EPOLLIN);
+        expect(repeated.has_value(), "repeat readiness registration");
+        const char byte = static_cast<char>(round);
+        expect(::send(client, &byte, 1, MSG_DONTWAIT | MSG_NOSIGNAL) == 1,
+               "repeat send");
+        auto ready = until_completion(reactor);
+        expect(ready.has_value()
+               && ready->ticket.value == repeated->value
+               && ready->outcome == NativeEpollReactor::Outcome::ready,
+               "repeat readiness ticket and outcome");
+        char received = 0;
+        expect(::recv(accepted, &received, 1, MSG_DONTWAIT) == 1
+               && received == byte, "repeat nonblocking receive");
+        expect(reactor.pending() == 0, "one-shot readiness slot released");
+    }
     auto cancelled = reactor.try_watch(accepted, EPOLLIN);
     expect(cancelled.has_value(), "register cancel target");
     expect(reactor.try_cancel(*cancelled), "cancel should win");
