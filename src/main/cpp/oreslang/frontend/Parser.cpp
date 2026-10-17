@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "quantum", "over", "structural", "int", "complex", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -113,6 +113,14 @@ public:
             ++at_;
             while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) {
                 ++at_;
+            }
+            if (at_ < source_.size()) {
+                const char suffix = source_[at_];
+                if (suffix == '.' || suffix == 'e' || suffix == 'E' || suffix == 'i') {
+                    throw std::runtime_error(
+                        "native complex128/f64 literal requires verified LLVM numeric lowering at byte "
+                        + std::to_string(start));
+                }
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
@@ -1369,6 +1377,9 @@ private:
     }
 
     void require(std::string_view text) {
+        if (text == "int" && token_.text == "complex") {
+            fail("native complex128 type requires verified LLVM scalar lowering");
+        }
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
 
