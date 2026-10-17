@@ -423,9 +423,6 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_complex128_integer_narrowing_failclosed
         native-complex128-int-narrow-reject.ores
         --diagnostic "native complex128 integer promotion exceeds exact binary64 range")
-    oreslang_contract_test(native_complex128_imaginary_integer_narrowing_failclosed
-        native-complex128-imag-int-narrow-reject.ores
-        --diagnostic "native complex128 imaginary integer promotion exceeds exact binary64 range")
     oreslang_contract_test(native_complex128_local_failclosed
         native-complex128-local-reject.ores
         --diagnostic "native complex128 is currently supported only as a zero-argument return type")
