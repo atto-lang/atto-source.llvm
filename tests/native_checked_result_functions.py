@@ -333,6 +333,42 @@ def main():
                     "__oreslang_checked_v2_entry_1" not in allowed.stdout):
                 raise AssertionError(
                     label + ": safe bounded graph was rejected: " + repr(allowed))
+            if label == "largest-binary-fanout-under-cap":
+                # Admission alone could falsely certify 49,149 evaluations.
+                # Execute the actual Oreslang-generated IR at both optimization
+                # levels; check exact full-width result, overflow propagation,
+                # failure atomicity, and null-out precedence.
+                fanout_ir = work / "bounded-fanout.ll"
+                fanout_ir.write_text(allowed.stdout, encoding="utf-8")
+                fanout_host = work / "bounded-fanout-host.c"
+                fanout_host.write_text(r"""
+#include <stdint.h>
+#include <limits.h>
+extern int32_t __oreslang_checked_v2_entry_1(int64_t, int64_t*);
+int main(void) {
+    int64_t out = INT64_C(987654321);
+    if (__oreslang_checked_v2_entry_1(1, &out) != 0 || out != 8192) return 10;
+    out = INT64_C(987654321);
+    if (__oreslang_checked_v2_entry_1(-1, &out) != 0 || out != -8192) return 11;
+    out = INT64_C(987654321);
+    if (__oreslang_checked_v2_entry_1(INT64_MAX, &out) != 1 ||
+        out != INT64_C(987654321)) return 12;
+    if (__oreslang_checked_v2_entry_1(INT64_MAX, 0) != 2) return 13;
+    return 0;
+}
+""", encoding="utf-8")
+                for optimization in ("0", "2"):
+                    fanout_exe = work / ("bounded-guest-O" + optimization)
+                    built = run([clang, "-O" + optimization, "-std=c11",
+                                 "-Wall", "-Wextra", "-Werror", "-Wno-override-module",
+                                 str(fanout_host), str(fanout_ir), "-o", str(fanout_exe)])
+                    if built.returncode or built.stderr:
+                        raise AssertionError("bounded result IR did not link: " + repr(built))
+                    ran = run([str(fanout_exe)])
+                    if ran.returncode or ran.stdout or ran.stderr:
+                        raise AssertionError(
+                            "bounded checked result execution failed O" +
+                            optimization + ": " + repr(ran))
         rejected(compiler, work, "mixed-trap", SOURCE,
                  ["--experimental-checked-i64-functions"])
         rejected(compiler, work, "mixed-status", SOURCE,

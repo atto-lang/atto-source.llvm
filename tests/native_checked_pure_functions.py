@@ -189,8 +189,11 @@ def main():
             attempted = subprocess.run(
                 [compiler, "--experimental-checked-i64-functions", str(invalid)],
                 capture_output=True, text=True, timeout=15, check=False)
-            if attempted.returncode != 1 or not attempted.stderr.startswith("oreslang-llvmc:"):
-                raise AssertionError("effectful checked source was not rejected")
+            if (attempted.returncode != 1 or
+                    not attempted.stderr.startswith("oreslang-llvmc:") or
+                    attempted.stdout):
+                raise AssertionError("rejected checked source emitted partial IR: " +
+                                     repr(attempted))
             if i in (len(negatives) - 3, len(negatives) - 2) and (
                     "evaluation work exceeds 65536-node call budget" not in attempted.stderr):
                 raise AssertionError("excessive work rejected for wrong reason: " + repr(attempted))
@@ -209,6 +212,48 @@ def main():
             if allowed.returncode or allowed.stderr or "define i64 @entry(" not in allowed.stdout:
                 raise AssertionError(
                     label + ": safe bounded graph was rejected: " + repr(allowed))
+            if label == "largest-binary-fanout-under-cap":
+                # Compile and RUN the 49,149-node upper admitted boundary:
+                # success must be exact; overflow must cause an actual trap.
+                fanout_ir = root / "bounded-fanout.ll"
+                fanout_ir.write_text(allowed.stdout, encoding="utf-8")
+                fanout_host = root / "bounded-fanout-host.c"
+                fanout_host.write_text(r"""
+#include <stdint.h>
+extern int64_t entry(int64_t);
+int main(int argc, char** argv) {
+    (void)argv;
+    if (argc == 2) {
+        (void)entry(INT64_MAX);
+        return 14;  /* overflow must trap before reaching this return */
+    }
+    if (argc != 1 || entry(1) != 8192 ||
+        entry(-1) != -8192 || entry(0) != 0) return 15;
+    return 0;
+}
+""", encoding="utf-8")
+                for optimization in ("0", "2"):
+                    fanout_exe = root / ("bounded-guest-O" + optimization)
+                    execute([clang, "-O" + optimization, "-std=c11",
+                             "-Wall", "-Wextra", "-Werror", "-Wno-override-module",
+                             str(fanout_host), str(fanout_ir), "-o", str(fanout_exe)])
+                    passing = subprocess.run([str(fanout_exe)],
+                                             capture_output=True, text=True,
+                                             timeout=15, check=False)
+                    if passing.returncode or passing.stdout or passing.stderr:
+                        raise AssertionError(
+                            "bounded trap-mode correct values failed O" +
+                            optimization + ": " + repr(passing))
+                    trapping = subprocess.run([str(fanout_exe), "overflow"],
+                                              capture_output=True, text=True,
+                                              timeout=15, check=False,
+                                              preexec_fn=core_limit if os.name == "posix" else None)
+                    if (trapping.returncode >= 0 or
+                            -trapping.returncode not in (signal.SIGILL, signal.SIGTRAP) or
+                            trapping.stdout or trapping.stderr):
+                        raise AssertionError(
+                            "bounded trap-mode failed to trap overflow O" +
+                            optimization + ": " + repr(trapping))
         # The opt-in modes have intentionally incompatible output ABIs.
         mixed = subprocess.run(
             [compiler, "--experimental-checked-i64",
