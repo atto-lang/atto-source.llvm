@@ -16,6 +16,18 @@ int main() {
     std::array<std::uint32_t, 4> bytes{{10, 20, 30, 40}};
     reject([&] { registry.issue(NativeRegionRegistry::Trust::Untrusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite); });
+    // Invalid enum values must never silently turn into ordinary RAM access.
+    bool invalid_mode_rejected = false;
+    try {
+        (void)registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
+            bytes.data(), sizeof(bytes), static_cast<TrustedPointerWindow::Mode>(255));
+    } catch (const std::invalid_argument&) {
+        invalid_mode_rejected = true;
+    }
+    if (!invalid_mode_rejected) throw std::runtime_error("invalid mode admitted");
+    reject([&] { (void)registry.issue(static_cast<NativeRegionRegistry::Trust>(255),
+        owner, 9, 1, bytes.data(), sizeof(bytes),
+        TrustedPointerWindow::Mode::ReadWrite); });
     auto grant = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite);
     auto p = registry.at<std::uint32_t>(grant, owner);
