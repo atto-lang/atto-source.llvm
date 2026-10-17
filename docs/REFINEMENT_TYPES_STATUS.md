@@ -31,3 +31,7 @@ define newtype D(string) with length eq 10;
 3. LLVM IR verification; real compiled runtime checks; absence of IR for rejected programs.
 4. Differential Java/LLVM semantic results for Unicode, error shape, newtype identity, mutation and serializer/actor boundary behavior.
 5. Clearly reported implemented versus explicitly rejected cases; no success counts awarded to skipped tests or tests that only exercise lexer rejection.
+
+## Zorde runtime parity
+
+LLVM refinement support includes emitting/consuming the same reflection-free Zorde validator descriptor contract as the language spec. Dynamic construction, deserialization, FFI, actor DATA and other trust boundaries must execute the normalized predicate or reject the unsupported descriptor before IR/execution. Backend-specific validation semantics are not permitted.
