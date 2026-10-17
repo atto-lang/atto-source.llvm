@@ -84,6 +84,41 @@ int main() {
     rejected([&] { (void)ledger.ingress("source"); },
              "closed generation accepted new DATA");
 
+    // A true direct source reply bypasses intermediate actor handlers but
+    // keeps the full original per-branch correlation path and route ID.
+    {
+        ActorPipeRouteLedger direct(stages(), edges(), 19, 5);
+        const auto root = direct.ingress("source");
+        rejected([&] { (void)direct.reply(root); },
+                 "ingress manufactured a direct reply to itself");
+        const auto fork = direct.forward_all(root);
+        const auto sink_left = direct.forward(fork[0]);
+        const auto sink_right = direct.forward(fork[1]);
+        const auto answer_left = direct.reply(sink_left);
+        const auto answer_right = direct.reply(sink_right);
+        check(answer_left->receiver() == "source" &&
+              answer_right->receiver() == "source",
+              "direct reply went to a guessed or intermediate actor");
+        check(answer_left->flow_id() == answer_right->flow_id() &&
+              answer_left->route_id() != answer_right->route_id() &&
+              answer_left->returning() && answer_right->returning(),
+              "direct fan-in replies collapsed independent branch identities");
+        rejected([&] { (void)direct.reply(sink_left); },
+                 "one-shot direct reply allowed replay");
+        rejected([&] { (void)direct.reply(answer_right); },
+                 "returning frame manufactured a second direct reply");
+        rejected([&] { (void)direct.forward(answer_left); },
+                 "returned message re-entered downstream forward DAG");
+        check(direct.outstanding() == 5, "reply leaked or duplicated credits");
+        direct.complete(answer_left);
+        direct.complete(answer_right);
+        direct.complete(fork[0]);
+        direct.complete(fork[1]);
+        direct.complete(root);
+        check(direct.outstanding() == 0, "direct replies leaked frames");
+        direct.close();
+    }
+
     // A caller dropping the last external Handle must NOT free a still
     // active Frame: otherwise a later allocation may reuse its address and
     // accidentally pass the raw-pointer identity check (ABA). The ledger
