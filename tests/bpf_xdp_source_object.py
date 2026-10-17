@@ -134,6 +134,20 @@ def main():
             if args.output_dir:
                 shutil.copyfile(objfile, args.output_dir / ("xdp-%d.o" % action))
 
+        # Harmless lexical/parenthesization differences must normalize to the
+        # exact same verified IR as the canonical XDP_PASS source.
+        for equivalent in (
+            "pub fnc ores_xdp(): int { return (2); }\n",
+            "pub fnc ores_xdp(): int { return (((2))); }\n",
+            "// leading comment\npub fnc ores_xdp(): int {\n  return 2;\n}\n",
+            "pub   fnc   ores_xdp ( ) : int { return 2 ; }\n",
+        ):
+            src.write_text(equivalent, encoding="utf-8")
+            normalized = run(cmd)
+            require(normalized.returncode == 0, normalized.stderr)
+            require(normalized.stdout == observed_ir[2],
+                    "equivalent XDP_PASS source did not normalize to identical IR")
+
         # Admission boundary: exactly 4096 bytes is permitted, 4097 is rejected
         # before parsing. Padding is a trailing source comment.
         base = b"pub fnc ores_xdp(): int { return 2; }\n"
@@ -166,7 +180,6 @@ def main():
         reject("pub fnc ores_xdp<T>(): int { return 2; }", None)
         reject("pub fnc ores_xdp(): void { return; }", None)
         reject("pub fnc ores_xdp(): int { if (true) { return 2; } return 1; }", None)
-        reject("pub fnc ores_xdp(): int { return (2); }", None)
         reject("// ores:target=bpfel\npub fnc ores_xdp(): int { return 2; }",
                "environment headers")
         reject("pub fnc ores_xdp(): int { return 2; }\n" + ("// extra\n" * 2000),
