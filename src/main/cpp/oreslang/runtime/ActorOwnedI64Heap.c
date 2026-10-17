@@ -50,6 +50,23 @@ static _Thread_local uint64_t carrier_epoch;
 
 static void rejected(void) { abort(); }
 
+/* Domain authority is never recycled. A wrapping fetch_add would transiently
+ * publish zero and then restart at one; use a saturating CAS loop instead so
+ * exhaustion is permanently fail-closed and stale handles can never regain a
+ * previously issued domain. */
+static uint64_t allocate_domain(void) {
+    uint64_t current = atomic_load_explicit(&next_domain, memory_order_relaxed);
+    for (;;) {
+        if (current == 0 || current == UINT64_MAX) rejected();
+        const uint64_t next = current + 1;
+        if (atomic_compare_exchange_weak_explicit(
+                &next_domain, &current, next,
+                memory_order_relaxed, memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 /* Short critical sections; bounded spinning fails rather than blocking an
  * uncooperative carrier forever. Production actor scheduling must not allow
  * guest code to execute while this lock is held. */
@@ -93,9 +110,7 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     OresActorI64Heap* heap = (OresActorI64Heap*) calloc(1, bytes);
     if (!heap) rejected();
     atomic_flag_clear(&heap->mutex);
-    const uint64_t id = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
-    if (id == 0 || id == UINT64_MAX) rejected();
-    heap->domain = id;
+    heap->domain = allocate_domain();
     heap->owner = actor_id;
     heap->incarnation = incarnation;
     heap->capacity = slot_capacity;
