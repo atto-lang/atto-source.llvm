@@ -1618,6 +1618,22 @@ private:
                 return false;
             };
 
+        std::function<bool(const Expression*)> proxy_read =
+            [&](const Expression* expr) -> bool {
+                if (!expr) return false;
+                if (expr->kind == Expression::Kind::Field && expr->left &&
+                        expr->left->kind == Expression::Kind::Variable &&
+                        proxy_names.count(expr->left->name) != 0)
+                    return true;
+                if (proxy_read(expr->left.get()) || proxy_read(expr->right.get()))
+                    return true;
+                for (const auto& arg : expr->arguments)
+                    if (proxy_read(arg.get())) return true;
+                return false;
+            };
+
+        bool has_proxy_read = false;
+        bool has_proxy_write = false;
         if (!proxy_names.empty()) {
             if (proxy_escape(fn.result.get(), false))
                 throw std::runtime_error(
@@ -1637,6 +1653,33 @@ private:
                 if (proxy_escape(send.payload.get(), false))
                     throw std::runtime_error(
                         "Proxy<T> capability serialization/send is unsupported");
+        }
+
+        if (!proxy_names.empty()) {
+            has_proxy_read = proxy_read(fn.result.get());
+            for (const auto& guard : fn.early_returns)
+                has_proxy_read = has_proxy_read ||
+                    proxy_read(guard.lhs.get()) ||
+                    proxy_read(guard.rhs.get()) ||
+                    proxy_read(guard.result.get());
+            for (const auto& stmt : fn.statements) {
+                has_proxy_read = has_proxy_read ||
+                    proxy_read(stmt.expression.get()) ||
+                    proxy_read(stmt.condition_lhs.get()) ||
+                    proxy_read(stmt.condition_rhs.get());
+                if (stmt.kind == Statement::Kind::FieldWrite &&
+                        proxy_names.count(stmt.receiver) != 0)
+                    has_proxy_write = true;
+            }
+            for (const auto& send : fn.actor_sends)
+                has_proxy_read = has_proxy_read || proxy_read(send.payload.get());
+
+            if (has_proxy_write)
+                throw std::runtime_error(
+                    "native Proxy<T> critical-write lowering is pending");
+            if (has_proxy_read)
+                throw std::runtime_error(
+                    "native Proxy<T> critical-read lowering is pending");
         }
 
         if (!fn.has_declared_effects) return;
