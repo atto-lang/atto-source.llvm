@@ -1392,6 +1392,12 @@ if(BUILD_TESTING)
             class-constructor-overload-extra-arity-reject.ores --diagnostic "native class constructor argument arity mismatch")
         oreslang_contract_test(reject_constructor_self_not_leading
             class-constructor-self-not-leading-reject.ores --diagnostic "expected 'int'")
+        oreslang_contract_test(native_constructor_arity_sixteen_boundary
+            class-constructor-arity-sixteen-boundary-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_constructor_arity_order_independent
+            class-constructor-arity-order-independent-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_constructor_arity_seventeen
+            class-constructor-arity-seventeen-reject.ores --diagnostic "native scalar constructor parameter limit exceeded (16)")
         # The restricted native frontend must not compile comma indexing or
         # method-index syntax as a one-dimensional array/method fallback.
         # Replace these denials with positive guest parity when complete.
