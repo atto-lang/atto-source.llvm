@@ -97,18 +97,35 @@ def main():
             require(len(elf_o0) >= 64 and elf_o0[:6] == b"\x7fELF\x02\x01" and
                     int.from_bytes(elf_o0[18:20], "little") == 247,
                     "-O0 result is not little-endian EM_BPF ELF")
+            sections_o0 = run([readelf, "-W", "-S", str(objfile_o0)])
+            require(sections_o0.returncode == 0, sections_o0.stderr)
+            require(re.search(r"\s+xdp\s+", sections_o0.stdout) and
+                    re.search(r"\s+license\s+", sections_o0.stdout),
+                    "-O0 EM_BPF ELF missing xdp/license sections")
+            require(".eh_frame" not in sections_o0.stdout and
+                    ".maps" not in sections_o0.stdout and
+                    ".BTF" not in sections_o0.stdout,
+                    "-O0 stage-0 object contains unwind/maps/BTF metadata")
+            reloc_o0 = run([readelf, "-W", "-r", str(objfile_o0)])
+            require(reloc_o0.returncode == 0 and
+                    "There are no relocations in this file." in reloc_o0.stdout,
+                    "-O0 stage-0 BPF object unexpectedly requires relocations")
             require(len(elf) >= 64 and elf[:4] == b"\x7fELF" and elf[4:6] == b"\x02\x01",
                     "BPF result not ELF64 little-endian")
+            require(int.from_bytes(elf[16:18], "little") == 1,
+                    "BPF result is not relocatable ET_REL")
             require(int.from_bytes(elf[18:20], "little") == 247,
                     "wrong ELF e_machine (expected EM_BPF=247)")
+            require(int.from_bytes(elf[20:24], "little") == 1,
+                    "wrong ELF version")
             sections = run([readelf, "-W", "-S", str(objfile)])
             require(sections.returncode == 0 and
                     re.search(r"\s+xdp\s+", sections.stdout) and
                     re.search(r"\s+license\s+", sections.stdout),
                     "missing real ELF XDP/license sections")
             require(".maps" not in sections.stdout and ".BTF" not in sections.stdout and
-                    ".BTF.ext" not in sections.stdout,
-                    "stage-0 object unexpectedly contains maps or BTF metadata")
+                    ".BTF.ext" not in sections.stdout and ".eh_frame" not in sections.stdout,
+                    "stage-0 object unexpectedly contains maps/BTF/unwind metadata")
             require(len(re.findall(r"\s+xdp\s+", sections.stdout)) == 1,
                     "stage-0 object must contain exactly one xdp section")
             require(len(re.findall(r"\s+license\s+", sections.stdout)) == 1,
