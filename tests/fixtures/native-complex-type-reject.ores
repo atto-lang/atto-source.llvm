@@ -1,0 +1,3 @@
+pub fnc main(): complex {
+  return 0;
+}
