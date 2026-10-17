@@ -13,6 +13,7 @@ typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
 typedef struct { uint64_t domain, nonce, index, generation; } OresActorLoan;
+typedef struct { uint64_t domain, index, generation; } OresActorExternalLease;
 
 /* Allocated once per actor incarnation, survives any number of turns. */
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
@@ -38,6 +39,13 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
+/* Lifetime-only authority for an admitted continuation/FFI/I/O callback.
+ * It carries no slot index or memory dereference capability. Release may run
+ * on any native carrier and is idempotent, including after lease-slot reuse. */
+OresActorExternalLease ores_actor_i64_heap_external_acquire(
+    OresActorI64Heap* heap, OresActorTurn turn);
+void ores_actor_i64_heap_external_release(
+    OresActorI64Heap* heap, OresActorExternalLease lease);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
  * fixed-layout owned fields. Field initialization is single-use. */
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
@@ -55,9 +63,10 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
-/* Returns zero while a turn or loan is outstanding; returns one and frees
- * native memory after quiescence. Never call with an invalidated heap pointer.
- * The supervisor is responsible for fencing stale wakeups/callback holders. */
+/* Returns zero while a turn, read loan, or external lifetime lease is
+ * outstanding; returns one and frees native memory after quiescence. Never
+ * call with an invalidated heap pointer. The supervisor is responsible for
+ * dropping its heap pointer after successful destroy and fencing stale users. */
 int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap);
 #ifdef __cplusplus
 }
