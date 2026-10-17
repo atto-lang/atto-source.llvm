@@ -46,6 +46,55 @@ private:
     TrustedExclusiveRawMemoryAuthority() noexcept = default;
 };
 
+
+/**
+ * Immutable supervisor/platform proof for an external native address range.
+ * The integer address itself carries no authority. This proof object is a
+ * compiler/runtime substrate; guest source cannot mint it.
+ */
+class TrustedRawAddressGrant final {
+public:
+    static TrustedRawAddressGrant compiler_trusted(
+            std::uintptr_t base,
+            std::size_t bytes,
+            std::uint32_t address_space,
+            bool writable,
+            std::uint64_t generation) {
+        if (base == 0 || bytes == 0)
+            throw std::invalid_argument("raw address grant requires nonzero base and extent");
+        if (generation == 0)
+            throw std::invalid_argument("raw address grant generation must be nonzero");
+        if (bytes > std::numeric_limits<std::uintptr_t>::max() - base)
+            throw std::overflow_error("raw address grant extent overflow");
+        return TrustedRawAddressGrant(base, bytes, address_space, writable, generation);
+    }
+
+    [[nodiscard]] std::uintptr_t base() const noexcept { return base_; }
+    [[nodiscard]] std::size_t bytes() const noexcept { return bytes_; }
+    [[nodiscard]] std::uint32_t address_space() const noexcept { return address_space_; }
+    [[nodiscard]] bool writable() const noexcept { return writable_; }
+    [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
+
+private:
+    TrustedRawAddressGrant(
+            std::uintptr_t base,
+            std::size_t bytes,
+            std::uint32_t address_space,
+            bool writable,
+            std::uint64_t generation) noexcept
+        : base_(base),
+          bytes_(bytes),
+          address_space_(address_space),
+          writable_(writable),
+          generation_(generation) {}
+
+    std::uintptr_t base_;
+    std::size_t bytes_;
+    std::uint32_t address_space_;
+    bool writable_;
+    std::uint64_t generation_;
+};
+
 /**
  * Opaque compiler/runtime region identity for safe-derived bounded raw views.
  * Numeric addresses are never substituted for this identity: address reuse
@@ -91,9 +140,10 @@ private:
  * never owns or extends the pointee lifetime; a compiler-created raw lease must
  * remain rooted in the original owner/arena until all descendants are dead.
  *
- * Bounded pointers remember their provenance and permit one-past-end addresses
- * for comparison/difference, but never dereference one-past-end. Integer-made
- * pointers are unbounded and therefore receive only overflow/alignment checks.
+ * Bounded safe-derived pointers remember allocation provenance. Numeric-address
+ * pointers are also range-bounded, but only by an explicit supervisor/platform
+ * grant and therefore do not acquire allocation provenance. One-past-end may be
+ * represented for either kind but never dereferenced.
  */
 template<class T>
 class TrustedRawPointer final {
@@ -143,21 +193,34 @@ public:
     static TrustedRawPointer from_address(
             std::uintptr_t address,
             TrustedUnsafeMemoryAuthority,
-            std::uint32_t address_space = 0) {
+            TrustedRawAddressGrant grant) {
         if (address == 0)
             throw std::invalid_argument("trusted raw address cannot be null");
         if ((address % alignof(T)) != 0)
             throw std::invalid_argument("trusted raw address is misaligned for T");
-        return TrustedRawPointer(address, address, 0, 0, false, 0, 0, 0, address_space,
-                                 RawPointerAccess::ReadOnly);
+        if (address < grant.base())
+            throw std::out_of_range("trusted raw address precedes granted native range");
+
+        const auto grant_end = grant.base() + static_cast<std::uintptr_t>(grant.bytes());
+        if (address >= grant_end)
+            throw std::out_of_range("trusted raw address is outside granted native range");
+        const auto remaining = grant_end - address;
+        if (remaining < sizeof(T))
+            throw std::out_of_range("trusted raw address lacks one complete typed element");
+
+        const auto count = static_cast<std::size_t>(remaining / sizeof(T));
+        return TrustedRawPointer(address, address, count, 0, true, 0, 0, 0,
+                                 grant.address_space(), RawPointerAccess::ReadOnly);
     }
 
     static TrustedRawPointer from_mut_address(
             std::uintptr_t address,
             TrustedUnsafeMemoryAuthority authority,
             TrustedExclusiveRawMemoryAuthority,
-            std::uint32_t address_space = 0) {
-        auto result = from_address(address, authority, address_space);
+            TrustedRawAddressGrant grant) {
+        if (!grant.writable())
+            throw std::logic_error("read-only native address grant cannot mint mutable raw authority");
+        auto result = from_address(address, authority, grant);
         result.access_ = RawPointerAccess::ReadWrite;
         return result;
     }
