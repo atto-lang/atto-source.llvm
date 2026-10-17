@@ -27,7 +27,11 @@ if mode == "artifact":
 if mode == "stdout-leak":
     print("partial LLVM IR")
 if mode != "missing-diagnostic":
-    print("oreslang-llvmc: unsupported structural source", file=sys.stderr)
+    if "fnc take(tuple (" in source or "fnc take((" in source:
+        print("native positional tuple parameter requires verified readonly-slot and optional-tail lowering",
+              file=sys.stderr)
+    else:
+        print("oreslang-llvmc: unsupported structural source", file=sys.stderr)
 sys.exit(1)
 '''
 
