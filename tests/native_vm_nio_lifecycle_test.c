@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
