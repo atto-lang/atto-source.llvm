@@ -48,7 +48,7 @@ def main():
         "BoolProbe.named_forward", "BoolProbe.compose",
     )
     for symbol in required_param:
-        if not re.search(rf"define i1 @{re.escape(symbol)}\\(i1 ", emitted):
+        if not re.search(rf"define i1 @{re.escape(symbol)}\(i1 ", emitted):
             raise AssertionError(f"missing i1-parameter Boolean export {symbol}")
 
     if "br i1" not in emitted or "phi i1" not in emitted:
@@ -57,13 +57,13 @@ def main():
         raise AssertionError("native Xor must lower to eager xor i1")
     if "call i1 @BoolProbe.and_args" not in emitted:
         raise AssertionError("same-module bool call did not lower to call i1")
-    if re.search(r"(?m)^\\s*declare\\b", emitted):
+    if re.search(r"(?m)^\s*declare\b", emitted):
         raise AssertionError("pure Boolean guest declares an external dependency")
 
     # Calls are permitted only between source-owned BoolProbe definitions.
     for line in emitted.splitlines():
-        if re.search(r"\\b(?:call|invoke|callbr)\\b", line):
-            if not re.search(r"@BoolProbe\\.[A-Za-z_][A-Za-z0-9_]*\\(", line):
+        if re.search(r"\b(?:call|invoke|callbr)\b", line):
+            if not re.search(r"@BoolProbe\.[A-Za-z_][A-Za-z0-9_]*\(", line):
                 raise AssertionError(f"unexpected non-BoolProbe call: {line}")
 
     with tempfile.TemporaryDirectory(prefix="oreslang-bool-aot-") as d:
