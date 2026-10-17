@@ -1200,6 +1200,20 @@ private:
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
             }
+            // Safe Pointer<T> and the trusted RawPointer<T> lane require
+            // dedicated provenance/lifetime lowering. Never let these spellings
+            // fall through to the scalar rt operation path and accidentally
+            // become integer/address operations.
+            if (operation == "ref" || operation == "unref" || operation == "deref") {
+                throw std::runtime_error(std::string("native rt ") + std::string(operation) +
+                    " requires provenance-checked Pointer<T> and lifetime/drop lowering at byte " +
+                    std::to_string(token_.offset));
+            }
+            if (operation == "raw") {
+                throw std::runtime_error(
+                    "native rt raw requires trusted unsafe.memory effect, stable owner provenance, "
+                    "and RawPointer<T> lowering at byte " + std::to_string(token_.offset));
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
