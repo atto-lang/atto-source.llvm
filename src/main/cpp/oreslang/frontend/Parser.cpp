@@ -1580,17 +1580,65 @@ private:
         // Proxy creation is suspension-capable even when the function omitted
         // a using clause entirely. Check this before the ordinary no-effects
         // fast path so ownership checking cannot obscure the missing effect.
+        std::unordered_set<std::string> proxy_names;
         for (const auto& local : fn.locals) {
             if (!local.proxy_class_name.empty()) {
+                proxy_names.insert(local.name);
                 if (!fn.has_declared_effects ||
                         !fn.declared_effects.has(FunctionEffect::Suspend))
                     throw std::runtime_error(
                         "rt proxy admission may suspend and requires using suspend");
-                throw std::runtime_error(
-                    "native Proxy<T> opaque runtime lowering is pending; "
-                    "proxy capabilities may not be encoded as scalar i64");
             }
         }
+
+        // A Proxy<T> variable is not an ordinary source value. Direct use in
+        // returns/arithmetic/call arguments would launder an opaque capability
+        // through the scalar ABI. A direct proxy receiver in a field access is
+        // reserved for the later compiler-owned critical-read/write lowering.
+        std::function<bool(const Expression*, bool)> proxy_escape =
+            [&](const Expression* expr, bool proxy_receiver) -> bool {
+                if (!expr) return false;
+                if (expr->kind == Expression::Kind::Variable) {
+                    return !proxy_receiver && proxy_names.count(expr->name) != 0;
+                }
+                if (expr->kind == Expression::Kind::Field && expr->left &&
+                        expr->left->kind == Expression::Kind::Variable &&
+                        proxy_names.count(expr->left->name) != 0) {
+                    // proxy.field is a future synchronized access, not a raw
+                    // capability escape. Nested uses still inspect arguments.
+                    for (const auto& arg : expr->arguments)
+                        if (proxy_escape(arg.get(), false)) return true;
+                    return false;
+                }
+                if (proxy_escape(expr->left.get(), false) ||
+                        proxy_escape(expr->right.get(), false))
+                    return true;
+                for (const auto& arg : expr->arguments)
+                    if (proxy_escape(arg.get(), false)) return true;
+                return false;
+            };
+
+        if (!proxy_names.empty()) {
+            if (proxy_escape(fn.result.get(), false))
+                throw std::runtime_error(
+                    "Proxy<T> capability cannot escape through a scalar return");
+            for (const auto& guard : fn.early_returns) {
+                if (proxy_escape(guard.lhs.get(), false) ||
+                        proxy_escape(guard.rhs.get(), false) ||
+                        proxy_escape(guard.result.get(), false))
+                    throw std::runtime_error(
+                        "Proxy<T> capability cannot escape through a guarded scalar expression");
+            }
+            for (const auto& stmt : fn.statements)
+                if (proxy_escape(stmt.expression.get(), false))
+                    throw std::runtime_error(
+                        "Proxy<T> capability cannot escape through a scalar statement");
+            for (const auto& send : fn.actor_sends)
+                if (proxy_escape(send.payload.get(), false))
+                    throw std::runtime_error(
+                        "Proxy<T> capability serialization/send is unsupported");
+        }
+
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -1635,6 +1683,11 @@ private:
                 throw std::runtime_error("using effects require transitive call summaries");
         if (contains_callable_invocation(fn.result.get()))
             throw std::runtime_error("using effects require transitive call summaries");
+
+        if (!proxy_names.empty())
+            throw std::runtime_error(
+                "native Proxy<T> opaque runtime lowering is pending; "
+                "proxy capabilities may not be encoded as scalar i64");
     }
 
     static void validate(const Program& program) {
