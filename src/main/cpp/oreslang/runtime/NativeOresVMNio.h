@@ -9,8 +9,9 @@ extern "C" {
  * caller to retain a live VM pointer and externally fence producer threads
  * before VM retirement/close. They never run guest code.
  *
- * NIO startup is an explicit bootstrap operation. Throughput mode starts one
- * dedicated epoll thread; preallocated RT mode starts its fixed configured
+ * NIO configuration is an explicit bootstrap operation. Throughput mode
+ * attaches a zero-thread reactor domain and starts reactor #0 only on the
+ * first valid readiness watch. Preallocated RT mode starts its fixed configured
  * reactor set before source guest admission. No hard-RT WCET is claimed.
  */
 int ores_native_vm_enable_nio(OresNativeVM* vm, size_t max_reactors,
