@@ -67,6 +67,8 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool bpf_target = false;
+    bool bpf_program_seen = false;
+    std::string bpf_program;
     bool target_seen = false;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -83,6 +85,14 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg.rfind("--bpf-program=", 0) == 0) {
+            if (bpf_program_seen) { std::cerr << "duplicate BPF program option\n"; return 2; }
+            bpf_program_seen = true;
+            bpf_program = arg.substr(std::string_view("--bpf-program=").size());
+            if (bpf_program != "xdp") {
+                std::cerr << "unsupported BPF program profile: " << bpf_program << "\n";
+                return 2;
+            }
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -93,7 +103,7 @@ int main(int argc, char** argv) {
             if (target == "host") {
                 // Historical default: host triple and ABI remain inferred downstream.
             } else if (target == "bpfel") {
-                bpf_target = oreslang::TargetAbi::parse(target).experimental_bpf_xdp_ir();
+                bpf_target = oreslang::TargetAbi::parse(target).experimental_bpf_ir();
             } else if (target == "thumbv7m-none-eabi") {
                 cortex_m_target = oreslang::TargetAbi::parse(target).experimental_cortexm_ir();
             } else if (target == "wasm32" || target == "wasm32-unknown-unknown") {
@@ -113,6 +123,12 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    if (bpf_target != bpf_program_seen) {
+        std::cerr << (bpf_target
+            ? "bpfel target requires --bpf-program=xdp\n"
+            : "--bpf-program is valid only with --target=bpfel\n");
+        return 2;
+    }
     oreslang::CoreLog::Level admittedLevel = oreslang::CoreLog::Level::Off;
     if (!oreslang::CoreLog::parse_level(coreLogLevel, admittedLevel)) {
         std::cerr << "invalid core log level (off|error|warn|info|debug|trace)\n";
@@ -124,16 +140,16 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|bpfel] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|bpfel] [--bpf-program=xdp] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
-        const std::size_t kMaxSourceBytes = (cortex_m_target || bpf_target)
-            ? 128u * 1024u : 8u * 1024u * 1024u;
+        const std::size_t kMaxSourceBytes = bpf_target ? 4096u
+            : (cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u);
         const auto text = read_regular_source(path, kMaxSourceBytes, bpf_target
-            ? "eBPF source exceeds 128 KiB limit"
+            ? "eBPF source exceeds 4096 byte limit"
             : (cortex_m_target ? "cortex-m source exceeds 128 KiB limit"
             : "native source exceeds 8 MiB admission limit"));
         require_valid_source_utf8(text);
