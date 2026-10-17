@@ -127,6 +127,16 @@ int main() {
          Signature{"choose", {{Kind::Enum, "Color"}}}},
         {{Kind::Enum, "root::Color"}}, ids); },
         "full-vector selector admitted malformed aggregate");
+    denied([&] { (void)m::linkSymbol("   ", color); },
+        "whitespace-only nominal owner admitted");
+    denied([&] { (void)m::linkSymbol("root.Picker",
+        {m::Domain::Instance, Signature{"   ",
+            {{Kind::Enum, "root::Color"}}}}); },
+        "whitespace-only nominal method name admitted");
+    denied([&] { (void)m::proveLocalSameArityFamilies({
+        {m::Domain::Instance, Signature{"   ", {{Kind::Enum, "root::Color"}}}},
+        {m::Domain::Instance, Signature{"   ", {{Kind::Enum, "root::Mode"}}}}
+    }, ids); }, "blank static proof name admitted");
     std::cout << "nominal method slot policy OK\n";
     return 0;
 }
