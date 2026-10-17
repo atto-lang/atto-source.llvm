@@ -111,7 +111,7 @@ int main(void) {
         }
         check(ores_native_vm_nio_started(batch_vm) == 1);
         check(ores_native_vm_nio_try_pop_batch(batch_vm, NULL, 5) == 0);
-        OresNativeNioCompletion completions[5] = {{0}};
+        OresNativeNioCompletion completions[5] = {0};
         check(ores_native_vm_nio_try_pop_batch(batch_vm, completions, 0) == 0);
         for (size_t i = 0; i < 5; ++i)
             check(write(pipes[i][1], "x", 1) == 1);
