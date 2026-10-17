@@ -167,7 +167,9 @@ class ManifestAuditTests(unittest.TestCase):
         self.fail_on("required CTest was not registered")
 
     def test_python_optimized_gates_cannot_be_missing(self):
-        for critical in CRITICAL_TESTS[:3]:
+        for critical in ("native_contract_harness_optimize_failclosed",
+                         "native_contract_harness_python_O",
+                         "native_contract_harness_python_OO"):
             corpus = fixture()
             corpus["tests"] = [x for x in corpus["tests"] if x["name"] != critical]
             with self.assertRaisesRegex(ManifestFailure, "required CTest"):
@@ -184,8 +186,10 @@ class ManifestAuditTests(unittest.TestCase):
                 check_manifest(document)
 
     def test_optimized_harness_must_execute_correct_script(self):
-        self.manifest["tests"][0]["command"][-1] = "tests/empty.py"
-        self.fail_on("wrong script")
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_contract_harness_optimize_failclosed")
+        target["command"][-1] = "tests/empty.py"
+        self.fail_on("wrong interpreter/arguments")
 
     def test_native_object_gates_cannot_be_omitted(self):
         for flag in ("--verify-object", "--clang", "--compiler", "--fixture"):
