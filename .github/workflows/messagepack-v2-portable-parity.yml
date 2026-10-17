@@ -55,7 +55,7 @@ jobs:
             printf 'compiler=%s\n' "$WIRE_COMPILER"
             printf 'workflow_sha=%s\n' "$GITHUB_WORKFLOW_SHA"
           } > "$RUNNER_TEMP/wire-v2-evidence/provenance.txt"
-          "$WIRE_COMPILER" --version | head -n 1 > "$RUNNER_TEMP/wire-v2-evidence/compiler-version.txt"
+          "$WIRE_COMPILER" --version > "$RUNNER_TEMP/wire-v2-evidence/compiler-version.txt"
           sha256sum src/main/cpp/oreslang/runtime/MessagePackWireV2.hpp \
             tests/messagepack_wire_v2_test.cpp tests/messagepack_wire_v2_matrix.py \
             contracts/v1/design/messagepack_collection_vectors.json \
