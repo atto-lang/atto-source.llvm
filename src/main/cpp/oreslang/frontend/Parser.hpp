@@ -49,6 +49,10 @@ struct LocalBinding {
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
     bool int_array = false; // non-Copy owned Array<int> local, no escape
+    // Parsed ownership identity for the first native Map<int,int> source shape.
+    // Lowering remains fail-closed until the compiler computes an exact fixed
+    // capacity and has real Option<int>/entry-iteration value representations.
+    bool int_map = false;
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.

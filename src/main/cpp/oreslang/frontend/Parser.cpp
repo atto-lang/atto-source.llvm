@@ -664,6 +664,27 @@ private:
                     require("(");
                     require(")");
                     binding.int_array = true;
+                } else if (token_.text == "Map") {
+                    if (!binding.owner_mutable)
+                        fail("native Map<int,int> requires let mut owner");
+                    require("Map");
+                    require("<");
+                    require("int");
+                    require(",");
+                    require("int");
+                    require(">");
+                    binding.name = identifier();
+                    require("=");
+                    require("new");
+                    require("Map");
+                    require("<");
+                    require("int");
+                    require(",");
+                    require("int");
+                    require(">");
+                    require("(");
+                    require(")");
+                    binding.int_map = true;
                 } else {
                 binding.class_name = identifier();
                 binding.name = identifier();
@@ -1560,7 +1581,7 @@ private:
                     allocates_class_array = std::any_of(cls->fields.begin(), cls->fields.end(),
                         [](const ClassField& field) { return field.int_array; });
             }
-            if ((local.heap_owned || local.int_array || allocates_class_array) &&
+            if ((local.heap_owned || local.int_array || local.int_map || allocates_class_array) &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error(
                     "owned allocation violates using signature without alloc");
@@ -1609,6 +1630,8 @@ private:
             // collide at the ELF/Wasm symbol boundary.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (fn.name.rfind("oreslang_i64_map_", 0) == 0)
+                throw std::runtime_error("reserved native Map<int,int> ABI symbol");
             if (program.module.empty()) {
                 const bool runtime_symbol =
                     fn.name == "abort" ||
@@ -1696,6 +1719,13 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
+                if (binding.int_map) {
+                    throw std::runtime_error(
+                        "native Map<int,int> source lowering requires compiler-computed "
+                        "fixed capacity plus Option<int> lookup and deterministic entry "
+                        "iteration lowering; NativeI64MapRegion ABI is available but "
+                        "must not be reached through a scalar/Array surrogate");
+                }
                 if (binding.int_array) {
                     // Construction was parsed as exactly new Array<int>().
                     // Its initializer is a trusted runtime operation, never

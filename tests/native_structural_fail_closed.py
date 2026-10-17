@@ -44,6 +44,12 @@ PROGRAMS = {
           end
         }
     """,
+    "native map source": """
+        fnc main(): int {
+          let mut Map<int,int> values = new Map<int,int>();
+          return 1;
+        }
+    """,
 }
 
 def directory_snapshot(root):
@@ -104,6 +110,12 @@ def main():
                             "readonly-slot and optional-tail lowering")
                 if required not in result.stderr:
                     raise RuntimeError(f"{name}: rejection lacked tuple-specific semantic diagnostic")
+            if name == "native map source":
+                required = ("native Map<int,int> source lowering requires compiler-computed "
+                            "fixed capacity plus Option<int> lookup and deterministic entry "
+                            "iteration lowering")
+                if required not in result.stderr:
+                    raise RuntimeError(f"{name}: rejection lacked map-specific semantic diagnostic")
             if result.stdout.strip():
                 raise RuntimeError(f"{name}: rejected structural source leaked LLVM IR/output")
     print("LLVM structural bootstrap correctly fails closed (not parity)")
