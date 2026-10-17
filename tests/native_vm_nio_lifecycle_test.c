@@ -70,11 +70,12 @@ int main(void) {
         check(ores_native_vm_started_carriers(vm, (enum OresNativeVMDomain)i) == 0);
     check(ores_native_vm_enable_nio(vm, 4, 0, 1));
     check(!ores_native_vm_enable_nio(vm, 4, 0, 1));
-    check(ores_native_vm_nio_started(vm) == 1);
+    check(ores_native_vm_nio_started(vm) == 0);
     int pipe_fd[2] = {-1, -1};
     check(pipe2(pipe_fd, O_NONBLOCK | O_CLOEXEC) == 0);
     OresNativeNioWatch watch = {0};
     check(ores_native_vm_nio_try_watch(vm, pipe_fd[0], EPOLLIN, &watch));
+    check(ores_native_vm_nio_started(vm) == 1);
     check(!ores_native_vm_nio_try_watch(vm, pipe_fd[0], EPOLLIN, &watch));
     check(ores_native_vm_nio_completion_fd(vm, 0) >= 0);
     check(write(pipe_fd[1], "x", 1) == 1);
@@ -99,6 +100,7 @@ int main(void) {
         OresNativeVM* batch_vm = ores_native_vm_open(&cfg);
         check(batch_vm != NULL);
         check(ores_native_vm_enable_nio(batch_vm, 1, 0, 1));
+        check(ores_native_vm_nio_started(batch_vm) == 0);
         int pipes[5][2] = {{-1, -1}};
         OresNativeNioWatch tickets[5] = {{0}};
         for (size_t i = 0; i < 5; ++i) {
@@ -182,7 +184,7 @@ int main(void) {
     ores_native_vm_nio_cancel_bootstrap(cold);
     check(ores_native_vm_nio_can_attach(cold));
     check(ores_native_vm_enable_nio(cold, 2, 0, 1));
-    check(ores_native_vm_nio_started(cold) == 1);
+    check(ores_native_vm_nio_started(cold) == 0);
     check(ores_native_vm_close(cold));
 
     // Fully preallocated RT bootstrap does not spawn network workers on its
