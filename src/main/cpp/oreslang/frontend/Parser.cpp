@@ -57,7 +57,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "and", "or", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -158,6 +158,14 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
+        // Logical symbolic operators are atomic. Their word aliases are
+        // ordinary reserved tokens and reach the same AST kinds below.
+        if (source_.substr(at_, 2) == "&&" ||
+                source_.substr(at_, 2) == "||" ||
+                source_.substr(at_, 2) == "^^") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -206,6 +214,21 @@ bool native_pure_scalar_tree(const Expression& expr) {
         return expr.left && expr.right &&
             native_pure_scalar_tree(*expr.left) &&
             native_pure_scalar_tree(*expr.right);
+    return false;
+}
+
+// First native logical slice: closed Boolean trees only. This is enough to
+// prove short-circuit CFG and i1 XOR lowering without pretending the current
+// i64 parameter/local ABI already has general bool storage or bool calls.
+bool native_pure_bool_tree(const Expression& expr) {
+    if (expr.kind == Expression::Kind::Boolean)
+        return expr.integer == 0 || expr.integer == 1;
+    if (expr.kind == Expression::Kind::LogicalAnd ||
+            expr.kind == Expression::Kind::LogicalOr ||
+            expr.kind == Expression::Kind::LogicalXor)
+        return expr.left && expr.right &&
+            native_pure_bool_tree(*expr.left) &&
+            native_pure_bool_tree(*expr.right);
     return false;
 }
 
@@ -1103,7 +1126,46 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return additive(); }
+    std::unique_ptr<Expression> expression() { return logical_or(); }
+
+    std::unique_ptr<Expression> logical_or() {
+        auto left = logical_xor();
+        while (token_.text == "or" || token_.text == "||") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalOr, offset);
+            expr->left = std::move(left);
+            expr->right = logical_xor();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_xor() {
+        auto left = logical_and();
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_and() {
+        auto left = additive();
+        while (token_.text == "and" || token_.text == "&&") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalAnd, offset);
+            expr->left = std::move(left);
+            expr->right = additive();
+            left = std::move(expr);
+        }
+        return left;
+    }
 
     std::unique_ptr<Expression> additive() {
         auto left = product();
@@ -1451,6 +1513,11 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::LogicalAnd:
+            case Expression::Kind::LogicalOr:
+            case Expression::Kind::LogicalXor:
+                if (!expr.left || !expr.right)
+                    throw std::runtime_error("invalid binary expression AST");
                 validate_expression(*expr.left, parameters, functions);
                 validate_expression(*expr.right, parameters, functions);
                 return;
@@ -1573,21 +1640,19 @@ private:
         std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>> functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
-            // A bool is an LLVM i1, never a disguised i64. Keep initial
-            // import-free admission strictly literal, side-effect free and
-            // independent of cleanup/continuation/ownership lifetimes.
+            // A bool is an LLVM i1, never a disguised i64. The first logical
+            // execution slice accepts only closed pure bool trees; general
+            // bool parameters/locals/calls stay fail-closed until their ABI,
+            // ownership and call-site typing are represented end to end.
             if (fn.returns_bool) {
                 if (fn.name == "main")
                     throw std::runtime_error("native bool main violates process exit ABI");
-                if (!fn.result ||
-                    (fn.result->kind != Expression::Kind::Boolean &&
-                     !( !program.imports.empty() &&
-                        fn.result->kind == Expression::Kind::ModuleCall)))
+                const bool imported_bool =
+                    fn.result && !program.imports.empty() &&
+                    fn.result->kind == Expression::Kind::ModuleCall;
+                if (!fn.result || (!native_pure_bool_tree(*fn.result) && !imported_bool))
                     throw std::runtime_error("native bool result requires typed bool expression");
-                if (fn.result->kind == Expression::Kind::Boolean &&
-                    fn.result->integer != 0 && fn.result->integer != 1)
-                    throw std::runtime_error("native bool literal must be canonical 0 or 1");
-                if (fn.result->kind == Expression::Kind::Boolean &&
+                if (native_pure_bool_tree(*fn.result) &&
                     (!fn.parameters.empty() || !fn.locals.empty() ||
                      !fn.statements.empty() || !fn.early_returns.empty() ||
                      !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
@@ -1595,8 +1660,12 @@ private:
                      !fn.actor_field_writes.empty() || fn.caught_throw_value ||
                      !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
                      fn.scalar_while || fn.has_declared_effects))
-                    throw std::runtime_error("native bool literal AOT requires pure zero-argument function");
-            } else if (fn.result && fn.result->kind == Expression::Kind::Boolean) {
+                    throw std::runtime_error("native bool logical AOT requires pure zero-argument function");
+            } else if (fn.result &&
+                    (fn.result->kind == Expression::Kind::Boolean ||
+                     fn.result->kind == Expression::Kind::LogicalAnd ||
+                     fn.result->kind == Expression::Kind::LogicalOr ||
+                     fn.result->kind == Expression::Kind::LogicalXor)) {
                 throw std::runtime_error("native int return cannot return bool");
             }
             // Compiler-owned ABI imports and generated exports may be
