@@ -12,10 +12,10 @@ parser must continue to fail closed on unlowered pointer intrinsics.
   and returns owned T once, invalidating its handle. There is no pointer math,
   free-standing address, implicit copy/share, or cross-actor transport.
   This is Java #1021 candidate behavior, not LLVM source feature support.
-- RawPointer<T> (canonical proposed unsafe, non-owning source capability):
+- NativePointer<T> (proposed unsafe, non-owning source capability):
   explicit, privileged view into supervisor-authorized native memory, an FFI
   buffer, or mapped MMIO. Never silently convert between Pointer<T> and
-  RawPointer<T>. The C++ TrustedPointerWindow in this branch is an internal
+  NativePointer<T>. The C++ TrustedPointerWindow in this branch is an internal
   runtime/grant substrate, not a second guest-visible pointer type.
 
 SHARED/PRIVATE trusted actors can be eligible, but trusted status is
@@ -68,7 +68,7 @@ Compiler/runtime admission rules:
 TrustedPointerWindow is a host-only C++17 region view with actor/epoch identity,
 explicit region/generation/allocation provenance, byte length, read/write mode
 and revocation. It supports checked typed element
-offsets, aligned load/store (memcpy for ordinary trivially-copyable objects),
+offsets, aligned load/store (memcpy for unsigned 8/16/32/64-bit scalar RAM values),
 unsigned 8/16/32/64-bit MMIO volatile load/store, and a synchronous FFI
 address callback that holds the revocation lock until return. Same-thread
 reentry into the window/nested FFI is rejected instead of deadlocking.
@@ -82,6 +82,16 @@ inversion against a callback that accesses the registry. The caller must
 keep the backing bytes mapped and alive through successful revocation.
 This prototype uses a shared control block and mutex: zero-copy data, but
 NOT zero allocation, lock-free real time or source/LLVM guest support.
+
+The experimental NativeRegionRegistry additionally tracks active virtual address
+ranges and rejects overlapping grants in the *same* registry, including
+read-only overlaps. It stamps grants with process-local registry identities to
+reject cross-registry replay, validates actor/epoch identity and keeps grant
+issuance private to a trusted runtime authority (with a test-only friend shim).
+This is NOT a finished supervisor: the trusted runtime authority is not yet
+implemented, and caller-supplied Trust values are not authentication.
+Physical aliasing through independent mappings and separately constructed
+registries still requires a supervisor-owned allocation/mapping catalog.
 
 Known limitations:
 - The C++ constructor is callable by trusted HOST code; the explicit
@@ -103,6 +113,29 @@ Known limitations:
 CTest trusted_native_pointer_window_host_only tests arithmetic bounds,
 one-past, signed extreme offsets, alignment, read-only denial, actor and epoch
 fencing, revocation, FFI completion ordering, and MMIO/FFI separation.
+
+## Verified host-only local test evidence (2026-10-17)
+
+The test files and C++ headers were reconstructed locally from the exact
+GitHub blob content, and each reconstructed file's Git blob SHA-1 was verified
+against the private branch before building:
+
+- ActorHeapIdentity.hpp: `51266a686ae35b82e42885e21a3df51d94dd0d54`
+- TrustedPointerWindow.hpp: `3408e022b10e425e71b38b06f1eab10aff084bb3`
+- NativeRegionRegistry.hpp: `b832a71b24782605a0b193b2624791d8271c34d2`
+- trusted_pointer_window_test.cpp: `4d5d9b529e7d1a6ff87c942258c85abe86bc06ad`
+- native_region_registry_test.cpp: `5177de1bd6c350a33c1b4aad3af7fa1c0d5fa04e`
+
+For these exact file blobs, both host test executables **passed locally**
+with Clang C++17 ASan+UBSan, GCC C++17 Release -O2 -DNDEBUG,
+and GCC C++17 TSan (each compiled with strict warnings and -Werror).
+Two standalone compile-negative fixtures were also checked with both
+GCC and Clang for private issuance and forbidden bool/float access.
+
+This is *not* a full LLVM compiler build, project CMake/CTest run,
+guest-source test, CI runner pass or production authorization proof.
+GitHub Actions run #39058450205 created three matrix jobs, but each
+failed with no recorded steps; it provides no executed test evidence.
 
 ## Required promotion evidence
 
