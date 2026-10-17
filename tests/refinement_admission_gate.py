@@ -20,6 +20,18 @@ UNSUPPORTED = {
     "min-length-annotation": "@MinLength(3)\n@MaxLength(32)\ntype Username = string;\nfnc main(): int { return 42; }\n",
     "min-annotation": "@Min(1)\n@Max(65535)\ntype Port = int;\nfnc main(): int { return 42; }\n",
     "range-annotation": "@Range(min=0,max=100)\ntype Percentage = int;\nfnc main(): int { return 42; }\n",
+    "schema-first-static": (
+        "namespace app;\\n"
+        "const PortSchema = Zorde.int().min(1).max(65535);\\n"
+        "type Port = Zorde.infer<PortSchema>;\\n"
+        "fnc main(): int { return 42; }\\n"
+    ),
+    "schema-first-dynamic": (
+        "namespace app;\\n"
+        "const S = userValidator();\\n"
+        "type Port = Zorde.infer<S>;\\n"
+        "fnc main(): int { return 42; }\\n"
+    ),
     "port-keyword": "type Port = int with value gte 1 and value lte 65535;\nfnc main(): int { return 42; }\n",
     "port-symbol": "type Port = int with value >= 1 and value <= 65535;\nfnc main(): int { return 42; }\n",
     "percentage-keyword": "type Percentage = int with value gte 0 and value lte 100;\nfnc main(): int { return 42; }\n",
