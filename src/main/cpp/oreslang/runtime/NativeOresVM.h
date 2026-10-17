@@ -134,6 +134,12 @@ unsigned ores_native_vm_control_pump(OresNativeVM* vm);
 typedef void (*OresNativeVMNioDestroy)(void* opaque_backend);
 /* Bootstrap-only check; final attach repeats this under the CONTROL gate. */
 int ores_native_vm_nio_can_attach(OresNativeVM* vm);
+/* Atomically reserve NIO startup before any selector threads are created.
+ * Actor spawn rejects while the reservation is held; always cancel it on
+ * failed bootstrap, or consume it via attach_nio on success.
+ */
+int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm);
+void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm);
 int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
                               OresNativeVMNioDestroy destroy);
 /* Nonblocking trusted-host pin. Every successful acquisition requires one
