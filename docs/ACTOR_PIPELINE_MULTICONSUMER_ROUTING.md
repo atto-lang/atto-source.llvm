@@ -251,3 +251,32 @@ by that isolated test and remain release blockers.
   cancellation, duplicate sends, pipeline reconfiguration, actor STOP and DONE.
 - Verify exact source Git tree on the authorized runner; never mirror private
   source into an unapproved external organization.
+
+## Native aggregate correlation metadata budget — 2026-10-17
+
+The native `ActorPipeRouteLedger` now accepts a configurable **graph-wide
+active correlation-frame metadata budget** (default and maximum 64 MiB).
+The charge includes each owned frame, allocated immutable path vector
+slots, retained actor-instance string buffers, and an allowance for the
+per-frame active-index entry. This is a **conservative metadata accounting
+model, not an exact heap-allocation limit**: allocator internals,
+temporary copies during frame creation, and external retained handles
+are outside this accounting contract.
+
+All-or-none `forward_all` preflights the aggregate path charge before
+publishing any frame. Single forward/ingress paths charge upon successful
+registry insertion; `backward` and direct `reply` replace an old frame
+transactionally, refunding its charged metadata while preserving its
+one-shot semantics. Completion, mailbox-side retirement, explicit
+generation abort and STOP refund credits. `metadata_bytes()` exposes
+outstanding ledger charges for assertions and host observability.
+New regressions cover per-graph saturation independently of frame count,
+zero partial fanout publication, reverse credit reuse, stale frame
+rejection and cancellation/STOP reclamation.
+
+These regression sources are committed but have **not** been executed
+against the production full-tree graph validator/transport or under
+native sanitizers at this exact revision. Native DATA payload
+byte/message/pending-reader quotas are distinct limits. Compiler
+`self.*` still requires source execution and typed ownership gates.
+
