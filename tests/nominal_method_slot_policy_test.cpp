@@ -110,6 +110,23 @@ int main() {
         {m::Domain::Instance,
          Signature{std::string("get\0evil", 8), {{Kind::Enum, "root::Mode"}}}}
     }, ids); }, "embedded NUL method name admitted by compiler proof");
+    // Public C++ aggregate values bypass the signature factory; both
+    // linker emission and full-vector selection must revalidate their shape.
+    denied([&] { (void)m::linkSymbol("root.Picker",
+        {m::Domain::Instance, Signature{"choose", {{Kind::Primitive, "String"}}}}); },
+        "noncanonical String aggregate admitted");
+    denied([&] { (void)m::linkSymbol("root.Picker",
+        {m::Domain::Instance, Signature{"choose",
+            {{static_cast<Kind>(255), "root::Color"}}}}); },
+        "forged kind aggregate admitted");
+    denied([&] { (void)m::linkSymbol("root.Picker",
+        {m::Domain::Instance, Signature{"choose", {{Kind::Enum, "Color"}}}}); },
+        "unqualified enum aggregate admitted");
+    denied([&] { (void)selectResolved(
+        {Signature{"choose", {{Kind::Enum, "root::Color"}}},
+         Signature{"choose", {{Kind::Enum, "Color"}}}},
+        {{Kind::Enum, "root::Color"}}, ids); },
+        "full-vector selector admitted malformed aggregate");
     std::cout << "nominal method slot policy OK\n";
     return 0;
 }

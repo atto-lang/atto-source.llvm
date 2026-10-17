@@ -1863,6 +1863,12 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-nominal-method-slot-policy-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    # Source-free fixture self-test checks shared golden symbols, not guest parity.
+    add_test(NAME native_nominal_method_slot_abi_reference
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/test_nominal_method_slot_abi_v1.py")
+    set_tests_properties(native_nominal_method_slot_abi_reference
+        PROPERTIES TIMEOUT 10)
     add_test(NAME native_nominal_method_slot_static_policy
         COMMAND oreslang-nominal-method-slot-policy-test)
     set_tests_properties(native_nominal_method_slot_static_policy
