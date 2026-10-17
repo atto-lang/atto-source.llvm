@@ -31,11 +31,15 @@ extern "C" int ores_native_vm_enable_nio(
     int preallocated_realtime, size_t rt_reactors) {
     // Creating epoll fds and pthreads is permitted only during bootstrap.
     // A failed or already-retired attach destroys the candidate immediately.
-    if (!vm || !ores_native_vm_nio_can_attach(vm)) return 0;
+    if (!vm || !ores_native_vm_nio_begin_bootstrap(vm)) return 0;
     OresNativeNio* backend =
         ores_native_nio_open(max_reactors, preallocated_realtime, rt_reactors);
-    if (!backend) return 0;
+    if (!backend) {
+        ores_native_vm_nio_cancel_bootstrap(vm);
+        return 0;
+    }
     if (!ores_native_vm_attach_nio(vm, backend, &ores_native_vm_nio_destroy_backend)) {
+        ores_native_vm_nio_cancel_bootstrap(vm);
         ores_native_nio_close(backend);
         return 0;
     }
