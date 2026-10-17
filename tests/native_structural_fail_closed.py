@@ -46,6 +46,20 @@ PROGRAMS = {
     """,
 }
 
+def directory_snapshot(root):
+    """Record names, file types, modes and bytes, not merely filenames.
+
+    An erroring compiler is not allowed to overwrite or replace a source file,
+    nor to clobber a previously rejected fixture while leaving names intact.
+    """
+    observed = {}
+    for item in pathlib.Path(root).iterdir():
+        if item.is_symlink() or not item.is_file():
+            raise RuntimeError("unexpected symlink or nonfile compiler artifact: " + item.name)
+        observed[item.name] = (item.lstat().st_mode, item.read_bytes())
+    return observed
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: native_structural_fail_closed.py <oreslang-llvmc>")
@@ -62,8 +76,10 @@ def main():
             raise RuntimeError(
                 "native structural test has no real working scalar compiler: "
                 + control.stderr[:500])
-        if {p.name for p in pathlib.Path(root).iterdir()} != {good.name}:
+        if set(directory_snapshot(root)) != {good.name}:
             raise RuntimeError("positive scalar control unexpectedly published a file")
+        if good.read_text(encoding="utf-8") != "pub fnc main(): int { return 42; }\\n".replace("\\n", "\n"):
+            raise RuntimeError("positive scalar control modified its source")
         good.unlink()
 
         for name, source in PROGRAMS.items():
@@ -71,13 +87,14 @@ def main():
             path.write_text(source, encoding="utf-8")
             # Keep compiler outputs in the isolated directory and prove a
             # rejected fixture did not leave a runnable/IR artifact.
-            before = {item.name for item in pathlib.Path(root).iterdir()}
+            before = directory_snapshot(root)
             result = subprocess.run(
                 [str(compiler), str(path)], capture_output=True, text=True,
                 cwd=root, timeout=15, check=False)
-            after = {item.name for item in pathlib.Path(root).iterdir()}
+            after = directory_snapshot(root)
             if before != after:
-                raise RuntimeError(f"{name}: rejected source created artifact(s): {sorted(after - before)}")
+                raise RuntimeError(f"{name}: rejected source modified existing input or left artifacts: "
+                                   f"{sorted(set(after) ^ set(before))}")
             if result.returncode is None or result.returncode <= 0:
                 raise RuntimeError(f"{name}: expected a diagnosed compiler failure; got {result.returncode}")
             if not result.stderr.strip():
