@@ -49,15 +49,24 @@ int main() {
         // A trusted lease object may be referenced from another OS thread,
         // but the lock-holding carrier is the only one authorized to use it.
         std::atomic<bool> foreignReadDenied{false}, foreignWriteDenied{false};
+        std::atomic<bool> foreignAllocateDenied{false}, foreignDropDenied{false};
         std::thread foreignCarrier([&] {
             std::uint64_t probe = 0;
             try { writer.read(h, &probe, sizeof(probe)); }
             catch (const std::logic_error&) { foreignReadDenied.store(true); }
             try { writer.write(h, &probe, sizeof(probe)); }
             catch (const std::logic_error&) { foreignWriteDenied.store(true); }
+            try { (void)writer.allocate(sizeof(probe)); }
+            catch (const std::logic_error&) { foreignAllocateDenied.store(true); }
+            try { writer.drop(h); }
+            catch (const std::logic_error&) { foreignDropDenied.store(true); }
         });
         foreignCarrier.join();
-        require(foreignReadDenied.load() && foreignWriteDenied.load());
+        require(foreignReadDenied.load() && foreignWriteDenied.load() &&
+                foreignAllocateDenied.load() && foreignDropDenied.load());
+        std::uint64_t afterForeignCarrier = 0;
+        writer.read(h, &afterForeignCarrier, sizeof(afterForeignCarrier));
+        require(afterForeignCarrier == x);
         reject([&] { writer.read(h, &x,sizeof(x)-1); });
         // Drop must physically scrub sensitive bytes before the slot can be reused,
         // not just revoke its generation. A new handle must see only zeros.
