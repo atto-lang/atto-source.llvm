@@ -1,0 +1,4 @@
+define class constructor as
+  pub final int number: 42;
+end
+pub fnc main(): int { return 42; }
