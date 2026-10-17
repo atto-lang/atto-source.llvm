@@ -8,6 +8,9 @@ is a construction receiver marker, not a parameter and not an ABI slot.
 Parameter names and types cannot produce additional overload identities.
 Return type is not a constructor dispatch dimension.
 
+The native lexer/parser reserves `constructor` as a declaration keyword,
+so it cannot be used as a class, local, parameter or callable identifier.
+
 A class may declare up to one constructor per scalar value arity (0–16).
 The compiler rejects duplicate arities and selects an exact arity before LLVM
 lowering. An implicit zero-argument constructor exists only when the class has
@@ -59,7 +62,7 @@ mangled symbol or cross-backend ABI is standardized by this milestone.
 
 The constructor branch adds **four** positive compile-to-LLVM-to-Clang CTests
 (including arity 0, reordered overloads, and the exact 16-scalar limit) and
-**seven** rejection CTests (including arity 17), while retaining the earlier
+**eight** rejection CTests (including arity 17 and keyword-as-identifier denial), while retaining the earlier
 constructor and native array/ownership regression suites. Native comma
 indexing adds three negative CTest admission gates. Until step-bearing Actions / CTest on the exact branch
 tree completes, treat this as committed implementation plus **unexecuted**
