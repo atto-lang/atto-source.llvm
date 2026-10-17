@@ -71,12 +71,17 @@ and revocation. It supports checked typed element
 offsets, aligned load/store (memcpy for ordinary trivially-copyable objects),
 unsigned 8/16/32/64-bit MMIO volatile load/store, and a synchronous FFI
 address callback that holds the revocation lock until return. Same-thread
-reentry into the window/nested FFI is rejected instead of deadlocking; a
-same-thread revoke request is deferred until the callback releases its raw
-address. The caller must
-keep the backing bytes mapped and alive until revoke returns. This prototype
-uses a shared control block and mutex: zero-copy data, but NOT zero allocation,
-lock-free real time or source/LLVM guest support.
+reentry into the window/nested FFI is rejected instead of deadlocking.
+TrustedPointerWindow::revoke() returns true only when callback quiescence was
+reached; a false return denotes deferred same-thread callback revocation and
+MUST NOT authorize backing-memory unmap. NativeRegionRegistry::revoke()
+rejects that self-revocation, retains its authority entry, and requires a
+retry after the callback completes. Registry lookups and revocation never
+hold the registry mutex while waiting for the FFI lock, preventing lock-order
+inversion against a callback that accesses the registry. The caller must
+keep the backing bytes mapped and alive through successful revocation.
+This prototype uses a shared control block and mutex: zero-copy data, but
+NOT zero allocation, lock-free real time or source/LLVM guest support.
 
 Known limitations:
 - The C++ constructor is callable by trusted HOST code; the explicit
