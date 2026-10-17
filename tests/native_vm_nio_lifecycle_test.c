@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 #include "oreslang/runtime/NativeOresVMNio.h"
 #include <fcntl.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
@@ -8,6 +10,18 @@
 #include <unistd.h>
 
 static void check(int valid) { if (!valid) abort(); }
+typedef struct {
+    OresNativeVM* vm;
+    atomic_int entered;
+    atomic_int finished;
+} NioCloseRace;
+static void* close_while_leased(void* opaque) {
+    NioCloseRace* race = (NioCloseRace*)opaque;
+    atomic_store(&race->entered, 1);
+    check(ores_native_vm_close(race->vm));
+    atomic_store(&race->finished, 1);
+    return NULL;
+}
 static void on_data(void* ignored, size_t slot, uint64_t value) {
     (void)ignored; (void)slot; (void)value;
     abort(); /* no guest callbacks may be delivered on NIO-only test path */
@@ -82,5 +96,34 @@ int main(void) {
     check(ores_native_vm_enable_nio(vm, 3, 1, 3));
     check(ores_native_vm_nio_started(vm) == 3);
     check(ores_native_vm_close(vm));
+
+    // A reactor cannot be destroyed while a concurrent accepted VM host
+    // operation still has a borrowed backend. This is a test-only host
+    // pthread: actor, CONTROL and reactor worker threads never wait here.
+    for (int iteration = 0; iteration < 25; ++iteration) {
+        OresNativeVM* racing = ores_native_vm_open(&cfg);
+        check(racing != NULL);
+        check(ores_native_vm_enable_nio(racing, 2, 0, 1));
+        void* borrowed = ores_native_vm_nio_acquire(racing);
+        check(borrowed != NULL);
+        NioCloseRace race = {.vm = racing};
+        atomic_init(&race.entered, 0);
+        atomic_init(&race.finished, 0);
+        pthread_t closer;
+        check(pthread_create(&closer, NULL, close_while_leased, &race) == 0);
+        while (!atomic_load(&race.entered)) {
+            struct timespec pause = {0, 1000000};
+            nanosleep(&pause, NULL);
+        }
+        struct timespec pause = {0, 10000000};
+        nanosleep(&pause, NULL);
+        check(!atomic_load(&race.finished));
+        // VM retirement fences all new NIO acquisition but cannot free this
+        // borrowed backend until the accepted operation releases its pin.
+        check(ores_native_vm_nio_acquire(racing) == NULL);
+        ores_native_vm_nio_release(racing, borrowed);
+        check(pthread_join(closer, NULL) == 0);
+        check(atomic_load(&race.finished));
+    }
     return 0;
 }
