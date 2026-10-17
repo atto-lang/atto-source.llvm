@@ -5,3 +5,4 @@ i686-unknown-linux-gnu	32	little	sysv	unimplemented
 armv7-unknown-linux-gnueabihf	32	little	aapcs32-hardfp	unimplemented
 wasm32-unknown-unknown	32	little	wasm-c	experimental-wasm32-ir
 thumbv7m-none-eabi	32	little	aapcs32-soft	experimental-cortexm-scalar-ir
+bpfel	64	little	bpf	experimental-bpf-socket-ir

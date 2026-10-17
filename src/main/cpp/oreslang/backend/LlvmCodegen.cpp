@@ -1490,4 +1490,75 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     return result;
 }
 
+
+// First eBPF milestone intentionally supports ONE constant-return socket filter.
+// The kernel-safe entrypoint is i32 (ptr context), not Oreslang's host i64() ABI.
+// There is no actor scheduler, FFI, heap, guest call, helper, packet read, or
+// runtime dependency. Kernel verification is a separate mandatory gate.
+std::string emit_verified_bpf_socket_ir(const Program& source) {
+    if (!source.module.empty() || !source.classes.empty() ||
+        !source.actors.empty() || !source.cooperative_loops.empty() ||
+        source.functions.size() != 1)
+        throw std::runtime_error("bpf socket target requires exactly one freestanding function");
+
+    const auto& fn = source.functions.front();
+    if (fn.name != "socket_filter" || !fn.exported || fn.returns_void ||
+        !fn.parameters.empty() || !fn.generic_parameters.empty() ||
+        !fn.locals.empty() || !fn.statements.empty() ||
+        !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+        !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+        !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+        fn.scalar_while || fn.caught_throw_value ||
+        !fn.caught_throw_defers.empty() || fn.has_declared_effects ||
+        !fn.result || fn.result->kind != Expression::Kind::Integer ||
+        fn.result->integer < 0 || fn.result->integer > 65535)
+        throw std::runtime_error(
+            "bpf socket target requires pub fnc socket_filter(): int with return literal 0..65535");
+
+    llvm::LLVMContext context;
+    llvm::Module module("oreslang-bpf-socket", context);
+#if LLVM_VERSION_MAJOR >= 21
+    module.setTargetTriple(llvm::Triple("bpfel"));
+#else
+    module.setTargetTriple("bpfel");
+#endif
+    module.setDataLayout("e-m:e-p:64:64-i64:64-i128:128-n32:64-S128");
+    if (module.getDataLayout().getPointerSizeInBits(0) != 64 ||
+        !module.getDataLayout().isLittleEndian())
+        throw std::runtime_error("bpf ABI/data layout mismatch");
+
+    auto* i32 = llvm::Type::getInt32Ty(context);
+#if LLVM_VERSION_MAJOR >= 18
+    auto* ctx = llvm::PointerType::get(context, 0);
+#else
+    auto* ctx = llvm::Type::getInt8PtrTy(context);
+#endif
+    auto* entry = llvm::Function::Create(
+        llvm::FunctionType::get(i32, {ctx}, false),
+        llvm::Function::ExternalLinkage, "oreslang_socket_filter", module);
+    entry->setSection("socket");
+    entry->getArg(0)->setName("ctx");
+    llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", entry));
+    builder.CreateRet(llvm::ConstantInt::get(i32, static_cast<std::uint64_t>(fn.result->integer)));
+
+    // libbpf requires an ELF license section even when no GPL-only helpers exist.
+    auto* license_bytes = llvm::ConstantDataArray::getString(context, "GPL", true);
+    auto* license = new llvm::GlobalVariable(
+        module, license_bytes->getType(), true, llvm::GlobalValue::ExternalLinkage,
+        license_bytes, "license");
+    license->setSection("license");
+
+    std::string diagnostics;
+    llvm::raw_string_ostream errors(diagnostics);
+    if (llvm::verifyModule(module, &errors)) {
+        errors.flush();
+        throw std::runtime_error("invalid generated bpf module: " + diagnostics);
+    }
+    std::string output;
+    llvm::raw_string_ostream stream(output);
+    module.print(stream, nullptr);
+    stream.flush();
+    return output;
+}
+
 } // namespace oreslang

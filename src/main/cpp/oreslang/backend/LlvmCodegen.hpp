@@ -9,6 +9,10 @@ namespace oreslang {
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target = false,
                                   bool cortex_m_target = false);
 
+// Strict first-milestone BPF socket filter: one pub fnc socket_filter(): int
+// returning a literal in [0, 65535]; no guest runtime or host ABI.
+std::string emit_verified_bpf_socket_ir(const Program& source);
+
 // Opt-in scalar-only continuation IR; external host owns and pins frame storage.
 std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop);
 

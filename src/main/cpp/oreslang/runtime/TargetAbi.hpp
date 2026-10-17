@@ -29,9 +29,15 @@ public:
             return {"armv7-unknown-linux-gnueabihf", 32, "little", "aapcs32-hardfp", "unimplemented"};
         if (triple == "thumbv7m-none-eabi")
             return {"thumbv7m-none-eabi", 32, "little", "aapcs32-soft", "experimental-cortexm-scalar-ir"};
+        if (triple == "bpfel")
+            return {"bpfel", 64, "little", "bpf", "experimental-bpf-socket-ir"};
         if (triple == "wasm32-unknown-unknown")
             return {"wasm32-unknown-unknown", 32, "little", "wasm-c", "experimental-wasm32-ir"};
         throw std::invalid_argument("unsupported target triple");
+    }
+
+    bool experimental_bpf_socket_ir() const noexcept {
+        return emission_ == "experimental-bpf-socket-ir";
     }
 
     bool experimental_cortexm_ir() const noexcept {
