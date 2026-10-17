@@ -41,6 +41,16 @@ public:
     PinnedContinuationGate(const PinnedContinuationGate&) = delete;
     PinnedContinuationGate& operator=(const PinnedContinuationGate&) = delete;
 
+    /**
+     * Lifetime authority must be retired explicitly after broker quiescence,
+     * guest cleanup and loan release. Silently destroying a still-pinned gate
+     * would leak the external heap lease forever; releasing it here would be
+     * worse because callbacks/borrows may still exist. Fail closed instead.
+     */
+    ~PinnedContinuationGate() noexcept {
+        if (lifetime_heap_ != nullptr) std::abort();
+    }
+
     bool acquire(AsyncIoTicket ticket, Loan mode) noexcept {
         if (!valid(ticket) || terminal_.load(std::memory_order_acquire) != AsyncIoTerminal::pending)
             return false;
