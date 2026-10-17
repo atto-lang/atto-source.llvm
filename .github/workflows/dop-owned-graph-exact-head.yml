@@ -1,0 +1,59 @@
+name: DOP LLVM owned CPU graph exact-head
+
+on:
+  push:
+    branches:
+      - integration/dop-owned-cpu-execution-graph-20261016
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-host-graph:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['g++', 'clang++']
+        mode: ['release', 'sanitized']
+    steps:
+      - name: Checkout exact private source head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify source repository and exact commit
+        shell: bash
+        env:
+          EXPECTED: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test "$(git remote get-url origin | sed -E 's#^https://github.com/##; s#\.git$##')" = 'ores-truffle-oreslang/oreslang-source.llvm'
+      - name: Compile and execute actual host integration and graph headers
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          BUILD_MODE: ${{ matrix.mode }}
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          flags=(-std=c++20 -pthread -Isrc/main/cpp -Wall -Wextra -Wpedantic -Werror)
+          if [[ "$BUILD_MODE" == sanitized ]]; then
+            flags+=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
+          else
+            flags+=(-O2 -DNDEBUG)
+          fi
+          work_dir="$(mktemp -d)"
+          trap 'rm -rf "$work_dir"' EXIT
+          for test_name in dop_graph_cpu_integration_v1_test execution_graph_v1_test execution_graph_v1_admission_security_test dop_region_schedule_test dop_cpu_region_execution_test; do
+            "$CXX" "${flags[@]}" "tests/${test_name}.cpp" -o "$work_dir/${test_name}"
+            "$work_dir/${test_name}"
+          done
+          python3 tests/test_cpu_gpu_nb_admission.py
+          printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+          printf '%s\n' 'SCOPE=native CPU header and source-free classifier; full LLVM CMake/CTest, frontend compilation and GPU still unverified'
