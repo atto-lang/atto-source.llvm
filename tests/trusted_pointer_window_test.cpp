@@ -9,6 +9,7 @@
 #include <thread>
 
 using oreslang::runtime::ActorHeapIdentity;
+using oreslang::runtime::NativeRegionIdentity;
 using oreslang::runtime::TrustedPointerWindow;
 
 template<class F> void denied(F f) {
@@ -20,8 +21,14 @@ void require(bool ok) { if (!ok) throw std::runtime_error("pointer test failure"
 
 int main() {
     const ActorHeapIdentity actor{10, 20, 30}, other_actor{10, 21, 30}, stale_epoch{10, 20, 29};
+    const auto allocation = NativeRegionIdentity::supervisor_minted(7, 11, 13);
     alignas(std::uint64_t) std::array<std::uint32_t, 4> values{{11, 22, 33, 44}};
-    TrustedPointerWindow region(actor, values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
+    TrustedPointerWindow region(
+        actor, allocation, values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
+    require(region.region_identity() == allocation);
+    denied([&] { (void)NativeRegionIdentity::supervisor_minted(0, 11, 13); });
+    denied([&] { (void)NativeRegionIdentity::supervisor_minted(7, 0, 13); });
+    denied([&] { (void)NativeRegionIdentity::supervisor_minted(7, 11, 0); });
     auto p = region.at<std::uint32_t>(actor);
     require(p.load(actor) == 11);
     require(p.offset(actor, 2).load(actor) == 33);
@@ -57,7 +64,9 @@ int main() {
     denied([&] { p.store(actor, 1); });
     denied([&] { (void)p.offset(actor, 1); });
 
-    TrustedPointerWindow read_only(actor, values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadOnly);
+    TrustedPointerWindow read_only(
+        actor, NativeRegionIdentity::supervisor_minted(7, 11, 14),
+        values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadOnly);
     auto ro = read_only.at<std::uint32_t>(actor);
     require(ro.load(actor) == 11);
     denied([&] { ro.store(actor, 99); });
@@ -65,11 +74,17 @@ int main() {
     require(values[0] == 11);
 
     alignas(std::uint32_t) std::uint32_t device_register = 0;
-    TrustedPointerWindow mmio(actor, &device_register, sizeof(device_register), TrustedPointerWindow::Mode::MmioReadWrite);
+    TrustedPointerWindow mmio(
+        actor, NativeRegionIdentity::supervisor_minted(8, 1, 1),
+        &device_register, sizeof(device_register), TrustedPointerWindow::Mode::MmioReadWrite);
     auto reg = mmio.at<std::uint32_t>(actor);
     reg.store(actor, 42);
     require(reg.load(actor) == 42);
     denied([&] { reg.with_ffi_address(actor, [](std::uint32_t*) { return 42; }); });
-    denied([&] { (void)TrustedPointerWindow(actor, nullptr, 4, TrustedPointerWindow::Mode::ReadWrite); });
+    denied([&] {
+        (void)TrustedPointerWindow(
+            actor, NativeRegionIdentity::supervisor_minted(9, 1, 1),
+            nullptr, 4, TrustedPointerWindow::Mode::ReadWrite);
+    });
     std::cout << "trusted pointer region host-only assertions passed\n";
 }
