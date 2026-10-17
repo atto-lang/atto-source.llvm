@@ -14,6 +14,27 @@
 #include <thread>
 
 namespace oreslang::runtime {
+namespace detail {
+inline std::uint64_t claim_nonrecycling_carrier(
+        std::atomic<std::uint64_t>& next) {
+    auto candidate = next.load(std::memory_order_relaxed);
+    constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
+    while (candidate != 0 && candidate < limit) {
+        if (next.compare_exchange_weak(candidate, candidate + 1,
+                                       std::memory_order_relaxed,
+                                       std::memory_order_relaxed))
+            return candidate;
+    }
+    throw std::overflow_error("shared region carrier identity exhausted");
+}
+inline std::uint64_t current_carrier_identity() {
+    static std::atomic<std::uint64_t> next{1};
+    // std::thread::id may be reused after thread termination. Security
+    // authority must distinguish thread lifetimes even when that happens.
+    thread_local const std::uint64_t identity = claim_nonrecycling_carrier(next);
+    return identity;
+}
+} // namespace detail
 class SharedDomainArena final {
 public:
     static constexpr std::size_t Slots = 16;
@@ -26,12 +47,14 @@ public:
         friend class SharedDomainArena;
         SharedDomainArena* arena_;
         // A std::shared_mutex must be unlocked by the same thread that locked it.
-        std::thread::id owner_thread_;
+        // Use a non-recycling token rather than std::thread::id, which may be
+        // reused by a later thread lifetime after the original carrier exits.
+        std::uint64_t owner_carrier_;
         std::shared_lock<std::shared_mutex> read_;
         std::unique_lock<std::shared_mutex> write_;
         bool exclusive_;
         Lease(SharedDomainArena& arena, std::uint64_t actor, std::uint64_t incarnation, Grant grant, bool exclusive)
-            : arena_(&arena), owner_thread_(std::this_thread::get_id()), exclusive_(exclusive) {
+            : arena_(&arena), owner_carrier_(detail::current_carrier_identity()), exclusive_(exclusive) {
             if (!actor || !incarnation) throw std::logic_error("shared region actor incarnation required");
             // Actor carrier threads must not park behind another actor's
             // critical lease. Admission is fail-fast; the scheduler may
@@ -46,7 +69,7 @@ public:
             arena.validate_grant(grant, actor, incarnation, exclusive_);
         }
         void require_live(bool write = false) const {
-            if (!arena_ || owner_thread_ != std::this_thread::get_id() ||
+            if (!arena_ || owner_carrier_ != detail::current_carrier_identity() ||
                 arena_->closing_.load(std::memory_order_acquire) ||
                 (write && !exclusive_))
                 throw std::logic_error("shared region lease revoked or insufficient rights");
@@ -68,7 +91,7 @@ public:
         ~Lease() noexcept {
             // Destructing on a foreign carrier would unlock a shared_mutex
             // from the wrong thread (undefined behavior), so fail closed.
-            if (owner_thread_ != std::this_thread::get_id()) std::terminate();
+            if (owner_carrier_ != detail::current_carrier_identity()) std::terminate();
         }
         Handle allocate(std::size_t bytes) {
             require_live(true);
