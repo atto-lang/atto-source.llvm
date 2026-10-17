@@ -45,8 +45,9 @@ def main():
     required_param = (
         "BoolProbe.and_args", "BoolProbe.or_args", "BoolProbe.xor_args",
         "BoolProbe.builtin_and", "BoolProbe.builtin_or",
-        "BoolProbe.builtin_xor", "BoolProbe.forward",
-        "BoolProbe.named_forward", "BoolProbe.compose",
+        "BoolProbe.builtin_xor", "BoolProbe.qualified_and",
+        "BoolProbe.qualified_or", "BoolProbe.qualified_xor",
+        "BoolProbe.forward", "BoolProbe.named_forward", "BoolProbe.compose",
         "BoolProbe.builtin_and8", "BoolProbe.builtin_or8",
         "BoolProbe.left_bool", "BoolProbe.right_bool",
         "BoolProbe.lazy_and_call", "BoolProbe.lazy_or_call",
