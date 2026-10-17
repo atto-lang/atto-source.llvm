@@ -605,7 +605,17 @@ private:
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
-                std::string name = identifier();
+                // 'suspend' is a reserved declaration/control word, but it is
+                // also the canonical effect name in FunctionEffects. Admit it
+                // only in this effect-list position; generic identifier()
+                // must continue rejecting it everywhere else.
+                std::string name;
+                if (token_.text == "suspend") {
+                    name = token_.text;
+                    advance();
+                } else {
+                    name = identifier();
+                }
                 if (accept(".")) name += "." + identifier();
                 FunctionEffect effect;
                 try { effect = FunctionEffects::parse(name); }
