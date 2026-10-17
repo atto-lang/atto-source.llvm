@@ -195,6 +195,33 @@ int main() {
         check(budgeted.metadata_bytes() == 0,
               "STOP failed to release all route metadata");
 
+        // Direct reply must atomically replace its forward frame at the
+        // same tight metadata limit. Replay/forward of retired handles must
+        // be rejected, and completing the reply must release exactly its
+        // route-path charge without touching the live ingress frame.
+        ActorPipeRouteLedger direct_budget(stages(), edges(), 43, 8,
+                                            source_charge + worker_charge);
+        const auto direct_root = direct_budget.ingress("source");
+        const auto direct_child = direct_budget.forward_to(direct_root, "worker-a");
+        const auto direct_reply = direct_budget.reply(direct_child);
+        check(direct_reply->receiver() == "source" &&
+              direct_reply->returning() &&
+              direct_budget.outstanding() == 2 &&
+              direct_budget.metadata_bytes() <= source_charge + worker_charge,
+              "direct reply exceeded or leaked its replaced frame metadata");
+        rejected([&] { (void)direct_budget.reply(direct_child); },
+                 "retired forward frame replied twice under byte pressure");
+        rejected([&] { (void)direct_budget.forward(direct_reply); },
+                 "return frame reentered forward graph under byte pressure");
+        direct_budget.complete(direct_reply);
+        check(direct_budget.metadata_bytes() == source_charge &&
+              direct_budget.outstanding() == 1,
+              "direct reply retirement failed to refund path bytes");
+        direct_budget.complete(direct_root);
+        check(direct_budget.metadata_bytes() == 0 &&
+              direct_budget.outstanding() == 0,
+              "direct reply budget failed to return to zero");
+
         rejected([&] {
             ActorPipeRouteLedger invalid(stages(), edges(), 2, 5, 0);
         }, "zero route metadata budget accepted");
