@@ -1880,9 +1880,25 @@ private:
                 }
             }
         }
+        // A real source module named BooleanOps shadows the trusted qualified
+        // builtin namespace just like Java. The restricted native frontend has
+        // one wrapped source module, so publish qualified aliases only for that
+        // exact module after the whole function table is known.
+        if (program.module == "BooleanOps") {
+            for (const char* member : {"And", "Or", "Xor"}) {
+                const auto labels = functions.find(member);
+                if (labels != functions.end())
+                    functions.emplace(std::string("BooleanOps.") + member, labels->second);
+                const auto typed = typed_functions.find(member);
+                if (typed != typed_functions.end())
+                    typed_functions.emplace(std::string("BooleanOps.") + member, typed->second);
+            }
+        }
+
         // Resolve the pure bool call graph only after every source function
         // family is indexed. This preserves Java's rule that any user-defined
-        // And/Or/Xor family shadows the builtin intrinsic name.
+        // And/Or/Xor family shadows the builtin intrinsic name, including a
+        // real wrapped module named BooleanOps.
         for (const auto& fn : program.functions) {
             if (!fn.returns_bool || !fn.result ||
                     fn.result->kind == Expression::Kind::ModuleCall)
