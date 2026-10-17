@@ -9,7 +9,10 @@
 
 namespace oreslang::runtime {
 
-// Host-only authority registry. Never expose this object to guest source or FFI.
+// Host-only region bookkeeping, NOT an authentication boundary. The Trust
+// enum and actor identity are caller-supplied and forgeable by native code.
+// Only a supervisor-controlled admission path may invoke issue(). Never expose
+// this object, its issue() method, or raw Grant values to guest source or FFI.
 // The caller must keep mapped backing memory alive through revoke()/retire().
 class NativeRegionRegistry final {
 public:
@@ -51,7 +54,9 @@ public:
         auto window = std::make_shared<TrustedPointerWindow>(
             owner, provenance, base, bytes, mode);
         const Grant grant{next_slot_, provenance, owner};
-        entries_.emplace(grant.slot, Entry{grant, std::move(window), false});
+        const auto inserted = entries_.emplace(grant.slot, Entry{grant, std::move(window), false});
+        if (!inserted.second)
+            throw std::logic_error("native grant slot collision");
         ++next_slot_;
         ++next_generation_;
         return grant;
