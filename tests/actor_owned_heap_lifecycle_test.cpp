@@ -13,7 +13,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR, FORGED_EXTERNAL_LEASE };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR, FORGED_EXTERNAL_LEASE, FORGED_EXTERNAL_DOMAIN, EXTERNAL_AFTER_RETIRE };
 static void invalid_call(enum Misuse which) {
     OresActorSlot foreign_slot = {0, 0, 0};
     if (which == FOREIGN_SLOT) {
@@ -76,6 +76,13 @@ static void invalid_call(enum Misuse which) {
         OresActorExternalLease lease = ores_actor_i64_heap_external_acquire(heap, turn);
         ++lease.generation;
         ores_actor_i64_heap_external_release(heap, &lease);
+    } else if (which == FORGED_EXTERNAL_DOMAIN) {
+        OresActorExternalLease lease = ores_actor_i64_heap_external_acquire(heap, turn);
+        ++lease.domain;
+        ores_actor_i64_heap_external_release(heap, &lease);
+    } else if (which == EXTERNAL_AFTER_RETIRE) {
+        ores_actor_i64_heap_retire(heap);
+        (void) ores_actor_i64_heap_external_acquire(heap, turn);
     }
     /* None of these calls may finish normally. */
 }
@@ -202,6 +209,8 @@ int main(void) {
     CHECK(rejects(FOREIGN_CARRIER_TURN));
     CHECK(rejects(NESTED_CARRIER_ACTOR));
     CHECK(rejects(FORGED_EXTERNAL_LEASE));
+    CHECK(rejects(FORGED_EXTERNAL_DOMAIN));
+    CHECK(rejects(EXTERNAL_AFTER_RETIRE));
 #endif
     /* Domain authority must remain unique across repeated actor incarnation
      * creation/destruction. This exercises the saturating CAS issuance path
