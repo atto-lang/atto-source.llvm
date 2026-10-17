@@ -46,6 +46,18 @@ int main() {
         h=writer.allocate(sizeof(std::uint64_t));
         std::uint64_t x=0x1234567890abcdefull;
         writer.write(h, &x,sizeof(x));
+        // A trusted lease object may be referenced from another OS thread,
+        // but the lock-holding carrier is the only one authorized to use it.
+        std::atomic<bool> foreignReadDenied{false}, foreignWriteDenied{false};
+        std::thread foreignCarrier([&] {
+            std::uint64_t probe = 0;
+            try { writer.read(h, &probe, sizeof(probe)); }
+            catch (const std::logic_error&) { foreignReadDenied.store(true); }
+            try { writer.write(h, &probe, sizeof(probe)); }
+            catch (const std::logic_error&) { foreignWriteDenied.store(true); }
+        });
+        foreignCarrier.join();
+        require(foreignReadDenied.load() && foreignWriteDenied.load());
         reject([&] { writer.read(h, &x,sizeof(x)-1); });
         // Drop must physically scrub sensitive bytes before the slot can be reused,
         // not just revoke its generation. A new handle must see only zeros.

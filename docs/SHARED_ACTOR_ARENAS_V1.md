@@ -9,7 +9,7 @@ The conformance regression extends the native negative tests: a slot handle allo
 
 ## Shared-domain native substrate now on this draft
 
-`src/main/cpp/oreslang/runtime/SharedDomainArena.hpp` provides a separate bounded host-only arena for *explicitly shared* bytes, distinct from every SHARED actor's private `ActorArena`. Trusted supervisor code can issue per-actor read/write grants; each lease checks domain, actor identity **and incarnation**, rights and generation, and holds a C++ shared/exclusive lock until its lexical scope exits. Leases are **non-copyable and non-movable** so a moved-from lease cannot access memory after transferring its lock.
+`src/main/cpp/oreslang/runtime/SharedDomainArena.hpp` provides a separate bounded host-only arena for *explicitly shared* bytes, distinct from every SHARED actor's private `ActorArena`. Trusted supervisor code can issue per-actor read/write grants; each lease checks domain, actor identity **and incarnation**, rights and generation, and holds a C++ shared/exclusive lock until its lexical scope exits. Leases are **non-copyable, non-movable and physical-carrier-bound**; their operations check the admitting thread. The lock is never transferable to another carrier, and even a foreign-thread reference cannot read/write through it. Source lowering must still prevent leases from crossing suspension.
 
 Persistent shared-region slots are generation checked, bounded and zeroed on release. A CONTROL-owned `try_retire()` first seals admission, then returns false rather than blocking if any reader/writer lease still exists; only after quiescence does it zero and retire storage. Parent actor termination does not implicitly retire a still-leased shared domain.
 
