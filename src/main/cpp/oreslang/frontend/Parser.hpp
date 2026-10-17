@@ -185,6 +185,9 @@ struct ActorDecl {
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
+    // Source-level bound, not a host worker pool setting. Native runtime
+    // single-owner execution remains mandatory until per-turn state proof.
+    unsigned max_actor_threads = 1;
 };
 
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
