@@ -74,8 +74,8 @@ enum class PairStatus { DistinctArity, DistinctEnums, Same, InvalidSameArity };
 // bounds and canonical shape before any pairwise quadratic proof work.
 // Eligibility of enum IDs still requires the compiler's trusted registry.
 inline void validateSignatureShape(const Signature& value) {
-    if (value.name.empty())
-        throw std::invalid_argument("callable name cannot be empty");
+    if (value.name.empty() || value.name.find_first_not_of(' ') == std::string::npos)
+        throw std::invalid_argument("callable name cannot be empty or blank");
     if (value.arity() > MaxOverloadArity)
         throw std::invalid_argument("nominal enum overload arity bound exceeded");
     for (const Position& position : value.positions) {
