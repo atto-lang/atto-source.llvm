@@ -121,7 +121,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("@(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -202,37 +202,46 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (accept("define")) {
-            if (accept("serial")) {
-                require("actor");
-                fail("native serial actor requires shared HTTP/message lane lowering");
-            }
-            if (accept("module")) {
+        // Module prelude is special; all other top-level definitions (actors,
+        // functions, and the frozen MaxActorThreads enum) share the same loop.
+        if (token_.text == "define") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "module") {
+                require("define");
+                require("module");
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
-            } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
-                    require("actor");
-                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'module', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            if (accept("define")) {
+            if (accept("@")) {
+                const unsigned cap = actor_max_threads_attribute();
+                // One known compile-time policy, never inert metadata on a
+                // class, function, or arbitrary enum.
+                require("define");
+                require("actor");
+                auto actor = actor_declaration();
+                actor.max_actor_threads = cap;
+                program.actors.push_back(std::move(actor));
+            } else if (accept("define")) {
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
+                if (accept("enum")) {
+                    built_in_actor_threads_enum();
+                } else if (accept("class")) {
+                    program.classes.push_back(class_declaration());
+                } else if (accept("actor")) {
+                    program.actors.push_back(actor_declaration());
+                } else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'class' or 'actor'");
+                } else {
+                    fail("expected 'class', 'actor', or built-in MaxActorThreads enum");
+                }
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
@@ -254,6 +263,47 @@ public:
     }
 
 private:
+    /** The Oreslang built-in enum is frozen, not a general native enum AST.
+     * A typo, numeric redefinition, or duplicate definition is rejected
+     * before LLVM IR; no user enum shadowing of scheduler admission is legal.
+     */
+    void built_in_actor_threads_enum() {
+        if (actor_threads_enum_seen_)
+            fail("duplicate MaxActorThreads enum definition");
+        require("MaxActorThreads");
+        require("as");
+        constexpr std::string_view tiers[] = {"LOW", "MEDIUM", "HIGH"};
+        constexpr std::string_view numbers[] = {"1", "2", "3"};
+        for (std::size_t i = 0; i < 3; ++i) {
+            require(tiers[i]);
+            require("int");
+            require("=");
+            if (token_.kind != Kind::Integer || token_.text != numbers[i])
+                fail("MaxActorThreads backing value must be the canonical integer");
+            advance();
+            accept(";");
+        }
+        require("end");
+        actor_threads_enum_seen_ = true;
+    }
+
+    unsigned actor_max_threads_attribute() {
+        require("ActorMaxThreads");
+        require("(");
+        require("MaxActorThreads");
+        require(".");
+        unsigned level = 0;
+        if (accept("LOW")) level = 1;
+        else if (accept("MEDIUM")) level = 2;
+        else if (accept("HIGH")) level = 3;
+        else fail("@ActorMaxThreads requires MaxActorThreads.LOW/MEDIUM/HIGH");
+        require(")");
+        if (level > 1) {
+            fail("@ActorMaxThreads(MEDIUM/HIGH) requires compiler-proven per-turn"
+                 " actor state isolation; source parallel actors are not enabled");
+        }
+        return level;
+    }
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -1827,6 +1877,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    bool actor_threads_enum_seen_ = false;
 };
 
 } // namespace
