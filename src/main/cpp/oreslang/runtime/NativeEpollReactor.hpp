@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <fcntl.h>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -88,6 +89,12 @@ public:
     std::optional<Ticket> try_watch(int fd, std::uint32_t events) noexcept {
         if (fd < 0 || !valid_events(events) || closed_.load(std::memory_order_acquire))
             return std::nullopt;
+        // epoll readiness does not make the consumer's subsequent read/write
+        // nonblocking. Reject blocking descriptors at admission, rather than
+        // silently letting a guest continuation park a CONTROL/actor carrier.
+        // This metadata check neither transfers ownership nor calls guest code.
+        const int flags = ::fcntl(fd, F_GETFL);
+        if (flags < 0 || (flags & O_NONBLOCK) == 0) return std::nullopt;
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         if (!guard.owns_lock() || !started_ || closed_.load(std::memory_order_relaxed))
             return std::nullopt;
