@@ -22,7 +22,8 @@ public:
 private:
     struct Entry {
         Grant grant;
-        std::unique_ptr<TrustedPointerWindow> window;
+        std::shared_ptr<TrustedPointerWindow> window;
+        bool retiring = false;
     };
     std::mutex mu_;
     std::unordered_map<std::uint64_t, Entry> entries_;
@@ -47,10 +48,10 @@ public:
         // Do not consume identity on failed validation/allocation.
         const auto provenance = NativeRegionIdentity::supervisor_minted(
             region, next_generation_, allocation);
-        auto window = std::make_unique<TrustedPointerWindow>(
+        auto window = std::make_shared<TrustedPointerWindow>(
             owner, provenance, base, bytes, mode);
         const Grant grant{next_slot_, provenance, owner};
-        entries_.emplace(grant.slot, Entry{grant, std::move(window)});
+        entries_.emplace(grant.slot, Entry{grant, std::move(window), false});
         ++next_slot_;
         ++next_generation_;
         return grant;
@@ -58,21 +59,46 @@ public:
 
     template<class T> typename TrustedPointerWindow::template Cursor<T>
     at(const Grant& grant, ActorHeapIdentity caller, std::size_t offset = 0) {
-        std::lock_guard<std::mutex> lock(mu_);
-        auto it = entries_.find(grant.slot);
-        if (it == entries_.end() || it->second.grant.provenance != grant.provenance ||
-            it->second.grant.owner != grant.owner || caller != grant.owner)
-            throw std::logic_error("invalid or foreign native grant");
-        return it->second.window->at<T>(caller, offset);
+        std::shared_ptr<TrustedPointerWindow> window;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = entries_.find(grant.slot);
+            if (it == entries_.end() || it->second.retiring ||
+                it->second.grant.provenance != grant.provenance ||
+                it->second.grant.owner != grant.owner || caller != grant.owner)
+                throw std::logic_error("invalid, retiring or foreign native grant");
+            window = it->second.window;
+        }
+        // Never hold the registry mutex while waiting on the FFI window lock:
+        // an FFI callback can call the registry on its own thread.
+        return window->at<T>(caller, offset);
     }
 
     void revoke(const Grant& grant) {
+        std::shared_ptr<TrustedPointerWindow> window;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            auto it = entries_.find(grant.slot);
+            if (it == entries_.end() || it->second.retiring ||
+                it->second.grant.provenance != grant.provenance ||
+                it->second.grant.owner != grant.owner)
+                throw std::logic_error("invalid or already retiring native grant");
+            it->second.retiring = true;
+            window = it->second.window;
+        }
+        // Call without mu_: otherwise callback -> registry plus external
+        // revoke -> window creates a mutex-order inversion / deadlock.
+        const bool quiesced = window->revoke();
         std::lock_guard<std::mutex> lock(mu_);
         auto it = entries_.find(grant.slot);
-        if (it == entries_.end() || it->second.grant.provenance != grant.provenance ||
-            it->second.grant.owner != grant.owner)
-            throw std::logic_error("invalid native grant revocation");
-        it->second.window->revoke();
+        if (it == entries_.end() || it->second.window != window)
+            throw std::logic_error("native grant changed during revocation");
+        if (!quiesced) {
+            // Reentrant FFI must not allow the caller to unmap memory while the
+            // callback still holds its raw address. Keep the grant for retry.
+            it->second.retiring = false;
+            throw std::logic_error("native FFI callback still holds region; retry revoke after return");
+        }
         entries_.erase(it);
     }
 };
