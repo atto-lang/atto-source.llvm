@@ -100,6 +100,12 @@ public:
     }
 
     bool try_cancel(Watch watch) noexcept {
+        // Match registration and completion's manager-level retirement fence.
+        // A cancellation must never overtake stop() and turn a pending
+        // shutdown completion into a spurious successful cancellation.
+        // The try-lock does not park an actor or deadline-sensitive carrier.
+        std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
+        if (!gate.owns_lock() || stopped_) return false;
         const auto count = started_.load(std::memory_order_acquire);
         if (watch.reactor >= count) return false;
         return reactors_[watch.reactor]->try_cancel(watch.ticket);
