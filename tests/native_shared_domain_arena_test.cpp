@@ -9,6 +9,7 @@
 #include <thread>
 #include <type_traits>
 #include <iostream>
+#include <new>
 #include <string_view>
 using oreslang::runtime::SharedDomainArena;
 void require(bool cond) { if (!cond) throw std::runtime_error("shared domain test failed"); }
@@ -42,6 +43,24 @@ int main() {
     static_assert(!std::is_aggregate_v<SharedDomainArena::Handle>);
     static_assert(!std::is_constructible_v<SharedDomainArena::Handle,
         std::uint64_t, std::uint64_t, std::size_t>);
+
+    // A stale CONTROL capability must not regain authority if allocator/stack
+    // reuse places a later arena at the exact same address.
+    {
+        alignas(SharedDomainArena) std::byte storage[sizeof(SharedDomainArena)];
+        auto* first = ::new (static_cast<void*>(storage)) SharedDomainArena();
+        auto staleControl = first->take_control();
+        require(first->try_retire(staleControl));
+        first->~SharedDomainArena();
+
+        auto* second = ::new (static_cast<void*>(storage)) SharedDomainArena();
+        auto currentControl = second->take_control();
+        reject([&] { (void)second->grant(staleControl, 999, 1, true, false); });
+        auto currentGrant = second->grant(currentControl, 999, 1, true, false);
+        require(second->try_revoke(currentControl, currentGrant));
+        require(second->try_retire(currentControl));
+        second->~SharedDomainArena();
+    }
     // Domain IDs must remain unique across concurrent arena construction.
     // This exercises the real header allocator, not a synthetic copy.
     {
