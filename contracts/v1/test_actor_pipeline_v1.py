@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small self-contained negative fixture gate for the routing v1 verifier."""
+"""Mutation tests for the shared actor-pipeline verification gate."""
 import copy
 import json
 import pathlib
@@ -7,62 +7,94 @@ import subprocess
 import sys
 import tempfile
 
-HERE = pathlib.Path(__file__).resolve().parent
 
-def verify(data):
-    with tempfile.TemporaryDirectory(prefix="actor-v1-") as folder:
-        fixture = pathlib.Path(folder) / "fixture.json"
+def run(verifier: pathlib.Path, data: dict):
+    with tempfile.TemporaryDirectory(prefix="ores-v1-contract-") as temp:
+        fixture = pathlib.Path(temp) / "routing.json"
         fixture.write_text(json.dumps(data, ensure_ascii=True), encoding="utf-8")
-        return subprocess.run(
-            [sys.executable, str(HERE / "verify_actor_pipeline_v1.py"), str(fixture)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
-            check=False
-        ).returncode == 0
+        return subprocess.run([sys.executable, str(verifier), str(fixture)],
+                              text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=10)
+
+
+def run_raw(verifier: pathlib.Path, contents: str):
+    with tempfile.TemporaryDirectory(prefix="ores-v1-json-") as temp:
+        fixture = pathlib.Path(temp) / "routing.json"
+        fixture.write_text(contents, encoding="utf-8")
+        return subprocess.run([sys.executable, str(verifier), str(fixture)],
+                              text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=10)
+
 
 def main():
-    original = json.loads((HERE / "actor-pipeline-routing-v1.json").read_text(encoding="utf-8"))
-    if not verify(original):
-        raise AssertionError("canonical fixture rejected")
-    def check(label, fn):
-        changed = copy.deepcopy(original)
-        fn(changed)
-        if verify(changed):
-            raise AssertionError("invalid routing contract accepted: " + label)
-    check("duplicate actor", lambda x: x["graph"]["stages"][2].update(id="worker-a"))
-    check("mismatched payload", lambda x: x["graph"]["connections"][0].update(payload="Wrong"))
-    check("wrong key affinity", lambda x: x["operations"]["by_key"][0].update(target="worker-b"))
-    check("wrong FNV digest", lambda x: x["operations"]["by_key"][0].update(fnv1a64_hex="0"*16))
-    check("missing NUL golden key", lambda x: x["operations"]["by_key"].pop())
-    check("NUL instance", lambda x: x["graph"]["stages"][1].update(id="bad" + chr(0)))
-    check("invalid UTF-8 scalar", lambda x: x["operations"]["by_key"][3].update(key=chr(0xd800)))
-    check("oversize key", lambda x: x["operations"]["by_key"][0].update(key="k"*4097))
-    check("transform with no actual outgoing edge",
-          lambda x: x["graph"]["stages"][1].update(role="transform", outbound="Event"))
-    check("unknown destination", lambda x: x["graph"]["connections"][0].update(target="missing"))
-    check("wrong RR order", lambda x: x["operations"]["forward_round_robin"].reverse())
-    check("altered schema", lambda x: x.update(schema="unknown"))
-    check("wrong default forward", lambda x: x["operations"]["forward"].update(error="route-first"))
-    check("changed named destination", lambda x: x["operations"]["forward_to"].update(target="missing"))
-    check("invalid target made valid", lambda x: x["operations"]["invalid_target"].update(target="worker-a"))
-    check("duplicate directed edge", lambda x: x["graph"]["connections"].append(
-        copy.deepcopy(x["graph"]["connections"][0])))
-    check("invalid supervisor role", lambda x: x["graph"]["stages"][1].update(role="supervisor"))
-    check("oversized graph identifier", lambda x: x["graph"]["stages"][1].update(id="🌍"*65))
-    check("isolated extra actor", lambda x: x["graph"]["stages"].append(
-        {"id":"orphan","actor_type":"T","role":"readable","inbound":"","outbound":"Event"}))
-    check("graph stage quota exceeded", lambda x: x["graph"]["stages"].extend(
-        copy.deepcopy(x["graph"]["stages"][0]) for _ in range(1022)))
-    check("graph edge quota exceeded", lambda x: x["graph"]["connections"].extend(
-        copy.deepcopy(x["graph"]["connections"][0]) for _ in range(4094)))
-    def cycle(x):
-        for i in (1, 2):
-            x["graph"]["stages"][i].update(role="transform", outbound="Event")
-        x["graph"]["connections"].extend([
-            {"source":"worker-a","target":"worker-b","payload":"Event"},
-            {"source":"worker-b","target":"worker-a","payload":"Event"}])
-    check("cyclic transform edges", cycle)
-    check("invalid self edge", lambda x: x["graph"]["connections"][0].update(target="producer-1"))
-    print("ORES_ACTOR_PIPELINE_CONTRACT_NEGATIVE_PASS cases=23")
+    root = pathlib.Path(__file__).resolve().parent
+    verifier = root / "verify_actor_pipeline_v1.py"
+    original = json.loads((root / "actor-pipeline-routing-v1.json").read_text())
+    if run(verifier, original).returncode != 0:
+        raise AssertionError("canonical routing fixture fails the baseline validator")
+    samples = []
+    def mutation(name, apply):
+        altered = copy.deepcopy(original)
+        apply(altered)
+        samples.append((name, altered))
+
+    mutation("altered schema", lambda d: d.update(schema="unknown"))
+    mutation("missing NUL golden vector", lambda d: d["operations"]["by_key"].pop())
+    mutation("forged key destination", lambda d: d["operations"]["by_key"][0].update(target="worker-b"))
+    mutation("forged FNV hash", lambda d: d["operations"]["by_key"][1].update(fnv1a64_hex="0"*16))
+    mutation("oversized routing key", lambda d: d["operations"]["by_key"][0].update(key="x"*4097))
+    mutation("invalid Unicode key", lambda d: d["operations"]["by_key"][3].update(key="\ud800"))
+    mutation("altered RR sequence", lambda d: d["operations"]["forward_round_robin"].reverse())
+    mutation("unknown supposedly connected target", lambda d: d["operations"]["forward_to"].update(target="other"))
+    mutation("invalid target suddenly connected", lambda d: d["operations"]["invalid_target"].update(target="worker-a"))
+    mutation("silent default forward", lambda d: d["operations"]["forward"].update(error="choose first"))
+    mutation("duplicate worker instance", lambda d: d["graph"]["stages"][2].update(id="worker-a"))
+    mutation("NUL actor instance", lambda d: d["graph"]["stages"][1].update(id="worker\0x"))
+    mutation("overlong UTF-8 instance", lambda d: d["graph"]["stages"][1].update(id="🌍"*65))
+    mutation("invalid supervisor actor role", lambda d: d["graph"]["stages"][1].update(role="supervisor"))
+    mutation("terminal transform with no outbound connection",
+             lambda d: d["graph"]["stages"][1].update(
+                 role="transform", outbound="Event"))
+    def add_cycle(d):
+        for index in (1, 2):
+            d["graph"]["stages"][index].update(role="transform", outbound="Event")
+        d["graph"]["connections"].extend([
+            {"source": "worker-a", "target": "worker-b", "payload": "Event"},
+            {"source": "worker-b", "target": "worker-a", "payload": "Event"}])
+    mutation("genuine transform cycle", add_cycle)
+    mutation("nominal payload mismatch", lambda d: d["graph"]["connections"][0].update(payload="Wrong"))
+    mutation("duplicate endpoint pair", lambda d: d["graph"]["connections"].append(copy.deepcopy(d["graph"]["connections"][0])))
+    mutation("unknown destination", lambda d: d["graph"]["connections"][0].update(target="unknown"))
+    mutation("self edge", lambda d: d["graph"]["connections"][0].update(target="producer-1"))
+    mutation("isolated extra actor", lambda d: d["graph"]["stages"].append(dict(id="orphan",actor_type="T",role="readable",inbound="",outbound="Event")))
+    mutation("vertex quota exceeded", lambda d: d["graph"]["stages"].extend(copy.deepcopy(d["graph"]["stages"][0]) for _ in range(1022)))
+    mutation("edge quota exceeded", lambda d: d["graph"]["connections"].extend(copy.deepcopy(d["graph"]["connections"][0]) for _ in range(4094)))
+    # Raw JSON tests: regular dict/json.dumps cannot represent duplicate
+    # keys. Each of these parses successfully with json.loads defaults and
+    # would otherwise be accepted as the canonical fixture.
+    raw = json.dumps(original, ensure_ascii=True)
+    malformed_json = [
+        ("duplicate top-level schema key",
+         '{"schema":"ignored",' + raw[1:]),
+        ("duplicate nested target key",
+         raw.replace('"target": "worker-a"',
+                     '"target":"worker-z","target": "worker-a"', 1)),
+        ("nonfinite extension",
+         '{"untrusted_extension":NaN,' + raw[1:]),
+    ]
+    failures = []
+    for name, contents in malformed_json:
+        if run_raw(verifier, contents).returncode == 0:
+            failures.append(name)
+    for name, case in samples:
+        result = run(verifier, case)
+        if result.returncode == 0:
+            failures.append(name)
+    if failures:
+        print("Unsafe fixtures ACCEPTED:", failures, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"ORES_ACTOR_PIPELINE_CONTRACT_MUTATION_PASS rejected={len(samples) + len(malformed_json)}")
+
 
 if __name__ == "__main__":
     main()
