@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "quantum", "over", "structural", "int", "any", "unknown", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -121,7 +121,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;?+-*/%=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -579,6 +579,9 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
+                if (token_.text == "any" || token_.text == "unknown") {
+                    fail("native opaque top type requires tagged value ABI, runtime type descriptors and ownership-preserving lowering");
+                }
                 if (!accept("int")) {
                     const std::string type = identifier();
                     const bool generic = std::any_of(value.generic_parameters.begin(),
@@ -594,6 +597,9 @@ private:
         }
         require(":");
         value.returns_void = accept("void");
+        if (!value.returns_void && (token_.text == "any" || token_.text == "unknown")) {
+            fail("native opaque top type requires tagged value ABI, runtime type descriptors and ownership-preserving lowering");
+        }
         if (!value.returns_void && !accept("int")) {
             const std::string type = identifier();
             const bool generic = std::any_of(value.generic_parameters.begin(),
@@ -701,6 +707,9 @@ private:
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        if (token_.text == "any" || token_.text == "unknown") {
+                            fail("native opaque top type requires tagged value ABI, runtime type descriptors and ownership-preserving lowering");
+                        }
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
@@ -1145,7 +1154,13 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return additive(); }
+    std::unique_ptr<Expression> expression() {
+        auto value = additive();
+        if (token_.text == "?") {
+            fail("native ternary expression requires typed bool conditions and branch-merge lowering before LLVM IR");
+        }
+        return value;
+    }
 
     std::unique_ptr<Expression> additive() {
         auto left = product();
