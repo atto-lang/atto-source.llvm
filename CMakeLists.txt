@@ -1424,6 +1424,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # Trusted host-only shared-region capability and read/write lease prototype.
+    add_executable(oreslang-native-shared-domain-arena-test
+        tests/native_shared_domain_arena_test.cpp)
+    target_include_directories(oreslang-native-shared-domain-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-shared-domain-arena-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-shared-domain-arena-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shared-domain-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_shared_domain_arena_leases
+        COMMAND oreslang-native-shared-domain-arena-test)
+    set_tests_properties(native_shared_domain_arena_leases PROPERTIES TIMEOUT 25)
+
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
