@@ -137,36 +137,48 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    unsigned char packet[64] = {0};
-    unsigned char packet_out[128] = {0};
-    struct bpf_test_run_opts options;
-    memset(&options, 0, sizeof(options));
-    options.sz = sizeof(options);
-    options.data_in = packet;
-    options.data_size_in = sizeof(packet);
-    options.data_out = packet_out;
-    options.data_size_out = sizeof(packet_out);
-    options.repeat = 8;
+    unsigned char packet[2048];
+    unsigned char packet_out[2048];
+    memset(packet, 0xa5, sizeof(packet));
+    const unsigned int packet_sizes[] = {64, 1500};
+    unsigned int final_retval = 0;
+    unsigned int final_duration = 0;
 
-    if (bpf_prog_test_run_opts(bpf_program__fd(only), &options)) {
-        fprintf(stderr, "BPF_PROG_RUN failed: %s\n", strerror(errno));
-        bpf_object__close(object);
-        return 1;
-    }
-    if ((int)options.retval != expected) {
-        fprintf(stderr, "XDP return %u != expected %d\n", options.retval, expected);
-        bpf_object__close(object);
-        return 1;
-    }
-    if (options.data_size_out > sizeof(packet_out)) {
-        fprintf(stderr, "BPF_PROG_RUN reported impossible output size %u\n",
-                options.data_size_out);
-        bpf_object__close(object);
-        return 1;
+    for (size_t i = 0; i < sizeof(packet_sizes) / sizeof(packet_sizes[0]); ++i) {
+        memset(packet_out, 0, sizeof(packet_out));
+        struct bpf_test_run_opts options;
+        memset(&options, 0, sizeof(options));
+        options.sz = sizeof(options);
+        options.data_in = packet;
+        options.data_size_in = packet_sizes[i];
+        options.data_out = packet_out;
+        options.data_size_out = sizeof(packet_out);
+        options.repeat = 8;
+
+        if (bpf_prog_test_run_opts(bpf_program__fd(only), &options)) {
+            fprintf(stderr, "BPF_PROG_RUN failed for packet size %u: %s\n",
+                    packet_sizes[i], strerror(errno));
+            bpf_object__close(object);
+            return 1;
+        }
+        if ((int)options.retval != expected) {
+            fprintf(stderr, "XDP return %u != expected %d for packet size %u\n",
+                    options.retval, expected, packet_sizes[i]);
+            bpf_object__close(object);
+            return 1;
+        }
+        if (options.data_size_out > sizeof(packet_out)) {
+            fprintf(stderr, "BPF_PROG_RUN reported impossible output size %u\n",
+                    options.data_size_out);
+            bpf_object__close(object);
+            return 1;
+        }
+        final_retval = options.retval;
+        final_duration = options.duration;
     }
 
-    printf("BPF_XDP_KERNEL_PASS verifier=accepted action=%u duration_ns=%u\n",
-           options.retval, options.duration);
+    printf("BPF_XDP_KERNEL_PASS verifier=accepted action=%u packet_sizes=64,1500 repeat=8 duration_ns=%u\n",
+           final_retval, final_duration);
     bpf_object__close(object);
     return 0;
 }
