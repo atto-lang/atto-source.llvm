@@ -136,7 +136,12 @@ typedef void (*OresNativeVMNioDestroy)(void* opaque_backend);
 int ores_native_vm_nio_can_attach(OresNativeVM* vm);
 int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
                               OresNativeVMNioDestroy destroy);
-void* ores_native_vm_nio_backend(OresNativeVM* vm);
+/* Nonblocking trusted-host pin. Every successful acquisition requires one
+ * release, including when VM retirement begins during an operation.
+ * External callers must fence new API entry before freeing the VM object.
+ */
+void* ores_native_vm_nio_acquire(OresNativeVM* vm);
+void ores_native_vm_nio_release(OresNativeVM* vm, void* backend);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call
