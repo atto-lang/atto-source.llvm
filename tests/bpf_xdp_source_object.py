@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Experimental eBPF XDP: fail-closed .ores source to real BPF ELF object."""
 import argparse
+import hashlib
 import pathlib
 import re
 import shutil
@@ -33,20 +34,31 @@ def main():
         src = root / "probe.ores"
         cmd = [args.compiler, "--target=bpfel", "--bpf-program=xdp", str(src)]
 
-        def reject(code, fragment="ebpf"):
-            src.write_text(code, encoding="utf-8")
+        def reject_bytes(payload, fragment=None):
+            src.write_bytes(payload)
             proc = run(cmd)
             require(proc.returncode != 0 and proc.stdout == "",
-                    "unsafe eBPF source admitted: " + repr(code[:140]))
-            require(fragment in proc.stderr.lower(),
-                    "unexpected eBPF rejection diagnostic: " + proc.stderr)
+                    "unsafe eBPF source admitted: " + repr(payload[:140]))
+            if fragment is not None:
+                require(fragment in proc.stderr.lower(),
+                        "unexpected eBPF rejection diagnostic: " + proc.stderr)
+            return proc
 
+        def reject(code, fragment="ebpf"):
+            return reject_bytes(code.encode("utf-8"), fragment)
+
+        observed_ir = {}
+        observed_obj = {}
         for action in range(4):
-            src.write_text("pub fnc ores_xdp(): int { return %d; }\n" % action,
-                           encoding="utf-8")
+            source_text = "pub fnc ores_xdp(): int { return %d; }\n" % action
+            src.write_text(source_text, encoding="utf-8")
             result = run(cmd)
             require(result.returncode == 0, result.stderr)
             ir = result.stdout
+            second = run(cmd)
+            require(second.returncode == 0 and second.stdout == ir,
+                    "same source did not produce deterministic LLVM IR")
+            observed_ir[action] = ir
             require('target triple = "bpfel"' in ir, "wrong eBPF target triple")
             require('target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"' in ir,
                     "wrong eBPF data layout")
@@ -63,6 +75,15 @@ def main():
                             str(irfile), "-o", str(objfile)])
             require(compiled.returncode == 0, "real BPF backend unavailable: " + compiled.stderr)
             elf = objfile.read_bytes()
+            objfile2 = root / "program-second.o"
+            compiled2 = run([clang, "--target=bpfel", "-O2", "-x", "ir", "-c",
+                             str(irfile), "-o", str(objfile2)])
+            require(compiled2.returncode == 0, compiled2.stderr)
+            elf2 = objfile2.read_bytes()
+            require(elf2 == elf,
+                    "same IR did not produce deterministic BPF object: %s != %s" %
+                    (hashlib.sha256(elf).hexdigest(), hashlib.sha256(elf2).hexdigest()))
+            observed_obj[action] = elf
             require(len(elf) >= 64 and elf[:4] == b"\x7fELF" and elf[4:6] == b"\x02\x01",
                     "BPF result not ELF64 little-endian")
             require(int.from_bytes(elf[18:20], "little") == 247,
@@ -72,16 +93,28 @@ def main():
                     re.search(r"\s+xdp\s+", sections.stdout) and
                     re.search(r"\s+license\s+", sections.stdout),
                     "missing real ELF XDP/license sections")
-            require(".maps" not in sections.stdout and ".BTF" not in sections.stdout,
+            require(".maps" not in sections.stdout and ".BTF" not in sections.stdout and
+                    ".BTF.ext" not in sections.stdout,
                     "stage-0 object unexpectedly contains maps or BTF metadata")
+            require(len(re.findall(r"\s+xdp\s+", sections.stdout)) == 1,
+                    "stage-0 object must contain exactly one xdp section")
+            require(len(re.findall(r"\s+license\s+", sections.stdout)) == 1,
+                    "stage-0 object must contain exactly one license section")
             symbols = run([readelf, "-W", "-s", str(objfile)])
             require(symbols.returncode == 0, symbols.stderr)
             undefined = []
+            named_globals = []
             for line in symbols.stdout.splitlines():
                 cols = line.split()
                 if len(cols) >= 8 and cols[6] == "UND" and cols[7]:
                     undefined.append(cols[7])
+                if len(cols) >= 8 and cols[4] == "GLOBAL" and cols[7]:
+                    named_globals.append(cols[7])
             require(not undefined, "stage-0 BPF object has undefined symbols: " + repr(undefined))
+            require("ores_xdp" in named_globals,
+                    "stage-0 object missing global ores_xdp symbol")
+            require(all(name in ("ores_xdp", "_license") for name in named_globals),
+                    "unexpected global BPF symbols: " + repr(named_globals))
             reloc = run([readelf, "-W", "-r", str(objfile)])
             require(reloc.returncode == 0 and "There are no relocations in this file." in reloc.stdout,
                     "stage-0 BPF object unexpectedly requires relocations")
@@ -89,8 +122,36 @@ def main():
             compact = re.sub(r"[^0-9a-f]", "", license_dump.stdout.lower())
             require(license_dump.returncode == 0 and "50726f707269657461727900" in compact,
                     "stage-0 license marker is not Proprietary\\0")
+            objdump = shutil.which("llvm-objdump")
+            if objdump:
+                dis = run([objdump, "-d", str(objfile)])
+                require(dis.returncode == 0, dis.stderr)
+                lower = dis.stdout.lower()
+                require("call" not in lower,
+                        "stage-0 BPF object unexpectedly contains helper/subprogram call")
+                require("exit" in lower,
+                        "stage-0 BPF object missing exit instruction")
             if args.output_dir:
                 shutil.copyfile(objfile, args.output_dir / ("xdp-%d.o" % action))
+
+        # Admission boundary: exactly 4096 bytes is permitted, 4097 is rejected
+        # before parsing. Padding is a trailing source comment.
+        base = b"pub fnc ores_xdp(): int { return 2; }\n"
+        exact = base + b"//" + (b"x" * (4096 - len(base) - 3)) + b"\n"
+        require(len(exact) == 4096, "test bug: exact BPF boundary is not 4096 bytes")
+        src.write_bytes(exact)
+        boundary = run(cmd)
+        require(boundary.returncode == 0 and 'target triple = "bpfel"' in boundary.stdout,
+                "exact 4096-byte BPF source was not admitted: " + boundary.stderr)
+        reject_bytes(exact + b"x", "source exceeds")
+
+        # Native source reader/UTF-8 validation must fail before the parser and
+        # must never leak partial LLVM IR.
+        reject_bytes(base[:-1] + b"\x00\n", "nul byte")
+        reject_bytes(base + b"//\xc0\xaf\n", "valid utf-8")
+        reject_bytes(base + b"//\xed\xa0\x80\n", "valid utf-8")
+        reject_bytes(base + b"//\xf4\x90\x80\x80\n", "valid utf-8")
+        reject_bytes(base + b"//\xe2\x82", "valid utf-8")
 
         reject("pub fnc main(): int { return 2; }")
         reject("fnc ores_xdp(): int { return 2; }")
@@ -102,20 +163,36 @@ def main():
         reject("pub fnc ores_xdp(): int { return 2; }\nfnc helper(): int { return 1; }")
         reject("pub fnc ores_xdp(): int { val v: int = 2; return v; }")
         reject("pub fnc ores_xdp(): int { return ores_xdp(); }")
-        reject("pub fnc ores_xdp(): int { return 2; }\n" + "// extra\n" * 600,
+        reject("pub fnc ores_xdp<T>(): int { return 2; }", None)
+        reject("pub fnc ores_xdp(): void { return; }", None)
+        reject("pub fnc ores_xdp(): int { if (true) { return 2; } return 1; }", None)
+        reject("pub fnc ores_xdp(): int { return (2); }", None)
+        reject("// ores:target=bpfel\npub fnc ores_xdp(): int { return 2; }",
+               "environment headers")
+        reject("pub fnc ores_xdp(): int { return 2; }\n" + ("// extra\n" * 2000),
                "source exceeds")
         src.write_text("pub fnc ores_xdp(): int { return 2; }\n", encoding="utf-8")
+        for good_flags in (["--target=bpfel", "--bpf-program=xdp"],
+                           ["--bpf-program=xdp", "--target=bpfel"],
+                           ["--no-core-log", "--target=bpfel", "--bpf-program=xdp"],
+                           ["--target=bpfel", "--core-log-level=off", "--bpf-program=xdp"]):
+            good = run([args.compiler, *good_flags, str(src)])
+            require(good.returncode == 0 and 'target triple = "bpfel"' in good.stdout,
+                    "valid BPF CLI ordering failed: " + repr(good_flags) + " " + good.stderr)
+
         for flags in (["--target=bpfel", "--target=bpfel", "--bpf-program=xdp"],
                       ["--target=bpfel", "--bpf-program=xdp", "--bpf-program=xdp"],
                       ["--target=bpfel", "--experimental-owned-int", "--bpf-program=xdp"],
                       ["--target=bpfel"],
                       ["--bpf-program=xdp"],
                       ["--target=bpfel", "--bpf-program=socket"],
-                      ["--target=bpfeb", "--bpf-program=xdp"]):
+                      ["--target=bpfel", "--bpf-program="],
+                      ["--target=bpfeb", "--bpf-program=xdp"],
+                      ["--target=bpfel", "--bpf-program=xdp", "--cpu=v3"]):
             proc = run([args.compiler, *flags, str(src)])
             require(proc.returncode != 0 and not proc.stdout,
                     "invalid BPF CLI option accepted: " + repr(flags))
-    print("eBPF XDP object/triple/section/actions and fail-closed admission PASS; kernel verifier not tested")
+    print("eBPF XDP admission/bounds/UTF8/determinism/ELF/symbol/relocation/action gates PASS; kernel verifier separate")
 
 
 if __name__ == "__main__":
