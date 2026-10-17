@@ -209,26 +209,98 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
         release(*it, locals);
 }
 
-void check_pure_bool_tree(const Expression& expr) {
-    if (expr.kind == Expression::Kind::Boolean) {
-        if ((expr.integer != 0 && expr.integer != 1) ||
-                !expr.name.empty() || expr.left || expr.right ||
-                !expr.arguments.empty() || !expr.argument_names.empty())
-            reject(expr, "unverified native bool literal AST");
-        return;
+bool boolean_intrinsic_name(std::string_view name) {
+    return name == "And" || name == "Or" || name == "Xor";
+}
+
+void check_bool_value(
+        const Expression& expr,
+        const std::unordered_set<std::string>& bool_parameters,
+        const Functions& functions,
+        const std::unordered_set<std::string>& shadowed_intrinsics) {
+    switch (expr.kind) {
+        case Expression::Kind::Boolean:
+            if ((expr.integer != 0 && expr.integer != 1) ||
+                    !expr.name.empty() || expr.left || expr.right ||
+                    !expr.arguments.empty() || !expr.argument_names.empty())
+                reject(expr, "unverified native bool literal AST");
+            return;
+        case Expression::Kind::Variable:
+            if (!expr.left && !expr.right && expr.arguments.empty() &&
+                    expr.argument_names.empty() &&
+                    bool_parameters.count(expr.name) != 0)
+                return;
+            reject(expr, "native bool expression requires a bool parameter");
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
+            if (!expr.left || !expr.right || expr.integer != 0 ||
+                    !expr.name.empty() || !expr.arguments.empty() ||
+                    !expr.argument_names.empty())
+                reject(expr, "unverified native logical bool AST");
+            check_bool_value(*expr.left, bool_parameters, functions, shadowed_intrinsics);
+            check_bool_value(*expr.right, bool_parameters, functions, shadowed_intrinsics);
+            return;
+        case Expression::Kind::Call: {
+            const bool intrinsic =
+                boolean_intrinsic_name(expr.name) &&
+                shadowed_intrinsics.count(expr.name) == 0;
+            if (intrinsic) {
+                if (!expr.argument_names.empty() &&
+                        std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
+                            [](const std::string& label) { return !label.empty(); }))
+                    reject(expr, "native Boolean intrinsics do not accept named arguments");
+                if (expr.name == "Xor" && expr.arguments.size() != 2)
+                    reject(expr, "native Xor expects exactly two scalar bool arguments");
+                if (expr.name != "Xor" && expr.arguments.size() < 2)
+                    reject(expr, "native And/Or aggregate reducers are unsupported");
+                for (const auto& argument : expr.arguments)
+                    check_bool_value(
+                        *argument, bool_parameters, functions, shadowed_intrinsics);
+                return;
+            }
+            const auto found =
+                functions.find(native_function_slot(expr.name, expr.arguments.size()));
+            if (found == functions.end() || !found->second->returns_bool)
+                reject(expr, "native bool expression requires a bool-returning function");
+            const Function* target = found->second;
+            for (const auto& param : target->parameters)
+                if (!param.boolean || param.mode != Mode::Value ||
+                        !param.class_name.empty())
+                    reject(expr, "native bool calls require by-value bool parameters");
+            if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
+                reject(expr, "invalid named bool call argument layout");
+            std::vector<bool> bound(target->parameters.size(), false);
+            std::size_t positional = 0;
+            bool named_seen = false;
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                const std::string label = expr.argument_names.empty()
+                    ? std::string{} : expr.argument_names[i];
+                std::size_t slot = positional;
+                if (!label.empty()) {
+                    named_seen = true;
+                    slot = 0;
+                    while (slot < target->parameters.size() &&
+                            target->parameters[slot].name != label) ++slot;
+                    if (slot == target->parameters.size())
+                        reject(expr, "unknown named bool argument '" + label + "'");
+                } else {
+                    if (named_seen)
+                        reject(expr, "positional bool argument after named argument");
+                    ++positional;
+                }
+                if (slot >= bound.size() || bound[slot])
+                    reject(expr, "duplicate bool parameter binding");
+                bound[slot] = true;
+                check_bool_value(
+                    *expr.arguments[i], bool_parameters, functions, shadowed_intrinsics);
+            }
+            return;
+        }
+        default:
+            reject(expr, "native bool result contains non-bool value or effect");
     }
-    if (expr.kind == Expression::Kind::LogicalAnd ||
-            expr.kind == Expression::Kind::LogicalOr ||
-            expr.kind == Expression::Kind::LogicalXor) {
-        if (!expr.left || !expr.right || expr.integer != 0 ||
-                !expr.name.empty() || !expr.arguments.empty() ||
-                !expr.argument_names.empty())
-            reject(expr, "unverified native logical bool AST");
-        check_pure_bool_tree(*expr.left);
-        check_pure_bool_tree(*expr.right);
-        return;
-    }
-    reject(expr, "native bool result contains non-bool value or effect");
 }
 
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
@@ -434,8 +506,12 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 
 void validate_i64_ownership(const Program& program) {
     Functions functions;
-    for (const auto& function : program.functions)
+    std::unordered_set<std::string> shadowed_intrinsics;
+    for (const auto& function : program.functions) {
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
+        if (boolean_intrinsic_name(function.name))
+            shadowed_intrinsics.insert(function.name);
+    }
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;
@@ -451,8 +527,36 @@ void validate_i64_ownership(const Program& program) {
         class_finals.emplace(cls.name, std::move(finals));
     }
     for (const auto& function : program.functions) {
+        if (function.returns_bool && function.result &&
+                function.result->kind != Expression::Kind::ModuleCall) {
+            if (!function.locals.empty() || !function.statements.empty() ||
+                    !function.early_returns.empty() || !function.actor_spawns.empty() ||
+                    !function.actor_actions.empty() || !function.actor_sends.empty() ||
+                    !function.actor_stops.empty() || !function.actor_field_writes.empty() ||
+                    function.caught_throw_value || !function.caught_throw_defers.empty() ||
+                    !function.catch_binding.empty() || function.scalar_while ||
+                    function.has_declared_effects || function.declared_effects.bits != 0)
+                throw std::runtime_error(
+                    "native bool ownership admission requires a pure expression body");
+            std::unordered_set<std::string> bool_parameters;
+            for (const auto& param : function.parameters) {
+                if (!param.boolean || param.mode != Mode::Value ||
+                        !param.class_name.empty())
+                    throw std::runtime_error(
+                        "native bool ownership admission requires by-value bool parameters");
+                if (!bool_parameters.insert(param.name).second)
+                    throw std::runtime_error("duplicate native bool parameter");
+            }
+            check_bool_value(
+                *function.result, bool_parameters, functions, shadowed_intrinsics);
+            continue;
+        }
+
         Locals locals;
         for (const auto& param : function.parameters) {
+            if (param.boolean)
+                throw std::runtime_error(
+                    "native bool parameters cannot enter i64 ownership lowering");
             if (!param.class_name.empty()) {
                 if (!class_fields.count(param.class_name))
                     throw std::runtime_error("unknown parameter class '" + param.class_name + "'");
@@ -732,10 +836,6 @@ void validate_i64_ownership(const Program& program) {
                 // validate argument ownership here; LLVM emission still rejects
                 // imports until source-owned typed linking exists.
                 check_value(*function.result, locals, functions);
-            } else if (function.returns_bool) {
-                // Closed logical i1 trees carry no owner, loan, heap or drop
-                // state. Validate crafted ASTs here as well as in the parser.
-                check_pure_bool_tree(*function.result);
             } else if (function.caught_throw_value) {
                 check_caught_throw_scalar_read(*function.result, locals, functions);
             } else {
