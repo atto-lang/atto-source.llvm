@@ -11,6 +11,8 @@
 #include <iostream>
 #include <string_view>
 using oreslang::runtime::SharedDomainArena;
+using oreslang::runtime::detail::claim_nonrecycling_carrier;
+using oreslang::runtime::detail::current_carrier_identity;
 void require(bool cond) { if (!cond) throw std::runtime_error("shared domain test failed"); }
 // Only busy admission is retryable; ownership, revocation and invalid handles
 // must fail permanently rather than being swallowed by the contention loop.
@@ -31,6 +33,31 @@ template<typename F> void reject(F&& f) {
 }
 int main() {
     static_assert(!std::is_move_constructible_v<SharedDomainArena::Lease>);
+
+    // Carrier identity is a non-recycling process-lifetime token, not the
+    // implementation's reusable std::thread::id. Sequential thread creation
+    // intentionally maximizes the chance that native thread IDs are recycled.
+    require(current_carrier_identity() == current_carrier_identity());
+    constexpr std::size_t CarrierThreads = 512;
+    std::array<std::uint64_t, CarrierThreads> carrierIds{};
+    for (std::size_t i = 0; i < CarrierThreads; ++i) {
+        std::thread carrier([&, i] {
+            carrierIds[i] = current_carrier_identity();
+        });
+        carrier.join();
+    }
+    auto sortedCarrierIds = carrierIds;
+    std::sort(sortedCarrierIds.begin(), sortedCarrierIds.end());
+    require(sortedCarrierIds.front() != 0);
+    require(std::adjacent_find(sortedCarrierIds.begin(), sortedCarrierIds.end()) ==
+            sortedCarrierIds.end());
+
+    constexpr auto maxCarrier = std::numeric_limits<std::uint64_t>::max();
+    std::atomic<std::uint64_t> nearCarrierEnd{maxCarrier - 1};
+    require(claim_nonrecycling_carrier(nearCarrierEnd) == maxCarrier - 1);
+    require(nearCarrierEnd.load() == maxCarrier);
+    reject([&] { (void)claim_nonrecycling_carrier(nearCarrierEnd); });
+    require(nearCarrierEnd.load() == maxCarrier);
     // Domain IDs must remain unique across concurrent arena construction.
     // This exercises the real header allocator, not a synthetic copy.
     {
