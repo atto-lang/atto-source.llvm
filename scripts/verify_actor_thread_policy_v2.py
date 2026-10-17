@@ -1,84 +1,142 @@
 #!/usr/bin/env python3
-"""Finite model for proposed v2 bounded physical actor execution grants.
+"""Bounded, incarnation-fenced physical actor-grant model (not production proof).
 
-Host-only contract model, not a proof of Java or LLVM scheduler refinement.
-It deliberately models physical permits, generation fencing and teardown,
-not actor-state ownership/effect correctness or mailbox sequencing.
+A grant is minted once per physical segment, including a continuation resuming
+on the same carrier. Never mistake a carrier identity for a lease identity.
+This intentionally does not prove logical ordering or actor-state safety.
 """
 from collections import deque
 from dataclasses import dataclass
 
 WORKERS = range(4)
-LAST_GENERATION = 3
+MAX_SERIAL = 5
+MAX_GENERATION = 2
+
+
+@dataclass(frozen=True, order=True)
+class Grant:
+    generation: int
+    serial: int
+    owner: int
+
 
 @dataclass(frozen=True)
 class State:
     generation: int
-    holders: frozenset[tuple[int, int]]
-    closing: bool
+    next_serial: int
+    holders: frozenset[Grant]
+    stopping: bool
 
 
-def claim(state: State, worker: int, cap: int, *, enforce_cap=True) -> State | None:
-    identity = (state.generation, worker)
-    if state.closing or identity in state.holders:
+def claim(s: State, owner: int, capacity: int, *, check_capacity=True) -> tuple[State, Grant] | None:
+    if owner not in WORKERS or s.stopping or s.next_serial > MAX_SERIAL:
         return None
-    if enforce_cap and len(state.holders) >= cap:
+    if any(g.owner == owner for g in s.holders):
         return None
-    return State(state.generation, state.holders | {identity}, state.closing)
+    if check_capacity and len(s.holders) >= capacity:
+        return None
+    ticket = Grant(s.generation, s.next_serial, owner)
+    return State(s.generation, s.next_serial + 1, s.holders | {ticket}, False), ticket
 
 
-def release(state: State, owner_generation: int, worker: int) -> State:
-    identity = (owner_generation, worker)
-    # Foreign or retired-generation releases cannot affect current permits.
-    if owner_generation != state.generation or identity not in state.holders:
-        return state
-    return State(state.generation, state.holders - {identity}, state.closing)
+def release(s: State, ticket: Grant, releasing_owner: int) -> State:
+    # Generation, nonce, and executing owner must ALL match. A previous turn
+    # on this same physical worker has no authority over its next turn.
+    if ticket.generation != s.generation or ticket.owner != releasing_owner:
+        return s
+    if ticket not in s.holders:
+        return s
+    return State(s.generation, s.next_serial, s.holders - {ticket}, s.stopping)
 
 
-def edges(state: State, cap: int, *, enforce_cap=True):
-    for worker in WORKERS:
-        next_state = claim(state, worker, cap, enforce_cap=enforce_cap)
-        if next_state is not None:
-            yield f"claim({worker})", next_state
-    for generation, worker in state.holders:
-        yield f"release({generation},{worker})", release(state, generation, worker)
-    if not state.closing:
-        yield "stop", State(state.generation, state.holders, True)
-    if state.closing and not state.holders and state.generation < LAST_GENERATION:
-        yield "restart", State(state.generation + 1, frozenset(), False)
+def stop(s: State) -> State:
+    return State(s.generation, s.next_serial, s.holders, True)
 
 
-def explore(cap: int, *, enforce_cap=True):
-    initial = State(1, frozenset(), False)
-    pending = deque([(initial, ())])
+def restart(s: State) -> State | None:
+    if not s.stopping or s.holders or s.generation == MAX_GENERATION:
+        return None
+    return State(s.generation + 1, 1, frozenset(), False)
+
+
+def successors(s: State, capacity: int, check_capacity: bool):
+    for owner in WORKERS:
+        next_claim = claim(s, owner, capacity, check_capacity=check_capacity)
+        if next_claim is not None:
+            yield f'claim({owner})', next_claim[0]
+    for g in s.holders:
+        yield f'release({g.serial})', release(s, g, g.owner)
+    if not s.stopping:
+        yield 'stop', stop(s)
+    next_gen = restart(s)
+    if next_gen is not None:
+        yield 'restart', next_gen
+
+
+def check_invariants(s: State, capacity: int) -> None:
+    assert len(s.holders) <= capacity, 'physical cap exceeded'
+    assert len({g.owner for g in s.holders}) == len(s.holders), 'owner double-admitted'
+    assert len({g.serial for g in s.holders}) == len(s.holders), 'grant nonce reused'
+    assert all(g.generation == s.generation and 1 <= g.serial < s.next_serial
+               for g in s.holders), 'stale or invalid grant executing'
+
+
+def explore(capacity: int, *, check_capacity=True) -> tuple[int, tuple[str, ...] | None]:
+    initial = State(1, 1, frozenset(), False)
+    todo = deque([(initial, ())])
     seen = {initial}
-    while pending:
-        state, trace = pending.popleft()
-        if len(state.holders) > cap:
+    while todo:
+        state, trace = todo.popleft()
+        try:
+            check_invariants(state, capacity)
+        except AssertionError:
             return len(seen), trace
-        if state.generation > 1 and release(state, state.generation - 1, 0) != state:
-            raise AssertionError("stale owner release changed current generation")
-        for action, successor in edges(state, cap, enforce_cap=enforce_cap):
+        for action, successor in successors(state, capacity, check_capacity):
             if successor not in seen:
                 seen.add(successor)
-                pending.append((successor, trace + (action,)))
+                todo.append((successor, trace + (action,)))
     return len(seen), None
+
+
+def targeted_regressions():
+    original = State(1, 1, frozenset(), False)
+    admitted, old = claim(original, 0, 1)
+    assert claim(admitted, 0, 3) is None, 'nested owner acquired second slot'
+    freed = release(admitted, old, 0)
+    replacement, fresh = claim(freed, 0, 1)
+    assert old != fresh
+    assert release(replacement, old, 0) == replacement, 'same-carrier stale ticket ABA'
+    assert release(replacement, fresh, 1) == replacement, 'wrong carrier released ticket'
+    assert release(replacement, Grant(9, fresh.serial, fresh.owner), 0) == replacement
+    stopped = stop(replacement)
+    assert claim(stopped, 1, 3) is None, 'post-stop admission allowed'
+    assert restart(stopped) is None, 'retired while active grant exists'
+    terminal = release(stopped, fresh, 0)
+    successor = restart(terminal)
+    assert successor is not None and successor.generation == 2
+    assert release(successor, fresh, 0) == successor, 'prior incarnation ticket accepted'
+    assert claim(successor, 0, 1) is not None, 'new incarnation admission unavailable'
+    # A mutant treating only carrier equality as authority would erroneously
+    # remove `fresh` when asked to release `old`.
+    carrier_only_release = State(replacement.generation, replacement.next_serial,
+                                 frozenset(), replacement.stopping)
+    assert carrier_only_release != release(replacement, old, 0), 'ABA mutation undetected'
 
 
 def main():
     if not __debug__:
-        raise RuntimeError("contract checks cannot run with Python assertions disabled")
+        raise RuntimeError('actor contract checks require Python assertions')
+    targeted_regressions()
+    print('PASS targeted ABA, carrier, stop, restart, and generation fencing')
     for cap in (1, 2, 3):
-        states, violation = explore(cap)
-        if violation is not None:
-            raise AssertionError(f"cap {cap} violated: {violation}")
-        print(f"PASS v2 abstract cap {cap}: {states} reachable states")
-    states, violation = explore(3, enforce_cap=False)
-    if violation is None:
-        raise AssertionError("mutation removing slot capacity guard was not detected")
-    print(f"PASS guard-removal mutation: over-cap reached in {len(violation)} steps")
-    print("LIMIT: abstract model only; actor field ownership and production scheduler are unverified")
+        count, trace = explore(cap)
+        assert trace is None, (cap, trace)
+        print(f'PASS bounded physical admission cap={cap}: {count} states')
+    _, mutation = explore(3, check_capacity=False)
+    assert mutation is not None and len(mutation) >= 4, 'removed admission guard not detected'
+    print(f'PASS capacity-guard mutation detected after {len(mutation)} transitions')
+    print('LIMIT: abstract physical protocol only; no state effect / real scheduler proof')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
