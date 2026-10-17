@@ -103,6 +103,38 @@ static void must_abort(int which) {
                 int64_t key = 0, out = 0;
                 (void)oreslang_i64_map_entry_at(&map, 0, &key, &out);
             }
+            else if (which == 14) {
+                union {
+                    OresNativeI64MapRegion region;
+                    OresNativeI64MapEntry entries[2];
+                } overlap;
+                oreslang_i64_map_init(&overlap.region, overlap.entries, 2);
+            }
+            else if (which == 15) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                (void)oreslang_i64_map_get(&map, 1, (int64_t*)&map.size);
+            }
+            else if (which == 16) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                (void)oreslang_i64_map_get(&map, 1, &storage[0].value);
+            }
+            else if (which == 17) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                int64_t output = 0;
+                (void)oreslang_i64_map_entry_at(&map, 0, &output, &output);
+            }
+            else if (which == 18) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                int64_t output = 0;
+                (void)oreslang_i64_map_entry_at(
+                    &map, 0, &storage[0].key, &output);
+            }
+            else if (which == 19) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                int64_t key = 0;
+                (void)oreslang_i64_map_entry_at(
+                    &map, 0, &key, (int64_t*)&map.size);
+            }
             else abort();
         }
         _exit(0);
@@ -116,7 +148,7 @@ static void must_abort(int which) {
 int main(void) {
     positives();
 #if defined(__unix__) || defined(__APPLE__)
-    for (int i = 0; i <= 13; ++i) must_abort(i);
+    for (int i = 0; i <= 19; ++i) must_abort(i);
 #endif
     return 0;
 }
