@@ -18,6 +18,30 @@ static void check(bool condition, const char* message) {
 
 // Isolate fatal-contract tests: the heap ABI must fail closed, not silently
 // allow writes to immutable fields or through a suspended shared loan.
+static void expect_unretired_frame_abort() {
+    const pid_t child = fork();
+    check(child >= 0, "fork failed");
+    if (child == 0) {
+        struct rlimit limit = {0, 0};
+        (void) setrlimit(RLIMIT_CORE, &limit);
+        const std::uint64_t actor = 900001;
+        OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 1);
+        const OresActorTurn turn = ores_actor_i64_heap_enter(heap, actor, 1);
+        {
+            const AsyncIoTicket ticket{actor, 1, 1};
+            PinnedContinuationGate frame(ticket, heap, turn);
+            ores_actor_i64_heap_leave(heap, turn);
+            // Scope exit MUST abort because frame lifetime authority was never
+            // quiesced and explicitly retired.
+        }
+        _exit(0);
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child, "waitpid failed");
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "unretired pinned continuation did not fail closed");
+}
+
 static void expect_field_write_abort(OresActorI64Heap* heap,
                                      std::uint64_t actor, std::uint64_t index) {
     const pid_t child = fork();
@@ -36,6 +60,7 @@ static void expect_field_write_abort(OresActorI64Heap* heap,
 }
 
 int main() {
+    expect_unretired_frame_abort();
     for (std::uint64_t round = 1; round <= 128; ++round) {
         const std::uint64_t actor = round + 400;
         OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 2);
