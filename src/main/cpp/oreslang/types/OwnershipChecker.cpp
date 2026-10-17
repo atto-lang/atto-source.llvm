@@ -328,6 +328,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             reject(expr, "Proxy<T> is an opaque capability and cannot be used as an int expression");
         case Expression::Kind::ProxyField:
             reject(expr, "native Proxy<T> critical-read lowering is pending");
+        case Expression::Kind::ProxyMethodCall:
+            reject(expr, "native Proxy<T> critical-write lowering is pending");
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "borrowed reference may only be passed to a borrowed parameter");
@@ -359,6 +361,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Take:
         case Expression::Kind::Proxy:
         case Expression::Kind::ProxyField:
+        case Expression::Kind::ProxyMethodCall:
         case Expression::Kind::Call:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
@@ -796,6 +799,9 @@ void validate_i64_ownership(const Program& program) {
             }
             if (expr.kind == Expression::Kind::ProxyField) {
                 reject(expr, "native Proxy<T> critical-read lowering is pending");
+            }
+            if (expr.kind == Expression::Kind::ProxyMethodCall) {
+                reject(expr, "native Proxy<T> critical-write lowering is pending");
             }
             if (expr.kind == Expression::Kind::Field) {
                 if (expr.left && expr.left->kind == Expression::Kind::Field &&
