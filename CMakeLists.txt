@@ -1875,6 +1875,22 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 10)
 endif()
 
+# Strict BPF socket target: source -> verified IR -> real EM_BPF ELF.
+# A separate privileged CI job checks the actual Linux verifier/test-run.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_BPF_CLANG NAMES clang-18 clang-19 clang-17 clang-16 clang-15 clang-14 clang)
+    if(NOT ORE_BPF_CLANG)
+        set(ORE_BPF_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-bpf-clang")
+    endif()
+    add_test(NAME bpf_socket_source_to_elf_and_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/bpf_socket_source_object.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_BPF_CLANG}")
+    set_tests_properties(bpf_socket_source_to_elf_and_failclosed PROPERTIES TIMEOUT 120)
+endif()
+
 # Freestanding Cortex-M target: actual Oreslang source -> LLVM IR -> ARM object.
 # This is not Zephyr/QEMU firmware evidence; the embedded platform owns that.
 if(BUILD_TESTING)

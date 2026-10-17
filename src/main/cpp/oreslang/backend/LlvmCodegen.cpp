@@ -1535,7 +1535,7 @@ std::string emit_verified_bpf_socket_ir(const Program& source) {
 #endif
     auto* entry = llvm::Function::Create(
         llvm::FunctionType::get(i32, {ctx}, false),
-        llvm::Function::ExternalLinkage, "oreslang_socket_filter", module);
+        llvm::Function::ExternalLinkage, "ores_bpf_socket", module);
     entry->setSection("socket");
     entry->getArg(0)->setName("ctx");
     llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", entry));
