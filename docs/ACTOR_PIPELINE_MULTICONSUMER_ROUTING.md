@@ -223,7 +223,7 @@ route selections. The production DAG validator, actual native transport,
 full repository CTest and compiled guest actor code were **not executed**
 by that isolated test and remain release blockers.
 
-## ## Canonical keyed correlation parity (2026-10-16)
+## Canonical keyed correlation parity (2026-10-16)
 
 The native `ActorPipeRouteLedger::forward_by_key` now selects a child
 correlation frame using the **same** `actor_pipe_key_slot` helper called by
@@ -329,3 +329,24 @@ preserve one failure receipt per fan-out destination under byte pressure.
 
 
 ##
+
+## Integration reconciliation: reader credits and correlation memory (2026-10-17)
+
+The native transport separately caps pending readers graph-wide (default 65,536;
+configurable 1..65,536), alongside edge-local reader bounds and buffered
+byte/message quotas. Direct write handoff refunds one reader credit; STOP
+fails queued read Futures and refunds credits. After an injected pending-writer
+promotion failure, new writes may not bypass older queued writers.
+
+The correlation ledger owns active immutable route frames until completion,
+generation abort, or STOP, preventing dangling-handle/ABA identity reuse.
+In addition to its 65,536-frame count limit it charges frame/path metadata
+against a configurable 64 MiB maximum graph-wide budget. This conservative
+accounting includes frame and path storage, but not all heap allocations.
+forward_all preflights full-batch metadata charges before committing frames.
+backward and direct reply replace a frame transactionally, without losing
+the original on quota or allocation failure. Completion, abort and STOP
+refund credits. Regression tests cover quotas, fan-in identity and races.
+
+These host guarantees do not establish source-compiled guest self.*
+availability or exact-revision native CI certification.
