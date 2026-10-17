@@ -89,7 +89,9 @@ public:
         void drop(Handle h) {
             require_live(true);
             auto& s = slot(h);
-            s.data.fill(std::byte{0});
+            // Security-sensitive drop must not be optimized away as a dead store.
+            // The final destructor uses the same volatile scrub primitive.
+            SharedDomainArena::scrub(s.data);
             s.length = 0;
             s.live = false;
             s.generation = s.generation == std::numeric_limits<std::uint64_t>::max()
