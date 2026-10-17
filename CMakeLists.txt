@@ -821,6 +821,19 @@ if(BUILD_TESTING)
         native-rt-proxy-double-consume-reject.ores
         --diagnostic "rt proxy consumed owner is no longer usable")
 
+    oreslang_contract_test(native_rt_proxy_critical_read_pending
+        native-rt-proxy-critical-read-pending.ores
+        --diagnostic "native Proxy<T> critical-read lowering is pending")
+    oreslang_contract_test(native_rt_proxy_critical_write_pending
+        native-rt-proxy-critical-write-pending.ores
+        --diagnostic "native Proxy<T> critical-write lowering is pending")
+    oreslang_contract_test(native_rt_proxy_return_escape_reject
+        native-rt-proxy-return-escape-reject.ores
+        --diagnostic "Proxy<T> capability cannot escape through a scalar return")
+    oreslang_contract_test(native_rt_proxy_call_escape_reject
+        native-rt-proxy-call-escape-reject.ores
+        --diagnostic "Proxy<T> capability cannot escape through a scalar return")
+
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
     # Source await/select/Futures still fail closed pending pinned-frame lowering.
