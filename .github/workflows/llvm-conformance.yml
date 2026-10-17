@@ -70,10 +70,10 @@ jobs:
             --backend llvm \
             --compiler "$(realpath build/oreslang-llvmc)" \
             --clang "$(command -v clang)" \
-            --source-sha "${{ github.sha }}" \
+            --source-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
             --report build/ai-conformance-llvm.json
       - name: Check compiled native results and diagnostic semantics
-        run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "${{ github.sha }}" --report build/semantics-llvm.json
+        run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "${{ github.event.pull_request.head.sha || github.sha }}" --report build/semantics-llvm.json
       - name: Verify seeded native metamorphic arithmetic
         run: |
           python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 32 --seed 20261008 --report build/metamorphic-llvm.json
