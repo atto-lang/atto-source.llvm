@@ -155,6 +155,10 @@ public:
         // during the callback. Runtime revocation waits for callback completion.
         template<class F> auto with_ffi_address(ActorHeapIdentity actor, F&& f) const
             -> decltype(f(static_cast<T*>(nullptr))) {
+            using Return = decltype(f(static_cast<T*>(nullptr)));
+            static_assert(std::is_void<Return>::value || std::is_integral<Return>::value ||
+                          std::is_enum<Return>::value,
+                          "unsafe FFI must return void or a scalar status, not an escaped pointer/reference");
             return inspect(actor, true, false, [&](State& s) {
                 if (mmio(s.mode))
                     throw std::logic_error("MMIO address cannot escape into ordinary FFI");
