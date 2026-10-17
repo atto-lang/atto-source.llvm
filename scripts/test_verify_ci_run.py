@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Source-free GitHub run proof regressions for five backends and three Rx variants."""
 import copy
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
 import importlib.util
 from pathlib import Path
 import unittest
@@ -71,6 +77,26 @@ class RunContract(unittest.TestCase):
 
     def rejected(self):
         with self.assertRaises(module.Denied):
+            self.validate()
+
+    def test_disguised_runner_housekeeping_cannot_count_as_execution(self):
+        for disguised in (" ", "\t", "  Set up job ", "set UP job",
+                          " POST Checkout", "pre Setup", " Complete job "):
+            with self.subTest(step=disguised):
+                self.assertFalse(module.executable_step_name(disguised))
+        self.assertTrue(module.executable_step_name("Prepare build"))
+        self.assertTrue(module.executable_step_name("Execute test suite"))
+
+    def test_whitespace_only_job_name_denied_with_real_test_step(self):
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        self.values[page]["jobs"][0]["name"] = " \t "
+        with self.assertRaisesRegex(module.Denied, "missing workflow job name"):
+            self.validate()
+
+    def test_whitespace_only_step_name_denied_despite_real_test_step(self):
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        self.values[page]["jobs"][0]["steps"][0]["name"] = "  \t  "
+        with self.assertRaisesRegex(module.Denied, "no name"):
             self.validate()
 
 
@@ -170,6 +196,36 @@ class RunContract(unittest.TestCase):
                         self.tree, self.run_id, ["unit"],
                         ["Execute test suite"], workflow_id=1)
         self.assertEqual(seen[0], 2)
+
+    def test_final_run_repository_id_denies_float_equivalent(self):
+        run_path = self.prefix + "/actions/runs/17"
+        reads = [0]
+        def tamper_final(resource):
+            data = copy.deepcopy(self.values[resource])
+            if resource == run_path:
+                reads[0] += 1
+                if reads[0] == 2:
+                    data["repository"]["id"] = float(self.repo_id)
+            return data
+        with self.assertRaisesRegex(module.Denied, "changed during evidence"):
+            self.verify(tamper_final, self.backend, self.commit, self.tree,
+                        self.run_id, ["unit"], ["Execute test suite"])
+        self.assertEqual(reads[0], 2)
+
+    def test_final_head_repository_id_denies_float_equivalent(self):
+        run_path = self.prefix + "/actions/runs/17"
+        reads = [0]
+        def tamper_final(resource):
+            data = copy.deepcopy(self.values[resource])
+            if resource == run_path:
+                reads[0] += 1
+                if reads[0] == 2:
+                    data["head_repository"]["id"] = float(self.repo_id)
+            return data
+        with self.assertRaisesRegex(module.Denied, "changed during evidence"):
+            self.verify(tamper_final, self.backend, self.commit, self.tree,
+                        self.run_id, ["unit"], ["Execute test suite"])
+        self.assertEqual(reads[0], 2)
 
     def test_run_changed_during_collection_denied(self):
         run_path = self.prefix + "/actions/runs/17"
@@ -675,11 +731,176 @@ class RunContract(unittest.TestCase):
         with self.assertRaises(module.Denied):
             self.verify(self.fetch,self.backend,self.commit,self.tree,True,["unit"],["Execute test suite"])
 
+    def test_overlapping_step_timestamps_cannot_prove_execution(self):
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        steps = self.values[page]["jobs"][0]["steps"]
+        for index, bad_start in ((1, "2026-10-16T10:00:30Z"),
+                                 (2, "2026-10-16T10:01:30Z")):
+            with self.subTest(step=index):
+                original = steps[index]["started_at"]
+                steps[index]["started_at"] = bad_start
+                try:
+                    with self.assertRaisesRegex(module.Denied, "overlap|execution order"):
+                        self.validate()
+                finally:
+                    steps[index]["started_at"] = original
+
+    def test_adjacent_equal_step_timestamps_allowed(self):
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        steps = self.values[page]["jobs"][0]["steps"]
+        steps[1]["started_at"] = steps[0]["completed_at"]
+        steps[2]["started_at"] = steps[1]["completed_at"]
+        self.assertEqual(self.validate()["verified_jobs"], 1)
+
     def test_negative_or_uppercase_sha(self):
         for sha in ("A"*40,"zz"*20,"a"*39):
             with self.subTest(sha=sha):
                 with self.assertRaises(module.Denied):
                     self.verify(self.fetch,self.backend,sha,self.tree,self.run_id,["unit"],["Execute test suite"])
+
+
+
+class StrictApiJSONContract(unittest.TestCase):
+    """API transport must not silently reinterpret ambiguous run metadata."""
+
+    def test_canonical_github_object_is_accepted(self):
+        data = module._strict_api_json(
+            b'{"id":17,"repository":{"id":1400792274},"ok":true}')
+        self.assertEqual(data["repository"]["id"], 1400792274)
+        self.assertIs(data["ok"], True)
+
+    def test_duplicate_keys_rejected_even_in_nested_metadata(self):
+        for raw in (
+            b'{"id":17,"id":18}',
+            b'{"repository":{"id":1,"id":2}}',
+            b'{"repository":{"owner":{"login":"a","login":"b"}}}',
+        ):
+            with self.subTest(raw=raw):
+                with self.assertRaisesRegex(module.Denied, "duplicate"):
+                    module._strict_api_json(raw)
+
+    def test_nonstandard_and_nonfinite_json_denied(self):
+        for raw in (
+            b'{"id":NaN}', b'{"id":Infinity}', b'{"id":-Infinity}',
+            b'{"id":1e999}', b'{"id":-1e999}',
+            b'{"id":' + b"9" * 65 + b"}",
+            b'{"id":1.' + b"1" * 130 + b"}",
+            b'{"id":+1}', b'{"id":01}', b'{"id":1} trailing',
+        ):
+            with self.subTest(raw=raw[:80]):
+                with self.assertRaises(module.Denied):
+                    module._strict_api_json(raw)
+
+    def test_input_shape_encoding_and_size_denied(self):
+        for raw in (b'[]', b'null', b'2', b'""', b'{not-json}',
+                    b'{"id":"\\xff"}', b'{"bad":' + b"x" * 20 + b"}",
+                    b'{"id":1}\xff', "{}", None,
+                    b' ' * (module.MAX_API_JSON_BYTES + 1)):
+            with self.subTest(sample=str(raw)[:65]):
+                with self.assertRaises(module.Denied):
+                    module._strict_api_json(raw)
+
+    def test_authenticated_fetch_applies_strict_parser(self):
+        class Response:
+            status = 200
+            def __init__(self, body):
+                self.body = body
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, length):
+                return self.body[:length]
+
+        with patch.dict("os.environ", {"GH_TOKEN": "synthetic-only"}, clear=True):
+            with patch.object(module.urllib.request, "urlopen",
+                              return_value=Response(b'{"id":17,"id":18}')):
+                with self.assertRaisesRegex(module.Denied, "duplicate"):
+                    module._api_get("repos/example/repo")
+            with patch.object(module.urllib.request, "urlopen",
+                              return_value=Response(b'{"id":17}')):
+                self.assertEqual(module._api_get("repos/example/repo"), {"id":17})
+
+
+class WorkflowIsolationContract(unittest.TestCase):
+    """Prevent candidate import-path shadowing in CI report generation."""
+
+    @staticmethod
+    def workflow_text():
+        return (Path(__file__).resolve().parents[1]
+                / ".github" / "workflows" / "ci-run-evidence-contract.yml").read_text(encoding="utf-8")
+
+    def test_report_writer_uses_isolated_python(self):
+        workflow = self.workflow_text()
+        marker = "      - name: Write minimal run evidence (not compiled guest parity)"
+        writer = workflow.split(marker, 1)[1].split(
+            "      - name: Upload minimal source-free CI evidence", 1)[0]
+        self.assertIn("python3 -I - <<'PY'", writer)
+        self.assertNotIn("python3 - <<'PY'", writer)
+
+    def test_all_inline_python_heredocs_use_isolated_mode(self):
+        inline_python = [line.strip() for line in self.workflow_text().splitlines()
+                         if "python3" in line and "<<'PY'" in line]
+        self.assertEqual(len(inline_python), 2)
+        self.assertTrue(all(line == "python3 -I - <<'PY'" for line in inline_python))
+
+
+    def test_report_pins_distinct_trigger_and_checkout_metadata(self):
+        workflow = self.workflow_text()
+        self.assertIn("RUN_TRIGGER_SHA: ${{ github.sha }}", workflow)
+        self.assertIn("RUN_TRIGGER_EVENT: ${{ github.event_name }}", workflow)
+        self.assertIn('"workflow_trigger_sha": os.environ["RUN_TRIGGER_SHA"]', workflow)
+        self.assertIn('"workflow_trigger_event": os.environ["RUN_TRIGGER_EVENT"]', workflow)
+        self.assertIn('os.environ["RUN_TRIGGER_SHA"] == os.environ["OBSERVED_HEAD"]', workflow)
+        self.assertIn('os.environ["SOURCE_OUTCOME"] == "success"', workflow)
+        self.assertIn('"verified_execution_claim": False', workflow)
+
+    def test_isolated_report_writer_exercises_source_vs_trigger_sha(self):
+        workflow = self.workflow_text()
+        section = workflow.split(
+            "      - name: Write minimal run evidence (not compiled guest parity)", 1
+        )[1].split("      - name: Upload minimal source-free CI evidence", 1)[0]
+        body = section.split("          python3 -I - <<\'PY\'\n", 1)[1].split(
+            "\n          PY\n", 1)[0]
+        script = textwrap.dedent(body)
+        for label, trigger, checkout, outcome, expected in (
+                ("PR synthetic-merge SHA differs", "a"*40, "b"*40, "success", False),
+                ("matching exact SHA", "b"*40, "b"*40, "success", True),
+                ("unverified checkout outcome", "b"*40, "b"*40, "failure", False)):
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temp:
+                env = dict(os.environ)
+                env.update({
+                    "RUN_TRIGGER_SHA": trigger, "RUN_TRIGGER_EVENT": "pull_request",
+                    "OBSERVED_HEAD": checkout, "EXPECTED_HEAD": "b"*40,
+                    "OBSERVED_TREE": "c"*40, "SOURCE_OUTCOME": outcome,
+                    "REGRESSION_OUTCOME": "success", "REPOSITORY_ID": "1400792274",
+                    "GITHUB_REPOSITORY": "ores-truffle-oreslang/oreslang-source.java",
+                    "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "1",
+                    "RUNNER_TEMP": temp,
+                })
+                proc = subprocess.run([sys.executable, "-I", "-"], input=script,
+                                      text=True, env=env, capture_output=True,
+                                      timeout=10, check=False)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                with open(os.path.join(temp, "source-free-ci-evidence.json"),
+                          encoding="utf-8") as handle:
+                    report = json.load(handle)
+                self.assertEqual(report["workflow_trigger_sha"], trigger)
+                self.assertEqual(report["workflow_trigger_event"], "pull_request")
+                self.assertIs(report["trigger_sha_matches_reported_checkout"], expected)
+                self.assertIs(report["verified_execution_claim"], False)
+
+
+    def test_workflow_checkout_is_pinned_and_uncredentialed(self):
+        workflow = self.workflow_text()
+        self.assertIn(
+            "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+            workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
+        self.assertIn("contents: read", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertNotIn("secrets.", workflow)
 
 
 if __name__ == "__main__":
