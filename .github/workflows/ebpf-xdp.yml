@@ -58,13 +58,14 @@ jobs:
             done
           done
 
-          # packet_u8(12) == 8 ? XDP_DROP : XDP_PASS
+          # packet_u8(14) == 8 ? XDP_DROP : XDP_PASS
           packet="$RUNNER_TEMP/xdp-objects/xdp-packet-u8.o"
-          # packet shorter than offset+1: compiler-inserted data_end guard must fall through.
-          sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$packet" 2 12
-          # byte exists but mismatches: fall through.
-          sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$packet" 2 13 12 7
-          # byte exists and matches: guarded action.
-          sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$packet" 1 13 12 8
-          # ordinary larger packet with default 0xa5 at byte 12: fall through.
+          # 14-byte Ethernet header: offset 14 is just past data_end, so the
+          # compiler-inserted bound must fall through without loading.
+          sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$packet" 2 14
+          # 15th byte exists but mismatches: fall through.
+          sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$packet" 2 15 14 7
+          # 15th byte exists and matches: take guarded DROP action.
+          sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$packet" 1 15 14 8
+          # ordinary larger packet with default 0xa5 at byte 14: fall through.
           sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$packet" 2 1500
