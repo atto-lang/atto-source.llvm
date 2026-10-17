@@ -17,6 +17,11 @@ extern "C" bool oreslang_bool_builtin_xor(bool, bool) asm("BoolProbe.builtin_xor
 extern "C" bool oreslang_bool_forward(bool, bool) asm("BoolProbe.forward");
 extern "C" bool oreslang_bool_named_forward(bool, bool) asm("BoolProbe.named_forward");
 extern "C" bool oreslang_bool_compose(bool, bool, bool) asm("BoolProbe.compose");
+extern "C" bool oreslang_bool_builtin_and8(
+    bool, bool, bool, bool, bool, bool, bool, bool) asm("BoolProbe.builtin_and8");
+extern "C" bool oreslang_bool_builtin_or8(
+    bool, bool, bool, bool, bool, bool, bool, bool) asm("BoolProbe.builtin_or8");
+extern "C" bool oreslang_bool_precedence_probe() asm("BoolProbe.precedence_probe");
 
 int main() {
     if (!oreslang_bool_yes() || oreslang_bool_no() ||
@@ -40,6 +45,15 @@ int main() {
             !oreslang_bool_named_forward(true, true) ||
             oreslang_bool_named_forward(true, false) ||
             !oreslang_bool_compose(true, true, false) ||
-            oreslang_bool_compose(false, false, false))
+            oreslang_bool_compose(false, false, false) ||
+            !oreslang_bool_builtin_and8(
+                true, true, true, true, true, true, true, true) ||
+            oreslang_bool_builtin_and8(
+                true, true, true, false, true, true, true, true) ||
+            !oreslang_bool_builtin_or8(
+                false, false, false, false, false, false, false, true) ||
+            oreslang_bool_builtin_or8(
+                false, false, false, false, false, false, false, false) ||
+            !oreslang_bool_precedence_probe())
         throw std::runtime_error("compiled native i1 Boolean graph mismatch");
 }
