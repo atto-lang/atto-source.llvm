@@ -83,11 +83,13 @@ struct ClassDecl {
     std::vector<std::string> constructor_parameters;
 };
 
-// Native source value categories. Complex128 is currently return-only;
-// Future<T> remains a no-IR boundary
-// until the compiler can lower nonblocking pinned continuations.
+// Native source value categories used by actor/capability plumbing.
+// Complex128 is intentionally NOT admitted here yet: its first native slice
+// exists only as a function return boundary, with no parameter/local/actor
+// ownership semantics. Future<T> remains a no-IR boundary until the compiler
+// can lower nonblocking pinned continuations.
 struct SourceType {
-    enum class Kind { I64, Complex128, ActorRef, Future };
+    enum class Kind { I64, ActorRef, Future };
     Kind kind = Kind::I64;
     std::string argument;
 };
