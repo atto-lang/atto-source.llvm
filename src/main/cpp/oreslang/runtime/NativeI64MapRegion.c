@@ -2,6 +2,15 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+_Static_assert(sizeof(OresNativeI64MapEntry) == 24,
+    "native i64 map entry ABI must remain 24 bytes");
+_Static_assert(offsetof(OresNativeI64MapEntry, key) == 0,
+    "native i64 map key ABI drift");
+_Static_assert(offsetof(OresNativeI64MapEntry, value) == 8,
+    "native i64 map value ABI drift");
+_Static_assert(offsetof(OresNativeI64MapEntry, occupied) == 16,
+    "native i64 map occupancy ABI drift");
+
 enum { ORES_NATIVE_I64_MAP_MAX_CAPACITY = 4096 };
 static const uint64_t ORES_NATIVE_I64_MAP_MAGIC = UINT64_C(0x4f52454d41504936);
 
@@ -63,12 +72,16 @@ OresNativeI64MapStatus oreslang_i64_map_put(
         int64_t value) {
     validate(region);
 
+    OresNativeI64MapEntry* matched = NULL;
     for (uint64_t i = 0; i < region->capacity; ++i) {
         OresNativeI64MapEntry* entry = &region->entries[i];
-        if (entry->occupied && entry->key == key) {
-            entry->value = value;
-            return ORES_NATIVE_I64_MAP_OK;
-        }
+        if (!entry->occupied || entry->key != key) continue;
+        if (matched) fail_closed(); /* Corrupted duplicate map key. */
+        matched = entry;
+    }
+    if (matched) {
+        matched->value = value;
+        return ORES_NATIVE_I64_MAP_OK;
     }
 
     if (region->size == region->capacity)
@@ -95,14 +108,16 @@ int oreslang_i64_map_get(
         int64_t* out_value) {
     if (!out_value) fail_closed();
     validate(region);
+    const OresNativeI64MapEntry* matched = NULL;
     for (uint64_t i = 0; i < region->capacity; ++i) {
         const OresNativeI64MapEntry* entry = &region->entries[i];
-        if (entry->occupied && entry->key == key) {
-            *out_value = entry->value;
-            return 1;
-        }
+        if (!entry->occupied || entry->key != key) continue;
+        if (matched) fail_closed(); /* Ambiguous lookup cannot be tolerated. */
+        matched = entry;
     }
-    return 0;
+    if (!matched) return 0;
+    *out_value = matched->value;
+    return 1;
 }
 
 uint64_t oreslang_i64_map_size(const OresNativeI64MapRegion* region) {
@@ -123,6 +138,10 @@ int oreslang_i64_map_entry_at(
         const OresNativeI64MapEntry* entry = &region->entries[i];
         if (!entry->occupied) continue;
         if (seen++ == ordinal) {
+            for (uint64_t j = 0; j < region->size; ++j) {
+                if (j != i && region->entries[j].key == entry->key)
+                    fail_closed(); /* Iteration cannot expose duplicate keys. */
+            }
             *out_key = entry->key;
             *out_value = entry->value;
             return 1;
