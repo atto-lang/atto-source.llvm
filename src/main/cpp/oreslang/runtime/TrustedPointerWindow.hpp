@@ -83,7 +83,8 @@ private:
     template<class T> static void validate(const State& s, std::size_t offset, bool access) {
         static_assert(std::is_trivially_copyable<T>::value
                       && std::is_trivially_default_constructible<T>::value
-                      && !std::is_pointer<T>::value,
+                      && !std::is_pointer<T>::value
+                      && !std::is_same<T, bool>::value,
                       "C++17 host window requires a trivially-copyable, "
                       "trivially-default-constructible nonpointer type");
         if (offset > s.bytes || (access && sizeof(T) > s.bytes - offset))
@@ -108,6 +109,8 @@ public:
             std::size_t bytes,
             Mode mode) {
         if (!base || !bytes) throw std::invalid_argument("empty native region");
+        if (region.region == 0 || region.generation == 0 || region.allocation == 0)
+            throw std::invalid_argument("invalid native region provenance");
         const auto address = reinterpret_cast<std::uintptr_t>(base);
         if (bytes > std::numeric_limits<std::uintptr_t>::max() - address)
             throw std::invalid_argument("overflowing native region");
