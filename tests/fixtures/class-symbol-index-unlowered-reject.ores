@@ -1,0 +1,7 @@
+define class Matrix as
+  pub final int number: 42;
+  pub [Symbol.index](int row, int col): int {
+    return row + col;
+  }
+end
+pub fnc main(): int { return 42; }
