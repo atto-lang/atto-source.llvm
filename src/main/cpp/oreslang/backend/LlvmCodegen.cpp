@@ -220,6 +220,9 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Boolean:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
             // i1 values may only be lowered by verified typed bool returns,
             // never by the generic native i64 expression code generator.
             throw std::runtime_error("typed bool cannot be lowered as native i64");
@@ -280,6 +283,65 @@ llvm::Value* lower(const Expression& expr,
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
+}
+
+// Lower a verified closed bool tree directly to LLVM i1. AND/OR are control
+// flow, not eager bitwise operations: their right operand must not execute on
+// the short-circuited edge. XOR is eager and evaluates both operands in order.
+llvm::Value* lower_bool(const Expression& expr, llvm::IRBuilder<>& builder) {
+    switch (expr.kind) {
+        case Expression::Kind::Boolean:
+            if ((expr.integer != 0 && expr.integer != 1) ||
+                    !expr.name.empty() || expr.left || expr.right ||
+                    !expr.arguments.empty() || !expr.argument_names.empty())
+                throw std::runtime_error("unverified native bool literal AST");
+            return builder.getInt1(expr.integer == 1);
+        case Expression::Kind::LogicalXor: {
+            if (!expr.left || !expr.right || expr.integer != 0 ||
+                    !expr.name.empty() || !expr.arguments.empty() ||
+                    !expr.argument_names.empty())
+                throw std::runtime_error("unverified native logical xor AST");
+            llvm::Value* left = lower_bool(*expr.left, builder);
+            llvm::Value* right = lower_bool(*expr.right, builder);
+            return builder.CreateXor(left, right, "bool.xor");
+        }
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr: {
+            if (!expr.left || !expr.right || expr.integer != 0 ||
+                    !expr.name.empty() || !expr.arguments.empty() ||
+                    !expr.argument_names.empty())
+                throw std::runtime_error("unverified native short-circuit bool AST");
+            llvm::Value* left = lower_bool(*expr.left, builder);
+            llvm::BasicBlock* left_end = builder.GetInsertBlock();
+            llvm::Function* function = left_end->getParent();
+            llvm::BasicBlock* rhs_block = llvm::BasicBlock::Create(
+                builder.getContext(), "bool.rhs", function);
+            llvm::BasicBlock* merge_block = llvm::BasicBlock::Create(
+                builder.getContext(), "bool.merge", function);
+            const bool is_and = expr.kind == Expression::Kind::LogicalAnd;
+            if (is_and)
+                builder.CreateCondBr(left, rhs_block, merge_block);
+            else
+                builder.CreateCondBr(left, merge_block, rhs_block);
+
+            builder.SetInsertPoint(rhs_block);
+            llvm::Value* right = lower_bool(*expr.right, builder);
+            llvm::BasicBlock* rhs_end = builder.GetInsertBlock();
+            if (rhs_end->getTerminator())
+                throw std::runtime_error("logical rhs unexpectedly terminated control flow");
+            builder.CreateBr(merge_block);
+
+            builder.SetInsertPoint(merge_block);
+            llvm::PHINode* result = builder.CreatePHI(
+                builder.getInt1Ty(), 2, is_and ? "bool.and" : "bool.or");
+            result->addIncoming(is_and ? builder.getFalse() : builder.getTrue(), left_end);
+            result->addIncoming(right, rhs_end);
+            return result;
+        }
+        default:
+            throw std::runtime_error(
+                "native bool result contains non-bool value, call or effect");
+    }
 }
 
 } // namespace
@@ -681,25 +743,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         if (fn.returns_bool) {
-            // Strictly pure, zero-argument source Boolean literal slice:
-            // no integer coercion, host callbacks, heap or GC allocation.
-            // All other typed bool forms remain parser-gated, and imported
-            // std/assert stays rejected before LLVM module creation.
-            if (!fn.result || fn.result->kind != Expression::Kind::Boolean ||
-                    !fn.parameters.empty() || !fn.locals.empty() ||
+            // Closed, pure Boolean expressions lower to real i1/CFG. General
+            // bool storage/calls remain parser-gated, and imported std/assert
+            // stays rejected before LLVM module creation.
+            if (!fn.result || !fn.parameters.empty() || !fn.locals.empty() ||
                     !fn.statements.empty() || !fn.early_returns.empty() ||
                     !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
                     !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                     !fn.actor_field_writes.empty() || fn.caught_throw_value ||
                     !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
                     fn.scalar_while || fn.has_declared_effects ||
-                    fn.declared_effects.bits != 0 ||
-                    !fn.result->name.empty() || fn.result->left || fn.result->right ||
-                    !fn.result->arguments.empty() ||
-                    !fn.result->argument_names.empty() ||
-                    (fn.result->integer != 0 && fn.result->integer != 1))
+                    fn.declared_effects.bits != 0)
                 throw std::runtime_error("unverified typed bool native result lowering");
-            builder.CreateRet(builder.getInt1(fn.result->integer == 1));
+            builder.CreateRet(lower_bool(*fn.result, builder));
             continue;
         }
         std::unordered_map<std::string, llvm::Value*> storage;
