@@ -6,6 +6,7 @@
 #include <string>
 
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -77,6 +78,9 @@ std::string emit_verified_bpf_xdp_ir(const Program& source) {
     auto* signature = llvm::FunctionType::get(i32, {context_ptr}, false);
     auto* xdp = llvm::Function::Create(signature, llvm::Function::ExternalLinkage,
                                        "ores_xdp", module);
+    // Kernel BPF has no language-level exception/unwind path. Make that
+    // explicit so even -O0 object emission cannot grow .eh_frame relocations.
+    xdp->addFnAttr(llvm::Attribute::NoUnwind);
     xdp->setSection("xdp");
     xdp->getArg(0)->setName("ctx"); // opaque, never dereferenced by this slice
     llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", xdp));
