@@ -84,8 +84,27 @@ int main() {
     expect(!reactor.try_cancel(*cancelled), "duplicate cancel rejected");
     auto cancellation = until_completion(reactor);
     expect(cancellation.has_value() && cancellation->outcome == NativeEpollReactor::Outcome::cancelled, "cancel record");
+    // Java Selector requires an explicit cancelled-key sweep before
+    // re-registration. Linux epoll uses synchronous EPOLL_CTL_DEL instead:
+    // prove the equivalent one-owner re-arm contract for many generations.
+    auto previous_ticket = *cancelled;
+    for (int round = 0; round < 128; ++round) {
+        auto watched_again = reactor.try_watch(accepted, EPOLLIN);
+        expect(watched_again.has_value(), "re-arm after cancel and pop");
+        expect(watched_again->value != previous_ticket.value, "fresh ticket generation");
+        expect(!reactor.try_cancel(previous_ticket),
+               "retired ticket cannot cancel a newly admitted watch");
+        expect(reactor.try_cancel(*watched_again), "cancel current generation");
+        auto terminal = until_completion(reactor);
+        expect(terminal.has_value()
+               && terminal->ticket.value == watched_again->value
+               && terminal->outcome == NativeEpollReactor::Outcome::cancelled,
+               "one terminal record per cancelled generation");
+        expect(reactor.pending() == 0, "re-arm must release slot on pop");
+        previous_ticket = *watched_again;
+    }
     auto replacement = reactor.try_watch(accepted, EPOLLIN);
-    expect(replacement.has_value() && replacement->value != cancelled->value, "new generation");
+    expect(replacement.has_value() && replacement->value != previous_ticket.value, "new generation");
     expect(!reactor.try_cancel(*cancelled), "old ticket must not cancel new operation");
     reactor.stop();
     auto stopped = until_completion(reactor);
