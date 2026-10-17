@@ -87,48 +87,6 @@ int main() {
                  "stale keyed source survived epoch advance");
         keyed.close();
     }
-    // Java parity: self.reply() is a distinct HOST-ONLY terminal
-    // correlation operation. It skips intermediate DATA handlers, does
-    // not change the original flow ID, and carries separate branch IDs.
-    {
-        ActorPipeRouteLedger direct(stages(), edges(), 17, 5);
-        const auto origin = direct.ingress("source");
-        rejected([&] { (void)direct.reply(origin); },
-                 "origin fabricated a reply to itself");
-        const auto fan = direct.forward_all(origin);
-        const auto sink_a = direct.forward(fan[0]);
-        const auto sink_b = direct.forward(fan[1]);
-        const auto answer_a = direct.reply(sink_a);
-        const auto answer_b = direct.reply(sink_b);
-        check(answer_a->receiver() == "source"
-              && answer_b->receiver() == "source"
-              && answer_a->returning() && answer_b->returning()
-              && answer_a->flow_id() == origin->flow_id()
-              && answer_b->flow_id() == origin->flow_id()
-              && answer_a->route_id() != answer_b->route_id()
-              && direct.outstanding() == 5,
-              "direct-origin reply lost one-shot fan-in provenance");
-        rejected([&] { (void)direct.reply(sink_a); },
-                 "consumed sink replayed direct reply");
-        rejected([&] { (void)direct.reply(answer_a); },
-                 "returning DATA fabricated another direct reply");
-        rejected([&] { (void)direct.forward(answer_a); },
-                 "returning DATA reentered forward DAG");
-        rejected([&] { (void)direct.backward(answer_b); },
-                 "terminal origin frame navigated upstream");
-        rejected([&] { direct.advance_generation(18); },
-                 "live terminal reply bypassed quiescence");
-        direct.complete(answer_a);
-        direct.complete(answer_b);
-        direct.complete(fan[0]);
-        direct.complete(fan[1]);
-        direct.complete(origin);
-        check(direct.outstanding() == 0, "direct replies leaked credits");
-        direct.advance_generation(18);
-        rejected([&] { (void)direct.reply(sink_b); },
-                 "stale sink replied after generation advancement");
-        direct.close();
-    }
     ActorPipeRouteLedger ledger(stages(), edges(), 7, 5);
     rejected([&] { (void)ledger.ingress("worker-a"); },
              "a middle worker originated a flow");
@@ -185,6 +143,41 @@ int main() {
     rejected([&] { (void)ledger.ingress("source"); },
              "closed generation accepted new DATA");
 
+    // A true direct source reply bypasses intermediate actor handlers but
+    // keeps the full original per-branch correlation path and route ID.
+    {
+        ActorPipeRouteLedger direct(stages(), edges(), 19, 5);
+        const auto root = direct.ingress("source");
+        rejected([&] { (void)direct.reply(root); },
+                 "ingress manufactured a direct reply to itself");
+        const auto fork = direct.forward_all(root);
+        const auto sink_left = direct.forward(fork[0]);
+        const auto sink_right = direct.forward(fork[1]);
+        const auto answer_left = direct.reply(sink_left);
+        const auto answer_right = direct.reply(sink_right);
+        check(answer_left->receiver() == "source" &&
+              answer_right->receiver() == "source",
+              "direct reply went to a guessed or intermediate actor");
+        check(answer_left->flow_id() == answer_right->flow_id() &&
+              answer_left->route_id() != answer_right->route_id() &&
+              answer_left->returning() && answer_right->returning(),
+              "direct fan-in replies collapsed independent branch identities");
+        rejected([&] { (void)direct.reply(sink_left); },
+                 "one-shot direct reply allowed replay");
+        rejected([&] { (void)direct.reply(answer_right); },
+                 "returning frame manufactured a second direct reply");
+        rejected([&] { (void)direct.forward(answer_left); },
+                 "returned message re-entered downstream forward DAG");
+        check(direct.outstanding() == 5, "reply leaked or duplicated credits");
+        direct.complete(answer_left);
+        direct.complete(answer_right);
+        direct.complete(fork[0]);
+        direct.complete(fork[1]);
+        direct.complete(root);
+        check(direct.outstanding() == 0, "direct replies leaked frames");
+        direct.close();
+    }
+
     // A caller dropping the last external Handle must NOT free a still
     // active Frame: otherwise a later allocation may reuse its address and
     // accidentally pass the raw-pointer identity check (ABA). The ledger
@@ -211,6 +204,72 @@ int main() {
         retained.close();
     }
 
+    // Metadata credits bound independent route-path copies even when count
+    // slots remain. Failed fan-out must be all-or-none and preserve source
+    // authority. Return frames must reuse the consumed forward-frame credits.
+    {
+        ActorPipeRouteLedger measure(stages(), edges(), 40, 8);
+        const auto probe = measure.ingress("source");
+        const auto source_charge = measure.metadata_bytes();
+        const auto probe_child = measure.forward_to(probe, "worker-a");
+        const auto worker_charge = measure.metadata_bytes() - source_charge;
+        check(source_charge > 0 && worker_charge > source_charge,
+              "route metadata path charge did not grow on forwarding");
+
+        ActorPipeRouteLedger budgeted(stages(), edges(), 41, 8,
+                                      source_charge + worker_charge);
+        const auto root = budgeted.ingress("source");
+        check(budgeted.metadata_bytes() == source_charge,
+              "ingress metadata was not charged");
+        rejected([&] { (void)budgeted.forward_all(root); },
+                 "fan-out bypassed whole-graph metadata credits");
+        check(budgeted.outstanding() == 1 &&
+              budgeted.metadata_bytes() == source_charge,
+              "failed fan-out partially published route credits");
+        const auto child = budgeted.forward_to(root, "worker-a");
+        check(budgeted.outstanding() == 2 &&
+              budgeted.metadata_bytes() <= source_charge + worker_charge,
+              "single child bypassed metadata cap");
+        rejected([&] { (void)budgeted.round_robin(root); },
+                 "failed child metadata allocation bypassed live quota");
+        const auto reply = budgeted.backward(child);
+        check(reply->receiver() == "source" &&
+              budgeted.outstanding() == 2 &&
+              budgeted.metadata_bytes() <= source_charge + worker_charge,
+              "reverse replacement leaked or overcharged metadata");
+        rejected([&] { budgeted.complete(child); },
+                 "replaced forward frame remained live");
+        budgeted.retire_if_active(reply);
+        check(budgeted.metadata_bytes() == source_charge,
+              "reverse retirement failed to refund bytes");
+        check(budgeted.abort_and_advance(42) == 1 &&
+              budgeted.metadata_bytes() == 0,
+              "generation abort leaked route metadata credits");
+        rejected([&] { budgeted.complete(root); },
+                 "aborted generation still accepted stale frame");
+        const auto fresh = budgeted.ingress("source");
+        check(budgeted.metadata_bytes() == source_charge,
+              "fresh generation failed to reacquire metadata credits");
+        budgeted.close();
+        check(budgeted.metadata_bytes() == 0,
+              "STOP failed to release all route metadata");
+
+        rejected([&] {
+            ActorPipeRouteLedger invalid(stages(), edges(), 2, 5, 0);
+        }, "zero route metadata budget accepted");
+        rejected([&] {
+            ActorPipeRouteLedger invalid(stages(), edges(), 2, 5,
+                                         64 * 1024 * 1024 + 1);
+        }, "oversized route metadata budget accepted");
+        ActorPipeRouteLedger too_tight(stages(), edges(), 44, 8, 1);
+        rejected([&] { (void)too_tight.ingress("source"); },
+                 "ingress exceeded metadata budget without rejection");
+        check(too_tight.outstanding() == 0 &&
+              too_tight.metadata_bytes() == 0,
+              "failed ingress leaked metadata credits");
+        (void)fresh;
+    }
+
     // Selection/retirement of 2000 independent child frames is synchronized.
     ActorPipeRouteLedger parallel(stages(), edges(), 9, 2001);
     const auto parent = parallel.ingress("source");
@@ -229,7 +288,6 @@ int main() {
     check(completed == 2000 && parallel.outstanding() == 1,
           "concurrent route IDs or frame retirement raced");
     parallel.complete(parent);
-
     // Parent + child frames cannot acquire new authority after a concurrent
     // supervisor close barrier. Requests that raced *before* close may
     // complete or fail; requests made after close returns must always fail.
@@ -274,6 +332,5 @@ int main() {
     rejected([&] { retiring.advance_generation(12); },
              "closed correlation ledger reopened through generation bump");
     retiring.close();
-    std::cout << "ORES_NATIVE_ACTOR_ROUTE_LEDGER_OK branches=2000"
-              << " post_stop_denials=8000" << std::endl;
+    std::cout << "ORES_NATIVE_ACTOR_ROUTE_LEDGER_OK branches=2000" << " post_stop_denials=8000" << std::endl;
 }
