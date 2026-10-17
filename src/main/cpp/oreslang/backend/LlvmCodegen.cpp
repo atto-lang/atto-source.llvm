@@ -272,6 +272,15 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // Defense in depth for compiler/API callers that construct Program
+    // without the parser. Never emit IR for unverified parallel guest actors.
+    for (const auto& actor : source.actors) {
+        if (actor.min_threads != 1 || actor.max_threads != 1) {
+            throw std::runtime_error("actor '" + actor.name
+                    + "' requests unsupported physical parallelism; "
+                    "native source actor scheduler requires threads(min: 1, max: 1)");
+        }
+    }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
