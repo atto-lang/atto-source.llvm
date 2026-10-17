@@ -41,9 +41,10 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
          * NativeActorScheduler additionally enforces its allocation limits. */
         if (!p->on_message || !p->actor_slots || !p->mailbox_capacity
             || workers > 128) goto failed;
-        vm->schedulers[i] = ores_native_actor_scheduler_open_typed_control(
+        vm->schedulers[i] = ores_native_actor_scheduler_open_capability_wakes(
             p->actor_slots, p->mailbox_capacity, workers,
-            p->on_message, p->on_control, p->on_failure, p->context);
+            p->on_message, p->on_control, p->on_failure,
+            p->on_capability_wake, p->context);
         if (!vm->schedulers[i]) goto failed;
         vm->supervisors[i] = (OresVMSupervisorRegistration*)calloc(
             p->actor_slots, sizeof(*vm->supervisors[i]));
@@ -251,6 +252,47 @@ int ores_native_vm_publish_control(
     return vm && valid_domain(domain)
         && ores_native_actor_scheduler_publish_control(
             vm->schedulers[domain], parent, payload);
+}
+
+int ores_native_vm_publish_capability_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, OresNativeActorCapabilityWake wake) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_publish_capability_wake(
+            vm->schedulers[domain], actor, wake);
+}
+
+uint64_t ores_native_vm_capability_wakes_completed(
+    OresNativeVM* vm, enum OresNativeVMDomain domain) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_capability_wakes_completed(vm->schedulers[domain])
+        : 0;
+}
+
+int ores_native_vm_current_actor_ref(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef* out) {
+    if (!vm || !valid_domain(domain) || !out) {
+        if (out) *out = (OresNativeActorRef){0, 0, 0};
+        return 0;
+    }
+    return ores_native_actor_scheduler_current_actor_ref(vm->schedulers[domain], out);
+}
+
+int ores_native_vm_current_actor_identity(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorIdentity* out) {
+    if (!vm || !valid_domain(domain) || !out) {
+        if (out) *out = (OresNativeActorIdentity){0, 0};
+        return 0;
+    }
+    return ores_native_actor_scheduler_current_actor_identity(vm->schedulers[domain], out);
+}
+
+int ores_native_vm_is_current_capability_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorCapabilityWake wake) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_is_current_capability_wake(
+            vm->schedulers[domain], wake);
 }
 
 static void control_lock(OresNativeVM* vm) {
