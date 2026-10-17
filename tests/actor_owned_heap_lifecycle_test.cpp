@@ -153,5 +153,20 @@ int main(void) {
     CHECK(rejects(FOREIGN_CARRIER_TURN));
     CHECK(rejects(NESTED_CARRIER_ACTOR));
 #endif
+    /* Domain authority must remain unique across repeated actor incarnation
+     * creation/destruction. This exercises the saturating CAS issuance path
+     * under ordinary operation; exhaustion itself is intentionally unreachable
+     * in a bounded regression. */
+    uint64_t previous_domain = 0;
+    for (uint64_t i = 0; i < 1024; ++i) {
+        OresActorI64Heap* probe = ores_actor_i64_heap_open(1000 + i, 1, 1);
+        OresActorTurn probe_turn = ores_actor_i64_heap_enter(probe, 1000 + i, 1);
+        CHECK(probe_turn.domain != 0);
+        CHECK(probe_turn.domain > previous_domain);
+        previous_domain = probe_turn.domain;
+        ores_actor_i64_heap_leave(probe, probe_turn);
+        ores_actor_i64_heap_retire(probe);
+        CHECK(ores_actor_i64_heap_try_destroy(probe) == 1);
+    }
     return 0;
 }
