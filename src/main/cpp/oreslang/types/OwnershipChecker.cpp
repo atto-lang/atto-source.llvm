@@ -413,13 +413,21 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
-        case Expression::Kind::Call:
-            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
+        case Expression::Kind::Call: {
+            const auto found =
+                functions.find(native_function_slot(expr.name, expr.arguments.size()));
+            if (found == functions.end()) {
+                if (boolean_intrinsic_name(expr.name))
+                    reject(expr, "typed bool intrinsic cannot be used as a native int expression");
+                reject(expr, "internal ownership error: unresolved native call");
+            }
+            if (found->second->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
-            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_bool)
+            if (found->second->returns_bool)
                 reject(expr, "typed bool result cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
+        }
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "borrowed reference may only be passed to a borrowed parameter");
