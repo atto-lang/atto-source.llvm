@@ -6,9 +6,24 @@ extern "C" void ores_native_vm_nio_destroy_backend(void* backend) {
     ores_native_nio_close(static_cast<OresNativeNio*>(backend));
 }
 namespace {
-OresNativeNio* admitted_nio(OresNativeVM* vm) {
-    return static_cast<OresNativeNio*>(ores_native_vm_nio_backend(vm));
-}
+/* The trusted host owns the VM object for the duration of this call. The
+ * pinned backend remains alive across concurrent retirement and host close.
+ * No dynamically allocated operation frame or guest callback is involved.
+ */
+class NioBackendLease final {
+public:
+    explicit NioBackendLease(OresNativeVM* vm)
+        : vm_(vm), ptr_(static_cast<OresNativeNio*>(ores_native_vm_nio_acquire(vm))) {}
+    ~NioBackendLease() {
+        if (ptr_) ores_native_vm_nio_release(vm_, ptr_);
+    }
+    NioBackendLease(const NioBackendLease&) = delete;
+    NioBackendLease& operator=(const NioBackendLease&) = delete;
+    OresNativeNio* get() const noexcept { return ptr_; }
+private:
+    OresNativeVM* vm_;
+    OresNativeNio* ptr_;
+};
 }
 
 extern "C" int ores_native_vm_enable_nio(
@@ -28,31 +43,37 @@ extern "C" int ores_native_vm_enable_nio(
 }
 
 extern "C" size_t ores_native_vm_nio_started(OresNativeVM* vm) {
-    auto* backend = admitted_nio(vm);
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
     return backend ? ores_native_nio_started_reactors(backend) : 0;
 }
 extern "C" int ores_native_vm_nio_try_watch(
     OresNativeVM* vm, int fd, uint32_t events, OresNativeNioWatch* output) {
-    auto* backend = admitted_nio(vm);
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
     return backend ? ores_native_nio_try_watch(backend, fd, events, output) : 0;
 }
 extern "C" int ores_native_vm_nio_try_cancel(
     OresNativeVM* vm, OresNativeNioWatch watch) {
-    auto* backend = admitted_nio(vm);
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
     return backend ? ores_native_nio_try_cancel(backend, watch) : 0;
 }
 extern "C" int ores_native_vm_nio_try_pop(
     OresNativeVM* vm, OresNativeNioCompletion* output) {
-    auto* backend = admitted_nio(vm);
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
     return backend ? ores_native_nio_try_pop(backend, output) : 0;
 }
 extern "C" int ores_native_vm_nio_completion_fd(
     OresNativeVM* vm, size_t reactor) {
-    auto* backend = admitted_nio(vm);
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
     return backend ? ores_native_nio_completion_fd(backend, reactor) : -1;
 }
 extern "C" void ores_native_vm_nio_drain_signal(
     OresNativeVM* vm, size_t reactor) {
-    auto* backend = admitted_nio(vm);
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
     if (backend) ores_native_nio_drain_completion_signal(backend, reactor);
 }
