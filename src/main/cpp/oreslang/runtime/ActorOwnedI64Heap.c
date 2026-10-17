@@ -127,6 +127,29 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     return heap;
 }
 
+int ores_actor_i64_heap_try_enter(OresActorI64Heap* heap,
+                                    uint64_t actor_id, uint64_t incarnation,
+                                    OresActorTurn* out) {
+    if (!heap || !out || !actor_id || !incarnation) rejected();
+    if (carrier_heap != NULL) return 0;
+    if (!try_lock_heap(heap)) return 0;
+    if (actor_id != heap->owner || incarnation != heap->incarnation)
+        rejected();
+    if (heap->retiring || heap->turn_active) {
+        unlock_heap(heap);
+        return 0;
+    }
+    if (heap->turn_epoch == UINT64_MAX) rejected();
+    ++heap->turn_epoch;
+    OresActorTurn token = {heap->domain, heap->turn_epoch};
+    heap->turn_active = 1;
+    carrier_heap = heap;
+    carrier_epoch = token.epoch;
+    *out = token;
+    unlock_heap(heap);
+    return 1;
+}
+
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                           uint64_t actor_id,
                                           uint64_t incarnation) {
