@@ -874,11 +874,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         field_indices.emplace(cls.name, std::move(indices));
     }
 
-    // Exact by-value i64 / borrowed-i64-pointer argument types for all
-    // same-module functions; no unsound conversion to i64 is permitted.
-    // Unique free functions retain their ABI symbol, overloaded families use arity slots.
+    // Exact i1/i64/borrowed-i64-pointer argument types for all same-module
+    // functions; no implicit bool<->int conversion is permitted. Any source
+    // family named And/Or/Xor shadows the compiler intrinsic, matching Java.
     std::unordered_map<std::string, std::size_t> family_sizes;
-    for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    std::unordered_set<std::string> shadowed_intrinsics;
+    for (const auto& fn : source.functions) {
+        ++family_sizes[fn.name];
+        if (fn.name == "And" || fn.name == "Or" || fn.name == "Xor")
+            shadowed_intrinsics.insert(fn.name);
+    }
     std::unordered_set<std::string> emitted_slots;
     for (const auto& fn : source.functions) {
         // Linker-owned names were already checked before all lowering paths.
@@ -900,10 +905,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         if (module.getNamedValue(symbol))
             throw std::runtime_error("native LLVM symbol collision '" + symbol + "'");
         std::vector<llvm::Type*> argument_types;
-        for (const auto& param : fn.parameters)
-            argument_types.push_back(param.class_name.empty()
-                ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
-                : class_types.at(param.class_name)->getPointerTo());
+        for (const auto& param : fn.parameters) {
+            if (param.boolean) {
+                if (!fn.returns_bool || param.mode != Parameter::Mode::Value ||
+                        !param.class_name.empty())
+                    throw std::runtime_error(
+                        "unverified native bool parameter ABI");
+                argument_types.push_back(llvm::Type::getInt1Ty(context));
+            } else {
+                if (fn.returns_bool)
+                    throw std::runtime_error(
+                        "native bool functions require only bool parameters");
+                argument_types.push_back(param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : class_types.at(param.class_name)->getPointerTo());
+            }
+        }
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) :
             (fn.returns_bool ? llvm::Type::getInt1Ty(context) : i64),
@@ -924,10 +941,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         if (fn.returns_bool) {
-            // Closed, pure Boolean expressions lower to real i1/CFG. General
-            // bool storage/calls remain parser-gated, and imported std/assert
-            // stays rejected before LLVM module creation.
-            if (!fn.result || !fn.parameters.empty() || !fn.locals.empty() ||
+            // Pure Boolean expression graphs lower entirely through i1. Bool
+            // locals/ownership/effects remain gated, but by-value bool params,
+            // same-module bool calls and compiler intrinsics are now native.
+            if (!fn.result || !fn.locals.empty() ||
                     !fn.statements.empty() || !fn.early_returns.empty() ||
                     !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
                     !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
@@ -935,8 +952,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
                     fn.scalar_while || fn.has_declared_effects ||
                     fn.declared_effects.bits != 0)
-                throw std::runtime_error("unverified typed bool native result lowering");
-            builder.CreateRet(lower_bool(*fn.result, builder));
+                throw std::runtime_error(
+                    "unverified typed bool native result lowering");
+
+            std::unordered_map<std::string, llvm::Value*> bool_values;
+            std::size_t bool_index = 0;
+            for (auto& arg : function->args()) {
+                const Parameter& param = fn.parameters.at(bool_index++);
+                if (!param.boolean || param.mode != Parameter::Mode::Value ||
+                        !param.class_name.empty() ||
+                        !arg.getType()->isIntegerTy(1))
+                    throw std::runtime_error(
+                        "unverified native bool parameter lowering");
+                if (!bool_values.emplace(param.name, &arg).second)
+                    throw std::runtime_error(
+                        "duplicate native bool parameter lowering");
+            }
+            builder.CreateRet(lower_bool(
+                *fn.result, builder, bool_values, declarations,
+                shadowed_intrinsics));
             continue;
         }
         std::unordered_map<std::string, llvm::Value*> storage;
