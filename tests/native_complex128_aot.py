@@ -31,6 +31,8 @@ def main():
             "complex_conj has the wrong LLVM ABI")
     require("define { double, double } @complex_conjugate()" in compiled.stdout,
             "complex_conjugate has the wrong LLVM ABI")
+    require("define { double, double } @complex_imag_exact_limit()" in compiled.stdout,
+            "complex_imag_exact_limit has the wrong LLVM ABI")
 
     harness = r'''
 #include <stdint.h>
@@ -45,6 +47,7 @@ extern ores_complex128 complex_add_sub(void);
 extern ores_complex128 complex_negate(void);
 extern ores_complex128 complex_conj(void);
 extern ores_complex128 complex_conjugate(void);
+extern ores_complex128 complex_imag_exact_limit(void);
 
 static uint64_t bits(double value) {
     uint64_t raw = 0;
@@ -68,6 +71,10 @@ int main(void) {
     ores_complex128 long_name = complex_conjugate();
     if (bits(long_name.real) != UINT64_C(0x4008000000000000)) return 17;
     if (bits(long_name.imaginary) != UINT64_C(0xc010000000000000)) return 18;
+
+    ores_complex128 exact_limit = complex_imag_exact_limit();
+    if (bits(exact_limit.real) != UINT64_C(0x0000000000000000)) return 19;
+    if (bits(exact_limit.imaginary) != UINT64_C(0x4340000000000000)) return 20;
     return 0;
 }
 '''
@@ -88,8 +95,8 @@ int main(void) {
         require(run.returncode == 0,
                 f"complex128 native ABI check failed with exit {run.returncode}")
 
-    print("NATIVE_COMPLEX128_RETURN_CASES=4")
-    print("NATIVE_COMPLEX128_RAW_COMPONENTS=8")
+    print("NATIVE_COMPLEX128_RETURN_CASES=5")
+    print("NATIVE_COMPLEX128_RAW_COMPONENTS=10")
 
 if __name__ == "__main__":
     try:
