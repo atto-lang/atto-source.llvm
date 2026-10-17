@@ -41,7 +41,7 @@ std::string emit_verified_bpf_xdp_ir(const Program& source) {
         !fn.actor_field_writes.empty() || fn.scalar_while ||
         fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
         fn.has_declared_effects)
-        throw std::runtime_error("eBPF XDP admits only pub fnc ores_xdp(): int { return 0..4; }");
+        throw std::runtime_error("eBPF XDP admits only pub fnc ores_xdp(): int { return 0..3; }");
 
     // Stage 0 admits only the basic XDP actions supported without redirect state:
     // XDP_ABORTED=0, DROP=1, PASS=2, TX=3. XDP_REDIRECT=4 requires
