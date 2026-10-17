@@ -21,6 +21,17 @@ UNSUPPORTED = (
     "fnc main(): int { return cpu; }",
 )
 
+def is_domain_refusal(stderr):
+    """Reject generic syntax/IO errors that merely mention gpu/cpu/nb."""
+    domain = re.search(r"\\b(cpu|gpu|nb|nonblocking)\\b|execution[- ]domain",
+                       stderr, re.IGNORECASE)
+    reason = re.search(
+        r"\\b(unsupported|unavailable|reserved|disabled|unimplemented)\\b"
+        r"|not[ -](?:yet[ -])?(?:implemented|supported|lowered)",
+        stderr, re.IGNORECASE)
+    return bool(domain and reason)
+
+
 def compile_source(compiler, text, path):
     path.write_text(text, encoding="utf-8")
     return subprocess.run([compiler, str(path)], capture_output=True,
@@ -35,8 +46,7 @@ def main():
         for case in UNSUPPORTED:
             result = compile_source(compiler, case, source)
             if (result.returncode != 1 or result.stdout
-                    or not re.search(r"\b(cpu|gpu|nb|nonblocking)\b|execution[- ]domain",
-                                     result.stderr, re.IGNORECASE)):
+                    or not is_domain_refusal(result.stderr)):
                 raise AssertionError(
                     f"unsupported CPU/GPU/nb source did not produce a domain-specific refusal: {case!r}; "
                     f"return={result.returncode}, stdout={result.stdout[:200]!r}, "
