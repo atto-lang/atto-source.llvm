@@ -41,7 +41,7 @@ def main():
             require(fragment in proc.stderr.lower(),
                     "unexpected eBPF rejection diagnostic: " + proc.stderr)
 
-        for action in range(5):
+        for action in range(4):
             src.write_text("pub fnc ores_xdp(): int { return %d; }\n" % action,
                            encoding="utf-8")
             result = run(cmd)
@@ -96,6 +96,7 @@ def main():
         reject("fnc ores_xdp(): int { return 2; }")
         reject("pub fnc ores_xdp(int ctx): int { return 2; }")
         reject("pub fnc ores_xdp(): int { return 2 + 0; }")
+        reject("pub fnc ores_xdp(): int { return 4; }")
         reject("pub fnc ores_xdp(): int { return 5; }")
         reject("pub fnc ores_xdp(): int { return -1; }")
         reject("pub fnc ores_xdp(): int { return 2; }\nfnc helper(): int { return 1; }")
