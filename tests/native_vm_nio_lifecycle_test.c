@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "oreslang/runtime/NativeOresVMNio.h"
+#include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -10,6 +11,41 @@
 #include <unistd.h>
 
 static void check(int valid) { if (!valid) abort(); }
+
+typedef struct {
+    pid_t ids[128];
+    size_t count;
+} ThreadIdSet;
+
+static int compare_tid(const void* left, const void* right) {
+    const pid_t a = *(const pid_t*)left;
+    const pid_t b = *(const pid_t*)right;
+    return (a > b) - (a < b);
+}
+
+static ThreadIdSet snapshot_thread_ids(void) {
+    ThreadIdSet set = {{0}, 0};
+    DIR* tasks = opendir("/proc/self/task");
+    check(tasks != NULL);
+    struct dirent* entry;
+    while ((entry = readdir(tasks)) != NULL) {
+        char* end = NULL;
+        const long value = strtol(entry->d_name, &end, 10);
+        if (end == entry->d_name || *end != '\0' || value <= 0) continue;
+        check(set.count < sizeof(set.ids) / sizeof(set.ids[0]));
+        set.ids[set.count++] = (pid_t)value;
+    }
+    check(closedir(tasks) == 0);
+    qsort(set.ids, set.count, sizeof(set.ids[0]), compare_tid);
+    return set;
+}
+
+static void check_same_thread_ids(ThreadIdSet before, ThreadIdSet after) {
+    check(before.count == after.count);
+    for (size_t i = 0; i < before.count; ++i)
+        check(before.ids[i] == after.ids[i]);
+}
+
 typedef struct {
     OresNativeVM* vm;
     atomic_int entered;
@@ -195,6 +231,21 @@ int main(void) {
         check(ores_native_vm_started_carriers(vm, (enum OresNativeVMDomain)i) == 2);
     check(ores_native_vm_enable_nio(vm, 3, 1, 3));
     check(ores_native_vm_nio_started(vm) == 3);
+    const ThreadIdSet rt_threads = snapshot_thread_ids();
+
+    int rt_pipe[2] = {-1, -1};
+    check(pipe2(rt_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
+    OresNativeNioWatch rt_watch = {0};
+    check(ores_native_vm_nio_try_watch(vm, rt_pipe[0], EPOLLIN, &rt_watch));
+    check(write(rt_pipe[1], "r", 1) == 1);
+    const OresNativeNioCompletion rt_done = await_completion(vm);
+    check(rt_done.watch.ticket == rt_watch.ticket);
+    check(rt_done.watch.reactor == rt_watch.reactor);
+    check(rt_done.outcome == ORES_NATIVE_NIO_READY);
+    ores_native_vm_nio_drain_signal(vm, rt_done.watch.reactor);
+    check_same_thread_ids(rt_threads, snapshot_thread_ids());
+    close(rt_pipe[0]);
+    close(rt_pipe[1]);
     check(ores_native_vm_close(vm));
 
     // Concurrent host shutdown must also wait for an in-progress reactor
