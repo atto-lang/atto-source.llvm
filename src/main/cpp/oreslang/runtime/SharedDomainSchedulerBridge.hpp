@@ -35,10 +35,8 @@ public:
         friend class SharedDomainSchedulerBridge;
         Arena::Grant grant_;
         OresNativeActorIdentity identity_;
-        OresNativeActorRef actor_;
-        Permit(Arena::Grant grant, OresNativeActorIdentity identity,
-               OresNativeActorRef actor)
-            : grant_(grant), identity_(identity), actor_(actor) {}
+        Permit(Arena::Grant grant, OresNativeActorIdentity identity)
+            : grant_(grant), identity_(identity) {}
     public:
         Permit(const Permit&) = default;
         Permit& operator=(const Permit&) = default;
@@ -161,7 +159,7 @@ public:
             control, identity.principal, identity.incarnation,
             allow_read, allow_write);
         members_[slot] = Member{actor, identity, true};
-        return Permit(grant, identity, actor);
+        return Permit(grant, identity);
     }
 
     /*
