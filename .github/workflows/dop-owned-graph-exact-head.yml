@@ -41,6 +41,14 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1
         run: |
           set -euo pipefail
+          mkdir -p evidence
+          {
+            printf 'DOP_GRAPH_SOURCE_HEAD=%s\n' "$(git rev-parse HEAD)"
+            printf 'DOP_GRAPH_SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+            printf 'DOP_GRAPH_REPOSITORY=%s\n' "$GITHUB_REPOSITORY"
+            printf 'DOP_GRAPH_COMPILER=%s\nDOP_GRAPH_MODE=%s\n' "$CXX" "$BUILD_MODE"
+            printf '%s\n' 'DOP_GRAPH_SCOPE=host-only native CPU F32 bridge and I64 graph'
+          } > evidence/provenance.txt
           flags=(-std=c++20 -pthread -Isrc/main/cpp -Wall -Wextra -Wpedantic -Werror)
           if [[ "$BUILD_MODE" == sanitized ]]; then
             flags+=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
@@ -52,8 +60,23 @@ jobs:
           for test_name in dop_graph_cpu_integration_v1_test execution_graph_v1_test execution_graph_v1_admission_security_test dop_region_schedule_test dop_cpu_region_execution_test; do
             "$CXX" "${flags[@]}" "tests/${test_name}.cpp" -o "$work_dir/${test_name}"
             "$work_dir/${test_name}"
+            printf 'PASS %s\n' "$test_name" >> evidence/test-results.txt
           done
           python3 tests/test_cpu_gpu_nb_admission.py
           printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
           printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
           printf '%s\n' 'SCOPE=native CPU header and source-free classifier; full LLVM CMake/CTest, frontend compilation and GPU still unverified'
+          test "$(grep -c '^PASS ' evidence/test-results.txt)" = 5
+          printf 'PASS cpu_gpu_nb_source_free_classifier\n' >> evidence/test-results.txt
+          printf 'DOP_GRAPH_TESTS=PASS\n' > evidence/test-outcome.txt
+      - name: Retain bounded per-matrix native test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, pinned
+        with:
+          name: dop-owned-graph-${{ matrix.compiler }}-${{ matrix.mode }}
+          path: |
+            evidence/provenance.txt
+            evidence/test-results.txt
+            evidence/test-outcome.txt
+          if-no-files-found: error
+          retention-days: 7
