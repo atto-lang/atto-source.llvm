@@ -14,6 +14,12 @@ extern "C" bool oreslang_bool_xor_args(bool, bool) asm("BoolProbe.xor_args");
 extern "C" bool oreslang_bool_builtin_and(bool, bool, bool) asm("BoolProbe.builtin_and");
 extern "C" bool oreslang_bool_builtin_or(bool, bool, bool) asm("BoolProbe.builtin_or");
 extern "C" bool oreslang_bool_builtin_xor(bool, bool) asm("BoolProbe.builtin_xor");
+extern "C" bool oreslang_bool_qualified_and(bool, bool, bool)
+    asm("BoolProbe.qualified_and");
+extern "C" bool oreslang_bool_qualified_or(bool, bool, bool)
+    asm("BoolProbe.qualified_or");
+extern "C" bool oreslang_bool_qualified_xor(bool, bool)
+    asm("BoolProbe.qualified_xor");
 extern "C" bool oreslang_bool_forward(bool, bool) asm("BoolProbe.forward");
 extern "C" bool oreslang_bool_named_forward(bool, bool) asm("BoolProbe.named_forward");
 extern "C" bool oreslang_bool_compose(bool, bool, bool) asm("BoolProbe.compose");
@@ -46,6 +52,12 @@ int main() {
             oreslang_bool_builtin_or(false, false, false) ||
             !oreslang_bool_builtin_xor(true, false) ||
             oreslang_bool_builtin_xor(true, true) ||
+            !oreslang_bool_qualified_and(true, true, true) ||
+            oreslang_bool_qualified_and(true, false, true) ||
+            !oreslang_bool_qualified_or(false, false, true) ||
+            oreslang_bool_qualified_or(false, false, false) ||
+            !oreslang_bool_qualified_xor(true, false) ||
+            oreslang_bool_qualified_xor(true, true) ||
             !oreslang_bool_forward(true, true) ||
             oreslang_bool_forward(true, false) ||
             !oreslang_bool_named_forward(true, true) ||
