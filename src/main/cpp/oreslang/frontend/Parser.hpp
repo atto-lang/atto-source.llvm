@@ -10,7 +10,8 @@
 
 namespace oreslang {
 
-// Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
+// Deliberately restricted native scalar expression AST (i64 + pure i1).
+// This is not the full Java Ast.Program and does not imply bool local storage.
 struct Expression {
     enum class Kind { Integer, Boolean, LogicalAnd, LogicalOr, LogicalXor, Variable, Negate, Add, Subtract, Multiply, Call, ModuleCall, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
