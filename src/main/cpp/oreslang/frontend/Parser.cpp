@@ -691,7 +691,9 @@ private:
             if (value.has_declared_effects)
                 fail("native complex128 first slice is pure and cannot declare effects");
             require("return");
+            complex_expression_context_ = true;
             value.result = expression();
+            complex_expression_context_ = false;
             require(";");
             require("}");
             return value;
@@ -1239,9 +1241,15 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
+            if (complex_expression_context_) {
+                if (token_.text == "*")
+                    fail("native complex128 multiplication requires exact once-rounded lowering");
+                if (token_.text == "/")
+                    fail("native complex128 division requires exact once-rounded lowering");
+                fail("native complex128 remainder is undefined");
+            }
             // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
+            // source compiler lowers ordinary expressions only to signed i64.
             if (token_.text == "/")
                 fail("native floating division unsupported: int/int yields float in Java; "
                      "LLVM float typing and zero-divisor semantics are not implemented");
@@ -1951,6 +1959,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    bool complex_expression_context_ = false;
 };
 
 } // namespace
