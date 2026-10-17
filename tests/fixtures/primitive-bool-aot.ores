@@ -69,4 +69,19 @@ define module BoolProbe as
     pub fnc precedence_probe(): bool {
         return true or true ^^ true and false;
     }
+    pub fnc left_bool(bool value): bool {
+        return value;
+    }
+    pub fnc right_bool(bool value): bool {
+        return value;
+    }
+    pub fnc lazy_and_call(bool left, bool right): bool {
+        return And(left, right_bool(right));
+    }
+    pub fnc lazy_or_call(bool left, bool right): bool {
+        return Or(left, right_bool(right));
+    }
+    pub fnc eager_xor_calls(bool left, bool right): bool {
+        return Xor(left_bool(left), right_bool(right));
+    }
 end
