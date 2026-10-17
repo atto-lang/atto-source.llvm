@@ -1,5 +1,7 @@
 #include "oreslang/runtime/NativeRegionRegistry.hpp"
 #include <array>
+#include <atomic>
+#include <thread>
 #include <cstdint>
 #include <stdexcept>
 using namespace oreslang::runtime;
@@ -52,4 +54,29 @@ int main() {
     reject([&] { (void)ffiPointer.load(owner); });
     registry.revoke(ffiGrant);
     reject([&] { registry.revoke(ffiGrant); });
+
+    // Exercise concurrent registry lookup against revocation. Both outcomes
+    // are permitted for a racing lookup, but no access may succeed after
+    // revoke() has completed.
+    auto racingGrant = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 10, 2,
+        bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadOnly);
+    auto racingPointer = registry.at<std::uint32_t>(racingGrant, owner);
+    std::atomic<bool> go{false}, stopped{false};
+    std::thread reader([&] {
+        while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+        while (!stopped.load(std::memory_order_acquire)) {
+            try {
+                (void)registry.at<std::uint32_t>(racingGrant, owner).load(owner);
+                (void)racingPointer.load(owner);
+            } catch (const std::logic_error&) {
+                break;
+            }
+        }
+    });
+    go.store(true, std::memory_order_release);
+    registry.revoke(racingGrant);
+    stopped.store(true, std::memory_order_release);
+    reader.join();
+    reject([&] { (void)registry.at<std::uint32_t>(racingGrant, owner); });
+    reject([&] { (void)racingPointer.load(owner); });
 }
