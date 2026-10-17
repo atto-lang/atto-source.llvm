@@ -182,6 +182,9 @@ struct Function {
 
 struct ActorDecl {
     std::string name;
+    // Requested physical actor execution lanes (v1 backend admits max == 1 only).
+    int min_threads = 1;
+    int max_threads = 1;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
