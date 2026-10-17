@@ -75,7 +75,7 @@ def main():
         reject("pub fnc ores_xdp(): int { return 5; }")
         reject("pub fnc ores_xdp(): int { return -1; }")
         reject("pub fnc ores_xdp(): int { return 2; }\nfnc helper(): int { return 1; }")
-        reject("pub fnc ores_xdp(): int { val int v = 2; return v; }")
+        reject("pub fnc ores_xdp(): int { val v: int = 2; return v; }")
         reject("pub fnc ores_xdp(): int { return ores_xdp(); }")
         reject("pub fnc ores_xdp(): int { return 2; }\n" + "// extra\n" * 17000,
                "source exceeds")
