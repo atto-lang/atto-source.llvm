@@ -211,4 +211,9 @@ struct Program {
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
+// BPF/XDP has a compiler-owned opaque kernel context that is intentionally not
+// a native user class. This entrypoint performs parser/name/arity validation;
+// emit_verified_bpf_xdp_ir() owns the narrower target-specific admission.
+Program parse_program_bpf_xdp(std::string_view source);
+
 } // namespace oreslang
