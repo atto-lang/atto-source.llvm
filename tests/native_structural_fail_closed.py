@@ -28,6 +28,14 @@ PROGRAMS = {
         fnc take(structural (int, int, string?) value): int { return 1; }
         fnc main(): int { return take(...(5, 3, "foo", "start")); }
     """,
+    "explicit tuple parameter": """
+        fnc take(tuple (int, int, string?) value): int { return 1; }
+        fnc main(): int { return 1; }
+    """,
+    "parenthesized tuple parameter": """
+        fnc take((int, int, string?) value): int { return 1; }
+        fnc main(): int { return 1; }
+    """,
     "structural match": """
         fnc main(): int {
           match 1 over
@@ -74,6 +82,11 @@ def main():
                 raise RuntimeError(f"{name}: expected a diagnosed compiler failure; got {result.returncode}")
             if not result.stderr.strip():
                 raise RuntimeError(f"{name}: missing rejection diagnostic")
+            if name in ("explicit tuple parameter", "parenthesized tuple parameter"):
+                required = ("native positional tuple parameter requires verified "
+                            "readonly-slot and optional-tail lowering")
+                if required not in result.stderr:
+                    raise RuntimeError(f"{name}: rejection lacked tuple-specific semantic diagnostic")
             if result.stdout.strip():
                 raise RuntimeError(f"{name}: rejected structural source leaked LLVM IR/output")
     print("LLVM structural bootstrap correctly fails closed (not parity)")
