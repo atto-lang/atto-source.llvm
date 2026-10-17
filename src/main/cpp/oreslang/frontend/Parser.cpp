@@ -532,7 +532,7 @@ private:
                     digits.data(), digits.data() + digits.size(), integer);
             if (parsed_integer.ec != std::errc{} ||
                     parsed_integer.ptr != digits.data() + digits.size() ||
-                    integer > UINT64_C(9007199254740992))
+                    integer > 9007199254740992ULL)
                 fail("native complex128 imaginary integer promotion exceeds exact binary64 range");
         }
         double value = 0.0;
