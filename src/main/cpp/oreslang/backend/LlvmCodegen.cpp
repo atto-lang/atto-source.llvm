@@ -323,6 +323,22 @@ llvm::Value* lower_complex128(const Expression& expr,
                 builder.CreateFNeg(imaginary, "complex.neg.imag"),
                 "complex.neg");
         }
+        case Expression::Kind::ArrayCall: {
+            if (!expr.left || !expr.arguments.empty() ||
+                    (expr.name != "conj" && expr.name != "conjugate"))
+                throw std::runtime_error(
+                    "invalid complex128 member reached LLVM lowering");
+            llvm::Value* operand =
+                lower_complex128(*expr.left, builder, f64, complex128);
+            llvm::Value* real =
+                builder.CreateExtractValue(operand, {0}, "complex.conj.real");
+            llvm::Value* imaginary =
+                builder.CreateExtractValue(operand, {1}, "complex.conj.imag.read");
+            return make_complex128(
+                builder, complex128, real,
+                builder.CreateFNeg(imaginary, "complex.conj.imag"),
+                "complex.conj");
+        }
         case Expression::Kind::Add:
         case Expression::Kind::Subtract: {
             llvm::Value* left =
