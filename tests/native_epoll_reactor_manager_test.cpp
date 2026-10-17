@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeEpollReactorManager.hpp"
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <stdexcept>
 #include <thread>
@@ -123,6 +124,35 @@ int main() {
         check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
         ::close(endpoints[0]);
         ::close(endpoints[1]);
+    }
+    {
+        // Cancellation and retirement may race on different host threads.
+        // Exactly one terminal record must win; a failed try-lock is not
+        // evidence of successful cancellation.
+        for (int round = 0; round < 48; ++round) {
+            NativeEpollReactorManager manager(1);
+            int pipefd[2]{-1, -1};
+            check(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+            auto watch = manager.try_watch(pipefd[0], EPOLLIN);
+            check(watch.has_value());
+            std::atomic<bool> cancelled{false};
+            std::thread racing([&] {
+                cancelled.store(manager.try_cancel(*watch), std::memory_order_release);
+            });
+            manager.stop();
+            racing.join();
+            auto terminal = manager.try_pop();
+            check(terminal.has_value());
+            check(terminal->event.ticket.value == watch->ticket.value);
+            check(terminal->event.outcome ==
+                (cancelled.load(std::memory_order_acquire)
+                    ? NativeEpollReactor::Outcome::cancelled
+                    : NativeEpollReactor::Outcome::stopped));
+            check(!manager.try_pop().has_value());
+            check(!manager.try_cancel(*watch));
+            ::close(pipefd[0]);
+            ::close(pipefd[1]);
+        }
     }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
