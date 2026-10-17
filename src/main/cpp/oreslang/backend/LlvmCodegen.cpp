@@ -244,10 +244,17 @@ std::string emit_verified_llvm_ir(const Program& source) {
             "ores_actor_i64_heap_field_init_mutable",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                                     {ptr, i64, i64, i64, i64}, false));
-    llvm::FunctionCallee fieldWrite = module.getOrInsertFunction(
-            "ores_actor_i64_heap_field_write",
+    llvm::FunctionCallee stateWriteBegin = module.getOrInsertFunction(
+            "ores_actor_i64_heap_state_write_begin",
+            llvm::FunctionType::get(i64, {ptr, i64, i64}, false));
+    llvm::FunctionCallee stateWriteEnd = module.getOrInsertFunction(
+            "ores_actor_i64_heap_state_write_end",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context),
-                                    {ptr, i64, i64, i64, i64}, false));
+                                    {ptr, i64, i64, i64}, false));
+    llvm::FunctionCallee fieldWriteGranted = module.getOrInsertFunction(
+            "ores_actor_i64_heap_field_write_granted",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                    {ptr, i64, i64, i64, i64, i64}, false));
 
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::Function*> actorInitializers;
@@ -804,6 +811,10 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             }
                             loanLocals.emplace("@state." + actor.fields[i].name, key);
                         }
+                        llvm::Value* scopedWriteGrant = nullptr;
+                        if (!arm.state_loan->assignments.empty())
+                            scopedWriteGrant = builder.CreateCall(stateWriteBegin,
+                                {heap, currentDomain, currentEpoch}, "state.write.grant");
                         for (const auto& assignment : arm.state_loan->assignments) {
                             const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
                                 [&](const LocalBinding& f) { return f.name == assignment.field; });
@@ -813,14 +824,17 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             auto* updated = lower(*assignment.value, builder, i64,
                                 armParameters, loanLocals, declarations);
                             const auto index = std::distance(actor.fields.begin(), it);
-                            builder.CreateCall(fieldWrite,
-                                {heap, currentDomain, currentEpoch,
+                            builder.CreateCall(fieldWriteGranted,
+                                {heap, currentDomain, currentEpoch, scopedWriteGrant,
                                  llvm::ConstantInt::get(i64, index), updated});
                             builder.CreateStore(updated,
                                 loanLocals.at("@state." + assignment.field));
                         }
                         auto* copied = lower(*arm.state_loan->result, builder, i64,
                                             armParameters, loanLocals, declarations);
+                        if (scopedWriteGrant)
+                            builder.CreateCall(stateWriteEnd,
+                                {heap, currentDomain, currentEpoch, scopedWriteGrant});
                         armCopiedState = copied;
                         armParameters.emplace(arm.state_loan->result_binding, copied);
                     }
@@ -870,6 +884,12 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 auto* whenFalse = llvm::BasicBlock::Create(context, "match.false", fn);
                 auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
                 builder.CreateCondBr(condition, whenTrue, whenFalse);
+                // Only lexical critical state-loan regions can mint a write
+                // grant. The old implicit mutation ABI is no longer callable.
+                for (const auto& arm : method.boolean_arms)
+                    if (!arm.assignments.empty())
+                        throw std::runtime_error(
+                            "legacy match mutation requires scoped critical handle_state");
                 // The parser proves exactly two exhaustive, nonoverlapping
                 // bool arms; no implicit fallthrough or untyped default.
                 for (const auto& arm : method.boolean_arms) {
@@ -881,16 +901,17 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             throw std::runtime_error("invalid receive match field mutation");
                         auto* updated = lower(*assignment.value, builder, i64,
                                               parameters, locals, declarations);
-                        builder.CreateCall(fieldWrite,
-                            {heap, currentDomain, currentEpoch,
-                             llvm::ConstantInt::get(i64,
-                                std::distance(actor.fields.begin(), field)), updated});
+                        throw std::runtime_error(
+                            "legacy match field mutation requires scoped critical handle_state");
                         builder.CreateStore(updated, locals.at(assignment.field));
                     }
                     builder.CreateBr(joined);
                 }
                 builder.SetInsertPoint(joined);
             }
+            if (!method.assignments.empty())
+                throw std::runtime_error(
+                    "legacy actor field mutation requires scoped critical handle_state");
             for (const auto& assignment : method.assignments) {
                 const auto match = std::find_if(actor.fields.begin(), actor.fields.end(),
                     [&](const LocalBinding& f) { return f.name == assignment.field; });
@@ -899,9 +920,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     throw std::runtime_error("invalid actor field mutation lowering");
                 llvm::Value* updated = lower(*assignment.value, builder, i64,
                                              parameters, locals, declarations);
-                builder.CreateCall(fieldWrite,
-                    {heap, currentDomain, currentEpoch,
-                     llvm::ConstantInt::get(i64, std::distance(actor.fields.begin(), match)), updated});
+                throw std::runtime_error(
+                    "legacy actor field mutation cannot emit persistent store");
                 builder.CreateStore(updated, locals.at(assignment.field));
             }
             auto* result = lower(*method.result, builder, i64,
@@ -1014,7 +1034,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "ores_actor_i64_heap_field_init"
                             && name != "ores_actor_i64_heap_field_read"
                             && name != "ores_actor_i64_heap_field_init_mutable"
-                            && name != "ores_actor_i64_heap_field_write"
+                            && name != "ores_actor_i64_heap_state_write_begin"
+                            && name != "ores_actor_i64_heap_state_write_end"
+                            && name != "ores_actor_i64_heap_field_write_granted"
                             && name != "oreslang_source_actor_pipeline_connect"
                             && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
