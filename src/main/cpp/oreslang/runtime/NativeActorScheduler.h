@@ -10,6 +10,10 @@ typedef struct {
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
+typedef struct {
+    uint64_t principal;
+    uint64_t incarnation;
+} OresNativeActorIdentity;
 enum { ORES_NATIVE_CONTROL_PANIC = 1, ORES_NATIVE_CONTROL_CANCELLED = 2,
        ORES_NATIVE_CONTROL_STOPPED = 3 };
 typedef struct {
@@ -112,6 +116,16 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Resolve a live ActorRef to backend-owned identity for CONTROL membership.
+ * principal is process-global/non-recycling; incarnation is scheduler-owned.
+ * Guest code never supplies either field. */
+int ores_native_actor_scheduler_resolve_actor_identity(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorIdentity* out);
+/* Derive memory authority from the actual current scheduler execution claim.
+ * No ActorRef or numeric actor identity is accepted from guest/source code. */
+int ores_native_actor_scheduler_current_actor_identity(
+    OresNativeActorScheduler* scheduler, OresNativeActorIdentity* out);
 /* Host CONTROL-plane wake only: signals an existing scheduler condition.
  * Does not admit actor mail, start workers, invoke guest code, or count as
  * a supervisor delivery receipt. Returns zero once retired.
