@@ -84,3 +84,24 @@ ancestry and content, *not executed code tests*.
   carrier run to certify this exact HEAD.
 - Resolve source-level no-value `void` versus `Unit` (#1098) before
   enabling positive guest syntax; no GPU-to-CPU implicit fallback.
+
+## Follow-up: inline-then-throw rejection provenance
+
+The native submitter now defers inline-executor settlement until the
+external scheduler returns. If the scheduler invokes the callback
+synchronously and then throws, the Future reports **the real scheduler
+exception**, not a premature inline-dispatch error. Normal inline
+dispatch still fails closed, with zero native writes.
+
+Updated native bridge header Git blob:
+`a29ba836ccf5ddd5bcaa160380b2b75b2640a5ac`.
+Updated checked-in native test adds this hostile inline-then-throw
+case, preserving the original exception and output immutability.
+
+**Local executed evidence:** the separately disclosed native
+admission-gate algorithm reproducer (not the production header)
+passed 12,288 checks per configuration: GCC 14 Debug,
+GCC 14 Release and Clang 17 ASan+UBSan, 1,024 iterations each.
+The real CMake/CTest suite still has no successful current-head
+runner allocation or uploaded artifact, and this must remain
+a draft until exact production source is built on authorized CI.
