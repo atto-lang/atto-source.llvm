@@ -426,6 +426,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_complex128_imaginary_integer_narrowing_failclosed
         native-complex128-imag-int-narrow-reject.ores
         --diagnostic "native complex128 imaginary integer promotion exceeds exact binary64 range")
+    oreslang_contract_test(native_complex128_local_failclosed
+        native-complex128-local-reject.ores
+        --diagnostic "native complex128 is currently supported only as a zero-argument return type")
+    oreslang_contract_test(native_complex128_call_from_int_failclosed
+        native-complex128-call-from-int-reject.ores
+        --diagnostic "native complex128 call results require typed complex call ABI lowering")
+    oreslang_contract_test(native_complex128_call_from_complex_failclosed
+        native-complex128-call-from-complex-reject.ores
+        --diagnostic "native complex128 calls require typed complex call ABI lowering")
     if(ORE_CLANG)
         oreslang_contract_test(native_complex128_return_ir_verifies
             native-complex128-return.ores
