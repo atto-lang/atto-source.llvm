@@ -166,6 +166,47 @@ def main():
                 shutil.copyfile(objfile, args.output_dir / ("xdp-%d-O2.o" % action))
                 shutil.copyfile(objfile_o0, args.output_dir / ("xdp-%d-O0.o" % action))
 
+        # Verifier-aware packet byte slice. The source sees only an opaque,
+        # borrowed XdpContext; the compiler owns data/data_end extraction and
+        # inserts the bounds branch before the packet load.
+        packet_source = (
+            "pub fnc ores_xdp(borrow XdpContext ctx): int {\n"
+            "  if (ctx.packet_u8(12) == 8) { return 1; } fi\n"
+            "  return 2;\n"
+            "}\n"
+        )
+        src.write_text(packet_source, encoding="utf-8")
+        packet_result = run(cmd)
+        require(packet_result.returncode == 0, packet_result.stderr)
+        packet_ir = packet_result.stdout
+        require("packet.load.0" in packet_ir and "packet.next.0" in packet_ir,
+                "packet_u8 lowering lacks explicit checked CFG")
+        require("icmp ule" in packet_ir and "load i8" in packet_ir,
+                "packet_u8 lowering lacks bounds compare or byte load")
+        require("ret i32 1" in packet_ir and "ret i32 2" in packet_ir,
+                "packet_u8 lowering lost guarded/fallback actions")
+        packet_ll = root / "packet-u8.ll"
+        packet_obj = root / "packet-u8.o"
+        packet_ll.write_text(packet_ir, encoding="utf-8")
+        packet_compiled = run([clang, "--target=bpfel", "-O2", "-x", "ir", "-c",
+                               str(packet_ll), "-o", str(packet_obj)])
+        require(packet_compiled.returncode == 0,
+                "packet_u8 BPF object failed: " + packet_compiled.stderr)
+        packet_sections = run([readelf, "-W", "-S", str(packet_obj)])
+        require(packet_sections.returncode == 0 and
+                re.search(r"\s+xdp\s+", packet_sections.stdout) and
+                ".maps" not in packet_sections.stdout and ".BTF" not in packet_sections.stdout,
+                "packet_u8 object violated stage-1 section boundary")
+        packet_symbols = run([readelf, "-W", "-s", str(packet_obj)])
+        require(packet_symbols.returncode == 0 and " UND " not in packet_symbols.stdout,
+                "packet_u8 object has unresolved symbols")
+        packet_reloc = run([readelf, "-W", "-r", str(packet_obj)])
+        require(packet_reloc.returncode == 0 and
+                "There are no relocations in this file." in packet_reloc.stdout,
+                "packet_u8 object unexpectedly requires relocations")
+        if args.output_dir:
+            shutil.copyfile(packet_obj, args.output_dir / "xdp-packet-u8.o")
+
         # Harmless lexical/parenthesization differences must normalize to the
         # exact same verified IR as the canonical XDP_PASS source.
         for equivalent in (
@@ -247,6 +288,17 @@ def main():
         reject("pub fnc ores_xdp<T>(): int { return 2; }", None)
         reject("pub fnc ores_xdp(): void { return; }", None)
         reject("pub fnc ores_xdp(): int { if (true) { return 2; } return 1; }", None)
+        reject("pub fnc ores_xdp(XdpContext ctx): int { return 2; }")
+        reject("pub fnc ores_xdp(borrow mut XdpContext ctx): int { return 2; }")
+        reject("pub fnc ores_xdp(borrow XdpContext ctx, int x): int { return 2; }")
+        reject("pub fnc ores_xdp(borrow Foo ctx): int { return 2; }")
+        reject("pub fnc ores_xdp(): int { if (ctx.packet_u8(12) == 8) { return 1; } fi return 2; }")
+        reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u8(4096) == 8) { return 1; } fi return 2; }")
+        reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u8(-1) == 8) { return 1; } fi return 2; }")
+        reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u8(12) == 256) { return 1; } fi return 2; }")
+        reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u8(12) == 8) { return 4; } fi return 2; }")
+        reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u16(12) == 8) { return 1; } fi return 2; }")
+        reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if ((ctx.packet_u8(12) + 0) == 8) { return 1; } fi return 2; }")
         reject("// ores:target=bpfel\npub fnc ores_xdp(): int { return 2; }",
                "environment headers")
         reject("pub fnc ores_xdp(): int { return 2; }\n" + ("// extra\n" * 2000),
