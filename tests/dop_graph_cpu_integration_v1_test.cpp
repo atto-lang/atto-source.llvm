@@ -121,6 +121,28 @@ int main() {
                 "inline executor modified native destination");
         }
 
+        // If a hostile executor invokes the callback inline and THEN
+        // throws, the actual rejection must win. Neither path may write.
+        {
+            output->write(2, 1, 125.0f);
+            auto rejected_inline = submit_owned_cpu_graph(kernel, input, output,
+                source, destination, answer(),
+                [&](std::function<void()> callback) {
+                    callback();
+                    throw std::runtime_error("inline then rejected");
+                });
+            ++checks;
+            try {
+                (void) rejected_inline.get();
+                throw std::runtime_error("inline/throw executor unexpectedly completed");
+            } catch (const std::runtime_error& error) {
+                if (std::string(error.what()) != "inline then rejected")
+                    throw;
+            }
+            require(output->read(2, 1) == 125.0f,
+                "inline/throw scheduler mutated output");
+        }
+
         // A scheduler may launch a worker, wait for it to begin, THEN throw.
         // A cancelled-bit check alone is insufficient: the already-running
         // worker must remain behind an independent admission barrier.
