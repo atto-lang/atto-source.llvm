@@ -31,7 +31,7 @@ jobs:
           git diff --cached --quiet
           printf 'commit=%s\n' "$observed" >> "$GITHUB_OUTPUT"
           printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
-      - name: Execute 10 complex reference tests in three complete rounds
+      - name: Execute 13 complex reference tests in three complete rounds
         id: finite_oracles
         shell: bash
         run: |
@@ -50,12 +50,12 @@ jobs:
           spec.loader.exec_module(module)
           for round_id in range(1, 4):
               suite = unittest.defaultTestLoader.loadTestsFromModule(module)
-              if suite.countTestCases() != 10:
+              if suite.countTestCases() != 13:
                   raise SystemExit("NUMERIC_COMPLEX_V1_TEST_COUNT_CHANGED")
               result = unittest.TextTestRunner(verbosity=2).run(suite)
-              if result.testsRun != 10 or not result.wasSuccessful() or result.skipped or result.expectedFailures or result.unexpectedSuccesses:
+              if result.testsRun != 13 or not result.wasSuccessful() or result.skipped or result.expectedFailures or result.unexpectedSuccesses:
                   raise SystemExit("NUMERIC_COMPLEX_REFERENCE_ROUND_FAILED")
-              print(f"NUMERIC_COMPLEX_FINITE_REFERENCE_ROUND_{round_id}=10_NOT_GUEST")
+              print(f"NUMERIC_COMPLEX_FINITE_REFERENCE_ROUND_{round_id}=13_NOT_GUEST")
           PY
       - name: Write non-certifying reference run metadata
         if: ${{ always() }}
