@@ -224,6 +224,12 @@ def main():
         # Admission boundary: exactly 4096 bytes is permitted, 4097 is rejected
         # before parsing. Padding is a trailing source comment.
         base = b"pub fnc ores_xdp(): int { return 2; }\n"
+        # Every incomplete prefix before the final closing brace/newline form
+        # must fail without leaking a partial module. The complete source minus
+        # only its trailing newline is intentionally excluded because it is valid.
+        for cut in range(len(base) - 1):
+            reject_bytes(base[:cut], None)
+
         exact = base + b"//" + (b"x" * (4096 - len(base) - 3)) + b"\n"
         require(len(exact) == 4096, "test bug: exact BPF boundary is not 4096 bytes")
         src.write_bytes(exact)
@@ -312,18 +318,22 @@ def main():
             require(good.returncode == 0 and 'target triple = "bpfel"' in good.stdout,
                     "valid BPF CLI ordering failed: " + repr(good_flags) + " " + good.stderr)
 
-        for flags in (["--target=bpfel", "--target=bpfel", "--bpf-program=xdp"],
-                      ["--target=bpfel", "--bpf-program=xdp", "--bpf-program=xdp"],
-                      ["--target=bpfel", "--experimental-owned-int", "--bpf-program=xdp"],
-                      ["--target=bpfel"],
-                      ["--bpf-program=xdp"],
-                      ["--target=bpfel", "--bpf-program=socket"],
-                      ["--target=bpfel", "--bpf-program="],
-                      ["--target=bpfeb", "--bpf-program=xdp"],
-                      ["--target=bpfel", "--bpf-program=xdp", "--cpu=v3"]):
+        cli_cases = (
+            (["--target=bpfel", "--target=bpfel", "--bpf-program=xdp"], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--bpf-program=xdp"], 2),
+            (["--target=bpfel", "--experimental-owned-int", "--bpf-program=xdp"], 1),
+            (["--target=bpfel"], 2),
+            (["--bpf-program=xdp"], 2),
+            (["--target=bpfel", "--bpf-program=socket"], 2),
+            (["--target=bpfel", "--bpf-program="], 2),
+            (["--target=bpfeb", "--bpf-program=xdp"], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--cpu=v3"], 2),
+        )
+        for flags, expected_code in cli_cases:
             proc = run([args.compiler, *flags, str(src)])
-            require(proc.returncode != 0 and not proc.stdout,
-                    "invalid BPF CLI option accepted: " + repr(flags))
+            require(proc.returncode == expected_code and not proc.stdout,
+                    "wrong fail-closed CLI result for %r: code=%d stderr=%r" %
+                    (flags, proc.returncode, proc.stderr))
     print("eBPF XDP admission/bounds/UTF8/determinism/ELF/symbol/relocation/action gates PASS; kernel verifier separate")
 
 
