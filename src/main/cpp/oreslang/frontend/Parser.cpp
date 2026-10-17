@@ -1664,9 +1664,17 @@ private:
                 throw std::runtime_error(
                     "native complex128 multiplication requires exact once-rounded lowering at byte "
                     + std::to_string(expr.offset));
+            case Expression::Kind::Call:
+                throw std::runtime_error(
+                    "native complex128 calls require typed complex call ABI lowering at byte "
+                    + std::to_string(expr.offset));
+            case Expression::Kind::Variable:
+                throw std::runtime_error(
+                    "native complex128 locals/parameters require typed complex storage lowering at byte "
+                    + std::to_string(expr.offset));
             default:
                 throw std::runtime_error(
-                    "native complex128 first slice supports only numeric literals, unary minus, add and subtract at byte "
+                    "native complex128 first slice supports only numeric literals, unary minus, add/subtract and conjugation at byte "
                     + std::to_string(expr.offset));
         }
     }
