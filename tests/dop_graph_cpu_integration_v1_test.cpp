@@ -216,9 +216,6 @@ int main() {
         require(weakInput.expired() && weakOutput.expired(),
                 "completed closure unexpectedly retained native owners");
     }
-    std::cout << "PASS " << checks
-              << " native owned-F32 + typed-I64 host graph assertions\n";
-
     // Whole zero-row layouts and zero-length slices are valid CPU no-ops,
     // but they still require trusted owned roots and one-shot worker admission.
     // The independent host-only i64 graph must still publish exactly once.
@@ -261,5 +258,9 @@ int main() {
                 && sliceOutput->read(2, 0) == 0,
                 "empty native slice mutated host output");
     }
+
+    std::cout << "PASS " << checks
+              << " native owned-F32 + typed-I64 host graph assertions\n";
+
 
 }
