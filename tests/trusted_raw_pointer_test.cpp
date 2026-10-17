@@ -40,10 +40,10 @@ int main() {
     try {
         const auto authority = TrustedUnsafeMemoryAuthority::compiler_trusted();
         const auto exclusive = TrustedExclusiveRawMemoryAuthority::compiler_trusted();
-        const auto provenance = TrustedRawProvenance::compiler_trusted(0xA11CEu);
+        const auto provenance = TrustedRawProvenance::compiler_trusted(0xA11CEu, 7);
 
         require_throws<std::invalid_argument>(
-            [&] { (void)TrustedRawProvenance::compiler_trusted(0); },
+            [&] { (void)TrustedRawProvenance::compiler_trusted(0, 0); },
             "zero provenance identity must reject");
 
         std::array<std::int32_t, 4> values{{10, 20, 30, 40}};
@@ -104,7 +104,7 @@ int main() {
         std::array<std::int32_t, 2> other_values{{1, 2}};
         auto other = TrustedRawPointer<std::int32_t>::from_span(
             other_values.data(), other_values.size(), authority,
-            TrustedRawProvenance::compiler_trusted(0xB0Bu));
+            TrustedRawProvenance::compiler_trusted(0xB0Bu, 1));
         require_throws<std::invalid_argument>(
             [&] { (void)base.distance_elements(other); },
             "unrelated provenance subtraction must reject");
@@ -114,6 +114,15 @@ int main() {
         require_throws<std::invalid_argument>(
             [&] { (void)base.distance_elements(other_address_space); },
             "cross-address-space subtraction must reject");
+
+        auto stale_generation = TrustedRawPointer<std::int32_t>::from_span(
+            values.data(), values.size(), authority,
+            TrustedRawProvenance::compiler_trusted(0xA11CEu, 8));
+        require(stale_generation.address() == base.address(),
+                "generation test must use the same numeric address");
+        require_throws<std::invalid_argument>(
+            [&] { (void)base.distance_elements(stale_generation); },
+            "same region/address with a stale generation must reject");
 
         auto raw = TrustedRawPointer<std::int32_t>::from_address(
             reinterpret_cast<std::uintptr_t>(values.data()), authority);
@@ -168,7 +177,7 @@ int main() {
         NoDefault non_default(1234);
         auto non_default_raw = TrustedRawPointer<NoDefault>::from_span(
             &non_default, 1, authority,
-            TrustedRawProvenance::compiler_trusted(0xD3FA017u));
+            TrustedRawProvenance::compiler_trusted(0xD3FA017u, 1));
         require(non_default_raw.load().value == 1234,
                 "trivially-copyable non-default-constructible load must work");
 
