@@ -24,6 +24,15 @@ int main() {
         }
         check(manager.started_threads() == 1); // five pending I/O != five threads
         for (auto& p : fds) check(::write(p[1], "x", 1) == 1);
+        // A host poller is allowed to acknowledge eventfd before consuming
+        // the completion records. They must remain signalled until drained:
+        // try_pop is nonparking and can temporarily fail due to lock contention.
+        struct pollfd early{manager.completion_fd(0), POLLIN, 0};
+        check(early.fd >= 0);
+        check(::poll(&early, 1, 3000) == 1);
+        manager.drain_completion_signal(0);
+        early.revents = 0;
+        check(::poll(&early, 1, 0) == 1);
         std::array<bool, 5> seen{};
         std::size_t done = 0;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
