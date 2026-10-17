@@ -1,0 +1,4 @@
+// Experimental eBPF XDP program: XDP_PASS, no packet access yet.
+pub fnc ores_xdp(): int {
+    return 2;
+}
