@@ -46,11 +46,11 @@ parameter for the bounded `packet_u8` guard slice. Return actions remain
 literal basic XDP actions:
 0=XDP_ABORTED, 1=XDP_DROP, 2=XDP_PASS, 3=XDP_TX.
 `XDP_REDIRECT` is intentionally not admitted: redirect requires state prepared
-by `bpf_redirect()` or `bpf_redirect_map()`, which stage 0 does not expose.
+by `bpf_redirect()` or `bpf_redirect_map()`, which stage 1 does not expose.
 The compiler emits the kernel entry ABI `i32(ptr ctx)`, marks section
 `xdp`, and emits a `Proprietary\0` license section. This is deliberately a
 **non-GPL kernel capability marker**, not a legal source-license declaration:
-stage 0 has no helpers, and later GPL-only helper/kfunc support must require an
+stage 1 has no helpers, and later GPL-only helper/kfunc support must require an
 explicit licensing policy rather than silently inheriting compiler defaults.
 It never exposes raw kernel pointers to Oreslang source.
 
@@ -74,20 +74,26 @@ in-bounds mismatch fallback, in-bounds byte match, and a normal 1500-byte
 packet fallback. Negative verifier fixtures also rejected uninitialized R0,
 invalid context access, out-of-bounds stack access, and an unknown helper.
 
+A separate exact-blob toolchain run
+[39076709211](https://github.com/ores-dummy-org-oreslang-stack/ores-dummy-org-oreslang-stack-lambdas/actions/runs/39076709211)
+built and passed the focused CTests with GCC, Clang, and Clang under
+AddressSanitizer + UndefinedBehaviorSanitizer + `_GLIBCXX_ASSERTIONS`.
+
 This is **focused exact-blob evidence, not full repository tree evidence**.
 It does not yet prove source-tree-wide CTest, multiple kernel versions, maps,
 helpers, BTF/CO-RE, live attachment, or network namespace behavior.
 
 ## Evidence boundary
 
-The dedicated CTest checks positive XDP actions, negative source admission,
-actual Clang BPF object generation, ELF architecture, and required sections.
+The focused CTests cover positive XDP actions, packet-bound admission,
+negative source admission, direct-AST backend fail-closed checks, actual
+Clang BPF object generation, ELF architecture, and required sections.
 It requires a Clang distribution with the BPF backend and binutils readelf.
 A successful IR verifier result alone is **not** sufficient evidence.
 
 Remaining milestones, in order:
 1. Run an **exact full-tree** build and complete CTest inventory; the current
-   passing evidence is a focused 20-blob compiler/XDP slice.
+   passing evidence is a focused 21-blob compiler/XDP slice.
 2. Repeat verifier/test-run evidence across an explicit supported Linux
    kernel matrix, and separately test live attach/detach in an isolated
    network namespace with deterministic cleanup.
