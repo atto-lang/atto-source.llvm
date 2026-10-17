@@ -17,6 +17,7 @@ int main(){
   Expr::add(Expr::i64(std::numeric_limits<std::int64_t>::max()),Expr::i64(1)))));});
  const auto nb=lower(Expr::cpu(Expr::i64(1),true));
  assert(nb.result==Type::FutureI64);
+ rejects([]{lower(Expr::cpu(Expr::cpu(Expr::i64(1),true),true));});
  rejects([&]{execute_cpu_i64(nb);});
  rejects([]{lower(Expr::gpu(Expr::seq({})));});
  const auto gpu=lower(Expr::gpu(
