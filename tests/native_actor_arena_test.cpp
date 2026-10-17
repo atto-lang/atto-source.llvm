@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "native actor arena failed:%d\n", __LINE__); return 1; } } while (0)
-enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN };
+enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN, FOREIGN_ARENA_HANDLE };
 typedef struct { OresActorArena* arena; OresArenaTurn turn; OresArenaHandle handle; } WrongCarrier;
 static int different_carrier_with_stolen_turn(void* opaque) {
     WrongCarrier* x = (WrongCarrier*) opaque;
@@ -62,6 +62,14 @@ static void invalid(enum Misuse m) {
     } else if (m == NESTED_ACTOR_TURN) {
         OresActorArena* other = ores_actor_arena_open(33, 2, 1, 16, 16);
         (void) ores_actor_arena_enter(other, 33, 2);
+    } else if (m == FOREIGN_ARENA_HANDLE) {
+        /* Two actor-private arenas in the same trusted shared scheduler are
+         * still different ownership domains, even with identical actor IDs. */
+        ores_actor_arena_leave(a, t);
+        OresActorArena* other = ores_actor_arena_open(23, 2, 2, 64, 128);
+        OresArenaTurn other_turn = ores_actor_arena_enter(other, 23, 2);
+        int v = 0;
+        ores_actor_arena_read(other, other_turn, h, 0, &v, sizeof(v));
     }
 }
 #if defined(__unix__) || defined(__APPLE__)
@@ -133,7 +141,7 @@ int main(void) {
     ores_actor_arena_leave(a, unwinding);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
 #if defined(__unix__) || defined(__APPLE__)
-    for (int n = STALE_TURN; n <= NESTED_ACTOR_TURN; ++n) CHECK(rejects((enum Misuse) n));
+    for (int n = STALE_TURN; n <= FOREIGN_ARENA_HANDLE; ++n) CHECK(rejects((enum Misuse) n));
 #endif
     return 0;
 }
