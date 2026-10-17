@@ -22,10 +22,11 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Floating, Imaginary, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
+    double floating = 0.0;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
@@ -83,7 +84,7 @@ struct ClassDecl {
 // Native source value categories. Future<T> remains a no-IR boundary
 // until the compiler can lower nonblocking pinned continuations.
 struct SourceType {
-    enum class Kind { I64, ActorRef, Future };
+    enum class Kind { I64, Complex128, ActorRef, Future };
     Kind kind = Kind::I64;
     std::string argument;
 };
@@ -169,6 +170,10 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    // First native complex128 slice: zero-argument, return-only scalar
+    // functions. Parameters/locals/calls remain fail-closed until their
+    // ownership and ABI rules are separately typed.
+    bool returns_complex = false;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
