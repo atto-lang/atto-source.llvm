@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
         std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
-                  << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
+                  << "Supported: int functions/parameters/calls; plus zero-argument return-only complex128 add/sub/negate/conjugate on host.\n";
         return 2;
     }
     try {

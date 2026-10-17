@@ -179,3 +179,21 @@ uploaded short-lived [artifact #12110614229](https://github.com/cliptown/cliptow
 Its checks were not copied from the private Oreslang source tree;
 **the actual source finite/IEEE oracle files and Oreslang native guest
 compilers have not been tested successfully by that host**.
+
+
+## Refreshed LLVM typed complex128 slice (2026-10-17)
+
+LLVM branch `feature/complex128-typed-scalar-refresh-20261017` reapplies
+the reviewed typed-return complex128 work from draft #532 onto the newest
+actor/serde/arena integration head. The current 13-method frozen finite-input
+verifier is retained unchanged and the separate IEEE-special reference corpus
+is layered beside it.
+
+This native slice represents complex128 as LLVM `{ double, double }` and
+executes return-only literal trees with add, subtract, negate and conjugation,
+including raw-component ABI checks at `-O0` and `-O2`. Integer promotion
+is restricted to the exact binary64 range. Complex multiplication, division,
+locals, parameters and complex call ABI remain deliberately fail-closed until
+their exact once-rounded semantics and ownership/ABI lowering are implemented.
+No reference-only run is evidence of native parity until exact-head compiler,
+CTest and linked native execution actually run.

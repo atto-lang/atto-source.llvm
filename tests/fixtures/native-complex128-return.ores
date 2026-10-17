@@ -1,0 +1,35 @@
+pub fnc complex_add_sub(): complex {
+  return (1.5 + 2.0i) - (0.25 + 0.5i);
+}
+
+pub fnc complex_negate(): complex {
+  return -(1.0 + 2.0i);
+}
+
+pub fnc complex_conj(): complex {
+  return (3.0 + 4.0i).conj();
+}
+
+pub fnc complex_conjugate(): complex {
+  return (3.0 + 4.0i).conjugate();
+}
+
+pub fnc complex_imag_binary64_rounding(): complex {
+  return 9007199254740993i;
+}
+
+pub fnc complex_imag_overflow(): complex {
+  return 1e309i;
+}
+
+pub fnc complex_imag_underflow(): complex {
+  return 1e-4000i;
+}
+
+pub fnc complex_imag_negative_underflow(): complex {
+  return -1e-4000i;
+}
+
+pub fnc complex_imag_min_subnormal(): complex {
+  return 3e-324i;
+}

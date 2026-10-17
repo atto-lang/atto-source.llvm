@@ -29,12 +29,56 @@ VISIBILITY_NEGATIVE_FIXTURES = {
 }
 VISIBILITY_POSITIVE = "native_public_class_field_read"
 
+COMPLEX_NEGATIVE_FIXTURES = {
+    "native_complex128_parameter_failclosed": (
+        "native-complex-type-reject.ores",
+        "native complex128 parameters require typed complex ABI lowering",
+    ),
+    "native_complex128_literal_in_int_failclosed": (
+        "native-complex-literal-reject.ores",
+        "native floating/imaginary literal requires complex128 return context",
+    ),
+    "native_complex128_multiply_failclosed": (
+        "native-complex128-multiply-reject.ores",
+        "native complex128 multiplication requires exact once-rounded lowering",
+    ),
+    "native_complex128_divide_failclosed": (
+        "native-complex128-divide-reject.ores",
+        "native complex128 division requires exact once-rounded lowering",
+    ),
+    "native_complex128_integer_narrowing_failclosed": (
+        "native-complex128-int-narrow-reject.ores",
+        "native complex128 integer promotion exceeds exact binary64 range",
+    ),
+    "native_complex128_local_failclosed": (
+        "native-complex128-local-reject.ores",
+        "native complex128 is currently supported only as a zero-argument return type",
+    ),
+    "native_complex128_call_from_int_failclosed": (
+        "native-complex128-call-from-int-reject.ores",
+        "native complex128 call results require typed complex call ABI lowering",
+    ),
+    "native_complex128_call_from_complex_failclosed": (
+        "native-complex128-call-from-complex-reject.ores",
+        "native complex128 calls require typed complex call ABI lowering",
+    ),
+    "native_complex128_real_conjugate_failclosed": (
+        "native-complex128-real-conjugate-reject.ores",
+        "native complex128 conjugation requires a complex operand",
+    ),
+}
+COMPLEX_POSITIVE_IR = "native_complex128_return_ir_verifies"
+COMPLEX_POSITIVE_AOT = "native_complex128_return_aot_raw_bits"
+
 
 CRITICAL_TESTS = (
     "native_contract_harness_optimize_failclosed",
     "native_contract_harness_python_O",
     "native_contract_harness_python_OO",
     "native_contract_positive_object_verifies",
+    COMPLEX_POSITIVE_IR,
+    COMPLEX_POSITIVE_AOT,
+    *COMPLEX_NEGATIVE_FIXTURES,
     "constant_main",
     "native_rt_while_loop_failclosed",
     "native_actor_owned_heap_contract",
@@ -61,7 +105,14 @@ CRITICAL_TESTS = (
     VISIBILITY_POSITIVE,
 )
 
-TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
+TIMED_TESTS = frozenset((
+    "native_contract_harness_optimize_failclosed",
+    "native_contract_harness_python_O",
+    "native_contract_harness_python_OO",
+    "native_contract_positive_object_verifies",
+    COMPLEX_POSITIVE_IR,
+    COMPLEX_POSITIVE_AOT,
+))
 # Bind critical CTest *names* to the real commands in CMakeLists.txt. A
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
@@ -114,6 +165,43 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
     This is deliberately a manifest check, not binary provenance or evidence
     that the command executed. Full CTest and independent CI remain mandatory.
     """
+    if name in COMPLEX_NEGATIVE_FIXTURES:
+        fixture, diagnostic = COMPLEX_NEGATIVE_FIXTURES[name]
+        if (len(command) < 7 or not python_program(command[0])
+                or not command[1].endswith("/tests/contract.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--fixture", name).endswith(
+                    "/tests/fixtures/" + fixture)
+                or option_value(command, "--diagnostic", name) != diagnostic
+                or any(flag in command for flag in
+                       ("--run", "--ir", "--verify-object", "--no-native-abi"))):
+            raise ManifestFailure(
+                f"complex negative gate targets wrong compiler/fixture/evidence: {name}")
+        return
+    if name == COMPLEX_POSITIVE_IR:
+        if (not python_program(command[0])
+                or not command[1].endswith("/tests/contract.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--fixture", name).endswith(
+                    "/tests/fixtures/native-complex128-return.ores")
+                or option_value(command, "--ir", name) != "ret { double, double }"
+                or not option_value(command, "--clang", name)
+                or "--verify-object" not in command
+                or "--diagnostic" in command):
+            raise ManifestFailure(
+                "complex positive IR gate does not compile the typed aggregate fixture")
+        return
+    if name == COMPLEX_POSITIVE_AOT:
+        if (not python_program(command[0])
+                or not command[1].endswith("/tests/native_complex128_aot.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--clang", name)
+                or not option_value(command, "--fixture", name).endswith(
+                    "/tests/fixtures/native-complex128-return.ores")
+                or len(command) != 8):
+            raise ManifestFailure(
+                "complex native ABI gate does not run the exact raw-bit harness")
+        return
     if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
         positive = name == VISIBILITY_POSITIVE
         fixture = ("class-public-field-read-native.ores" if positive

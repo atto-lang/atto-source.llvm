@@ -5,8 +5,10 @@ import sys
 import unittest
 
 from ctest_manifest_gate import (
+    COMPLEX_NEGATIVE_FIXTURES, COMPLEX_POSITIVE_AOT, COMPLEX_POSITIVE_IR,
     CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
-    SOURCE_ACTOR_TESTS, TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE, check_manifest,
+    SOURCE_ACTOR_TESTS, TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES,
+    VISIBILITY_POSITIVE, check_manifest,
 )
 
 
@@ -16,7 +18,24 @@ def fixture():
     entries = []
     for name in CRITICAL_TESTS:
         props = [{"name": "TIMEOUT", "value": 90.0}] if name in TIMED_TESTS else []
-        if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
+        if name in COMPLEX_NEGATIVE_FIXTURES:
+            source, diagnostic = COMPLEX_NEGATIVE_FIXTURES[name]
+            command = [sys.executable, "/work/src/tests/contract.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--fixture", "/work/src/tests/fixtures/" + source,
+                       "--diagnostic", diagnostic]
+        elif name == COMPLEX_POSITIVE_IR:
+            command = [sys.executable, "/work/src/tests/contract.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--fixture", "/work/src/tests/fixtures/native-complex128-return.ores",
+                       "--ir", "ret { double, double }",
+                       "--verify-object", "--clang", "/usr/bin/clang"]
+        elif name == COMPLEX_POSITIVE_AOT:
+            command = [sys.executable, "/work/src/tests/native_complex128_aot.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--clang", "/usr/bin/clang",
+                       "--fixture", "/work/src/tests/fixtures/native-complex128-return.ores"]
+        elif name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
             positive = name == VISIBILITY_POSITIVE
             source = ("class-public-field-read-native.ores" if positive
                       else VISIBILITY_NEGATIVE_FIXTURES[name])
@@ -77,6 +96,63 @@ class ManifestAuditTests(unittest.TestCase):
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
+
+    def test_complex_critical_gates_cannot_be_missing_or_swapped(self):
+        for name, (fixture_name, diagnostic) in COMPLEX_NEGATIVE_FIXTURES.items():
+            for corruption in ("missing", "fixture", "diagnostic", "compiler", "positive"):
+                doc = fixture()
+                entry = next(x for x in doc["tests"] if x["name"] == name)
+                cmd = entry["command"]
+                if corruption == "missing":
+                    doc["tests"].remove(entry)
+                elif corruption == "positive":
+                    cmd += ["--verify-object"]
+                else:
+                    flag = {
+                        "fixture": "--fixture",
+                        "diagnostic": "--diagnostic",
+                        "compiler": "--compiler",
+                    }[corruption]
+                    cmd[cmd.index(flag) + 1] = "wrong-evidence"
+                with self.subTest(name=name, corruption=corruption), self.assertRaises(ManifestFailure):
+                    check_manifest(doc)
+
+    def test_complex_positive_ir_requires_real_fixture_object_and_ir_evidence(self):
+        for corruption in ("fixture", "ir", "clang", "compiler", "verify"):
+            doc = fixture()
+            entry = next(x for x in doc["tests"] if x["name"] == COMPLEX_POSITIVE_IR)
+            cmd = entry["command"]
+            if corruption == "verify":
+                cmd.remove("--verify-object")
+            else:
+                flag = {
+                    "fixture": "--fixture",
+                    "ir": "--ir",
+                    "clang": "--clang",
+                    "compiler": "--compiler",
+                }[corruption]
+                cmd[cmd.index(flag) + 1] = "wrong-evidence"
+            with self.subTest(corruption=corruption), self.assertRaises(ManifestFailure):
+                check_manifest(doc)
+
+    def test_complex_native_abi_gate_requires_exact_harness(self):
+        for corruption in ("script", "fixture", "clang", "compiler", "extra"):
+            doc = fixture()
+            entry = next(x for x in doc["tests"] if x["name"] == COMPLEX_POSITIVE_AOT)
+            cmd = entry["command"]
+            if corruption == "script":
+                cmd[1] = "/work/src/tests/empty.py"
+            elif corruption == "extra":
+                cmd += ["--ignored"]
+            else:
+                flag = {
+                    "fixture": "--fixture",
+                    "clang": "--clang",
+                    "compiler": "--compiler",
+                }[corruption]
+                cmd[cmd.index(flag) + 1] = "wrong-evidence"
+            with self.subTest(corruption=corruption), self.assertRaises(ManifestFailure):
+                check_manifest(doc)
 
     def test_visibility_negatives_cannot_be_missing_or_swapped(self):
         for name in VISIBILITY_NEGATIVE_FIXTURES:

@@ -1,3 +1,3 @@
-pub fnc main(): complex {
+pub fnc bad(complex value): int {
   return 0;
 }
