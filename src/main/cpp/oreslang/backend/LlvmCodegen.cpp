@@ -388,9 +388,8 @@ llvm::Value* lower_bool(
                     !expr.name.empty() || !expr.arguments.empty() ||
                     !expr.argument_names.empty())
                 throw std::runtime_error("unverified native short-circuit bool AST");
-            std::vector<std::unique_ptr<Expression>> synthetic;
-            // Do not move or clone AST ownership. Lower the binary node with
-            // the same CFG shape used by the variadic intrinsic below.
+            // Lower the binary node with the same short-circuit CFG
+            // semantics used by the variadic intrinsic below.
             llvm::Value* left = lower_bool(
                 *expr.left, builder, values, functions, shadowed_intrinsics);
             llvm::BasicBlock* left_end = builder.GetInsertBlock();
