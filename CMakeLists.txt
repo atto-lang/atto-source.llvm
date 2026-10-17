@@ -521,6 +521,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_i64_reject_bool_parameter
         native-bool-param-int-result-reject.ores
         --diagnostic "native bool parameters require a bool-returning pure function")
+    oreslang_contract_test(native_i64_reject_bool_intrinsic
+        native-bool-in-int-reject.ores
+        --diagnostic "typed bool intrinsic cannot be used as a native int expression")
     add_test(NAME native_bool_logical_guest_aot_asan_ubsan
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_source_execution.py"
