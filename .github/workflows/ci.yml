@@ -47,6 +47,11 @@ jobs:
       - name: Compile
         id: build_native
         run: cmake --build build --parallel 2
+      - name: Verify checked-i64 CTest inventory before full native suite
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_ctest_manifest_gate.py -v
+          python3 tests/ctest_manifest_gate.py --build-dir build --min-tests 250
       - name: Verify real checked-result compiler ABI before full CTest
         id: checked_i64_guest
         run: |
@@ -54,11 +59,6 @@ jobs:
           ctest --test-dir build --output-on-failure --timeout 240 --no-tests=error \
             --output-junit "$GITHUB_WORKSPACE/build/checked-i64-ctest.xml" \
             -R '^numeric_experimental_checked_(i64_status_abi|pure_function_graph|result_function_graph)$'
-      - name: Verify checked-i64 CTest inventory before full native suite
-        run: |
-          set -euo pipefail
-          python3 -m unittest discover -s tests -p test_ctest_manifest_gate.py -v
-          python3 tests/ctest_manifest_gate.py --build-dir build --min-tests 250
       - name: Verify parser, IR and native execution
         id: all_native_tests
         run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2 --output-junit "$GITHUB_WORKSPACE/build/full-ctest.xml"
