@@ -7,6 +7,7 @@ on:
       - 'contracts/architecture/v1/targets.tsv'
       - 'tests/bpf_xdp_*'
       - 'examples/xdp_pass.ores'
+      - 'examples/xdp_packet_u8.ores'
       - 'CMakeLists.txt'
   workflow_dispatch:
 
