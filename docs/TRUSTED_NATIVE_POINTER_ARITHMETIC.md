@@ -12,9 +12,11 @@ parser must continue to fail closed on unlowered pointer intrinsics.
   and returns owned T once, invalidating its handle. There is no pointer math,
   free-standing address, implicit copy/share, or cross-actor transport.
   This is Java #1021 candidate behavior, not LLVM source feature support.
-- NativePointer<T> (proposed unsafe, non-owning): explicit, privileged view into
-  supervisor-authorized native memory, an FFI buffer, or mapped MMIO. Never
-  silently convert between Pointer<T> and NativePointer<T>.
+- RawPointer<T> (canonical proposed unsafe, non-owning source capability):
+  explicit, privileged view into supervisor-authorized native memory, an FFI
+  buffer, or mapped MMIO. Never silently convert between Pointer<T> and
+  RawPointer<T>. The C++ TrustedPointerWindow in this branch is an internal
+  runtime/grant substrate, not a second guest-visible pointer type.
 
 SHARED/PRIVATE trusted actors can be eligible, but trusted status is
 **not sufficient**: compiler unsafe-effect admission and a broker-minted native
@@ -64,7 +66,8 @@ Compiler/runtime admission rules:
 ## What is actually implemented
 
 TrustedPointerWindow is a host-only C++17 region view with actor/epoch identity,
-byte length, read/write mode and revocation. It supports checked typed element
+explicit region/generation/allocation provenance, byte length, read/write mode
+and revocation. It supports checked typed element
 offsets, aligned load/store (memcpy for ordinary trivially-copyable objects),
 unsigned 8/16/32/64-bit MMIO volatile load/store, and a synchronous FFI
 address callback that holds the revocation lock until return. The caller must
@@ -73,15 +76,19 @@ uses a shared control block and mutex: zero-copy data, but NOT zero allocation,
 lock-free real time or source/LLVM guest support.
 
 Known limitations:
-- The C++ constructor is callable by trusted HOST code; there is no compiler
-  admission or supervisor-only native capability minting path yet.
+- The C++ constructor is callable by trusted HOST code; the explicit
+  NativeRegionIdentity must be nonzero but is still a TCB proof object, not yet
+  an unforgeable guest capability. There is no compiler admission or
+  supervisor-only native capability minting path yet.
 - Native host misuse, early free/unmap, callback pointer retention and invalid
   mapped device addresses can still be unsafe. The prototype intentionally
   cannot make unrestricted native C++ memory-safe.
 - No integration yet with ActorOwnedGraphHeap generation/loan retirement,
   native actor permission policy, async FFI/DMA pins or Java/Graal FFM.
 - Actual source-level rt ref, rt deref and rt unref are still unimplemented in
-  LLVM; Java #1021 is an open draft based on an older parent branch.
+  LLVM. The separate LLVM #526 draft defines the unsafe.memory/raw-provenance
+  compiler/runtime contract and must be reconciled with this runtime window
+  rather than exposing two competing guest pointer types.
 
 CTest trusted_native_pointer_window_host_only tests arithmetic bounds,
 one-past, signed extreme offsets, alignment, read-only denial, actor and epoch
