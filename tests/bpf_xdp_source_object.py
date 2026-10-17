@@ -219,8 +219,20 @@ def main():
                 ".maps" not in packet_sections.stdout and ".BTF" not in packet_sections.stdout,
                 "packet_u8 object violated stage-1 section boundary")
         packet_symbols = run([readelf, "-W", "-s", str(packet_obj)])
-        require(packet_symbols.returncode == 0 and " UND " not in packet_symbols.stdout,
-                "packet_u8 object has unresolved symbols")
+        require(packet_symbols.returncode == 0, packet_symbols.stderr)
+        packet_undefined = []
+        packet_globals = []
+        for line in packet_symbols.stdout.splitlines():
+            cols = line.split()
+            if len(cols) >= 8 and cols[6] == "UND" and cols[7]:
+                packet_undefined.append(cols[7])
+            if len(cols) >= 8 and cols[4] == "GLOBAL" and cols[7]:
+                packet_globals.append(cols[7])
+        require(not packet_undefined,
+                "packet_u8 object has named unresolved symbols: " + repr(packet_undefined))
+        require("ores_xdp" in packet_globals and
+                all(name in ("ores_xdp", "_license") for name in packet_globals),
+                "packet_u8 object has unexpected globals: " + repr(packet_globals))
         packet_reloc = run([readelf, "-W", "-r", str(packet_obj)])
         require(packet_reloc.returncode == 0 and
                 "There are no relocations in this file." in packet_reloc.stdout,
