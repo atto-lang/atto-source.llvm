@@ -44,6 +44,18 @@ int main() {
         std::uint64_t x=0x1234567890abcdefull;
         writer.write(h, &x,sizeof(x));
         reject([&] { writer.read(h, &x,sizeof(x)-1); });
+        // Drop must physically scrub sensitive bytes before the slot can be reused,
+        // not just revoke its generation. A new handle must see only zeros.
+        auto secret = writer.allocate(sizeof(std::uint64_t));
+        std::uint64_t sensitive = 0xfedcba9876543210ull;
+        writer.write(secret, &sensitive, sizeof(sensitive));
+        writer.drop(secret);
+        reject([&] { writer.read(secret, &sensitive, sizeof(sensitive)); });
+        auto recycled = writer.allocate(sizeof(std::uint64_t));
+        std::uint64_t cleared = ~std::uint64_t{0};
+        writer.read(recycled, &cleared, sizeof(cleared));
+        require(cleared == 0);
+        writer.drop(recycled);
     }
     std::atomic<std::uint64_t> observed{0};
     std::thread otherCarrier([&] {
