@@ -38,6 +38,12 @@ if mode != "missing-diagnostic":
     if "fnc take(tuple (" in source or "fnc take((" in source:
         print("native positional tuple parameter requires verified readonly-slot and optional-tail lowering",
               file=sys.stderr)
+    elif "let mut Map<int,int>" in source:
+        print("native Map<int,int> source lowering requires compiler-computed fixed capacity plus Option<int> lookup and deterministic entry iteration lowering",
+              file=sys.stderr)
+    elif "fnc oreslang_i64_map_" in source:
+        print("reserved native Map<int,int> ABI symbol",
+              file=sys.stderr)
     else:
         print("oreslang-llvmc: unsupported structural source", file=sys.stderr)
 sys.exit(1)

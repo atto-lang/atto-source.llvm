@@ -50,6 +50,12 @@ PROGRAMS = {
           return 1;
         }
     """,
+    "native map ABI collision": """
+        fnc oreslang_i64_map_put(int region, int key, int value): int {
+          return 0;
+        }
+        fnc main(): int { return 1; }
+    """,
 }
 
 def directory_snapshot(root):
@@ -116,6 +122,10 @@ def main():
                             "iteration lowering")
                 if required not in result.stderr:
                     raise RuntimeError(f"{name}: rejection lacked map-specific semantic diagnostic")
+            if name == "native map ABI collision":
+                required = "reserved native Map<int,int> ABI symbol"
+                if required not in result.stderr:
+                    raise RuntimeError(f"{name}: rejection lacked reserved-map-ABI diagnostic")
             if result.stdout.strip():
                 raise RuntimeError(f"{name}: rejected structural source leaked LLVM IR/output")
     print("LLVM structural bootstrap correctly fails closed (not parity)")
