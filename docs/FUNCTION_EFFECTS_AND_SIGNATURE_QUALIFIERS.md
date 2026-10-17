@@ -89,7 +89,7 @@ unknown effects and cannot meet a stricter contract without proof.
 | `alloc` | Potential allocation/resource cost, **not intrinsically impure** |
 | `block` | May block a physical carrier |
 | `ffi` | Foreign effect without stronger trusted summary |
-| `unsafe.memory` | Trusted native raw-address formation/arithmetic/dereference; forbidden in untrusted actors and portable sandbox profiles |
+| `unsafe.memory` | Trusted native raw-address formation/arithmetic/cast/dereference. It is incompatible with `pure` by default and does not itself prove mutable exclusivity; forbidden in untrusted actors and portable sandbox profiles |
 | `throw<E>` | Ordinary typed exceptional control |
 | `raise<E>` | Non-trappable exceptional escalation |
 | `panic` | Fatal/invariant failure control |
