@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 using oreslang::runtime::TrustedExclusiveRawMemoryAuthority;
+using oreslang::runtime::TrustedRawAddressGrant;
 using oreslang::runtime::TrustedRawPointer;
 using oreslang::runtime::TrustedRawProvenance;
 using oreslang::runtime::TrustedUnsafeMemoryAuthority;
@@ -54,6 +55,21 @@ int main() {
             "zero provenance allocation id must reject");
 
         std::array<std::int32_t, 4> values{{10, 20, 30, 40}};
+        const auto values_address = reinterpret_cast<std::uintptr_t>(values.data());
+        const auto values_read_grant = TrustedRawAddressGrant::compiler_trusted(
+            values_address, sizeof(values), 0, false, 1);
+        const auto values_write_grant = TrustedRawAddressGrant::compiler_trusted(
+            values_address, sizeof(values), 0, true, 1);
+        require_throws<std::invalid_argument>(
+            [&] { (void)TrustedRawAddressGrant::compiler_trusted(0, 4, 0, false, 1); },
+            "zero grant base must reject");
+        require_throws<std::invalid_argument>(
+            [&] { (void)TrustedRawAddressGrant::compiler_trusted(values_address, 0, 0, false, 1); },
+            "zero grant extent must reject");
+        require_throws<std::invalid_argument>(
+            [&] { (void)TrustedRawAddressGrant::compiler_trusted(values_address, sizeof(values), 0, false, 0); },
+            "zero grant generation must reject");
+
         auto readonly = TrustedRawPointer<std::int32_t>::from_span(
             values.data(), values.size(), authority, provenance);
         require(readonly.has_provenance(), "safe-derived span must carry explicit provenance");
@@ -147,54 +163,81 @@ int main() {
             "same provenance with incompatible original bounds must reject");
 
         auto raw = TrustedRawPointer<std::int32_t>::from_address(
-            reinterpret_cast<std::uintptr_t>(values.data()), authority);
+            values_address, authority, values_read_grant);
         auto raw_next = raw.offset_elements(1);
+        require(raw.bounded() && raw.address_space() == values_read_grant.address_space(),
+                "grant-backed address must be range-bounded in the granted address space");
         require(!raw.has_provenance() && !raw_next.has_provenance(),
-                "integer-fabricated pointers must not gain safe provenance");
-        require(!raw_next.writable(), "read-only address arithmetic must remain read-only");
-        require(raw_next.load() == 20, "integer-made pointer element offset");
+                "grant-backed integer pointers must not gain allocation provenance");
+        require(!raw_next.writable(), "read-only grant arithmetic must remain read-only");
+        require(raw_next.load() == 20, "grant-backed pointer element offset");
         require_throws<std::invalid_argument>(
             [&] { (void)raw_next.distance_elements(raw); },
-            "integer-fabricated pointer subtraction must reject without provenance");
+            "grant-backed pointer subtraction must reject without allocation provenance");
         auto independently_fabricated = TrustedRawPointer<std::int32_t>::from_address(
-            reinterpret_cast<std::uintptr_t>(values.data()), authority);
+            values_address, authority, values_read_grant);
         require_throws<std::invalid_argument>(
             [&] { (void)independently_fabricated.distance_elements(raw); },
-            "same numeric address must not manufacture common provenance");
+            "same numeric address/grant must not manufacture allocation provenance");
+        require_throws<std::logic_error>(
+            [&] {
+                (void)TrustedRawPointer<std::int32_t>::from_mut_address(
+                    values_address, authority, exclusive, values_read_grant);
+            },
+            "read-only address grant must not mint mutable authority");
+        auto granted_mut = TrustedRawPointer<std::int32_t>::from_mut_address(
+            values_address, authority, exclusive, values_write_grant);
+        granted_mut.offset_elements(1).store(21);
+        require(values[1] == 21, "writable grant must permit bounded mutable access");
+        require_throws<std::out_of_range>(
+            [&] { (void)granted_mut.offset_elements(4).load(); },
+            "grant one-past pointer must not dereference");
 
         volatile std::int32_t mmio_cell = 9;
+        const auto mmio_address =
+            reinterpret_cast<std::uintptr_t>(const_cast<std::int32_t*>(&mmio_cell));
+        const auto mmio_grant = TrustedRawAddressGrant::compiler_trusted(
+            mmio_address, sizeof(mmio_cell), 7, true, 1);
         auto mmio = TrustedRawPointer<std::int32_t>::from_mut_address(
-            reinterpret_cast<std::uintptr_t>(const_cast<std::int32_t*>(&mmio_cell)),
-            authority, exclusive);
+            mmio_address, authority, exclusive, mmio_grant);
+        require(mmio.address_space() == 7, "MMIO pointer must inherit grant address space");
         require(mmio.load_volatile() == 9, "volatile raw load");
         mmio.store_volatile(11);
         require(mmio_cell == 11, "volatile raw store");
 
         require_throws<std::invalid_argument>(
-            [&] { (void)TrustedRawPointer<std::int32_t>::from_address(0, authority); },
+            [&] {
+                (void)TrustedRawPointer<std::int32_t>::from_address(
+                    0, authority, values_read_grant);
+            },
             "null raw address must reject");
         require_throws<std::invalid_argument>(
             [&] {
                 (void)TrustedRawPointer<std::int32_t>::from_address(
-                    reinterpret_cast<std::uintptr_t>(values.data()) + 1u, authority);
+                    values_address + 1u, authority, values_read_grant);
             },
             "misaligned raw address must reject");
-
-        const auto aligned_near_max =
-            std::numeric_limits<std::uintptr_t>::max()
-            & ~static_cast<std::uintptr_t>(alignof(std::int32_t) - 1u);
-        auto near_max = TrustedRawPointer<std::int32_t>::from_address(
-            aligned_near_max, authority);
+        require_throws<std::out_of_range>(
+            [&] {
+                (void)TrustedRawPointer<std::int32_t>::from_address(
+                    values_address + sizeof(values), authority, values_read_grant);
+            },
+            "one-past address cannot be used as initial typed mapping");
         require_throws<std::overflow_error>(
-            [&] { (void)near_max.offset_elements(1); },
-            "raw arithmetic overflow must reject");
+            [&] {
+                const auto near_max = std::numeric_limits<std::uintptr_t>::max()
+                    - static_cast<std::uintptr_t>(3);
+                (void)TrustedRawAddressGrant::compiler_trusted(
+                    near_max, 8, 0, false, 1);
+            },
+            "grant extent overflow must reject");
 
-        require_throws<std::overflow_error>(
+        require_throws<std::out_of_range>(
             [&] {
                 (void)raw.offset_elements(
                     std::numeric_limits<std::ptrdiff_t>::min());
             },
-            "PTRDIFF_MIN element arithmetic must reject without signed overflow");
+            "PTRDIFF_MIN grant arithmetic must reject without signed overflow");
 
         NoDefault non_default(1234);
         auto non_default_raw = TrustedRawPointer<NoDefault>::from_span(
