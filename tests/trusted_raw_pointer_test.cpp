@@ -40,11 +40,18 @@ int main() {
     try {
         const auto authority = TrustedUnsafeMemoryAuthority::compiler_trusted();
         const auto exclusive = TrustedExclusiveRawMemoryAuthority::compiler_trusted();
-        const auto provenance = TrustedRawProvenance::compiler_trusted(0xA11CEu, 7);
+        const auto provenance = TrustedRawProvenance::compiler_trusted(0xA11CEu, 7, 1);
 
         require_throws<std::invalid_argument>(
-            [&] { (void)TrustedRawProvenance::compiler_trusted(0, 0); },
+            [&] { (void)TrustedRawProvenance::compiler_trusted(0, 0, 0); },
             "zero provenance identity must reject");
+
+        require_throws<std::invalid_argument>(
+            [&] { (void)TrustedRawProvenance::compiler_trusted(0xA11CEu, 0, 1); },
+            "zero provenance generation must reject");
+        require_throws<std::invalid_argument>(
+            [&] { (void)TrustedRawProvenance::compiler_trusted(0xA11CEu, 1, 0); },
+            "zero provenance allocation id must reject");
 
         std::array<std::int32_t, 4> values{{10, 20, 30, 40}};
         auto readonly = TrustedRawPointer<std::int32_t>::from_span(
@@ -104,7 +111,7 @@ int main() {
         std::array<std::int32_t, 2> other_values{{1, 2}};
         auto other = TrustedRawPointer<std::int32_t>::from_span(
             other_values.data(), other_values.size(), authority,
-            TrustedRawProvenance::compiler_trusted(0xB0Bu, 1));
+            TrustedRawProvenance::compiler_trusted(0xB0Bu, 1, 1));
         require_throws<std::invalid_argument>(
             [&] { (void)base.distance_elements(other); },
             "unrelated provenance subtraction must reject");
@@ -117,12 +124,27 @@ int main() {
 
         auto stale_generation = TrustedRawPointer<std::int32_t>::from_span(
             values.data(), values.size(), authority,
-            TrustedRawProvenance::compiler_trusted(0xA11CEu, 8));
+            TrustedRawProvenance::compiler_trusted(0xA11CEu, 8, 1));
         require(stale_generation.address() == base.address(),
                 "generation test must use the same numeric address");
         require_throws<std::invalid_argument>(
             [&] { (void)base.distance_elements(stale_generation); },
             "same region/address with a stale generation must reject");
+
+        auto different_allocation = TrustedRawPointer<std::int32_t>::from_span(
+            values.data(), values.size(), authority,
+            TrustedRawProvenance::compiler_trusted(0xA11CEu, 7, 2));
+        require(different_allocation.address() == base.address(),
+                "allocation identity test must use the same numeric address");
+        require_throws<std::invalid_argument>(
+            [&] { (void)base.distance_elements(different_allocation); },
+            "same region/generation/address with a different allocation id must reject");
+
+        auto shorter_bounds = TrustedRawPointer<std::int32_t>::from_span(
+            values.data(), values.size() - 1, authority, provenance);
+        require_throws<std::invalid_argument>(
+            [&] { (void)base.distance_elements(shorter_bounds); },
+            "same provenance with incompatible original bounds must reject");
 
         auto raw = TrustedRawPointer<std::int32_t>::from_address(
             reinterpret_cast<std::uintptr_t>(values.data()), authority);
@@ -177,7 +199,7 @@ int main() {
         NoDefault non_default(1234);
         auto non_default_raw = TrustedRawPointer<NoDefault>::from_span(
             &non_default, 1, authority,
-            TrustedRawProvenance::compiler_trusted(0xD3FA017u, 1));
+            TrustedRawProvenance::compiler_trusted(0xD3FA017u, 1, 1));
         require(non_default_raw.load().value == 1234,
                 "trivially-copyable non-default-constructible load must work");
 
