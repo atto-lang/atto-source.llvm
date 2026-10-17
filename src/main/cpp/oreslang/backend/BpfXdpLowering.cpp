@@ -50,7 +50,7 @@ std::string emit_verified_bpf_xdp_ir(const Program& source) {
         throw std::runtime_error("eBPF XDP return action must be an integer literal 0..4");
 
     const auto profile = TargetAbi::parse("bpfel");
-    if (!profile.experimental_bpf_xdp_ir() || profile.pointer_bits() != 64 ||
+    if (!profile.experimental_bpf_ir() || profile.pointer_bits() != 64 ||
         profile.endian() != "little")
         throw std::runtime_error("eBPF XDP ABI profile mismatch");
 
@@ -62,6 +62,9 @@ std::string emit_verified_bpf_xdp_ir(const Program& source) {
     module.setTargetTriple("bpfel");
 #endif
     module.setDataLayout("e-m:e-p:64:64-i64:64-i128:128-n32:64-S128");
+    if (module.getDataLayout().getPointerSizeInBits(0) != 64 ||
+        !module.getDataLayout().isLittleEndian())
+        throw std::runtime_error("eBPF XDP LLVM data layout mismatch");
 
     auto* i32 = llvm::Type::getInt32Ty(context);
 #if LLVM_VERSION_MAJOR >= 18
@@ -77,9 +80,11 @@ std::string emit_verified_bpf_xdp_ir(const Program& source) {
     llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", xdp));
     builder.CreateRet(llvm::ConstantInt::get(i32, static_cast<std::uint64_t>(action)));
 
-    // Metadata required by common BPF ELF loaders; users must check that
-    // this GPL license declaration matches their source distribution.
-    auto* license_value = llvm::ConstantDataArray::getString(context, "GPL", true);
+    // Stage 0 deliberately marks the object non-GPL. This is a kernel capability
+    // restriction, not a legal license declaration: later helper/kfunc support
+    // must add an explicit source/deployment licensing contract before GPL-only
+    // capabilities can ever be admitted.
+    auto* license_value = llvm::ConstantDataArray::getString(context, "Proprietary", true);
     auto* license = new llvm::GlobalVariable(
         module, license_value->getType(), true,
         llvm::GlobalValue::ExternalLinkage, license_value, "_license");
