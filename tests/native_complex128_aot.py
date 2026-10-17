@@ -33,6 +33,14 @@ def main():
             "complex_conjugate has the wrong LLVM ABI")
     require("define { double, double } @complex_imag_binary64_rounding()" in compiled.stdout,
             "complex_imag_binary64_rounding has the wrong LLVM ABI")
+    require("define { double, double } @complex_imag_overflow()" in compiled.stdout,
+            "complex_imag_overflow has the wrong LLVM ABI")
+    require("define { double, double } @complex_imag_underflow()" in compiled.stdout,
+            "complex_imag_underflow has the wrong LLVM ABI")
+    require("define { double, double } @complex_imag_negative_underflow()" in compiled.stdout,
+            "complex_imag_negative_underflow has the wrong LLVM ABI")
+    require("define { double, double } @complex_imag_min_subnormal()" in compiled.stdout,
+            "complex_imag_min_subnormal has the wrong LLVM ABI")
 
     harness = r'''
 #include <stdint.h>
@@ -48,6 +56,10 @@ extern ores_complex128 complex_negate(void);
 extern ores_complex128 complex_conj(void);
 extern ores_complex128 complex_conjugate(void);
 extern ores_complex128 complex_imag_binary64_rounding(void);
+extern ores_complex128 complex_imag_overflow(void);
+extern ores_complex128 complex_imag_underflow(void);
+extern ores_complex128 complex_imag_negative_underflow(void);
+extern ores_complex128 complex_imag_min_subnormal(void);
 
 static uint64_t bits(double value) {
     uint64_t raw = 0;
@@ -75,6 +87,22 @@ int main(void) {
     ores_complex128 rounded_literal = complex_imag_binary64_rounding();
     if (bits(rounded_literal.real) != UINT64_C(0x0000000000000000)) return 19;
     if (bits(rounded_literal.imaginary) != UINT64_C(0x4340000000000000)) return 20;
+
+    ores_complex128 overflow = complex_imag_overflow();
+    if (bits(overflow.real) != UINT64_C(0x0000000000000000)) return 21;
+    if (bits(overflow.imaginary) != UINT64_C(0x7ff0000000000000)) return 22;
+
+    ores_complex128 underflow = complex_imag_underflow();
+    if (bits(underflow.real) != UINT64_C(0x0000000000000000)) return 23;
+    if (bits(underflow.imaginary) != UINT64_C(0x0000000000000000)) return 24;
+
+    ores_complex128 negative_underflow = complex_imag_negative_underflow();
+    if (bits(negative_underflow.real) != UINT64_C(0x8000000000000000)) return 25;
+    if (bits(negative_underflow.imaginary) != UINT64_C(0x8000000000000000)) return 26;
+
+    ores_complex128 min_subnormal = complex_imag_min_subnormal();
+    if (bits(min_subnormal.real) != UINT64_C(0x0000000000000000)) return 27;
+    if (bits(min_subnormal.imaginary) != UINT64_C(0x0000000000000001)) return 28;
     return 0;
 }
 '''
@@ -100,8 +128,8 @@ int main(void) {
                     f"complex128 native ABI check {optimization} failed "
                     f"with exit {run.returncode}")
 
-    print("NATIVE_COMPLEX128_RETURN_CASES=5")
-    print("NATIVE_COMPLEX128_RAW_COMPONENTS=10")
+    print("NATIVE_COMPLEX128_RETURN_CASES=9")
+    print("NATIVE_COMPLEX128_RAW_COMPONENTS=18")
     print("NATIVE_COMPLEX128_IMAG_LITERAL_ROUNDING=JAVA_PARITY")
     print("NATIVE_COMPLEX128_OPT_LEVELS=2")
 
