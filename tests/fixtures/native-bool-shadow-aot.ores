@@ -1,0 +1,9 @@
+define module BoolShadow as
+    pub fnc And(bool left, bool right): bool {
+        return left;
+    }
+
+    pub fnc probe(bool left, bool right): bool {
+        return And(left, right);
+    }
+end
