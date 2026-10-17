@@ -145,6 +145,12 @@ int ores_native_actor_scheduler_is_current_actor(
 int ores_native_actor_scheduler_resolve_actor_identity(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     OresNativeActorIdentity* out);
+/* Derive the exact live ActorRef from the actual current scheduler execution
+ * claim. Trusted runtime/compiler bridges use this when CONTROL must establish
+ * membership for the currently executing actor. Guest/source code never
+ * supplies or receives this ref as shared-memory authority. */
+int ores_native_actor_scheduler_current_actor_ref(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef* out);
 /* Derive memory authority from the actual current scheduler execution claim.
  * No ActorRef or numeric actor identity is accepted from guest/source code. */
 int ores_native_actor_scheduler_current_actor_identity(
