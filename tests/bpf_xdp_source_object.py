@@ -85,6 +85,18 @@ def main():
                     "same IR did not produce deterministic BPF object: %s != %s" %
                     (hashlib.sha256(elf).hexdigest(), hashlib.sha256(elf2).hexdigest()))
             observed_obj[action] = elf
+
+            # Stage-0 validity must not depend on optimizer cleanup. Produce an
+            # unoptimized object from the exact same verified IR as well.
+            objfile_o0 = root / "program-o0.o"
+            compiled_o0 = run([clang, "--target=bpfel", "-O0", "-x", "ir", "-c",
+                               str(irfile), "-o", str(objfile_o0)])
+            require(compiled_o0.returncode == 0,
+                    "Clang -O0 BPF backend failed: " + compiled_o0.stderr)
+            elf_o0 = objfile_o0.read_bytes()
+            require(len(elf_o0) >= 64 and elf_o0[:6] == b"\x7fELF\x02\x01" and
+                    int.from_bytes(elf_o0[18:20], "little") == 247,
+                    "-O0 result is not little-endian EM_BPF ELF")
             require(len(elf) >= 64 and elf[:4] == b"\x7fELF" and elf[4:6] == b"\x02\x01",
                     "BPF result not ELF64 little-endian")
             require(int.from_bytes(elf[18:20], "little") == 247,
@@ -134,6 +146,8 @@ def main():
                         "stage-0 BPF object missing exit instruction")
             if args.output_dir:
                 shutil.copyfile(objfile, args.output_dir / ("xdp-%d.o" % action))
+                shutil.copyfile(objfile, args.output_dir / ("xdp-%d-O2.o" % action))
+                shutil.copyfile(objfile_o0, args.output_dir / ("xdp-%d-O0.o" % action))
 
         # Harmless lexical/parenthesization differences must normalize to the
         # exact same verified IR as the canonical XDP_PASS source.
