@@ -108,6 +108,15 @@ public:
             void* base,
             std::size_t bytes,
             Mode mode) {
+        switch (mode) {
+            case Mode::ReadOnly:
+            case Mode::ReadWrite:
+            case Mode::MmioReadOnly:
+            case Mode::MmioReadWrite:
+                break;
+            default:
+                throw std::invalid_argument("invalid native region access mode");
+        }
         if (!base || !bytes) throw std::invalid_argument("empty native region");
         if (region.region == 0 || region.generation == 0 || region.allocation == 0)
             throw std::invalid_argument("invalid native region provenance");
