@@ -13,19 +13,29 @@ Partial host primitives are not authority to execute source actors concurrently.
    (for example epoll, kqueue, IOCP, or an appropriate Wasm host event loop).
    Reactor callbacks perform bounded host bookkeeping only. **Guest code must
    execute on its owning actor or CONTROL scheduler, never on a reactor.**
-3. The throughput profile targets one reactor at startup and allows up to four
-   configurable reactors based on sustained measured work, NOT the number of
-   pending I/O handles. Five idle reads must not allocate five threads.
-4. Independent CONTROL and actor pools have bounded runnable queues, explicit
+3. The throughput profile targets exactly one VM readiness reactor at cold
+   startup and allows up to four configurable reactors based on sustained
+   measured reactor work, NOT the number of pending I/O handles. Five or
+   10,000 idle reads must not allocate proportional threads.
+4. Throughput CONTROL, PRIVATE, SHARED and UNTRUSTED execution domains target
+   **zero resident carriers at cold startup**. A first carrier is created only
+   after independently runnable work is admitted. Hosts MAY opt into an
+   explicit nonzero warm minimum, but that is configuration rather than a
+   language semantic.
+5. Completion isolation must not add resident cold-start workers. A backend
+   MAY lazily create a small bounded host-completion pool after readiness
+   actually completes, but reactor threads MUST NOT execute arbitrary Future
+   subscribers and slow subscribers MUST NOT consume/starve CONTROL carriers.
+6. Independent CONTROL and actor pools have bounded runnable queues, explicit
    rejection/backpressure, and configurable carrier limits (nominal max 20).
    Demand for *runnable* turns can grow carriers; pending I/O cannot.
-5. The strict profile forbids blocking-worker/virtual-thread I/O offloading.
+7. The strict profile forbids blocking-worker/virtual-thread I/O offloading.
    Unsupported socket/file/HTTP/stdio operations reject; they must not silently
    use blocking calls or pretend that an async-looking API is OS-nonblocking.
-6. Socket, read/write operation, continuation and completion records are owned,
+8. Socket, read/write operation, continuation and completion records are owned,
    bounded, generation-fenced and cancel-safe. A descriptor is admitted by at
    most one active I/O owner; a stale completion cannot settle a reused slot.
-7. A VM/guest may use existing OS/JVM/.NET/host event loops when dedicated
+9. A VM/guest may use existing OS/JVM/.NET/host event loops when dedicated
    reactor ownership is unavailable, but MUST verify that its guest operation
    is genuinely nonblocking. It MUST NOT claim explicit 1..4 reactor-thread
    control if that platform does not expose it.
@@ -69,8 +79,9 @@ Backends without proven RT admission must explicitly deny #hard.
 
 ## Required differential fixtures
 
-- One VM reactor at startup; five and many pending reads without proportional
-  OS thread creation; independently runnable turn saturation scales workers.
+- Throughput cold start: one VM reactor, zero CONTROL/actor/completion
+  carriers; five and many pending reads without proportional OS thread
+  creation; independently runnable work lazily creates bounded carriers.
 - Concurrent connect/accept/read/write, partial writes, EOF, cancel/close
   races, generation/descriptor reuse, fd ownership and bounded backpressure.
 - A reactor publishes completions only; guest callbacks run on the owning
