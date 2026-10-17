@@ -62,6 +62,10 @@ COMPLEX_NEGATIVE_FIXTURES = {
         "native-complex128-call-from-complex-reject.ores",
         "native complex128 calls require typed complex call ABI lowering",
     ),
+    "native_complex128_real_conjugate_failclosed": (
+        "native-complex128-real-conjugate-reject.ores",
+        "native complex128 conjugation requires a complex operand",
+    ),
 }
 COMPLEX_POSITIVE_IR = "native_complex128_return_ir_verifies"
 COMPLEX_POSITIVE_AOT = "native_complex128_return_aot_raw_bits"
