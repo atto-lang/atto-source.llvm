@@ -45,7 +45,7 @@ static int parse_action(const char *text) {
     char *end = NULL;
     errno = 0;
     long value = strtol(text, &end, 10);
-    if (errno || !end || *end != '\0' || value < 0 || value > 4)
+    if (errno || !end || *end != '\0' || value < 0 || value > 3)
         return -1;
     return (int)value;
 }
@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
     }
     const int expected = parse_action(argv[2]);
     if (expected < 0) {
-        fprintf(stderr, "expected XDP action must be 0..4\n");
+        fprintf(stderr, "expected XDP action must be 0..3\n");
         return 64;
     }
 
