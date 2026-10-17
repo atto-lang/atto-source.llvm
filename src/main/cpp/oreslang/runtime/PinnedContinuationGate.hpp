@@ -1,5 +1,6 @@
 #pragma once
 #include "oreslang/runtime/AsyncIoCompletionGate.hpp"
+#include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include <atomic>
 #include <cstdint>
 
@@ -16,6 +17,21 @@ public:
     static constexpr std::uint32_t max_shared_loans = 1024;
 
     explicit PinnedContinuationGate(AsyncIoTicket ticket) noexcept : ticket_(ticket) {}
+
+    /**
+     * Bind this continuation frame to one actor-owned heap while still inside
+     * the admitted actor turn. The external lease is lifetime-only: it carries
+     * no slot index and cannot read/write actor state. Physical heap destroy is
+     * blocked until successful try_retire() releases this token.
+     */
+    PinnedContinuationGate(
+            AsyncIoTicket ticket,
+            OresActorI64Heap* heap,
+            OresActorTurn turn)
+        : ticket_(ticket),
+          lifetime_heap_(heap),
+          lifetime_lease_(ores_actor_i64_heap_external_acquire(heap, turn)) {}
+
     PinnedContinuationGate(const PinnedContinuationGate&) = delete;
     PinnedContinuationGate& operator=(const PinnedContinuationGate&) = delete;
 
@@ -93,8 +109,22 @@ public:
                 || !resume_finished_.load(std::memory_order_acquire)
                 || loans_.load(std::memory_order_acquire) != 0) return false;
         bool old = false;
-        return retired_.compare_exchange_strong(old, true,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+        if (!retired_.compare_exchange_strong(old, true,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return false;
+        }
+        if (lifetime_heap_ != nullptr) {
+            ores_actor_i64_heap_external_release(
+                    lifetime_heap_, &lifetime_lease_);
+            lifetime_heap_ = nullptr;
+        }
+        return true;
+    }
+
+    bool lifetime_pinned() const noexcept {
+        return lifetime_heap_ != nullptr
+            && lifetime_lease_.domain != 0
+            && lifetime_lease_.generation != 0;
     }
 
     AsyncIoTerminal terminal() const noexcept { return terminal_.load(std::memory_order_acquire); }
@@ -109,6 +139,8 @@ private:
             && ticket.operation_id == ticket_.operation_id;
     }
     const AsyncIoTicket ticket_;
+    OresActorI64Heap* lifetime_heap_{nullptr};
+    OresActorExternalLease lifetime_lease_{0, 0, 0};
     std::atomic<AsyncIoTerminal> terminal_{AsyncIoTerminal::pending};
     std::atomic<std::uint32_t> loans_{0};
     std::atomic<bool> broker_quiesced_{false};
