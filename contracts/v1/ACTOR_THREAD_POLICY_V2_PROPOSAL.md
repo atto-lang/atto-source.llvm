@@ -137,3 +137,34 @@ These are **v1 fail-closed controls** and abstract v2 protocol evidence.
 They do not certify lock-free grant implementation, actor-field races,
 reentrant critical callbacks, same-actor true parallelism, foreign
 callbacks, supervisor CONTROL or cross-backend scheduler parity.
+
+## Hardened implementation evidence (2026-10-17 follow-up)
+
+The Java/GraalVM branch now independently checks actor policy at direct AST
+compiler entrypoints, diagnostic analysis, the type-checker/annotation-expansion
+boundary, direct tree-shaking, and the Truffle execution boundary. AST
+reconstructors preserve the policy instead of recreating a default (1,1)
+policy. A host-only `ActorExecutionGrantGate` demonstrates synchronized,
+bounded physical claims, unique single-use carrier tickets, incarnation
+fencing, stop/seal and retirement, with 12-way contention and stale/foreign
+release JUnit fixtures. This host test primitive is **not attached to production
+actor dispatch** and does not authorize `max > 1` source execution.
+
+The LLVM branch rejects forged `ActorDecl` policies during IR generation,
+not merely in its parser, and adds direct Program-to-LLVM rejection tests,
+executable source fixtures and no-IR rejection cases.
+
+Both branches run the same abstract Python grant model when their CI runners
+are available. Independently executing the model locally produced:
+`cap=1: 104`, `cap=2: 744`, and `cap=3: 2184` reachable finite states;
+a disabled capacity guard produced a four-claim counterexample. The model also
+checks same-carrier release/reacquire ABA, cross-carrier release, duplicate and
+stale tickets, seal/retirement, and generation transitions. These are
+**abstract bounded-model results only**, not evidence of JDK25, native-image,
+LLVM/CMake, or concrete actor scheduler correctness.
+
+Production v2 remains blocked on verified actor effect checking, all callback
+and FFI entrypoints, scheduler ownership, heap-state parallelism, logical task
+and state-loan retirement, supervisor CONTROL priority, and exact-tree green
+JVM/native CI. In particular, a zero-step GitHub Actions failure is a CI
+infrastructure failure/unknown result rather than an executable test verdict.
