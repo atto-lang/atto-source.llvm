@@ -210,6 +210,41 @@ int main() {
     catch (const std::invalid_argument&) {invalid = true;}
     require(invalid,true,"invalid enum");
 
+    // Runtime policy may be broader than an immutable artifact/host
+    // ceiling, but effective authority is their intersection.
+    const auto build_ceiling = ScopedPolicy::from_host(
+        {Permission::Env, Permission::Net}, {
+            scope(Permission::Env, "SAFE"),
+            scope(Permission::Net, "api.example.com:443"),
+            scope(Permission::Net, "127.0.0.1:443", true)
+        });
+    const auto runtime_grant = ScopedPolicy::from_host(
+        {Permission::Env, Permission::Net}, {
+            scope(Permission::Env, "*"),
+            scope(Permission::Net, "*")
+        });
+    const auto effective = runtime_grant.bounded_by(build_ceiling);
+    require(effective.allows(Permission::Env, "SAFE"), true,
+            "build ceiling preserves common env scope");
+    require(effective.allows(Permission::Env, "SECRET"), false,
+            "runtime wildcard cannot widen build env scope");
+    require(effective.allows(Permission::Net, "api.example.com:443"), true,
+            "build and runtime network scopes intersect");
+    require(effective.allows(Permission::Net, "other.example.com:443"), false,
+            "runtime wildcard cannot widen build network host");
+    require(effective.allows_network_connection(
+                "api.example.com:443", "203.0.113.7:443"), true,
+            "selected IP must pass both build and runtime layers");
+    require(effective.allows_network_connection(
+                "api.example.com:443", "127.0.0.1:443"), false,
+            "runtime wildcard cannot bypass build selected-IP deny");
+    const auto narrower = effective.bounded_by(ScopedPolicy::from_host(
+        {Permission::Env}, {scope(Permission::Env, "SAFE")}));
+    require(narrower.allows(Permission::Env, "SAFE"), true,
+            "chained ceiling keeps common authority");
+    require(narrower.allows(Permission::Net, "api.example.com:443"), false,
+            "chained ceiling can only attenuate");
+
     // Real native substrate (not guest host-I/O) executes every canonical
     // authorization vector from the SHA-pinned scoped-permissions v1 corpus.
     struct GoldenAuthorization {
