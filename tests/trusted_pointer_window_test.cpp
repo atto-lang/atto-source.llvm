@@ -73,6 +73,22 @@ int main() {
     denied([&] { ro.with_ffi_address(actor, [](std::uint32_t* ptr) { *ptr = 99; }); });
     require(values[0] == 11);
 
+    TrustedPointerWindow reentrant(
+        actor, NativeRegionIdentity::supervisor_minted(7, 11, 15),
+        values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
+    auto reentrant_cursor = reentrant.at<std::uint32_t>(actor);
+    require(reentrant_cursor.with_ffi_address(actor, [&](std::uint32_t*) {
+        denied([&] { (void)reentrant_cursor.load(actor); });
+        denied([&] {
+            (void)reentrant_cursor.with_ffi_address(
+                actor, [](std::uint32_t*) { return 0; });
+        });
+        // Same-thread revoke is deferred until this callback releases its raw address.
+        reentrant.revoke();
+        return 7;
+    }) == 7);
+    denied([&] { (void)reentrant_cursor.load(actor); });
+
     alignas(std::uint32_t) std::uint32_t device_register = 0;
     TrustedPointerWindow mmio(
         actor, NativeRegionIdentity::supervisor_minted(8, 1, 1),
