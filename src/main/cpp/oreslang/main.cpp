@@ -165,8 +165,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
-        auto ast = oreslang::parse_program(text, experimental_owned_int,
-                                           experimental_rt_scalar_loop);
+        auto ast = bpf_target
+            ? oreslang::parse_program_bpf_xdp(text)
+            : oreslang::parse_program(text, experimental_owned_int,
+                                      experimental_rt_scalar_loop);
         if (bpf_target) {
             std::cout << oreslang::emit_verified_bpf_xdp_ir(ast);
             std::cout.flush();
