@@ -170,13 +170,20 @@ inline std::optional<fs::path> find_manifest(const fs::path& start,
     std::optional<fs::path> legacy;
     while(!cursor.empty() && (physical_boundary.empty()||beneath(physical_boundary,cursor))){
         auto pkg=cursor/".ores.pkg.toml", old=cursor/".oreslangc.cfg.toml";
-        if(fs::is_regular_file(pkg)){
-            // A manifest symlink may not inherit authority from a different tree.
+        // The presence of a higher-priority modern marker shadows legacy
+        // discovery even when malformed. Never walk to a parent package or
+        // fall through to legacy because the modern marker is a dangling
+        // symlink, directory, nonregular file, or intra-directory symlink.
+        if(fs::symlink_status(pkg).type()!=fs::file_type::not_found){
+            if(fs::is_symlink(pkg)||!fs::is_regular_file(pkg))
+                throw std::invalid_argument("invalid package manifest marker");
             if(!beneath(cursor,fs::canonical(pkg)))
                 throw std::invalid_argument("package manifest escapes discovery directory");
             return pkg;
         }
-        if(!legacy && fs::is_regular_file(old)){
+        if(!legacy && fs::symlink_status(old).type()!=fs::file_type::not_found){
+            if(fs::is_symlink(old)||!fs::is_regular_file(old))
+                throw std::invalid_argument("invalid legacy manifest marker");
             if(!beneath(cursor,fs::canonical(old)))
                 throw std::invalid_argument("legacy manifest escapes discovery directory");
             legacy=old;
