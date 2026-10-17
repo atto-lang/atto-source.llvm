@@ -60,6 +60,21 @@ int main() {
                           std::string("sum") + '\x7f' + "count"); });
     check(RegionTask("phase one", {}).name == "phase one");
     check(RegionAccess(r, 0, 0, 1, RegionMode::Reduce, "sum_count").reduction == "sum_count");
+    // Unicode NEL, line breaks, bidi overrides, invisible separators and
+    // ill-formed UTF-8 must never be admitted as diagnostic metadata.
+    for (const std::string& hidden : std::vector<std::string>{
+            "x\xC2\x85y", "x\xE2\x80\xA8y", "x\xE2\x80\xA9y",
+            "x\xE2\x80\xAEy", "x\xE2\x81\xA6y", "x\xC2\xA0y",
+            "x\xE2\x80\x8By", "x\xEF\xBB\xBFy",
+            "\xED\xA0\x80", "\xC0\xAF", "\xE2\x80",
+            "\xF4\x90\x80\x80", "\x80"}) {
+        bad([&] { RegionTask(hidden, {}); });
+        bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce, hidden); });
+    }
+    check(RegionTask("r\xC3\xA9sum\xC3\xA9", {}).name
+          == "r\xC3\xA9sum\xC3\xA9");
+    check(RegionAccess(r, 0, 0, 1, RegionMode::Reduce,
+                       "\xCE\xB1_sum").reduction == "\xCE\xB1_sum");
     bad([&] { RegionAccess(r, 0, 0, 1, static_cast<RegionMode>(255)); });
     bad([&] { RegionRoot::trusted_create(std::numeric_limits<std::uint64_t>::max(), 1); });
     std::vector<RegionTask> tasks;
