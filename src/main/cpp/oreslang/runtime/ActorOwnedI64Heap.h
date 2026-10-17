@@ -13,6 +13,7 @@ typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
 typedef struct { uint64_t domain, nonce, index, generation; } OresActorLoan;
+typedef struct { uint64_t domain, nonce; } OresActorLifetimePin;
 
 /* Allocated once per actor incarnation, survives any number of turns. */
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
@@ -38,6 +39,13 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
+/* Lifetime-only pin for continuations/FFI/I/O completions. It is registered
+ * during an admitted turn, carries no slot coordinates, and may be released
+ * from any completion carrier after logical retirement. */
+OresActorLifetimePin ores_actor_i64_heap_pin_external(
+    OresActorI64Heap* heap, OresActorTurn turn);
+void ores_actor_i64_heap_release_external(
+    OresActorI64Heap* heap, OresActorLifetimePin pin);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
  * fixed-layout owned fields. Field initialization is single-use. */
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
