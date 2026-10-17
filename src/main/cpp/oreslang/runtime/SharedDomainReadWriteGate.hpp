@@ -154,6 +154,24 @@ public:
         return ready;
     }
 
+    [[nodiscard]] std::vector<Ready> cancel_pending(
+            Token token, OresNativeActorIdentity owner) {
+        require_identity(owner);
+        std::lock_guard<std::mutex> lock(mu_);
+        validate_token(token);
+        if (closed_) return {};
+        auto pending = std::find_if(waiting_.begin(), waiting_.end(), [&](const Waiter& waiter) {
+            return waiter.token == token && same_identity(waiter.owner, owner);
+        });
+        if (pending == waiting_.end())
+            throw std::logic_error("only queued shared-domain admission may be cancelled");
+        std::vector<Ready> ready;
+        ready.reserve(waiting_.size());
+        waiting_.erase(pending);
+        admit_waiters(ready);
+        return ready;
+    }
+
     [[nodiscard]] std::vector<Ready> retire() {
         std::lock_guard<std::mutex> lock(mu_);
         if (closed_) return {};
