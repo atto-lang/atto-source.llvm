@@ -29,6 +29,25 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-policy substrate only; actual guest host-I/O boundaries are not lowered.
+    add_executable(oreslang-native-scoped-policy-test
+        contracts/v1/scoped_permission_policy_test.cpp)
+    target_include_directories(oreslang-native-scoped-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1")
+    target_compile_options(oreslang-native-scoped-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME scoped_permission_host_policy_substrate
+        COMMAND oreslang-native-scoped-policy-test)
+    set_tests_properties(scoped_permission_host_policy_substrate PROPERTIES TIMEOUT 15)
+    add_executable(oreslang-native-pinned-tcp-test
+        contracts/v1/scoped_tcp_boundary_test.cpp)
+    target_include_directories(oreslang-native-pinned-tcp-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1")
+    target_compile_options(oreslang-native-pinned-tcp-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_pinned_tcp_host_boundary COMMAND oreslang-native-pinned-tcp-test)
+    set_tests_properties(native_pinned_tcp_host_boundary PROPERTIES TIMEOUT 15)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
