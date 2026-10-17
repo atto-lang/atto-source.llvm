@@ -133,7 +133,7 @@ public:
                         return *reinterpret_cast<volatile T*>(s.base + byte_offset_);
                     throw std::logic_error("MMIO requires unsigned native scalar");
                 }
-                T result;
+                T result{};
                 std::memcpy(&result, s.base + byte_offset_, sizeof(T));
                 return result;
             });
