@@ -10,7 +10,9 @@
 
 namespace oreslang {
 
-// Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
+// Deliberately restricted native expression AST. Most values remain checked
+// i64; the first complex128 slice admits only return-only numeric trees.
+// This is not the full Java Ast.Program.
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
     std::string type; // native stage 1 admits only int
@@ -81,7 +83,8 @@ struct ClassDecl {
     std::vector<std::string> constructor_parameters;
 };
 
-// Native source value categories. Future<T> remains a no-IR boundary
+// Native source value categories. Complex128 is currently return-only;
+// Future<T> remains a no-IR boundary
 // until the compiler can lower nonblocking pinned continuations.
 struct SourceType {
     enum class Kind { I64, Complex128, ActorRef, Future };
@@ -210,8 +213,9 @@ struct Program {
     std::vector<Function> functions;
 };
 
-// Parse a constrained native subset: i64 expressions, call-scoped borrows and
-// bounded multi-field i64 classes and trusted, synchronous actor send/stop.
+// Parse a constrained native subset: i64 expressions, return-only complex128
+// expressions, call-scoped borrows, bounded multi-field i64 classes and
+// trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32 and source-level await/suspension.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
