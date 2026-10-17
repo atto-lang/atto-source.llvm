@@ -82,21 +82,27 @@ int main(void) {
         root = pathlib.Path(td)
         ir = root / "guest.ll"
         c = root / "harness.c"
-        exe = root / "complex128-test"
         ir.write_text(compiled.stdout, encoding="utf-8")
         c.write_text(harness, encoding="utf-8")
-        native = subprocess.run(
-            [args.clang, str(ir), str(c), "-std=c11", "-O0", "-o", str(exe)],
-            capture_output=True, text=True, check=False, timeout=30)
-        require(native.returncode == 0,
-                "Clang failed to link complex128 aggregate ABI: " + native.stderr)
-        run = subprocess.run(
-            [str(exe)], capture_output=True, text=True, check=False, timeout=10)
-        require(run.returncode == 0,
-                f"complex128 native ABI check failed with exit {run.returncode}")
+        for optimization in ("-O0", "-O2"):
+            exe = root / ("complex128-test-" + optimization[1:])
+            native = subprocess.run(
+                [args.clang, str(ir), str(c), "-std=c11", optimization,
+                 "-o", str(exe)],
+                capture_output=True, text=True, check=False, timeout=30)
+            require(native.returncode == 0,
+                    "Clang failed to link complex128 aggregate ABI "
+                    + optimization + ": " + native.stderr)
+            run = subprocess.run(
+                [str(exe)], capture_output=True, text=True,
+                check=False, timeout=10)
+            require(run.returncode == 0,
+                    f"complex128 native ABI check {optimization} failed "
+                    f"with exit {run.returncode}")
 
     print("NATIVE_COMPLEX128_RETURN_CASES=5")
     print("NATIVE_COMPLEX128_RAW_COMPONENTS=10")
+    print("NATIVE_COMPLEX128_OPT_LEVELS=2")
 
 if __name__ == "__main__":
     try:
