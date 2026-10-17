@@ -20,6 +20,14 @@ int ores_native_vm_nio_try_watch(OresNativeVM* vm, int fd, uint32_t events,
                                  OresNativeNioWatch* output);
 int ores_native_vm_nio_try_cancel(OresNativeVM* vm, OresNativeNioWatch watch);
 int ores_native_vm_nio_try_pop(OresNativeVM* vm, OresNativeNioCompletion* output);
+/* Collect up to min(capacity, 256) completed tickets into caller-owned
+ * storage under one VM backend lease. Each record is consumed exactly once.
+ * Zero means no work, contention, or a retired VM. No allocations, blocking,
+ * or guest callbacks occur on this operation path. Host scheduling and Future
+ * resolution remain the caller's responsibility.
+ */
+size_t ores_native_vm_nio_try_pop_batch(
+    OresNativeVM* vm, OresNativeNioCompletion* output, size_t capacity);
 int ores_native_vm_nio_completion_fd(OresNativeVM* vm, size_t reactor);
 void ores_native_vm_nio_drain_signal(OresNativeVM* vm, size_t reactor);
 
