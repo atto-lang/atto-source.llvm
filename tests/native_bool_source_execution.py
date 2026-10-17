@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Compile closed Oreslang Boolean/logical functions to native LLVM machine code.
+"""Compile Oreslang Boolean parameters/calls/intrinsics to native machine code.
 
-This intentionally does NOT exercise imported Assert, Any, Option, trap, bool
-parameters, locals, or bool-returning calls. Each export is compiled from source
-using oreslang-llvmc and called by a separate native fixture.
+The fixture is deliberately pure: no bool locals, ownership, imported stdlib,
+suspension, actor effects or host callbacks. Every exported result is generated
+by oreslang-llvmc and exercised by a separately compiled native harness.
 """
 import argparse
 import os
@@ -32,24 +32,39 @@ def main():
     emitted = invoke(a.compiler, source).stdout
     if "ret i1 true" not in emitted or "ret i1 false" not in emitted:
         raise AssertionError("native bool result must use LLVM i1, not i64")
-    # This fixture remains a closed, no-call i1 module. Logical AND/OR must
-    # produce explicit short-circuit CFG; XOR may constant-fold in this closed
-    # literal-only slice even though the backend lowers it through CreateXor.
-    required = (
+    required_zero = (
         "BoolProbe.yes", "BoolProbe.no", "BoolProbe.and_word",
         "BoolProbe.and_symbol", "BoolProbe.or_word", "BoolProbe.or_symbol",
         "BoolProbe.xor_symbol", "BoolProbe.nested",
     )
-    for symbol in required:
+    for symbol in required_zero:
         if f"define i1 @{symbol}()" not in emitted:
             raise AssertionError(f"missing native Boolean guest export {symbol}")
+
+    required_param = (
+        "BoolProbe.and_args", "BoolProbe.or_args", "BoolProbe.xor_args",
+        "BoolProbe.builtin_and", "BoolProbe.builtin_or",
+        "BoolProbe.builtin_xor", "BoolProbe.forward",
+        "BoolProbe.named_forward", "BoolProbe.compose",
+    )
+    for symbol in required_param:
+        if not re.search(rf"define i1 @{re.escape(symbol)}\\(i1 ", emitted):
+            raise AssertionError(f"missing i1-parameter Boolean export {symbol}")
+
     if "br i1" not in emitted or "phi i1" not in emitted:
-        raise AssertionError("native and/or must lower to short-circuit i1 CFG")
-    if re.search(r"(?m)^\s*declare\b", emitted):
+        raise AssertionError("native And/Or must lower to short-circuit i1 CFG")
+    if "xor i1" not in emitted:
+        raise AssertionError("native Xor must lower to eager xor i1")
+    if "call i1 @BoolProbe.and_args" not in emitted:
+        raise AssertionError("same-module bool call did not lower to call i1")
+    if re.search(r"(?m)^\\s*declare\\b", emitted):
         raise AssertionError("pure Boolean guest declares an external dependency")
-    if re.search(r"(?m)^\s*(?:[%@][^=\n]*=\s*)?"
-                 r"(?:(?:tail|musttail|notail)\s+)?(?:call|invoke|callbr)\b", emitted):
-        raise AssertionError("pure Boolean guest contains an unexpected call")
+
+    # Calls are permitted only between source-owned BoolProbe definitions.
+    for line in emitted.splitlines():
+        if re.search(r"\\b(?:call|invoke|callbr)\\b", line):
+            if not re.search(r"@BoolProbe\\.[A-Za-z_][A-Za-z0-9_]*\\(", line):
+                raise AssertionError(f"unexpected non-BoolProbe call: {line}")
 
     with tempfile.TemporaryDirectory(prefix="oreslang-bool-aot-") as d:
         ir = Path(d) / "guest.ll"
