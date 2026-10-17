@@ -726,7 +726,13 @@ void validate_i64_ownership(const Program& program) {
             check_deferred_exit(taken);
         }
         if (function.result) {
-            if (function.returns_bool) {
+            if (function.returns_bool &&
+                    function.result->kind == Expression::Kind::ModuleCall) {
+                // Preserve the existing parsed-but-unlinked Assert boundary:
+                // validate argument ownership here; LLVM emission still rejects
+                // imports until source-owned typed linking exists.
+                check_value(*function.result, locals, functions);
+            } else if (function.returns_bool) {
                 // Closed logical i1 trees carry no owner, loan, heap or drop
                 // state. Validate crafted ASTs here as well as in the parser.
                 check_pure_bool_tree(*function.result);
