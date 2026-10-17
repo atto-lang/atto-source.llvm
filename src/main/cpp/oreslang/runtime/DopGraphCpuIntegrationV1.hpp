@@ -122,6 +122,7 @@ inline OwnedCpuGraphFuture submit_owned_cpu_graph(
     auto state = std::make_shared<OwnedCpuGraphFuture::State>();
     auto admission = std::make_shared<OwnedCpuGraphFuture::State::Admission>();
     const auto submitting_thread = std::this_thread::get_id();
+    auto inline_attempted = std::make_shared<std::atomic<bool>>(false);
     OwnedCpuGraphFuture future(state);
     try {
         if (!input || !output) throw std::invalid_argument("missing owned CPU buffer");
@@ -148,7 +149,7 @@ inline OwnedCpuGraphFuture submit_owned_cpu_graph(
 
         // Capture owners by value: queued work must never retain raw pointers
         // or references to caller-owned C++ wrappers.
-        schedule([state, admission, submitting_thread, kernel, input = std::move(input),
+        schedule([state, admission, inline_attempted, submitting_thread, kernel, input = std::move(input),
                   output = std::move(output), source = std::move(source),
                   destination = std::move(destination),
                   graph = std::move(graph)]() mutable {
@@ -158,8 +159,11 @@ inline OwnedCpuGraphFuture submit_owned_cpu_graph(
                     std::unique_lock<std::mutex> guard(admission->mutex);
                     if (!admission->resolved &&
                             std::this_thread::get_id() == submitting_thread) {
-                        throw std::logic_error(
-                            "owned CPU graph requires queued executor, not inline dispatch");
+                        // Defer settlement until schedule returns. If the
+                        // scheduler invokes inline and then throws, report
+                        // its actual rejection, not a misleading inline error.
+                        inline_attempted->store(true, std::memory_order_release);
+                        return;
                     }
                     if (!admission->cv.wait_for(guard, std::chrono::seconds(30),
                             [&] { return admission->resolved; })) {
@@ -180,8 +184,15 @@ inline OwnedCpuGraphFuture submit_owned_cpu_graph(
                 state->fail(std::current_exception());
             }
         });
-        // Open worker gate only after successful scheduler return.
-        admission->resolve(true);
+        // Inline callbacks are not asynchronous. Their first invocation
+        // is a failed admission, even if schedule() returned normally.
+        if (inline_attempted->load(std::memory_order_acquire)) {
+            state->reject(std::make_exception_ptr(std::logic_error(
+                "owned CPU graph requires queued executor, not inline dispatch")));
+            admission->resolve(false);
+        } else {
+            admission->resolve(true);
+        }
     } catch (...) {
         // Even when schedule started a worker and then threw, the pending
         // closure is released solely in rejected state, without CPU writes.
