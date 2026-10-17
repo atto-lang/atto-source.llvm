@@ -49,6 +49,17 @@ int main() {
     bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce, "sum\f"); });
     bad([&] { RegionTask("name\v", {}); });
     bad([&] { RegionTask(std::string(1, '\0') + "name", {}); });
+    // Reject internal control bytes, including ones hidden between visible text.
+    bad([&] { RegionTask(std::string("good") + '\0' + "bad", {}); });
+    bad([&] { RegionTask("phase\nsecond", {}); });
+    bad([&] { RegionTask(std::string("a") + '\x7f' + "b", {}); });
+    bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce,
+                          std::string("sum") + '\0' + "count"); });
+    bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce, "sum\tcount"); });
+    bad([&] { RegionAccess(r, 0, 0, 1, RegionMode::Reduce,
+                          std::string("sum") + '\x7f' + "count"); });
+    check(RegionTask("phase one", {}).name == "phase one");
+    check(RegionAccess(r, 0, 0, 1, RegionMode::Reduce, "sum_count").reduction == "sum_count");
     bad([&] { RegionAccess(r, 0, 0, 1, static_cast<RegionMode>(255)); });
     bad([&] { RegionRoot::trusted_create(std::numeric_limits<std::uint64_t>::max(), 1); });
     std::vector<RegionTask> tasks;
