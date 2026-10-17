@@ -10,6 +10,7 @@
  * a compiler/scheduler admission barrier before they may use this backend. */
 #define MAX_SLOTS 4096u
 #define MAX_LOANS 64u
+#define MAX_EXTERNAL_LEASES 64u
 
 typedef struct {
     int64_t value;
@@ -26,6 +27,11 @@ typedef struct {
     uint64_t generation;
 } ActorLoanEntry;
 
+typedef struct {
+    uint64_t generation;
+    unsigned char active;
+} ActorExternalLeaseEntry;
+
 struct OresActorI64Heap {
     atomic_flag mutex;
     uint64_t domain;
@@ -37,7 +43,9 @@ struct OresActorI64Heap {
     int turn_active;
     int retiring;
     uint32_t active_loans;
+    uint32_t active_external_leases;
     ActorLoanEntry loan_entries[MAX_LOANS];
+    ActorExternalLeaseEntry external_leases[MAX_EXTERNAL_LEASES];
     ActorSlot slots[];
 };
 
@@ -241,6 +249,54 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
     }
     rejected();
 }
+
+OresActorExternalLease ores_actor_i64_heap_external_acquire(
+    OresActorI64Heap* heap, OresActorTurn turn) {
+    lock_heap(heap);
+    require_turn(heap, turn);
+    if (heap->active_external_leases >= MAX_EXTERNAL_LEASES) rejected();
+
+    unsigned found = MAX_EXTERNAL_LEASES;
+    for (unsigned i = 0; i < MAX_EXTERNAL_LEASES; ++i) {
+        if (!heap->external_leases[i].active) { found = i; break; }
+    }
+    if (found == MAX_EXTERNAL_LEASES) rejected();
+
+    ActorExternalLeaseEntry* entry = &heap->external_leases[found];
+    if (entry->generation == UINT64_MAX) rejected();
+    ++entry->generation;
+    entry->active = 1;
+    ++heap->active_external_leases;
+
+    OresActorExternalLease lease = {
+        heap->domain, (uint64_t) found, entry->generation
+    };
+    unlock_heap(heap);
+    return lease;
+}
+
+void ores_actor_i64_heap_external_release(
+    OresActorI64Heap* heap, OresActorExternalLease lease) {
+    lock_heap(heap);
+    if (lease.domain != heap->domain || lease.index >= MAX_EXTERNAL_LEASES
+        || lease.generation == 0) {
+        rejected();
+    }
+
+    ActorExternalLeaseEntry* entry = &heap->external_leases[lease.index];
+    if (lease.generation > entry->generation) rejected();
+
+    /* An older generation, or the current generation after it was already
+     * released, is an idempotent cleanup retry and cannot affect a newer lease. */
+    if (lease.generation < entry->generation || !entry->active) {
+        unlock_heap(heap);
+        return;
+    }
+    if (!heap->active_external_leases) rejected();
+    entry->active = 0;
+    --heap->active_external_leases;
+    unlock_heap(heap);
+}
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
                                     uint64_t domain, uint64_t epoch,
                                     uint64_t index, int64_t initial) {
@@ -310,7 +366,7 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
     /* CONTROL try-destroy must not spin behind an in-flight actor operation. */
     if (!try_lock_heap(heap)) return 0;
     if (!heap->retiring) rejected();
-    if (heap->turn_active || heap->active_loans) {
+    if (heap->turn_active || heap->active_loans || heap->active_external_leases) {
         unlock_heap(heap);
         return 0;
     }
@@ -318,6 +374,7 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
                        + (size_t) heap->capacity * sizeof(ActorSlot);
     memset(heap->slots, 0, (size_t) heap->capacity * sizeof(ActorSlot));
     memset(heap->loan_entries, 0, sizeof(heap->loan_entries));
+    memset(heap->external_leases, 0, sizeof(heap->external_leases));
     heap->domain = 0;
     /* Release lock before teardown; the supervisor must have fenced all
      * transport, scheduler, timer and callback handles to this heap. */
