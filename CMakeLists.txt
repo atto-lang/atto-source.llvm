@@ -80,6 +80,19 @@ if(BUILD_TESTING)
     add_test(NAME native_int_array_region_security
         COMMAND oreslang-native-int-array-region-test)
 
+    # Allocation-free native Map<int,int> representation substrate. This is
+    # runtime/layout evidence only; source structural Map syntax remains fail-closed.
+    add_executable(oreslang-native-i64-map-region-test
+        tests/native_i64_map_region_test.c
+        src/main/cpp/oreslang/runtime/NativeI64MapRegion.c)
+    target_include_directories(oreslang-native-i64-map-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-i64-map-region-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Werror -Wpedantic>)
+    add_test(NAME native_i64_map_region_security
+        COMMAND oreslang-native-i64-map-region-test)
+    set_tests_properties(native_i64_map_region_security PROPERTIES TIMEOUT 30)
+
     # Checked, recoverable internal allocation/resize + staged prepare/commit.
     # Failpoint injection only exists in this test executable; existing
     # compiler-generated abort ABI and production runtime remain unchanged.
