@@ -6,12 +6,20 @@ on:
       - 'scripts/verify_persistent_actor_data_contract.py'
       - 'scripts/test_persistent_actor_data_contract.py'
       - '.github/workflows/persistent-actor-data-contract.yml'
+      - 'src/main/cpp/oreslang/runtime/SharedDomainArena.hpp'
+      - 'tests/native_shared_domain_arena_test.cpp'
+      - 'tests/native_actor_arena_test.cpp'
+      - 'CMakeLists.txt'
   push:
     paths:
       - 'contracts/v1/persistent_actor_data_v1.json'
       - 'scripts/verify_persistent_actor_data_contract.py'
       - 'scripts/test_persistent_actor_data_contract.py'
       - '.github/workflows/persistent-actor-data-contract.yml'
+      - 'src/main/cpp/oreslang/runtime/SharedDomainArena.hpp'
+      - 'tests/native_shared_domain_arena_test.cpp'
+      - 'tests/native_actor_arena_test.cpp'
+      - 'CMakeLists.txt'
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,3 +41,15 @@ jobs:
         run: python3 scripts/verify_persistent_actor_data_contract.py
       - name: Execute negative policy mutation suite
         run: python3 scripts/test_persistent_actor_data_contract.py -v
+
+  host-arena:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Compile and execute real LLVM host shared-domain leases
+        run: |
+          c++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -pthread -Isrc/main/cpp tests/native_shared_domain_arena_test.cpp -o /tmp/oreslang-shared-domain-arena
+          /tmp/oreslang-shared-domain-arena
