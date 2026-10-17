@@ -16,7 +16,7 @@ class DomainRefusalEvidenceTest(unittest.TestCase):
             "error: CPU input file could not be opened",
             "error: parse failed on nb",
             "error: unsupported integer syntax",
-            "error: GPU driver file not found",
+            "error: GPU driver file not found",\n            "error: GPU driver not supported",\n            "error: unsupported CPU font rendering",
         ):
             with self.subTest(diagnostic=diagnostic):
                 self.assertFalse(is_domain_refusal(diagnostic))
