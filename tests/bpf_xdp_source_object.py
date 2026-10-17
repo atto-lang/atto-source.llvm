@@ -298,7 +298,7 @@ def main():
         reject("pub fnc ores_xdp(borrow mut XdpContext ctx): int { return 2; }")
         reject("pub fnc ores_xdp(borrow XdpContext ctx, int x): int { return 2; }")
         reject("pub fnc ores_xdp(borrow Foo ctx): int { return 2; }")
-        reject("pub fnc ores_xdp(): int { if (ctx.packet_u8(12) == 8) { return 1; } fi return 2; }")
+        reject("pub fnc ores_xdp(): int { if (ctx.packet_u8(12) == 8) { return 1; } fi return 2; }", None)
         reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u8(4096) == 8) { return 1; } fi return 2; }")
         reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u8(-1) == 8) { return 1; } fi return 2; }")
         reject("pub fnc ores_xdp(borrow XdpContext ctx): int { if (ctx.packet_u8(12) == 256) { return 1; } fi return 2; }")
