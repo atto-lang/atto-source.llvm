@@ -404,6 +404,16 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # std/otp source modules are implemented first on Java/Graal. Native must
+    # reject all six explicitly until module linking and typed OTP lowering
+    # exist; a generic parser accident is not the long-term contract.
+    add_test(NAME native_otp_stdlib_imports_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/otp_stdlib_import_fail_closed.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --positive-fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
+    set_tests_properties(native_otp_stdlib_imports_fail_closed PROPERTIES TIMEOUT 45)
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
