@@ -27,6 +27,27 @@ int main() {
     expect(reactor.start(), "repeated start");
     expect(!reactor.try_watch(-1, EPOLLIN).has_value(), "bad fd");
     expect(!reactor.try_watch(0, 0).has_value(), "bad readiness flags");
+    // A readiness notification alone must never legalize blocking I/O.
+    // Reject a blocking descriptor; allow that same descriptor only after
+    // its owner explicitly enables O_NONBLOCK before guest admission.
+    int blocking_pipe[2]{-1, -1};
+    expect(::pipe(blocking_pipe) == 0, "create blocking pipe");
+    expect(!reactor.try_watch(blocking_pipe[0], EPOLLIN).has_value(),
+           "blocking descriptor must fail closed");
+    const int old_flags = ::fcntl(blocking_pipe[0], F_GETFL);
+    expect(old_flags >= 0
+           && ::fcntl(blocking_pipe[0], F_SETFL, old_flags | O_NONBLOCK) == 0,
+           "set nonblocking pipe");
+    auto nonblocking_ticket = reactor.try_watch(blocking_pipe[0], EPOLLIN);
+    expect(nonblocking_ticket.has_value(), "nonblocking descriptor permitted");
+    expect(reactor.try_cancel(*nonblocking_ticket), "cancel test pipe watch");
+    auto cancelled_pipe = until_completion(reactor);
+    expect(cancelled_pipe.has_value()
+           && cancelled_pipe->ticket.value == nonblocking_ticket->value
+           && cancelled_pipe->outcome == NativeEpollReactor::Outcome::cancelled,
+           "cancel test pipe");
+    ::close(blocking_pipe[0]);
+    ::close(blocking_pipe[1]);
     const int server = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     expect(server >= 0, "socket");
     sockaddr_in addr{}; addr.sin_family = AF_INET; addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
