@@ -267,12 +267,12 @@ void ores_actor_i64_heap_release_external(
         unlock_heap(heap);
         return;
     }
-    /* Nonces are monotonic and never reused. An issued external pin that is
-     * absent from the active table has already been released. Treat cleanup
-     * retries as a no-op so callback/finally races cannot underflow counts.
-     * An active read-loan nonce would still be found above and rejected by the
-     * sentinel check, so this cannot release slot authority. */
-    unlock_heap(heap);
+    /* External pins are linear host authority. Treating an absent nonce as an
+     * idempotent retry is unsafe: after the last real pin releases, CONTROL may
+     * immediately destroy the heap, so a second cleanup caller could race into
+     * freed memory. Every independently racing holder must receive its own pin
+     * and release exactly once; duplicates fail closed while the heap is live. */
+    rejected();
 }
 
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
