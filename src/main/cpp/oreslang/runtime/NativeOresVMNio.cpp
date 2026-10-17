@@ -39,7 +39,9 @@ extern "C" int ores_native_vm_enable_nio(
         return 0;
     }
     if (!ores_native_vm_attach_nio(vm, backend, &ores_native_vm_nio_destroy_backend)) {
-        ores_native_vm_nio_cancel_bootstrap(vm);
+        // attach_nio always consumes this thread's reservation. Another
+        // closer may reclaim the VM immediately afterwards, so do not
+        // invoke a second VM method here; reclaim only the unowned candidate.
         ores_native_nio_close(backend);
         return 0;
     }
