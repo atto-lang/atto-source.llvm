@@ -42,16 +42,25 @@ struct OresActorI64Heap {
 };
 
 static _Atomic(uint64_t) next_domain = 1;
+/* A logical turn token is not physical execution authority. The carrier that
+ * admitted the turn is the only carrier allowed to dereference actor memory;
+ * migration requires leave + a fresh enter on the destination carrier. */
+static _Thread_local OresActorI64Heap* carrier_heap;
+static _Thread_local uint64_t carrier_epoch;
 
 static void rejected(void) { abort(); }
 
 /* Short critical sections; bounded spinning fails rather than blocking an
  * uncooperative carrier forever. Production actor scheduling must not allow
  * guest code to execute while this lock is held. */
+static int try_lock_heap(OresActorI64Heap* heap) {
+    if (!heap) rejected();
+    return !atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire);
+}
 static void lock_heap(OresActorI64Heap* heap) {
     if (!heap) rejected();
     for (unsigned i = 0; i != 1000000u; ++i) {
-        if (!atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire)) return;
+        if (try_lock_heap(heap)) return;
     }
     rejected();
 }
@@ -61,7 +70,8 @@ static void unlock_heap(OresActorI64Heap* heap) {
 
 static void require_turn(OresActorI64Heap* heap, OresActorTurn turn) {
     if (heap->retiring || !heap->turn_active
-        || heap->domain != turn.domain || heap->turn_epoch != turn.epoch) {
+        || heap->domain != turn.domain || heap->turn_epoch != turn.epoch
+        || carrier_heap != heap || carrier_epoch != turn.epoch) {
         rejected();
     }
 }
@@ -97,6 +107,7 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                           uint64_t actor_id,
                                           uint64_t incarnation) {
+    if (carrier_heap != NULL) rejected();
     lock_heap(heap);
     if (heap->retiring || heap->turn_active
         || actor_id != heap->owner || incarnation != heap->incarnation
@@ -104,6 +115,8 @@ OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
     heap->turn_active = 1;
     ++heap->turn_epoch;
     OresActorTurn token = {heap->domain, heap->turn_epoch};
+    carrier_heap = heap;
+    carrier_epoch = token.epoch;
     unlock_heap(heap);
     return token;
 }
@@ -111,8 +124,11 @@ OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
 void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn) {
     lock_heap(heap);
     if (!heap->turn_active || turn.domain != heap->domain
-            || turn.epoch != heap->turn_epoch) rejected();
+            || turn.epoch != heap->turn_epoch || carrier_heap != heap
+            || carrier_epoch != turn.epoch) rejected();
     heap->turn_active = 0;
+    carrier_heap = NULL;
+    carrier_epoch = 0;
     unlock_heap(heap);
 }
 OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
@@ -275,7 +291,9 @@ void ores_actor_i64_heap_retire(OresActorI64Heap* heap) {
     unlock_heap(heap);
 }
 int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
-    lock_heap(heap);
+    if (!heap) rejected();
+    /* CONTROL try-destroy must not spin behind an in-flight actor operation. */
+    if (!try_lock_heap(heap)) return 0;
     if (!heap->retiring) rejected();
     if (heap->turn_active || heap->active_loans) {
         unlock_heap(heap);
