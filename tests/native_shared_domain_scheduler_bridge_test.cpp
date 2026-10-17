@@ -13,9 +13,12 @@ using oreslang::runtime::SharedDomainArena;
 using oreslang::runtime::SharedDomainReadWriteGate;
 using oreslang::runtime::SharedDomainSchedulerBridge;
 
-static void require(bool value) {
-    if (!value) throw std::runtime_error("shared-domain scheduler bridge test failed");
+static void require_at(bool value, int line) {
+    if (!value)
+        throw std::runtime_error(
+            "shared-domain scheduler bridge test failed at line " + std::to_string(line));
 }
+#define require(value) require_at((value), __LINE__)
 template <class F>
 static void reject(F&& fn) {
     bool denied = false;
