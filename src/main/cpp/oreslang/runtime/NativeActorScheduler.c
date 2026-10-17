@@ -25,6 +25,7 @@ typedef struct {
     unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
+    uint64_t principal;
     OresNativeExecutionAuthority authority;
 } ActorLane;
 struct OresNativeActorScheduler {
@@ -46,9 +47,11 @@ struct OresNativeActorScheduler {
 };
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
+static _Thread_local OresNativeActorIdentity executing_identity;
 static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
+static _Atomic(uint64_t) next_actor_principal = 1;
 
 /* Never wrap a scheduler-domain capability back to 1: a stale ActorRef
  * must not match a new scheduler even after counter exhaustion. The
@@ -60,6 +63,21 @@ static uint64_t allocate_scheduler_domain(void) {
     while (candidate != 0 && candidate != UINT64_MAX) {
         if (atomic_compare_exchange_weak_explicit(
                 &next_scheduler_domain, &candidate, candidate + 1,
+                memory_order_relaxed, memory_order_relaxed))
+            return candidate;
+    }
+    return 0;
+}
+
+/* Actor principals are independent from reusable scheduler slots/generations.
+ * Exhaustion is permanent: stale memory capabilities must never alias a later
+ * actor merely because a scheduler or slot was recycled. */
+static uint64_t allocate_actor_principal(void) {
+    uint64_t candidate = atomic_load_explicit(
+        &next_actor_principal, memory_order_relaxed);
+    while (candidate != 0 && candidate != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(
+                &next_actor_principal, &candidate, candidate + 1,
                 memory_order_relaxed, memory_order_relaxed))
             return candidate;
     }
@@ -133,12 +151,14 @@ static void* carrier(void* raw) {
 
         // Actor identity is authorized only by the physical execution claim.
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
+        executing_identity = (OresNativeActorIdentity){lane->principal, lane->generation};
         executing_claim = execution_claim;
         executing = s;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
         executing_actor = (OresNativeActorRef){0, 0, 0};
+        executing_identity = (OresNativeActorIdentity){0, 0};
         executing_claim = (OresExecutionClaim){0};
         executing = NULL;
 
@@ -301,8 +321,14 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
         return missing;
     }
     ActorLane* a = &s->actors[i];
+    const uint64_t principal = allocate_actor_principal();
+    if (!principal) {
+        unlock(s);
+        return missing;
+    }
     a->spawned = 1;
     a->generation = a->authority.generation;
+    a->principal = principal;
     OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
     unlock(s);
     return ref;
@@ -507,6 +533,40 @@ int ores_native_actor_scheduler_is_current_actor(
     // An active callback pins its scheduler/lane; only the authority mutex
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
+}
+int ores_native_actor_scheduler_resolve_actor_identity(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        OresNativeActorIdentity* out) {
+    if (!s || !out) return 0;
+    lock(s);
+    const int ok = matching(s, actor) && !s->retired
+        && !s->actors[actor.actor_slot].retired
+        && s->actors[actor.actor_slot].principal != 0;
+    if (ok) {
+        *out = (OresNativeActorIdentity){
+            s->actors[actor.actor_slot].principal,
+            s->actors[actor.actor_slot].generation
+        };
+    } else {
+        *out = (OresNativeActorIdentity){0, 0};
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_current_actor_identity(
+        OresNativeActorScheduler* s, OresNativeActorIdentity* out) {
+    if (!s || !out || executing != s || !executing_claim.carrier
+            || !executing_identity.principal || !executing_identity.incarnation) {
+        if (out) *out = (OresNativeActorIdentity){0, 0};
+        return 0;
+    }
+    if (!ores_execution_owns(
+            &s->actors[executing_actor.actor_slot].authority, executing_claim)) {
+        *out = (OresNativeActorIdentity){0, 0};
+        return 0;
+    }
+    *out = executing_identity;
+    return 1;
 }
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     if (!s) return 0;
