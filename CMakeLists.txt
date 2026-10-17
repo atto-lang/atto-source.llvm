@@ -832,6 +832,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_rt_proxy_call_escape_reject
         native-rt-proxy-call-escape-reject.ores
         --diagnostic "Proxy<T> capability cannot escape through a scalar return")
+    oreslang_contract_test(native_rt_proxy_method_call_reject
+        native-rt-proxy-method-call-reject.ores
+        --diagnostic "native Proxy<T> critical-write lowering is pending")
 
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
