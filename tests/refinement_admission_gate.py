@@ -16,7 +16,7 @@ UNSUPPORTED = {
     "annotation": "@Size(min=1,max=32)\ntype Username = string;\nfnc main(): int { return 42; }\n",
     "with": "type NonEmpty = string with length gt 0;\nfnc main(): int { return 42; }\n",
     "where": "type NonBlank = string where it.trim().length > 0;\nfnc main(): int { return 42; }\n",
-    "newtype": "define newtype Username(string) with length ge 1;\nfnc main(): int { return 42; }\n",
+    "newtype": "define newtype Username(string) with length gte 1;\nfnc main(): int { return 42; }\n",
     "invalid-with": "type T = string with length gt 0 or length eq 10;\nfnc main(): int { return 42; }\n",
 }
 
