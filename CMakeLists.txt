@@ -494,20 +494,22 @@ if(BUILD_TESTING)
         unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
     oreslang_contract_test(reject_unadmitted_nested_core_assert_import
         unsupported-core-assert-nested-import.ores --diagnostic "native module imports must precede declarations")
-    # First truly source-compiled native i1 Boolean return slice.
-    # It is NOT imported std/assert, Option or trap lowering.
+    # Source-compiled native i1 Boolean/logical return slice.
+    # It is NOT imported std/assert, Option, trap, bool storage or bool calls.
     oreslang_contract_test(native_bool_literal_true_i1
         primitive-bool-aot.ores --ir "ret i1 true")
     oreslang_contract_test(native_bool_literal_false_i1
         primitive-bool-aot.ores --ir "ret i1 false")
-    add_test(NAME native_bool_literal_guest_aot_asan_ubsan
+    oreslang_contract_test(native_bool_short_circuit_cfg_i1
+        primitive-bool-aot.ores --ir "phi i1")
+    add_test(NAME native_bool_logical_guest_aot_asan_ubsan
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_source_execution.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_NATIVE_ARRAY_CLANG}"
             --cxx "${CMAKE_CXX_COMPILER}"
             --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
-    set_tests_properties(native_bool_literal_guest_aot_asan_ubsan
+    set_tests_properties(native_bool_logical_guest_aot_asan_ubsan
         PROPERTIES TIMEOUT 180)
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
