@@ -12,6 +12,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace oreslang::runtime {
 class SharedDomainArena final {
@@ -19,7 +20,53 @@ public:
     static constexpr std::size_t Slots = 16;
     static constexpr std::size_t SlotBytes = 64;
     static constexpr std::size_t Members = 16;
+    static constexpr std::size_t MaxLifetimePins = 64;
     class Lease;
+    class Control;
+    class LifetimePin;
+
+    // Domain CONTROL is a one-shot opaque capability. Holding a reference to
+    // the arena is not enough to mutate membership or retire the domain.
+    class Control final {
+        friend class SharedDomainArena;
+        SharedDomainArena* arena_ = nullptr;
+        std::uint64_t generation_ = 0;
+        Control(SharedDomainArena& arena, std::uint64_t generation)
+            : arena_(&arena), generation_(generation) {}
+    public:
+        Control(const Control&) = delete;
+        Control& operator=(const Control&) = delete;
+        Control(Control&&) = delete;
+        Control& operator=(Control&&) = delete;
+    };
+
+    // Lifetime-only pins model continuation / FFI / I/O owners that can
+    // outlive an actor critical section. They carry no slot or byte access and
+    // may be released from a completion carrier different from the acquirer.
+    class LifetimePin final {
+        friend class SharedDomainArena;
+        SharedDomainArena* arena_ = nullptr;
+        explicit LifetimePin(SharedDomainArena& arena) : arena_(&arena) {}
+        void reset() noexcept {
+            auto* arena = std::exchange(arena_, nullptr);
+            if (arena) arena->release_lifetime_pin();
+        }
+    public:
+        LifetimePin(const LifetimePin&) = delete;
+        LifetimePin& operator=(const LifetimePin&) = delete;
+        LifetimePin(LifetimePin&& other) noexcept
+            : arena_(std::exchange(other.arena_, nullptr)) {}
+        LifetimePin& operator=(LifetimePin&& other) noexcept {
+            if (this != &other) {
+                reset();
+                arena_ = std::exchange(other.arena_, nullptr);
+            }
+            return *this;
+        }
+        ~LifetimePin() noexcept { reset(); }
+        void release() noexcept { reset(); }
+        bool live() const noexcept { return arena_ != nullptr; }
+    };
     // Grants and handles are capabilities, not serializable coordinates.
     // Raw aggregate fields previously let trusted-but-unprivileged host code
     // fabricate another member's predictable (domain,generation,index) token.
@@ -137,21 +184,30 @@ public:
     };
 
     SharedDomainArena() : identity_(allocate_identity()) {}
+    Control take_control() {
+        std::unique_lock lock(mutex_, std::try_to_lock);
+        if (!lock.owns_lock()) throw std::logic_error("shared region busy");
+        if (closing_.load(std::memory_order_acquire) || control_issued_)
+            throw std::logic_error("shared region control unavailable");
+        control_issued_ = true;
+        return Control(*this, control_generation_);
+    }
     SharedDomainArena(const SharedDomainArena&) = delete;
     SharedDomainArena& operator=(const SharedDomainArena&) = delete;
     ~SharedDomainArena() noexcept {
         // Destruction requires completed CONTROL retirement and no live
         // actor lease. Never scrub storage beneath a concurrent carrier.
         std::unique_lock<std::shared_mutex> lock(mutex_, std::try_to_lock);
-        if (!lock.owns_lock() || !retired_) std::terminate();
+        if (!lock.owns_lock() || !retired_ || lifetime_pins_.load(std::memory_order_acquire) != 0) std::terminate();
         for (auto& s : slots_) scrub(s.data);
     }
 
-    Grant grant(std::uint64_t actor, std::uint64_t incarnation, bool allow_read, bool allow_write) {
+    Grant grant(const Control& control, std::uint64_t actor, std::uint64_t incarnation, bool allow_read, bool allow_write) {
         // Like actor lease admission, membership grants may not park a CONTROL
         // carrier behind a guest-held critical lease.
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) throw std::logic_error("shared region busy");
+        validate_control(control);
         if (closing_.load(std::memory_order_acquire) || !actor || !incarnation || (!allow_read && !allow_write))
             throw std::logic_error("invalid shared region grant");
         for (std::size_t i = 0; i < Members; ++i) {
@@ -169,9 +225,10 @@ public:
     }
     // CONTROL never waits on a guest-held reader/writer lease. The caller may
     // retry after actor lease quiescence; no state is mutated on contention.
-    bool try_revoke(Grant grant) {
+    bool try_revoke(const Control& control, Grant grant) {
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
+        validate_control(control);
         validate_grant(grant, 0, 0, false);
         auto& m = members_[grant.member_];
         m.active = false;
@@ -189,13 +246,30 @@ public:
         return Lease(*this, actor, incarnation, grant, true);
     }
 
+    LifetimePin pin(std::uint64_t actor, std::uint64_t incarnation, Grant grant) {
+        std::shared_lock lock(mutex_, std::try_to_lock);
+        if (!lock.owns_lock()) throw std::logic_error("shared region busy");
+        validate_grant(grant, actor, incarnation, false);
+        auto current = lifetime_pins_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (current >= MaxLifetimePins)
+                throw std::out_of_range("shared region lifetime pin quota");
+            if (lifetime_pins_.compare_exchange_weak(
+                    current, current + 1, std::memory_order_acq_rel,
+                    std::memory_order_relaxed))
+                return LifetimePin(*this);
+        }
+    }
+
     // Supervisor CONTROL path only: never block a carrier waiting for loans.
     // Returning false means existing readers/writers have not yet quiesced.
-    bool try_retire() {
+    bool try_retire(const Control& control) {
+        validate_control(control);
         closing_.store(true, std::memory_order_release);
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
         if (retired_) return true;
+        if (lifetime_pins_.load(std::memory_order_acquire) != 0) return false;
         for (auto& slot : slots_) {
             scrub(slot.data);
             slot.live = false;
@@ -234,12 +308,30 @@ private:
     const std::uint64_t identity_;
     std::shared_mutex mutex_;
     std::atomic<bool> closing_{false};
+    std::atomic<std::size_t> lifetime_pins_{0};
+    std::uint64_t control_generation_ = 1;
+    bool control_issued_ = false;
     bool retired_ = false;
     std::array<Slot, Slots> slots_{};
     std::array<Member, Members> members_{};
     template<std::size_t N> static void scrub(std::array<std::byte, N>& data) noexcept {
         volatile unsigned char* p = reinterpret_cast<volatile unsigned char*>(data.data());
         for (std::size_t i = 0; i < N; ++i) p[i] = 0;
+    }
+    void validate_control(const Control& control) const {
+        if (!control_issued_ || control.arena_ != this ||
+            control.generation_ != control_generation_)
+            throw std::logic_error("foreign or stale shared region control");
+    }
+    void release_lifetime_pin() noexcept {
+        auto current = lifetime_pins_.load(std::memory_order_acquire);
+        for (;;) {
+            if (current == 0) std::terminate();
+            if (lifetime_pins_.compare_exchange_weak(
+                    current, current - 1, std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                return;
+        }
     }
     void validate_grant(Grant grant, std::uint64_t actor, std::uint64_t incarnation, bool writer) const {
         if (closing_.load(std::memory_order_acquire) ||
