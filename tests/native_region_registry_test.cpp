@@ -1,4 +1,16 @@
+#define ORESLANG_NATIVE_GRANT_TESTING 1
 #include "oreslang/runtime/NativeRegionRegistry.hpp"
+namespace oreslang::runtime {
+struct NativeRegionRegistryTestAccess {
+    static NativeRegionRegistry::Grant issue(NativeRegionRegistry& registry,
+        NativeRegionRegistry::Trust trust, ActorHeapIdentity owner,
+        std::uint64_t region, std::uint64_t allocation, void* base,
+        std::size_t bytes, TrustedPointerWindow::Mode mode) {
+        return registry.issue(trust, owner, region, allocation, base, bytes, mode);
+    }
+};
+}
+
 #include <array>
 #include <atomic>
 #include <thread>
@@ -12,39 +24,47 @@ template<class F> void reject(F f) {
 }
 int main() {
     NativeRegionRegistry registry;
+    // Only this test build can call the private issuance hook. Production guest
+    // code cannot request a trusted grant by passing Trust::Trusted.
+    auto issue = [&](NativeRegionRegistry::Trust trust, ActorHeapIdentity actor,
+                     std::uint64_t region, std::uint64_t allocation, void* base,
+                     std::size_t bytes, TrustedPointerWindow::Mode mode) {
+        return NativeRegionRegistryTestAccess::issue(registry, trust, actor,
+            region, allocation, base, bytes, mode);
+    };
     const ActorHeapIdentity owner{1, 2, 3}, other{1, 4, 3}, stale{1, 2, 2};
     std::array<std::uint32_t, 4> bytes{{10, 20, 30, 40}};
-    reject([&] { registry.issue(NativeRegionRegistry::Trust::Untrusted, owner, 9, 1,
+    reject([&] { issue(NativeRegionRegistry::Trust::Untrusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite); });
     // Invalid enum values must never silently turn into ordinary RAM access.
     bool invalid_mode_rejected = false;
     try {
-        (void)registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
+        (void)issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
             bytes.data(), sizeof(bytes), static_cast<TrustedPointerWindow::Mode>(255));
     } catch (const std::invalid_argument&) {
         invalid_mode_rejected = true;
     }
     if (!invalid_mode_rejected) throw std::runtime_error("invalid mode admitted");
-    reject([&] { (void)registry.issue(static_cast<NativeRegionRegistry::Trust>(255),
+    reject([&] { (void)issue(static_cast<NativeRegionRegistry::Trust>(255),
         owner, 9, 1, bytes.data(), sizeof(bytes),
         TrustedPointerWindow::Mode::ReadWrite); });
-    auto grant = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
+    auto grant = issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite);
     // Even distinct actor identities cannot obtain aliased grants over the
     // same backing bytes. Read-only aliasing also requires explicit sharing.
-    reject([&] { (void)registry.issue(NativeRegionRegistry::Trust::Trusted,
+    reject([&] { (void)issue(NativeRegionRegistry::Trust::Trusted,
         other, 11, 4, bytes.data(), sizeof(bytes),
         TrustedPointerWindow::Mode::ReadOnly); });
-    reject([&] { (void)registry.issue(NativeRegionRegistry::Trust::Trusted,
+    reject([&] { (void)issue(NativeRegionRegistry::Trust::Trusted,
         owner, 12, 5, bytes.data() + 1, sizeof(std::uint32_t),
         TrustedPointerWindow::Mode::ReadWrite); });
     // Disjoint adjacent windows are permitted and must not be mistaken for
     // overlapping ranges.
     std::array<std::uint32_t, 2> adjacentBacking{{55, 66}};
-    auto adjacentLeft = registry.issue(NativeRegionRegistry::Trust::Trusted,
+    auto adjacentLeft = issue(NativeRegionRegistry::Trust::Trusted,
         owner, 13, 6, adjacentBacking.data(), sizeof(std::uint32_t),
         TrustedPointerWindow::Mode::ReadOnly);
-    auto adjacentRight = registry.issue(NativeRegionRegistry::Trust::Trusted,
+    auto adjacentRight = issue(NativeRegionRegistry::Trust::Trusted,
         other, 14, 7, adjacentBacking.data() + 1, sizeof(std::uint32_t),
         TrustedPointerWindow::Mode::ReadOnly);
     if (registry.at<std::uint32_t>(adjacentRight, other).load(other) != 66)
@@ -63,7 +83,7 @@ int main() {
     reject([&] { (void)p.load(owner); });
     reject([&] { (void)registry.at<std::uint32_t>(grant, owner); });
     reject([&] { registry.revoke(grant); });
-    auto second = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
+    auto second = issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadOnly);
     if (second.slot == grant.slot || second.provenance.generation == grant.provenance.generation)
         throw std::runtime_error("grant identity reused");
@@ -72,7 +92,7 @@ int main() {
     // Self-revocation must not release the allocation while an FFI callback
     // still holds its raw T*. The callback may request revocation, but the
     // caller must retry after the active foreign scope has unwound.
-    auto ffiGrant = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
+    auto ffiGrant = issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite);
     auto ffiPointer = registry.at<std::uint32_t>(ffiGrant, owner);
     const int callbackResult = ffiPointer.with_ffi_address(owner, [&](std::uint32_t* raw) {
@@ -91,7 +111,7 @@ int main() {
     // Exercise concurrent registry lookup against revocation. Both outcomes
     // are permitted for a racing lookup, but no access may succeed after
     // revoke() has completed.
-    auto racingGrant = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 10, 2,
+    auto racingGrant = issue(NativeRegionRegistry::Trust::Trusted, owner, 10, 2,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadOnly);
     auto racingPointer = registry.at<std::uint32_t>(racingGrant, owner);
     std::atomic<bool> go{false}, stopped{false};
