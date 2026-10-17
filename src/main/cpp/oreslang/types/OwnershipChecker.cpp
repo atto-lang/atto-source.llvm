@@ -151,7 +151,7 @@ void release(const Loan& loan, Locals& locals) {
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
     const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
     if (found == functions.end()) {
-        if (expr.name == "And" || expr.name == "Or" || expr.name == "Xor")
+        if (boolean_intrinsic_member(expr.name) == "And" || boolean_intrinsic_member(expr.name) == "Or" || boolean_intrinsic_member(expr.name) == "Xor")
             reject(expr,
                 "native Boolean intrinsic call statement requires bool expression lowering");
         reject(expr, "internal ownership error: unresolved function");
@@ -214,8 +214,15 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
         release(*it, locals);
 }
 
+std::string_view boolean_intrinsic_member(std::string_view name) {
+    if (name == "And" || name == "BooleanOps.And") return "And";
+    if (name == "Or" || name == "BooleanOps.Or") return "Or";
+    if (name == "Xor" || name == "BooleanOps.Xor") return "Xor";
+    return {};
+}
+
 bool boolean_intrinsic_name(std::string_view name) {
-    return name == "And" || name == "Or" || name == "Xor";
+    return !boolean_intrinsic_member(name).empty();
 }
 
 void check_bool_value(
@@ -255,9 +262,9 @@ void check_bool_value(
                         std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
                             [](const std::string& label) { return !label.empty(); }))
                     reject(expr, "native Boolean intrinsics do not accept named arguments");
-                if (expr.name == "Xor" && expr.arguments.size() != 2)
+                if (boolean_intrinsic_member(expr.name) == "Xor" && expr.arguments.size() != 2)
                     reject(expr, "native Xor expects exactly two scalar bool arguments");
-                if (expr.name != "Xor" && expr.arguments.size() < 2)
+                if (boolean_intrinsic_member(expr.name) != "Xor" && expr.arguments.size() < 2)
                     reject(expr, "native And/Or aggregate reducers are unsupported");
                 for (const auto& argument : expr.arguments)
                     check_bool_value(
