@@ -1,0 +1,6 @@
+define class NumberBox as
+  pub final int number: 42;
+  constructor(self) { return; }
+  constructor() { return; }
+end
+pub fnc main(): int { return 42; }
