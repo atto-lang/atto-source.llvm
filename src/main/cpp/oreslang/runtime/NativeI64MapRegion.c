@@ -65,6 +65,8 @@ static void validate(const OresNativeI64MapRegion* region) {
             region->capacity > ORES_NATIVE_I64_MAP_MAX_CAPACITY ||
             region->size > region->capacity)
         fail_closed();
+    validate_region_storage_disjoint(
+        region, region->entries, region->capacity);
 
     /*
      * No deletion/recycling exists, so valid storage is a compact occupied
