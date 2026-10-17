@@ -27,6 +27,17 @@ typedef struct {
  */
 typedef void (*OresNativeActorPanicFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
+/* Dedicated bounded wake envelope for compiler/runtime capability admission.
+ * It never aliases supervisor CONTROL or ordinary DATA. "scope" and "ticket"
+ * are opaque backend identities; source code cannot synthesize them. */
+typedef struct {
+    uint64_t scope;
+    uint64_t ticket;
+    uint64_t status;
+} OresNativeActorCapabilityWake;
+enum { ORES_NATIVE_CAPABILITY_READY = 1, ORES_NATIVE_CAPABILITY_CANCELLED = 2 };
+typedef void (*OresNativeActorCapabilityWakeFn)(
+    void* ctx, size_t actor_index, OresNativeActorCapabilityWake wake);
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
@@ -79,6 +90,11 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_future,
     OresNativeActorPanicFn on_panic, void* ctx);
+OresNativeActorScheduler* ores_native_actor_scheduler_open_capability_wakes(
+    size_t actor_count, size_t per_actor_capacity, size_t workers,
+    OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control,
+    OresNativeActorPanicFn on_panic,
+    OresNativeActorCapabilityWakeFn on_capability_wake, void* ctx);
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
@@ -88,6 +104,13 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
  */
 int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent, uint64_t payload);
+/* Trusted backend-only nonblocking capability wake admission. The complete
+ * typed envelope is retained until the actor's own single-flight lane runs it. */
+int ores_native_actor_scheduler_publish_capability_wake(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorCapabilityWake wake);
+uint64_t ores_native_actor_scheduler_capability_wakes_completed(
+    OresNativeActorScheduler* scheduler);
 /* Child must be a valid actor in the same scheduler, distinct from parent.
  * Returns 0 on reserved CONTROL saturation, stale refs or parent retirement.
  * Never invokes on_panic directly on the publishing child's carrier.
@@ -126,6 +149,10 @@ int ores_native_actor_scheduler_resolve_actor_identity(
  * No ActorRef or numeric actor identity is accepted from guest/source code. */
 int ores_native_actor_scheduler_current_actor_identity(
     OresNativeActorScheduler* scheduler, OresNativeActorIdentity* out);
+/* True only inside the exact scheduler-dequeued capability wake callback.
+ * A normal DATA or supervisor CONTROL turn for the same actor cannot satisfy it. */
+int ores_native_actor_scheduler_is_current_capability_wake(
+    OresNativeActorScheduler* scheduler, OresNativeActorCapabilityWake wake);
 /* Host CONTROL-plane wake only: signals an existing scheduler condition.
  * Does not admit actor mail, start workers, invoke guest code, or count as
  * a supervisor delivery receipt. Returns zero once retired.
