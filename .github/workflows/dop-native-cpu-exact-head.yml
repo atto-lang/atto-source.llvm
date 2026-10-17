@@ -4,13 +4,6 @@ on:
   push:
     branches:
       - harden/dop-cpu-exclusive-kernel-loans-20261015
-    paths:
-      - 'src/main/cpp/oreslang/runtime/Dop*.hpp'
-      - 'src/main/cpp/oreslang/runtime/DataOrientedLayout.hpp'
-      - 'tests/dop_region_schedule_test.cpp'
-      - 'tests/dop_cpu_region_execution_test.cpp'
-      - '.github/workflows/dop-native-cpu-exact-head.yml'
-      - 'CMakeLists.txt'
 
 permissions:
   contents: read
