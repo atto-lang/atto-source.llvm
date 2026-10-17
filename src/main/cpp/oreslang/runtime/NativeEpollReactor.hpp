@@ -126,6 +126,7 @@ public:
         auto result = completions_[completion_head_];
         completion_head_ = (completion_head_ + 1) % capacity;
         --completion_count_;
+        completion_pending_.store(completion_count_, std::memory_order_release);
         const std::size_t index = decode_index(result.ticket.value);
         // Uniqueness is guaranteed by the slot being retained until pop.
         if (index < capacity && slots_[index].generation == decode_generation(result.ticket.value)
@@ -141,6 +142,13 @@ public:
     void drain_completion_signal() noexcept {
         std::uint64_t value;
         while (::read(completion_signal_, &value, sizeof(value)) == sizeof(value)) { }
+        // A nonparking try_pop() may lose its try-lock race after an outer
+        // poller acknowledges eventfd. Re-arm while records are still queued
+        // so the host cannot sleep indefinitely with unread completions.
+        // A concurrent pop may cause one harmless extra wakeup, never a
+        // lost notification or an unbounded busy wait.
+        if (completion_pending_.load(std::memory_order_acquire) != 0)
+            signal(completion_signal_);
     }
     std::size_t pending() const noexcept { return pending_.load(std::memory_order_relaxed); }
     std::uint64_t events_processed() const noexcept { return events_processed_.load(std::memory_order_relaxed); }
@@ -193,6 +201,7 @@ private:
         const auto index = (completion_head_ + completion_count_) % capacity;
         completions_[index] = completion;
         ++completion_count_;
+        completion_pending_.store(completion_count_, std::memory_order_release);
         signal(completion_signal_);
     }
     void loop() noexcept {
@@ -247,6 +256,7 @@ private:
     std::array<Completion, capacity> completions_{};
     std::size_t completion_head_ = 0;
     std::size_t completion_count_ = 0;
+    std::atomic<std::size_t> completion_pending_{0};
     std::atomic<std::size_t> pending_{0};
     std::atomic<std::uint64_t> events_processed_{0};
 };
