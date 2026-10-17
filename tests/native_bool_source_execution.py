@@ -36,6 +36,7 @@ def main():
         "BoolProbe.yes", "BoolProbe.no", "BoolProbe.and_word",
         "BoolProbe.and_symbol", "BoolProbe.or_word", "BoolProbe.or_symbol",
         "BoolProbe.xor_symbol", "BoolProbe.nested",
+        "BoolProbe.precedence_probe",
     )
     for symbol in required_zero:
         if f"define i1 @{symbol}()" not in emitted:
@@ -46,6 +47,7 @@ def main():
         "BoolProbe.builtin_and", "BoolProbe.builtin_or",
         "BoolProbe.builtin_xor", "BoolProbe.forward",
         "BoolProbe.named_forward", "BoolProbe.compose",
+        "BoolProbe.builtin_and8", "BoolProbe.builtin_or8",
     )
     for symbol in required_param:
         if not re.search(rf"define i1 @{re.escape(symbol)}\(i1 ", emitted):
