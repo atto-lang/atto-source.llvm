@@ -1,0 +1,102 @@
+name: Native MessagePack v2 portable golden parity
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-wire-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  golden-and-negative:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: gcc
+            compiler: g++
+          - id: clang
+            compiler: clang++
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install native Crypto and compiler dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev g++ clang python3
+      - name: Verify exact Git source and capture native provenance
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          WIRE_COMPILER: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/wire-v2-evidence"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          {
+            printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'compiler=%s\n' "$WIRE_COMPILER"
+            printf 'workflow_sha=%s\n' "$GITHUB_WORKFLOW_SHA"
+          } > "$RUNNER_TEMP/wire-v2-evidence/provenance.txt"
+          "$WIRE_COMPILER" --version | head -n 1 > "$RUNNER_TEMP/wire-v2-evidence/compiler-version.txt"
+          sha256sum src/main/cpp/oreslang/runtime/MessagePackWireV2.hpp \
+            tests/messagepack_wire_v2_test.cpp tests/messagepack_wire_v2_matrix.py \
+            contracts/v1/design/messagepack_collection_vectors.json \
+            .github/workflows/messagepack-v2-portable-parity.yml \
+            > "$RUNNER_TEMP/wire-v2-evidence/source-sha256.txt"
+          for path in src/main/cpp/oreslang/runtime/MessagePackWireV2.hpp \
+                      tests/messagepack_wire_v2_test.cpp tests/messagepack_wire_v2_matrix.py \
+                      contracts/v1/design/messagepack_collection_vectors.json; do
+            printf '%s git_blob=%s\n' "$path" "$(git rev-parse "HEAD:$path")"
+          done > "$RUNNER_TEMP/wire-v2-evidence/git-blobs.txt"
+      - name: Compile and execute ten portable vectors and hostile inputs
+        shell: bash
+        env:
+          WIRE_COMPILER: ${{ matrix.compiler }}
+        run: |
+          set -uo pipefail
+          "$WIRE_COMPILER" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -I src/main/cpp tests/messagepack_wire_v2_test.cpp -lcrypto \
+            -o "$RUNNER_TEMP/wire-v2-test" > "$RUNNER_TEMP/wire-v2-compile.log" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/wire-v2-compile.log"
+          printf 'compiler_exit=%s\n' "$code" >> "$RUNNER_TEMP/wire-v2-evidence/results.txt"
+          if [ "$code" -ne 0 ]; then exit "$code"; fi
+          python3 tests/messagepack_wire_v2_matrix.py \
+            --binary "$RUNNER_TEMP/wire-v2-test" \
+            --vectors contracts/v1/design/messagepack_collection_vectors.json \
+            > "$RUNNER_TEMP/wire-v2-matrix.log" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/wire-v2-matrix.log"
+          printf 'matrix_exit=%s\n' "$code" >> "$RUNNER_TEMP/wire-v2-evidence/results.txt"
+          if ! grep -Fq 'PASS ten exact Java/Python/native MessagePack v2 vectors and hostile inputs' "$RUNNER_TEMP/wire-v2-matrix.log"; then
+            printf 'portable_vector_count=unverified\n' >> "$RUNNER_TEMP/wire-v2-evidence/results.txt"
+            exit 1
+          fi
+          printf 'portable_vector_count=10\n' >> "$RUNNER_TEMP/wire-v2-evidence/results.txt"
+          exit "$code"
+      - name: Upload source-free native parity evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-wire-v2-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/wire-v2-evidence/
+          if-no-files-found: error
+          retention-days: 7
