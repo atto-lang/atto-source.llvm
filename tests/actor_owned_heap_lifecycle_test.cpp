@@ -152,6 +152,7 @@ int main(void) {
     CHECK(ores_actor_i64_heap_try_destroy(completion_heap) == 0);
     std::thread completion_carrier([&] {
         ores_actor_i64_heap_release_external(completion_heap, completion_pin);
+        ores_actor_i64_heap_release_external(completion_heap, completion_pin);
     });
     completion_carrier.join();
     CHECK(ores_actor_i64_heap_try_destroy(completion_heap) == 1);
