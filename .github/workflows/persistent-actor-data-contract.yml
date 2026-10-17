@@ -137,6 +137,17 @@ jobs:
         run: |
           c++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -pthread -Isrc/main/cpp tests/native_shared_domain_arena_test.cpp -o /tmp/oreslang-shared-domain-arena
           /tmp/oreslang-shared-domain-arena
+      - name: ASan and UBSan shared-domain lease regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_shared_domain_arena_test.cpp \
+            -o /tmp/oreslang-shared-domain-arena-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            /tmp/oreslang-shared-domain-arena-sanitized
 
       # This artifact is metadata only; never upload source, binaries or test logs.
       - name: Record source-local checkout identity (diagnostic only)
