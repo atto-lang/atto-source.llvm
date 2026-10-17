@@ -1919,3 +1919,27 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only DOP f32 region + typed i64 graph integration. This is not
+# source-level `cpu {}` lowering, an actor-carrier worker, or GPU execution.
+if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
+  foreach(graph_test execution_graph_v1_test execution_graph_v1_admission_security_test)
+    add_executable(${graph_test} "tests/${graph_test}.cpp")
+    target_include_directories(${graph_test} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(${graph_test} PRIVATE
+      $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(${graph_test} PRIVATE Threads::Threads)
+    add_test(NAME ${graph_test} COMMAND ${graph_test})
+    set_tests_properties(${graph_test} PROPERTIES TIMEOUT 25)
+  endforeach()
+  add_executable(oreslang-dop-owned-graph-bridge-test tests/dop_graph_cpu_integration_v1_test.cpp)
+  target_include_directories(oreslang-dop-owned-graph-bridge-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(oreslang-dop-owned-graph-bridge-test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  target_link_libraries(oreslang-dop-owned-graph-bridge-test PRIVATE Threads::Threads)
+  add_test(NAME dop_owned_f32_cpu_host_i64_graph_bridge
+    COMMAND oreslang-dop-owned-graph-bridge-test)
+  set_tests_properties(dop_owned_f32_cpu_host_i64_graph_bridge PROPERTIES TIMEOUT 25)
+endif()
