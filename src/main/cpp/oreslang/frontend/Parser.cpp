@@ -48,7 +48,7 @@ bool reserved(std::string_view name) {
         "default", "eq", "neq", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
-        "static", "pub", "private", "return", "defer", "throw", "raise",
+        "static", "pub", "private", "constructor", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "quantum", "over", "structural", "int", "pure",
