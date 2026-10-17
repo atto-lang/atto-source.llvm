@@ -43,11 +43,13 @@ std::string emit_verified_bpf_xdp_ir(const Program& source) {
         fn.has_declared_effects)
         throw std::runtime_error("eBPF XDP admits only pub fnc ores_xdp(): int { return 0..4; }");
 
-    // XDP_ABORTED=0, DROP=1, PASS=2, TX=3, REDIRECT=4. Nothing may
-    // manufacture a kernel context pointer or call unverified helpers.
+    // Stage 0 admits only the basic XDP actions supported without redirect state:
+    // XDP_ABORTED=0, DROP=1, PASS=2, TX=3. XDP_REDIRECT=4 requires
+    // bpf_redirect()/bpf_redirect_map() to establish redirect metadata and is
+    // intentionally withheld until typed helper/map capabilities exist.
     const std::int64_t action = fn.result->integer;
-    if (action < 0 || action > 4)
-        throw std::runtime_error("eBPF XDP return action must be an integer literal 0..4");
+    if (action < 0 || action > 3)
+        throw std::runtime_error("eBPF XDP return action must be an integer literal 0..3");
 
     const auto profile = TargetAbi::parse("bpfel");
     if (!profile.experimental_bpf_ir() || profile.pointer_bits() != 64 ||
