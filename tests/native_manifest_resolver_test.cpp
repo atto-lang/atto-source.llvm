@@ -90,6 +90,8 @@ math = { zed = "acme/math" }
         require(resolve_source(config,app/"src/main.ores","+/src/util")==fs::canonical(app/"src/util.ores"),"+ root");
         // The search root may be *exactly* the nested package directory.
         // Checking only descendants of that root would skip its own marker.
+        std::error_code nested_alias_error;
+        fs::create_symlink(app/"src/util.ores",nested/"parent-alias.ores",nested_alias_error);
         auto configured_child_root=config;
         configured_child_root.import_paths={nested};
         rejects([&]{(void)resolve_source(configured_child_root,app/"src/main.ores",
@@ -122,8 +124,6 @@ math = { zed = "acme/math" }
         // Canonical physical identity by itself misses this: a symlink
         // spelled through the child package points to a parent-owned file.
         // Lexical traversal must retain the child's package boundary.
-        std::error_code nested_alias_error;
-        fs::create_symlink(app/"src/util.ores",nested/"parent-alias.ores",nested_alias_error);
         if(!nested_alias_error)
             rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/packages/child/parent-alias");},
                     "child package symlink laundered parent +/ authority");
