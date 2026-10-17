@@ -22,14 +22,17 @@ UNSUPPORTED = (
 )
 
 def is_domain_refusal(stderr):
-    """Reject generic syntax/IO errors that merely mention gpu/cpu/nb."""
-    domain = re.search(r"\\b(cpu|gpu|nb|nonblocking)\\b|execution[- ]domain",
+    """Require explicit source/region capability refusal, not a generic error."""
+    domain = re.search(r"\b(cpu|gpu|nb|nonblocking)\b|execution[- ]domain",
                        stderr, re.IGNORECASE)
     reason = re.search(
-        r"\\b(unsupported|unavailable|reserved|disabled|unimplemented)\\b"
+        r"\b(unsupported|unavailable|reserved|disabled|unimplemented)\b"
         r"|not[ -](?:yet[ -])?(?:implemented|supported|lowered)",
         stderr, re.IGNORECASE)
-    context = re.search(r"\\b(execution|regions?|graph|lowering|source|placement)\\b"\n                        r"|execution[- ]domain", stderr, re.IGNORECASE)\n    return bool(domain and reason and context)
+    context = re.search(
+        r"\b(execution|regions?|graph|lowering|source|placement)\b"
+        r"|execution[- ]domain", stderr, re.IGNORECASE)
+    return bool(domain and reason and context)
 
 
 def compile_source(compiler, text, path):
