@@ -149,8 +149,12 @@ void release(const Loan& loan, Locals& locals) {
 
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
     const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
-    if (found == functions.end())
+    if (found == functions.end()) {
+        if (expr.name == "And" || expr.name == "Or" || expr.name == "Xor")
+            reject(expr,
+                "native Boolean intrinsic call statement requires bool expression lowering");
         reject(expr, "internal ownership error: unresolved function");
+    }
     const auto& parameters = found->second->parameters;
     if (parameters.size() != expr.arguments.size())
         reject(expr, "internal ownership error: call arity mismatch");
