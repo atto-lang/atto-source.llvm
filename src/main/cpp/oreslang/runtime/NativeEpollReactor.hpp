@@ -69,7 +69,13 @@ public:
 
     /** Never called on a reactor's own thread; runtime does not expose callbacks. */
     void stop() noexcept {
-        closed_.store(true, std::memory_order_release);
+        // Linearize shutdown against cancellation/readiness ownership. Once
+        // closed_ is published under mu_, no later cancellation may convert a
+        // shutdown-fenced watch into a successful cancelled completion.
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            closed_.store(true, std::memory_order_release);
+        }
         signal(wake_);
         if (thread_.joinable()) {
             if (thread_.get_id() == std::this_thread::get_id()) std::terminate();
@@ -121,7 +127,7 @@ public:
     /** Cancellation races readiness under one short lock; exactly one wins. */
     bool try_cancel(Ticket ticket) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
-        if (!guard.owns_lock()) return false;
+        if (!guard.owns_lock() || closed_.load(std::memory_order_relaxed)) return false;
         Slot* item = lookup_active(ticket);
         if (!item) return false;
         (void)::epoll_ctl(epoll_, EPOLL_CTL_DEL, item->fd, nullptr);
@@ -228,6 +234,10 @@ private:
                     continue;
                 }
                 std::lock_guard<std::mutex> lock(mu_); // reactor-only wait is permitted
+                // stop() uses the same lock to publish closed_. If shutdown
+                // wins this lock, terminal cleanup owns the watch and must
+                // publish stopped rather than a late ready result.
+                if (closed_.load(std::memory_order_relaxed)) break;
                 Slot* item = lookup_active(Ticket{token});
                 if (!item) continue; // stale event, cancelled slot or FD reuse
                 (void)::epoll_ctl(epoll_, EPOLL_CTL_DEL, item->fd, nullptr);
