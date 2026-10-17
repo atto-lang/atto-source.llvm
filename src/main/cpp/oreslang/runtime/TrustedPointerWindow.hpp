@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -60,7 +61,10 @@ private:
         std::size_t bytes;
         Mode mode;
         bool live = true;
-        std::mutex mu;
+        bool ffi_active = false;
+        bool revoke_pending = false;
+        std::thread::id ffi_owner{};
+        std::recursive_mutex mu;
         State(ActorHeapIdentity a, NativeRegionIdentity r, void* p, std::size_t n, Mode m)
             : owner(a), region(r), base(static_cast<std::byte*>(p)), bytes(n), mode(m) {}
     };
@@ -117,7 +121,14 @@ public:
 
     void revoke() noexcept {
         if (auto s = state_) {
-            std::lock_guard<std::mutex> lock(s->mu);
+            std::lock_guard<std::recursive_mutex> lock(s->mu);
+            if (s->ffi_active && s->ffi_owner == std::this_thread::get_id()) {
+                // Never deadlock a callback by waiting on itself. Its raw
+                // address remains valid until callback return; cleanup below
+                // applies the requested revocation before releasing the lock.
+                s->revoke_pending = true;
+                return;
+            }
             s->live = false;
         }
     }
@@ -132,7 +143,10 @@ public:
             -> decltype(fn(std::declval<State&>())) {
             auto s = state_.lock();
             if (!s) throw std::logic_error("expired native pointer region");
-            std::lock_guard<std::mutex> lock(s->mu);
+            std::lock_guard<std::recursive_mutex> lock(s->mu);
+            if (s->ffi_active && s->ffi_owner == std::this_thread::get_id())
+                throw std::logic_error(
+                    "reentrant access to native pointer window during FFI callback");
             require_live(*s, actor);
             validate<T>(*s, byte_offset_, access);
             if (writing && !writable(s->mode))
@@ -201,6 +215,23 @@ public:
                 // native addresses from a read-only grant.
                 if (!writable(s.mode))
                     throw std::logic_error("read-only native region cannot export mutable FFI address");
+                if (s.ffi_active)
+                    throw std::logic_error("nested native FFI callback is not permitted");
+
+                s.ffi_active = true;
+                s.ffi_owner = std::this_thread::get_id();
+                struct FfiCleanup final {
+                    State& state;
+                    ~FfiCleanup() noexcept {
+                        state.ffi_active = false;
+                        state.ffi_owner = {};
+                        if (state.revoke_pending) {
+                            state.live = false;
+                            state.revoke_pending = false;
+                        }
+                    }
+                } cleanup{s};
+
                 return f(reinterpret_cast<T*>(s.base + byte_offset_));
             });
         }
@@ -209,14 +240,14 @@ public:
     [[nodiscard]] NativeRegionIdentity region_identity() const {
         auto s = state_;
         if (!s) throw std::logic_error("moved-from native pointer region");
-        std::lock_guard<std::mutex> lock(s->mu);
+        std::lock_guard<std::recursive_mutex> lock(s->mu);
         return s->region;
     }
 
     template<class T> Cursor<T> at(ActorHeapIdentity actor, std::size_t byte_offset = 0) const {
         auto s = state_;
         if (!s) throw std::logic_error("moved-from native pointer region");
-        std::lock_guard<std::mutex> lock(s->mu);
+        std::lock_guard<std::recursive_mutex> lock(s->mu);
         require_live(*s, actor);
         validate<T>(*s, byte_offset, false);
         return Cursor<T>{s, byte_offset};
