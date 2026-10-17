@@ -25,6 +25,9 @@ typedef struct {
     size_t carrier_workers;   /* 0 => 5 */
     OresNativeActorTaskFn on_message; /* host callback; required */
     OresNativeActorTaskFn on_control; /* optional priority CONTROL callback */
+    /* Optional compiler/runtime capability-wake callback. It is serialized on
+     * the actor's single-flight lane and is distinct from DATA and CONTROL. */
+    OresNativeActorCapabilityWakeFn on_capability_wake;
     /* Optional typed terminal-failure handler, serialized on parent's lane.
      * REQUIRED for supervised child construction in this domain; otherwise
      * spawn_supervised fails without consuming the requested actor slot.
@@ -99,6 +102,22 @@ int ores_native_vm_wait_done(
 int ores_native_vm_publish_control(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef parent, uint64_t payload);
+/* Trusted compiler/runtime capability wake. Never guest mailbox data and never
+ * supervisor CONTROL. Exact actor ref + scope/ticket/status are scheduler-fenced. */
+int ores_native_vm_publish_capability_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, OresNativeActorCapabilityWake wake);
+uint64_t ores_native_vm_capability_wakes_completed(
+    OresNativeVM* vm, enum OresNativeVMDomain domain);
+/* Runtime-only current-turn authority adapters. Guest source never receives
+ * the returned ref/identity or uses them as numeric shared-memory authority. */
+int ores_native_vm_current_actor_ref(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef* out);
+int ores_native_vm_current_actor_identity(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorIdentity* out);
+int ores_native_vm_is_current_capability_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorCapabilityWake wake);
 
 /* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
  * per domain. The host event loop explicitly pumps it; no master pthread or
