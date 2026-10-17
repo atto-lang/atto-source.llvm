@@ -35,3 +35,7 @@ define newtype D(string) with length eq 10;
 ## Zorde runtime parity
 
 LLVM refinement support includes emitting/consuming the same reflection-free Zorde validator descriptor contract as the language spec. Dynamic construction, deserialization, FFI, actor DATA and other trust boundaries must execute the normalized predicate or reject the unsupported descriptor before IR/execution. Backend-specific validation semantics are not permitted.
+
+## Inclusive comparison spelling
+
+Canonical textual inclusive bounds are `gte` and `lte`; symbolic `>=` and `<=` are equivalent source spellings. Legacy `ge` and `le` are deliberately invalid and must never be accepted as aliases. Until this backend implements checked refinement lowering, both canonical/symbolic valid refinements and legacy-invalid refinements remain fail-closed admission cases rather than erased base types.
