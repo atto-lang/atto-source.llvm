@@ -1677,6 +1677,26 @@ private:
         throw std::runtime_error("internal invalid expression kind");
     }
 
+    static bool intrinsically_complex_expression(const Expression& expr) {
+        switch (expr.kind) {
+            case Expression::Kind::Imaginary:
+                return true;
+            case Expression::Kind::Negate:
+                return expr.left && intrinsically_complex_expression(*expr.left);
+            case Expression::Kind::Add:
+            case Expression::Kind::Subtract:
+                return expr.left && expr.right &&
+                    (intrinsically_complex_expression(*expr.left) ||
+                     intrinsically_complex_expression(*expr.right));
+            case Expression::Kind::ArrayCall:
+                return expr.left && expr.arguments.empty() &&
+                    (expr.name == "conj" || expr.name == "conjugate") &&
+                    intrinsically_complex_expression(*expr.left);
+            default:
+                return false;
+        }
+    }
+
     static void validate_complex_expression(const Expression& expr) {
         switch (expr.kind) {
             case Expression::Kind::Integer:
@@ -1695,6 +1715,10 @@ private:
                 if (expr.left && expr.arguments.empty() &&
                         (expr.name == "conj" || expr.name == "conjugate")) {
                     validate_complex_expression(*expr.left);
+                    if (!intrinsically_complex_expression(*expr.left))
+                        throw std::runtime_error(
+                            "native complex128 conjugation requires a complex operand at byte "
+                            + std::to_string(expr.offset));
                     return;
                 }
                 throw std::runtime_error(
