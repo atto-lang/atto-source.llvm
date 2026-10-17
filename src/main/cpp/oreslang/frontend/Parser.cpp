@@ -217,8 +217,15 @@ bool native_pure_scalar_tree(const Expression& expr) {
     return false;
 }
 
+std::string_view boolean_intrinsic_member(std::string_view name) {
+    if (name == "And" || name == "BooleanOps.And") return "And";
+    if (name == "Or" || name == "BooleanOps.Or") return "Or";
+    if (name == "Xor" || name == "BooleanOps.Xor") return "Xor";
+    return {};
+}
+
 bool boolean_intrinsic_name(std::string_view name) {
-    return name == "And" || name == "Or" || name == "Xor";
+    return !boolean_intrinsic_member(name).empty();
 }
 
 class Parser {
@@ -1302,7 +1309,28 @@ private:
         while (token_.text == "." || token_.text == "::") {
             const bool double_colon = accept("::");
             if (!double_colon) require(".");
-            if (expr->kind == Expression::Kind::Variable && expr->name == "Assert") {
+            if (expr->kind == Expression::Kind::Variable && expr->name == "BooleanOps") {
+                if (double_colon)
+                    fail("native BooleanOps qualification uses '.'");
+                const std::string member = identifier();
+                if (!boolean_intrinsic_name(member))
+                    fail("unknown native BooleanOps member '" + member + "'");
+                if (!accept("("))
+                    fail("native BooleanOps member must be called, not read as a value");
+                auto call = make_expression(Expression::Kind::Call, offset);
+                call->name = "BooleanOps." + member;
+                if (!accept(")")) {
+                    do {
+                        if (named_argument_ahead())
+                            fail("native Boolean intrinsics do not accept named arguments");
+                        call->arguments.push_back(expression());
+                        call->argument_names.emplace_back();
+                    } while (accept(","));
+                    require(")");
+                }
+                expr = std::move(call);
+                break;
+            } else if (expr->kind == Expression::Kind::Variable && expr->name == "Assert") {
                 if (!has_assert_import_) fail("unbound native Assert module alias");
                 if (token_.kind != Kind::Identifier &&
                     token_.text != "true" && token_.text != "false")
@@ -1465,10 +1493,10 @@ private:
                                 [](const std::string& label) { return !label.empty(); }))
                         throw std::runtime_error(
                             "native Boolean intrinsics do not accept named arguments");
-                    if (expr.name == "Xor" && expr.arguments.size() != 2)
+                    if (boolean_intrinsic_member(expr.name) == "Xor" && expr.arguments.size() != 2)
                         throw std::runtime_error(
                             "native Xor expects exactly two scalar bool arguments");
-                    if (expr.name != "Xor" && expr.arguments.size() < 2)
+                    if (boolean_intrinsic_member(expr.name) != "Xor" && expr.arguments.size() < 2)
                         throw std::runtime_error(
                             "native And/Or aggregate reducers are unsupported; use scalar bool arguments");
                     for (const auto& arg : expr.arguments)
@@ -1579,10 +1607,10 @@ private:
                                 [](const std::string& label) { return !label.empty(); }))
                         throw std::runtime_error(
                             "native Boolean intrinsics do not accept named arguments");
-                    if (expr.name == "Xor" && expr.arguments.size() != 2)
+                    if (boolean_intrinsic_member(expr.name) == "Xor" && expr.arguments.size() != 2)
                         throw std::runtime_error(
                             "native Xor expects exactly two scalar bool arguments");
-                    if (expr.name != "Xor" && expr.arguments.size() < 2)
+                    if (boolean_intrinsic_member(expr.name) != "Xor" && expr.arguments.size() < 2)
                         throw std::runtime_error(
                             "native And/Or aggregate reducers are unsupported; use scalar bool arguments");
                     for (const auto& arg : expr.arguments)
