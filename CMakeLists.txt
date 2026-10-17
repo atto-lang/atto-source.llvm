@@ -29,6 +29,11 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME actor_thread_policy_v2_finite_model
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_actor_thread_policy_v2.py")
+    set_tests_properties(actor_thread_policy_v2_finite_model PROPERTIES TIMEOUT 20)
     # Direct forged Program API must not bypass frontend actor thread rejection.
     # Check actual native LLVM IR lowering, not just a parser diagnostic.
     add_executable(oreslang-actor-thread-policy-ir-gate-test
