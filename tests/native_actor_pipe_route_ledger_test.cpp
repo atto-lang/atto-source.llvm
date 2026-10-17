@@ -134,6 +134,34 @@ int main() {
         retained.close();
     }
 
+    // A routed attempt consumes its RR turn even if child admission fails.
+    // Exhaust the frame budget after selecting A, attempt and fail B, then
+    // release A: the next successful turn must be A, not B.
+    {
+        ActorPipeRouteLedger limited(stages(), edges(), 16, 2);
+        const auto root = limited.ingress("source");
+        const auto selected_a = limited.round_robin(root);
+        check(selected_a->receiver() == "worker-a",
+              "budget test first selection was not A");
+        rejected([&] { (void)limited.round_robin(root); },
+                 "RR exceeded frame budget without rejection");
+        check(limited.outstanding() == 2,
+              "failed RR admission corrupted frame credits");
+        limited.complete(selected_a);
+        const auto after_failed_b = limited.round_robin(root);
+        check(after_failed_b->receiver() == "worker-a",
+              "failed RR attempt did not consume B's turn");
+        limited.complete(after_failed_b);
+        limited.complete(root);
+        limited.advance_generation(17);
+        const auto next_root = limited.ingress("source");
+        const auto next_a = limited.round_robin(next_root);
+        check(next_a->receiver() == "worker-a",
+              "quota failure left stale RR state after generation change");
+        limited.complete(next_a);
+        limited.complete(next_root);
+    }
+
     // Selection/retirement of 2000 independent child frames is synchronized.
     ActorPipeRouteLedger parallel(stages(), edges(), 9, 2001);
     const auto parent = parallel.ingress("source");
