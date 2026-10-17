@@ -74,6 +74,30 @@ math = { zed = "acme/math" }
                 "package project.root crossed nested package authority");
         write(configured/".ores.pkg.toml",
               "schema_version=\"1\"\n[project]\nroot=\"app\"\n");
+        // Nearest-manifest policy is cross-backend: a modern parent cannot
+        // steal a nested directory that explicitly declares legacy package
+        // ownership. Modern only wins when both markers share a directory.
+        const auto near=tmp/"nearest";
+        fs::create_directories(near/"child/src");
+        write(near/".ores.pkg.toml","schema_version = \"1\"\n");
+        write(near/"child/.oreslangc.cfg.toml",
+              "schema_version = \"1\"\n");
+        write(near/"child/src/main.ores","main");
+        const auto near_source=near/"child/src/main.ores";
+        require(read_project(near_source).manifest ==
+                near/"child/.oreslangc.cfg.toml",
+                "ancestor modern manifest stole nearer legacy package");
+        require(!read_project(near_source).package_manifest,
+                "nearest legacy package kind was changed by ancestor");
+        write(near/"child/.ores.pkg.toml","schema_version = \"1\"\n");
+        require(read_project(near_source).manifest == near/"child/.ores.pkg.toml",
+                "same-directory modern marker failed precedence over legacy");
+        fs::remove(near/"child/.ores.pkg.toml");
+        fs::remove(near/"child/.oreslangc.cfg.toml");
+        fs::create_directory(near/"child/.oreslangc.cfg.toml");
+        rejects([&]{(void)read_project(near_source);},
+                "malformed nearer legacy marker incorrectly used parent modern");
+
         // Existing but malformed modern marker must shadow a valid legacy
         // manifest in the same directory. Falling back changes +/ ownership.
         const auto priority=tmp/"manifest-priority";
