@@ -35,7 +35,7 @@ int main() {
                 "panic and raise must be distinct");
         // Exhaustive spelling and one-hot flag coverage: adding or aliasing an
         // effect must require updating this reviewed table.
-        const std::array<std::pair<std::string_view, FunctionEffect>, 10> known{{
+        const std::array<std::pair<std::string_view, FunctionEffect>, 11> known{{
             {"state.read", FunctionEffect::StateRead},
             {"state.write", FunctionEffect::StateWrite},
             {"suspend", FunctionEffect::Suspend},
@@ -46,6 +46,7 @@ int main() {
             {"throw", FunctionEffect::Throw},
             {"raise", FunctionEffect::Raise},
             {"panic", FunctionEffect::Panic},
+            {"unsafe.memory", FunctionEffect::UnsafeMemory},
         }};
         std::uint32_t seen = 0;
         for (const auto& [name, effect] : known) {
@@ -67,7 +68,7 @@ int main() {
         require(seen == ((1u << known.size()) - 1u),
                 "effect flags must form the reviewed contiguous bit range");
 
-        // Exhaust all 2^10 by 2^10 ordered permission pairs, including
+        // Exhaust all 2^11 by 2^11 ordered permission pairs, including
         // empty, singleton, composite, and disjoint effect sets. Deliberately
         // run as ordinary executable code: assert() disappears under NDEBUG.
         constexpr std::uint32_t all_effects = (1u << known.size()) - 1u;
@@ -99,7 +100,7 @@ int main() {
         // subset-only permits() check, equal unknown-bit masks were accepted,
         // including as the declared actor-state "using" effects.
         constexpr std::uint32_t unknown_high = 1u << 31;
-        constexpr std::uint32_t unknown_next = 1u << 10;
+        constexpr std::uint32_t unknown_next = 1u << 11;
         constexpr std::uint32_t read_bit =
             static_cast<std::uint32_t>(FunctionEffect::StateRead);
         constexpr std::uint32_t write_bit =
