@@ -32,11 +32,19 @@ int main() {
         const auto authority = TrustedUnsafeMemoryAuthority::compiler_trusted();
 
         std::array<std::int32_t, 4> values{{10, 20, 30, 40}};
-        auto base = TrustedRawPointer<std::int32_t>::from_span(
+        auto readonly = TrustedRawPointer<std::int32_t>::from_span(
             values.data(), values.size(), authority, 0xA11CEu);
-        require(base.load() == 10, "base load");
+        require(readonly.load() == 10, "base load");
+        require(!readonly.writable(), "ordinary raw formation must be read-only");
+        require_throws<std::logic_error>(
+            [&] { readonly.store(99); },
+            "read-only raw pointer must reject store");
 
+        auto base = TrustedRawPointer<std::int32_t>::from_mut_span(
+            values.data(), values.size(), authority, 0xA11CEu);
+        require(base.writable(), "mutable raw formation must carry write authority");
         auto third = base.offset_elements(2);
+        require(third.writable(), "pointer arithmetic must preserve write authority");
         require(third.load() == 30, "element arithmetic load");
         third.store(77);
         require(values[2] == 77, "element arithmetic store");
@@ -65,11 +73,12 @@ int main() {
         auto raw = TrustedRawPointer<std::int32_t>::from_address(
             reinterpret_cast<std::uintptr_t>(values.data()), authority);
         auto raw_next = raw.offset_elements(1);
+        require(!raw_next.writable(), "read-only address arithmetic must remain read-only");
         require(raw_next.load() == 20, "integer-made pointer element offset");
         require(raw_next.distance_elements(raw) == 1, "integer-made derived distance");
 
         volatile std::int32_t mmio_cell = 9;
-        auto mmio = TrustedRawPointer<std::int32_t>::from_address(
+        auto mmio = TrustedRawPointer<std::int32_t>::from_mut_address(
             reinterpret_cast<std::uintptr_t>(const_cast<std::int32_t*>(&mmio_cell)), authority);
         require(mmio.load_volatile() == 9, "volatile raw load");
         mmio.store_volatile(11);
