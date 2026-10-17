@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Direct forged Program API must not bypass frontend actor thread rejection.
+    # Check actual native LLVM IR lowering, not just a parser diagnostic.
+    add_executable(oreslang-actor-thread-policy-ir-gate-test
+        tests/actor_thread_policy_ir_gate_test.cpp
+        src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+        src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
+    target_include_directories(oreslang-actor-thread-policy-ir-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-actor-thread-policy-ir-gate-test PRIVATE ${ORE_LLVM_LIBS})
+    add_test(NAME actor_thread_policy_forged_ast_ir_rejection
+        COMMAND oreslang-actor-thread-policy-ir-gate-test)
+    set_tests_properties(actor_thread_policy_forged_ast_ir_rejection
+        PROPERTIES TIMEOUT 20)
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
