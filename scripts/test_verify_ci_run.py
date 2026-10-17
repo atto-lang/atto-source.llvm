@@ -823,6 +823,8 @@ class WorkflowIsolationContract(unittest.TestCase):
                          if "python3" in line and "<<'PY'" in line]
         self.assertEqual(len(inline_python), 2)
         self.assertTrue(all(line == "python3 -I - <<'PY'" for line in inline_python))
+        self.assertNotIn("python3 - <<'PY'", self.workflow_text())
+        self.assertIn("python3 -I -m py_compile", self.workflow_text())
 
 
     def test_report_pins_distinct_trigger_and_checkout_metadata(self):
@@ -870,6 +872,18 @@ class WorkflowIsolationContract(unittest.TestCase):
                 self.assertIs(report["trigger_sha_matches_reported_checkout"], expected)
                 self.assertIs(report["verified_execution_claim"], False)
 
+
+
+    def test_workflow_checkout_is_pinned_and_uncredentialed(self):
+        workflow = self.workflow_text()
+        self.assertIn(
+            "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+            workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
+        self.assertIn("contents: read", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertNotIn("secrets.", workflow)
 
 
 if __name__ == "__main__":
