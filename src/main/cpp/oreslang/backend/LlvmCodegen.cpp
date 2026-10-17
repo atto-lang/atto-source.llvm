@@ -268,6 +268,88 @@ llvm::Value* lower(const Expression& expr,
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
 }
 
+llvm::Value* make_complex128(llvm::IRBuilder<>& builder,
+                             llvm::StructType* complex128,
+                             llvm::Value* real,
+                             llvm::Value* imaginary,
+                             const std::string& label) {
+    llvm::Value* value = llvm::UndefValue::get(complex128);
+    value = builder.CreateInsertValue(value, real, {0}, label + ".real");
+    return builder.CreateInsertValue(value, imaginary, {1}, label + ".imag");
+}
+
+llvm::Value* lower_complex128(const Expression& expr,
+                              llvm::IRBuilder<>& builder,
+                              llvm::Type* f64,
+                              llvm::StructType* complex128) {
+    auto zero = [&]() -> llvm::Value* {
+        return llvm::ConstantFP::get(f64, 0.0);
+    };
+    switch (expr.kind) {
+        case Expression::Kind::Integer: {
+            constexpr std::int64_t exact_limit = INT64_C(9007199254740992);
+            if (expr.integer < -exact_limit || expr.integer > exact_limit)
+                throw std::runtime_error(
+                    "native complex128 integer promotion exceeds exact binary64 range");
+            return make_complex128(
+                builder, complex128,
+                llvm::ConstantFP::get(f64, static_cast<double>(expr.integer)),
+                zero(), "complex.int");
+        }
+        case Expression::Kind::Floating:
+            return make_complex128(
+                builder, complex128,
+                llvm::ConstantFP::get(f64, expr.floating),
+                zero(), "complex.real");
+        case Expression::Kind::Imaginary:
+            return make_complex128(
+                builder, complex128, zero(),
+                llvm::ConstantFP::get(f64, expr.floating),
+                "complex.imaginary");
+        case Expression::Kind::Negate: {
+            llvm::Value* operand =
+                lower_complex128(*expr.left, builder, f64, complex128);
+            llvm::Value* real =
+                builder.CreateExtractValue(operand, {0}, "complex.neg.real.read");
+            llvm::Value* imaginary =
+                builder.CreateExtractValue(operand, {1}, "complex.neg.imag.read");
+            return make_complex128(
+                builder, complex128,
+                builder.CreateFNeg(real, "complex.neg.real"),
+                builder.CreateFNeg(imaginary, "complex.neg.imag"),
+                "complex.neg");
+        }
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract: {
+            llvm::Value* left =
+                lower_complex128(*expr.left, builder, f64, complex128);
+            llvm::Value* right =
+                lower_complex128(*expr.right, builder, f64, complex128);
+            llvm::Value* lr =
+                builder.CreateExtractValue(left, {0}, "complex.left.real");
+            llvm::Value* li =
+                builder.CreateExtractValue(left, {1}, "complex.left.imag");
+            llvm::Value* rr =
+                builder.CreateExtractValue(right, {0}, "complex.right.real");
+            llvm::Value* ri =
+                builder.CreateExtractValue(right, {1}, "complex.right.imag");
+            const bool add = expr.kind == Expression::Kind::Add;
+            llvm::Value* real = add
+                ? builder.CreateFAdd(lr, rr, "complex.add.real")
+                : builder.CreateFSub(lr, rr, "complex.sub.real");
+            llvm::Value* imaginary = add
+                ? builder.CreateFAdd(li, ri, "complex.add.imag")
+                : builder.CreateFSub(li, ri, "complex.sub.imag");
+            return make_complex128(
+                builder, complex128, real, imaginary,
+                add ? "complex.add" : "complex.sub");
+        }
+        default:
+            throw std::runtime_error(
+                "invalid expression kind while lowering complex128 LLVM IR");
+    }
+}
+
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
@@ -278,6 +360,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
     }
     llvm::LLVMContext context;
+    const bool has_complex128 = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [](const Function& fn) { return fn.returns_complex; });
+    if (has_complex128 && wasm32_target)
+        throw std::runtime_error(
+            "wasm32 complex128 ABI lowering is not implemented");
+    if (has_complex128 && cortex_m_target)
+        throw std::runtime_error(
+            "Cortex-M complex128 ABI lowering is not implemented");
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
     // Its state lives in private Wasm globals owned by exactly one Worker.
     // Native scheduler, ActorRef, suspension and supervisor APIs remain gated.
@@ -364,6 +455,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* f64 = llvm::Type::getDoubleTy(context);
+    llvm::StructType* complex128 =
+        llvm::StructType::get(context, {f64, f64}, false);
     llvm::Type* loan_ptr = i64->getPointerTo();
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
@@ -511,9 +605,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             argument_types.push_back(param.class_name.empty()
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
                 : class_types.at(param.class_name)->getPointerTo());
+        llvm::Type* return_type = fn.returns_void
+            ? llvm::Type::getVoidTy(context)
+            : (fn.returns_complex ? static_cast<llvm::Type*>(complex128) : i64);
         llvm::FunctionType* signature = llvm::FunctionType::get(
-            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
-            argument_types, false);
+            return_type, argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module);
         // Forward references must already expose parameter labels.
@@ -526,6 +622,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
+        if (fn.returns_complex) {
+            if (!fn.result || !fn.parameters.empty() || !fn.locals.empty() ||
+                    !fn.statements.empty() || !fn.early_returns.empty())
+                throw std::runtime_error(
+                    "invalid complex128 return-only function reached LLVM lowering");
+            builder.CreateRet(
+                lower_complex128(*fn.result, builder, f64, complex128));
+            continue;
+        }
         std::unordered_map<std::string, llvm::Value*> storage;
         std::unordered_map<std::string, llvm::Value*> field_storage;
         std::size_t index = 0;
