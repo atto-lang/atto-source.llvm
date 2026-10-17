@@ -1,0 +1,59 @@
+name: Experimental Oreslang eBPF kernel gate
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ebpf.yml'
+      - 'src/main/cpp/oreslang/**'
+      - 'contracts/architecture/v1/targets.tsv'
+      - 'tests/bpf_socket_*'
+      - 'tests/fixtures/bpf-socket-pass.ores'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bpf-elf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install LLVM toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev llvm binutils python3
+      - name: Build Oreslang compiler
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Test BPF source admission and real EM_BPF ELF
+        run: python3 tests/bpf_socket_source_object.py --compiler ./build/oreslang-llvmc --clang "$(command -v clang)"
+
+  bpf-kernel-verifier:
+    needs: bpf-elf
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install LLVM, libbpf and ELF dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev llvm binutils python3 libbpf-dev libelf-dev zlib1g-dev
+      - name: Build Oreslang compiler
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Produce and verify BPF ELF
+        run: |
+          set -euo pipefail
+          python3 tests/bpf_socket_source_object.py \
+            --compiler ./build/oreslang-llvmc --clang "$(command -v clang)" \
+            --output-object "$RUNNER_TEMP/oreslang-filter.o"
+      - name: Compile verifier and test-run harness
+        run: cc -O2 -Wall -Wextra -Werror tests/bpf_socket_kernel_run.c -lbpf -lelf -lz -o "$RUNNER_TEMP/bpf-kernel-run"
+      - name: Verify and execute inside real Linux kernel (no skip)
+        run: |
+          set -euo pipefail
+          uname -a
+          sudo -n "$RUNNER_TEMP/bpf-kernel-run" "$RUNNER_TEMP/oreslang-filter.o"

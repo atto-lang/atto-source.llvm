@@ -1,0 +1,4 @@
+// Oreslang's first kernel eBPF socket filter: retain up to 65535 bytes.
+pub fnc socket_filter(): int {
+    return 65535;
+}
