@@ -114,6 +114,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_fail_closed.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_structural_tuple_fail_closed PROPERTIES TIMEOUT 65)
+    # This independent self-test uses synthetic compilers only. It proves the
+    # negative gate cannot pass an always-failing or artifact-leaking frontend.
+    add_test(NAME native_structural_tuple_gate_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_structural_fail_closed_harness.py")
+    set_tests_properties(native_structural_tuple_gate_selftest PROPERTIES TIMEOUT 90)
 
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
