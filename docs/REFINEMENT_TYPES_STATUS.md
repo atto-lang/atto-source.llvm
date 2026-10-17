@@ -17,7 +17,7 @@ define newtype D(string) with length eq 10;
 ~~~
 
 - All constrained aliases normalize to one typed predicate representation; `D` additionally has a distinct nominal ID.
-- `with` accepts only recognized properties and conjunctive constant comparisons; `where` accepts only pure deterministic expressions and never silently permits unvalidated values.
+- `with` accepts only recognized properties and conjunctive constant comparisons. Canonical textual comparators are `eq/ne/gt/gte/lt/lte`; symbolic aliases are `==/!=/>/>=/</<=`. `ge` and `le` are rejected. `where` accepts only pure deterministic expressions and never silently permits unvalidated values.
 - Checked `Name.try_from(Base) -> Result<Name, ConstraintError>` construction is needed for runtime values.
 - String length means Unicode **code points**, never UTF-8 bytes or Java UTF-16 units. NFC/NFD normalization is not implicit.
 - Length/size-constrained mutable references cannot be mutated or aliased unsafely.
