@@ -1,0 +1,9 @@
+define class Box as
+  pub final int answer: 42;
+  constructor(self, int value, int other) { return; }
+  constructor(self) { return; }
+end
+pub fnc main(): int {
+  let Box box = new Box();
+  return box.answer;
+}
