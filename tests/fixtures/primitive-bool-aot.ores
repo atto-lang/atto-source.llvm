@@ -46,6 +46,15 @@ define module BoolProbe as
     pub fnc builtin_xor(bool a, bool b): bool {
         return Xor(a, b);
     }
+    pub fnc qualified_and(bool a, bool b, bool c): bool {
+        return BooleanOps.And(a, b, c);
+    }
+    pub fnc qualified_or(bool a, bool b, bool c): bool {
+        return BooleanOps.Or(a, b, c);
+    }
+    pub fnc qualified_xor(bool a, bool b): bool {
+        return BooleanOps.Xor(a, b);
+    }
 
     pub fnc forward(bool a, bool b): bool {
         return and_args(a, b);
