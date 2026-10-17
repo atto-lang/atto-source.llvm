@@ -57,10 +57,11 @@ mangled symbol or cross-backend ABI is standardized by this milestone.
 
 ## Validation and release gate
 
-The constructor branch adds two positive compile-to-LLVM-to-Clang CTests and
-six rejection CTests, while retaining the earlier constructor and native
-array/ownership regression suites. Native comma indexing adds three negative
-CTest admission gates. Until step-bearing Actions / CTest on the exact branch
+The constructor branch adds **four** positive compile-to-LLVM-to-Clang CTests
+(including arity 0, reordered overloads, and the exact 16-scalar limit) and
+**seven** rejection CTests (including arity 17), while retaining the earlier
+constructor and native array/ownership regression suites. Native comma
+indexing adds three negative CTest admission gates. Until step-bearing Actions / CTest on the exact branch
 tree completes, treat this as committed implementation plus **unexecuted**
 native regression tests, not a verified release.
 
