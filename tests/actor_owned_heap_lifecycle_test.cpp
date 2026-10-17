@@ -75,7 +75,7 @@ static void invalid_call(enum Misuse which) {
     } else if (which == FORGED_EXTERNAL_LEASE) {
         OresActorExternalLease lease = ores_actor_i64_heap_external_acquire(heap, turn);
         ++lease.generation;
-        ores_actor_i64_heap_external_release(heap, lease);
+        ores_actor_i64_heap_external_release(heap, &lease);
     }
     /* None of these calls may finish normally. */
 }
@@ -155,13 +155,16 @@ int main(void) {
     ores_actor_i64_heap_retire(external_heap);
     CHECK(ores_actor_i64_heap_try_destroy(external_heap) == 0);
     std::thread callback_release([&] {
-        ores_actor_i64_heap_external_release(external_heap, external);
-        ores_actor_i64_heap_external_release(external_heap, external);
+        ores_actor_i64_heap_external_release(external_heap, &external);
+        ores_actor_i64_heap_external_release(external_heap, &external);
     });
     callback_release.join();
-    /* A cleanup retry on yet another carrier remains harmless. */
-    ores_actor_i64_heap_external_release(external_heap, external);
+    CHECK(external.domain == 0 && external.index == 0 && external.generation == 0);
     CHECK(ores_actor_i64_heap_try_destroy(external_heap) == 1);
+    external_heap = nullptr;
+    /* The consumed token can be retried after CONTROL has destroyed/cleared
+     * the heap pointer: release must return before touching heap storage. */
+    ores_actor_i64_heap_external_release(external_heap, &external);
 
     /* Reusing a bounded lease slot must not let an old cleanup token release
      * the newer generation occupying that slot. */
@@ -169,16 +172,21 @@ int main(void) {
     OresActorTurn reused_turn = ores_actor_i64_heap_enter(reused_heap, 42, 3);
     OresActorExternalLease old_lease =
         ores_actor_i64_heap_external_acquire(reused_heap, reused_turn);
-    ores_actor_i64_heap_external_release(reused_heap, old_lease);
+    OresActorExternalLease stale_copy = old_lease;
+    ores_actor_i64_heap_external_release(reused_heap, &old_lease);
+    CHECK(old_lease.domain == 0 && old_lease.index == 0 && old_lease.generation == 0);
     OresActorExternalLease current_lease =
         ores_actor_i64_heap_external_acquire(reused_heap, reused_turn);
-    CHECK(current_lease.index == old_lease.index);
-    CHECK(current_lease.generation > old_lease.generation);
-    ores_actor_i64_heap_external_release(reused_heap, old_lease);
+    CHECK(current_lease.index == stale_copy.index);
+    CHECK(current_lease.generation > stale_copy.generation);
+    ores_actor_i64_heap_external_release(reused_heap, &stale_copy);
+    CHECK(stale_copy.domain == 0 && stale_copy.index == 0 && stale_copy.generation == 0);
     ores_actor_i64_heap_leave(reused_heap, reused_turn);
     ores_actor_i64_heap_retire(reused_heap);
     CHECK(ores_actor_i64_heap_try_destroy(reused_heap) == 0);
-    ores_actor_i64_heap_external_release(reused_heap, current_lease);
+    ores_actor_i64_heap_external_release(reused_heap, &current_lease);
+    CHECK(current_lease.domain == 0 && current_lease.index == 0
+          && current_lease.generation == 0);
     CHECK(ores_actor_i64_heap_try_destroy(reused_heap) == 1);
 #if defined(__unix__) || defined(__APPLE__)
     CHECK(rejects(WRONG_OWNER));
