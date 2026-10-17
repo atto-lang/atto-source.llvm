@@ -72,6 +72,12 @@ public:
                 roots_.insert(entry.first);
         }
         if (roots_.empty()) throw std::invalid_argument("route graph lacks ingress root");
+        // Actor source selectors are known at validated graph construction.
+        // Preallocate RR state so the first route in every generation never
+        // needs a new map node before an attempted turn is recorded.
+        cursors_.reserve(outgoing_.size());
+        for (const auto& source : outgoing_)
+            cursors_.emplace(source.first, 0);
     }
 
     Handle ingress(const std::string& root) {
@@ -123,7 +129,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         require_forward(frame);
         const auto& out = connected(frame->receiver());
-        auto& cursor = cursors_[frame->receiver()];
+        // Do not insert a new selector node on the message-admission path.
+        auto& cursor = cursors_.at(frame->receiver());
         const auto selected = out[cursor];
         cursor = (cursor + 1) % out.size(); // failed attempt consumes turn
         return child(frame, selected);
@@ -173,7 +180,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         ensure_successor(next);
         if (!active_.empty()) throw std::logic_error("nonquiescent route generation");
-        cursors_.clear();
+        // Retain the trusted graph selector table; reset only the epoch.
+        for (auto& cursor : cursors_) cursor.second = 0;
         generation_ = next;
     }
 
@@ -182,7 +190,8 @@ public:
         ensure_successor(next);
         const auto cancelled = active_.size();
         active_.clear();
-        cursors_.clear();
+        // Retain the trusted graph selector table; reset only the epoch.
+        for (auto& cursor : cursors_) cursor.second = 0;
         generation_ = next;
         return cancelled;
     }
