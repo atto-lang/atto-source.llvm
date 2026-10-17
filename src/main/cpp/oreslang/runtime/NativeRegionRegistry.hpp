@@ -9,12 +9,22 @@
 
 namespace oreslang::runtime {
 
-// Host-only region bookkeeping, NOT an authentication boundary. The Trust
-// enum and actor identity are caller-supplied and forgeable by native code.
-// Only a supervisor-controlled admission path may invoke issue(). Never expose
-// this object, its issue() method, or raw Grant values to guest source or FFI.
+// Only trusted runtime integration may define this admission authority.
+// A test-only shim is separately enabled when compiling registry tests.
+class NativeRegionRuntimeAuthority;
+#ifdef ORESLANG_NATIVE_GRANT_TESTING
+struct NativeRegionRegistryTestAccess;
+#endif
+
+// Host-only region bookkeeping. Native issuance is private, reserved for the
+// runtime's trusted admission authority; guest code must never see this API.
+// Native C++ in the TCB can always bypass language-level memory isolation.
 // The caller must keep mapped backing memory alive through revoke()/retire().
 class NativeRegionRegistry final {
+    friend class NativeRegionRuntimeAuthority;
+#ifdef ORESLANG_NATIVE_GRANT_TESTING
+    friend struct NativeRegionRegistryTestAccess;
+#endif
 public:
     enum class Trust { Trusted, Untrusted };
     struct Grant final {
@@ -39,6 +49,9 @@ public:
     NativeRegionRegistry(const NativeRegionRegistry&) = delete;
     NativeRegionRegistry& operator=(const NativeRegionRegistry&) = delete;
 
+private:
+    // This operation must be called only after trusted runtime admission.
+    // A caller-supplied enum is NOT an authentication proof.
     Grant issue(Trust trust, ActorHeapIdentity owner, std::uint64_t region,
                 std::uint64_t allocation, void* base, std::size_t bytes,
                 TrustedPointerWindow::Mode mode) {
@@ -77,6 +90,7 @@ public:
         return grant;
     }
 
+public:
     template<class T> typename TrustedPointerWindow::template Cursor<T>
     at(const Grant& grant, ActorHeapIdentity caller, std::size_t offset = 0) {
         std::shared_ptr<TrustedPointerWindow> window;
