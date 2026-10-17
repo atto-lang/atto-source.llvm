@@ -14,6 +14,32 @@
 
 namespace oreslang::runtime {
 
+struct NativeRegionIdentity final {
+    std::uint64_t region;
+    std::uint64_t generation;
+    std::uint64_t allocation;
+
+    static NativeRegionIdentity supervisor_minted(
+            std::uint64_t region_id,
+            std::uint64_t generation_id,
+            std::uint64_t allocation_id) {
+        if (region_id == 0 || generation_id == 0 || allocation_id == 0)
+            throw std::invalid_argument(
+                "native region provenance requires nonzero region/generation/allocation");
+        return {region_id, generation_id, allocation_id};
+    }
+};
+
+inline bool operator==(NativeRegionIdentity a, NativeRegionIdentity b) noexcept {
+    return a.region == b.region
+        && a.generation == b.generation
+        && a.allocation == b.allocation;
+}
+inline bool operator!=(NativeRegionIdentity a, NativeRegionIdentity b) noexcept {
+    return !(a == b);
+}
+
+
 /**
  * Host-only substrate for an eventual explicit UNSAFE native pointer escape hatch.
  * This does not grant source-language pointer arithmetic. A trusted supervisor
@@ -29,13 +55,14 @@ public:
 private:
     struct State final {
         ActorHeapIdentity owner;
+        NativeRegionIdentity region;
         std::byte* base;
         std::size_t bytes;
         Mode mode;
         bool live = true;
         std::mutex mu;
-        State(ActorHeapIdentity a, void* p, std::size_t n, Mode m)
-            : owner(a), base(static_cast<std::byte*>(p)), bytes(n), mode(m) {}
+        State(ActorHeapIdentity a, NativeRegionIdentity r, void* p, std::size_t n, Mode m)
+            : owner(a), region(r), base(static_cast<std::byte*>(p)), bytes(n), mode(m) {}
     };
     std::shared_ptr<State> state_;
 
@@ -50,8 +77,11 @@ private:
         if (!s.live) throw std::logic_error("revoked native pointer region");
     }
     template<class T> static void validate(const State& s, std::size_t offset, bool access) {
-        static_assert(std::is_trivially_copyable<T>::value && !std::is_pointer<T>::value,
-                      "pointer access requires a trivially-copyable nonpointer type");
+        static_assert(std::is_trivially_copyable<T>::value
+                      && std::is_trivially_default_constructible<T>::value
+                      && !std::is_pointer<T>::value,
+                      "C++17 host window requires a trivially-copyable, "
+                      "trivially-default-constructible nonpointer type");
         if (offset > s.bytes || (access && sizeof(T) > s.bytes - offset))
             throw std::out_of_range("native pointer out of region bounds");
         const auto base = reinterpret_cast<std::uintptr_t>(s.base);
@@ -67,12 +97,17 @@ private:
                (sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8);
     }
 public:
-    TrustedPointerWindow(ActorHeapIdentity owner, void* base, std::size_t bytes, Mode mode) {
+    TrustedPointerWindow(
+            ActorHeapIdentity owner,
+            NativeRegionIdentity region,
+            void* base,
+            std::size_t bytes,
+            Mode mode) {
         if (!base || !bytes) throw std::invalid_argument("empty native region");
         const auto address = reinterpret_cast<std::uintptr_t>(base);
         if (bytes > std::numeric_limits<std::uintptr_t>::max() - address)
             throw std::invalid_argument("overflowing native region");
-        state_ = std::make_shared<State>(owner, base, bytes, mode);
+        state_ = std::make_shared<State>(owner, region, base, bytes, mode);
     }
     TrustedPointerWindow(const TrustedPointerWindow&) = delete;
     TrustedPointerWindow& operator=(const TrustedPointerWindow&) = delete;
@@ -170,6 +205,13 @@ public:
             });
         }
     };
+
+    [[nodiscard]] NativeRegionIdentity region_identity() const {
+        auto s = state_;
+        if (!s) throw std::logic_error("moved-from native pointer region");
+        std::lock_guard<std::mutex> lock(s->mu);
+        return s->region;
+    }
 
     template<class T> Cursor<T> at(ActorHeapIdentity actor, std::size_t byte_offset = 0) const {
         auto s = state_;
