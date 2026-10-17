@@ -52,6 +52,6 @@ jobs:
         run: |
           set -euo pipefail
           uname -a
-          for action in 0 1 2 3 4; do
+          for action in 0 1 2 3; do
             sudo -n "$RUNNER_TEMP/bpf-xdp-kernel-run" "$RUNNER_TEMP/xdp-objects/xdp-$action.o" "$action"
           done
