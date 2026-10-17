@@ -58,6 +58,20 @@ math = { zed = "acme/math" }
                 "configured root import did not resolve source");
         require(!resolve_source(configured_project,configured/"app/src/main.ores",
                                 "+/outside"),"root import escaped configured project root");
+        // Invalid standalone CR must not be mistaken for a legal TOML
+        // line ending, even when hidden under a # comment or at EOF.
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\" # hidden\r[project]\rroot=\"../ambient\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "bare-CR comment concealed unsafe project.root");
+        write(configured/".ores.pkg.toml","schema_version=\"1\"\r");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "bare CR at EOF was admitted");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\r\n[project]\r\nroot=\"app\"\r\n");
+        require(read_project(configured/"app/src/main.ores").root==configured/"app",
+                "legal CRLF configured root was rejected");
+
         write(configured/".ores.pkg.toml",
               "schema_version=\"1\"\n[project]\nroot=\"../ambient\"\n");
         rejects([&]{(void)read_project(configured/"app/src/main.ores");},
