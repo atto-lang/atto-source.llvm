@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <atomic>
 #include <thread>
 #if defined(__unix__) || defined(__APPLE__)
 #include <signal.h>
@@ -13,7 +14,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, DOUBLE_EXTERNAL_PIN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR };
 static void invalid_call(enum Misuse which) {
     OresActorSlot foreign_slot = {0, 0, 0};
     if (which == FOREIGN_SLOT) {
@@ -69,6 +70,11 @@ static void invalid_call(enum Misuse which) {
                 heap, turn.domain, turn.epoch, 1);
         });
         stolen.join();
+    } else if (which == DOUBLE_EXTERNAL_PIN_RELEASE) {
+        OresActorLifetimePin pin =
+            ores_actor_i64_heap_pin_external(heap, turn);
+        ores_actor_i64_heap_release_external(heap, pin);
+        ores_actor_i64_heap_release_external(heap, pin);
     } else if (which == NESTED_CARRIER_ACTOR) {
         OresActorI64Heap* other = ores_actor_i64_heap_open(30, 8, 1);
         (void) ores_actor_i64_heap_enter(other, 30, 8);
@@ -145,17 +151,45 @@ int main(void) {
     OresActorI64Heap* completion_heap = ores_actor_i64_heap_open(31, 9, 1);
     OresActorTurn completion_turn =
         ores_actor_i64_heap_enter(completion_heap, 31, 9);
-    OresActorLifetimePin completion_pin =
+    OresActorLifetimePin completion_pin_a =
+        ores_actor_i64_heap_pin_external(completion_heap, completion_turn);
+    OresActorLifetimePin completion_pin_b =
         ores_actor_i64_heap_pin_external(completion_heap, completion_turn);
     ores_actor_i64_heap_leave(completion_heap, completion_turn);
     ores_actor_i64_heap_retire(completion_heap);
     CHECK(ores_actor_i64_heap_try_destroy(completion_heap) == 0);
-    std::thread completion_carrier([&] {
-        ores_actor_i64_heap_release_external(completion_heap, completion_pin);
-        ores_actor_i64_heap_release_external(completion_heap, completion_pin);
+
+    // Each independently racing completion owns one linear pin. Final CONTROL
+    // destroy may race the two releases, but cannot free the heap until both
+    // holders have dropped their own pin. No thread touches the heap after its
+    // release call returns or after try_destroy succeeds.
+    std::atomic<int> completion_ready{0};
+    std::atomic<bool> completion_go{false};
+    std::atomic<int> completion_destroyed{0};
+    std::thread completion_a([&] {
+        completion_ready.fetch_add(1);
+        while (!completion_go.load(std::memory_order_acquire)) { }
+        ores_actor_i64_heap_release_external(completion_heap, completion_pin_a);
     });
-    completion_carrier.join();
-    CHECK(ores_actor_i64_heap_try_destroy(completion_heap) == 1);
+    std::thread completion_b([&] {
+        completion_ready.fetch_add(1);
+        while (!completion_go.load(std::memory_order_acquire)) { }
+        ores_actor_i64_heap_release_external(completion_heap, completion_pin_b);
+    });
+    std::thread completion_control([&] {
+        completion_ready.fetch_add(1);
+        while (!completion_go.load(std::memory_order_acquire)) { }
+        while (!ores_actor_i64_heap_try_destroy(completion_heap)) {
+            std::this_thread::yield();
+        }
+        completion_destroyed.store(1, std::memory_order_release);
+    });
+    while (completion_ready.load(std::memory_order_acquire) != 3) { }
+    completion_go.store(true, std::memory_order_release);
+    completion_a.join();
+    completion_b.join();
+    completion_control.join();
+    CHECK(completion_destroyed.load(std::memory_order_acquire) == 1);
 
 #if defined(__unix__) || defined(__APPLE__)
     CHECK(rejects(WRONG_OWNER));
@@ -166,6 +200,7 @@ int main(void) {
     CHECK(rejects(STALE_SLOT_REUSED));
     CHECK(rejects(FOREIGN_SLOT));
     CHECK(rejects(DOUBLE_LOAN_RELEASE));
+    CHECK(rejects(DOUBLE_EXTERNAL_PIN_RELEASE));
     CHECK(rejects(REENTER));
     CHECK(rejects(CALL_AFTER_RETIRE));
     CHECK(rejects(FOREIGN_CARRIER_TURN));
