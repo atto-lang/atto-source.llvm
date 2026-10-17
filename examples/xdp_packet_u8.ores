@@ -1,0 +1,6 @@
+// Experimental verifier-aware XDP byte filter.
+// XdpContext is compiler-owned; packet_u8(14) is bounds-checked against data_end.
+pub fnc ores_xdp(borrow XdpContext ctx): int {
+    if (ctx.packet_u8(14) == 8) { return 1; } fi // XDP_DROP
+    return 2;                                    // XDP_PASS
+}
