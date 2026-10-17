@@ -56,4 +56,17 @@ define module BoolProbe as
     pub fnc compose(bool a, bool b, bool c): bool {
         return Or(And(a, b), Xor(b, c));
     }
+    pub fnc builtin_and8(
+            bool a, bool b, bool c, bool d,
+            bool e, bool f, bool g, bool h): bool {
+        return And(a, b, c, d, e, f, g, h);
+    }
+    pub fnc builtin_or8(
+            bool a, bool b, bool c, bool d,
+            bool e, bool f, bool g, bool h): bool {
+        return Or(a, b, c, d, e, f, g, h);
+    }
+    pub fnc precedence_probe(): bool {
+        return true or true ^^ true and false;
+    }
 end
