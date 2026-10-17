@@ -11,13 +11,9 @@
 #include <string.h>
 #include <unistd.h>
 
-static int prove_negative_verifier(void) {
-    // EXIT reads R0 as the return value, but R0 was never initialized.
-    // LLVM never emits this fixture; it exists only to prove that the real
-    // kernel verifier is active and rejects invalid register state.
-    const struct bpf_insn invalid[] = {
-        { .code = BPF_JMP | BPF_EXIT }
-    };
+static int reject_invalid_program(const char *label,
+                                  const struct bpf_insn *insns,
+                                  size_t insn_count) {
     char log[65536];
     memset(log, 0, sizeof(log));
     LIBBPF_OPTS(bpf_prog_load_opts, opts,
@@ -25,19 +21,58 @@ static int prove_negative_verifier(void) {
         .log_buf = log,
         .log_size = sizeof(log));
 
-    int fd = bpf_prog_load(BPF_PROG_TYPE_XDP, "ores_bad", "Proprietary",
-                           invalid, sizeof(invalid) / sizeof(invalid[0]), &opts);
+    int fd = bpf_prog_load(BPF_PROG_TYPE_XDP, label, "Proprietary",
+                           insns, insn_count, &opts);
     if (fd >= 0) {
         close(fd);
-        fprintf(stderr, "invalid XDP fixture unexpectedly passed kernel verifier\n");
+        fprintf(stderr, "invalid XDP fixture %s unexpectedly passed kernel verifier\n",
+                label);
         return 1;
     }
     if (!log[0]) {
-        fprintf(stderr, "invalid XDP fixture failed without verifier log: %s\n",
-                strerror(errno));
+        fprintf(stderr, "invalid XDP fixture %s failed without verifier log: %s\n",
+                label, strerror(errno));
         return 1;
     }
-    printf("BPF_NEGATIVE_VERIFIER_PASS rejected_uninitialized_r0=1\n");
+    printf("BPF_NEGATIVE_VERIFIER_PASS fixture=%s log_bytes=%zu\n",
+           label, strnlen(log, sizeof(log)));
+    return 0;
+}
+
+static int prove_negative_verifier(void) {
+    // 1. EXIT reads R0 before initialization.
+    const struct bpf_insn uninitialized_r0[] = {
+        { .code = BPF_JMP | BPF_EXIT }
+    };
+    // 2. XDP context is a typed pointer; reading thousands of bytes past the
+    // xdp_md layout must be rejected rather than treated as arbitrary memory.
+    const struct bpf_insn invalid_context_read[] = {
+        { .code = BPF_LDX | BPF_MEM | BPF_W,
+          .dst_reg = BPF_REG_0, .src_reg = BPF_REG_1, .off = 4096 },
+        { .code = BPF_JMP | BPF_EXIT }
+    };
+    // 3. Stack slots are unreadable until initialized.
+    const struct bpf_insn uninitialized_stack[] = {
+        { .code = BPF_LDX | BPF_MEM | BPF_DW,
+          .dst_reg = BPF_REG_0, .src_reg = BPF_REG_10, .off = -8 },
+        { .code = BPF_JMP | BPF_EXIT }
+    };
+    // 4. Unknown helper IDs must never be callable merely because a BPF CALL
+    // instruction can be represented.
+    const struct bpf_insn unknown_helper[] = {
+        { .code = BPF_JMP | BPF_CALL, .imm = 0x7fffffff },
+        { .code = BPF_JMP | BPF_EXIT }
+    };
+
+    if (reject_invalid_program("bad_r0", uninitialized_r0,
+                               sizeof(uninitialized_r0) / sizeof(uninitialized_r0[0])) ||
+        reject_invalid_program("bad_ctx", invalid_context_read,
+                               sizeof(invalid_context_read) / sizeof(invalid_context_read[0])) ||
+        reject_invalid_program("bad_stack", uninitialized_stack,
+                               sizeof(uninitialized_stack) / sizeof(uninitialized_stack[0])) ||
+        reject_invalid_program("bad_helper", unknown_helper,
+                               sizeof(unknown_helper) / sizeof(unknown_helper[0])))
+        return 1;
     return 0;
 }
 
@@ -111,7 +146,7 @@ int main(int argc, char **argv) {
     options.data_size_in = sizeof(packet);
     options.data_out = packet_out;
     options.data_size_out = sizeof(packet_out);
-    options.repeat = 1;
+    options.repeat = 8;
 
     if (bpf_prog_test_run_opts(bpf_program__fd(only), &options)) {
         fprintf(stderr, "BPF_PROG_RUN failed: %s\n", strerror(errno));
@@ -120,6 +155,12 @@ int main(int argc, char **argv) {
     }
     if ((int)options.retval != expected) {
         fprintf(stderr, "XDP return %u != expected %d\n", options.retval, expected);
+        bpf_object__close(object);
+        return 1;
+    }
+    if (options.data_size_out > sizeof(packet_out)) {
+        fprintf(stderr, "BPF_PROG_RUN reported impossible output size %u\n",
+                options.data_size_out);
         bpf_object__close(object);
         return 1;
     }
