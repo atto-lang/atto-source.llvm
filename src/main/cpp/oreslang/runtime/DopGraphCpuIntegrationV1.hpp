@@ -8,6 +8,8 @@
 #include <exception>
 #include <functional>
 #include <future>
+#include <condition_variable>
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -28,6 +30,23 @@ namespace oreslang::dop {
  */
 class OwnedCpuGraphFuture {
     struct State {
+        // The scheduler may start a worker before schedule(...) returns, then
+        // throw. Neither a claimed worker nor a retained closure may touch
+        // native buffers until external task admission has committed.
+        struct Admission {
+            std::mutex mutex;
+            std::condition_variable cv;
+            bool resolved = false;
+            bool accepted = false;
+            void resolve(bool ok) noexcept {
+                {
+                    std::lock_guard<std::mutex> guard(mutex);
+                    resolved = true;
+                    accepted = ok;
+                }
+                cv.notify_all();
+            }
+        };
         mutable std::mutex mutex;
         std::atomic<bool> cancelled{false};
         std::atomic<bool> started{false};
@@ -101,6 +120,8 @@ inline OwnedCpuGraphFuture submit_owned_cpu_graph(
         execution_v1::Plan graph,
         const std::function<void(std::function<void()>)>& schedule) {
     auto state = std::make_shared<OwnedCpuGraphFuture::State>();
+    auto admission = std::make_shared<OwnedCpuGraphFuture::State::Admission>();
+    const auto submitting_thread = std::this_thread::get_id();
     OwnedCpuGraphFuture future(state);
     try {
         if (!input || !output) throw std::invalid_argument("missing owned CPU buffer");
@@ -127,12 +148,28 @@ inline OwnedCpuGraphFuture submit_owned_cpu_graph(
 
         // Capture owners by value: queued work must never retain raw pointers
         // or references to caller-owned C++ wrappers.
-        schedule([state, kernel, input = std::move(input),
+        schedule([state, admission, submitting_thread, kernel, input = std::move(input),
                   output = std::move(output), source = std::move(source),
                   destination = std::move(destination),
                   graph = std::move(graph)]() mutable {
             if (!state->claim()) return;
             try {
+                {
+                    std::unique_lock<std::mutex> guard(admission->mutex);
+                    if (!admission->resolved &&
+                            std::this_thread::get_id() == submitting_thread) {
+                        throw std::logic_error(
+                            "owned CPU graph requires queued executor, not inline dispatch");
+                    }
+                    if (!admission->cv.wait_for(guard, std::chrono::seconds(30),
+                            [&] { return admission->resolved; })) {
+                        state->reject(std::make_exception_ptr(std::runtime_error(
+                            "owned CPU graph executor admission timed out")));
+                        return;
+                    }
+                    if (!admission->accepted) return;
+                }
+                if (state->cancelled.load(std::memory_order_acquire)) return;
                 execute_cpu_region(kernel, *input, *output, source, destination);
                 if (state->cancelled.load(std::memory_order_acquire)) return;
                 const auto value = graph.execute_cpu();
@@ -143,8 +180,13 @@ inline OwnedCpuGraphFuture submit_owned_cpu_graph(
                 state->fail(std::current_exception());
             }
         });
+        // Open worker gate only after successful scheduler return.
+        admission->resolve(true);
     } catch (...) {
+        // Even when schedule started a worker and then threw, the pending
+        // closure is released solely in rejected state, without CPU writes.
         state->reject(std::current_exception());
+        admission->resolve(false);
     }
     return future;
 }
