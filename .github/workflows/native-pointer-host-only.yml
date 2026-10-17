@@ -1,0 +1,62 @@
+name: Native pointer host-only security
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-pointer-host-only.yml'
+      - 'src/main/cpp/oreslang/runtime/ActorHeapIdentity.hpp'
+      - 'src/main/cpp/oreslang/runtime/TrustedPointerWindow.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeRegionRegistry.hpp'
+      - 'tests/trusted_pointer_window_test.cpp'
+      - 'tests/native_region_registry_test.cpp'
+      - 'tests/native_region_negative_compile.cpp'
+      - 'tests/run_native_pointer_negative_compile.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: gcc-release
+            compiler: g++
+            flags: '-O2 -DNDEBUG'
+          - profile: clang-asan-ubsan
+            compiler: clang++
+            flags: '-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer'
+          - profile: gcc-tsan
+            compiler: g++
+            flags: '-O1 -g -fsanitize=thread -fno-omit-frame-pointer'
+    name: ${{ matrix.profile }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Compile exact checked-out host tests
+        env:
+          CXX: ${{ matrix.compiler }}
+          CXXFLAGS: ${{ matrix.flags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/native-pointer-host-only
+          for name in trusted_pointer_window native_region_registry; do
+            "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+              $CXXFLAGS -Isrc/main/cpp "tests/${name}_test.cpp" \
+              -o "build/native-pointer-host-only/${name}_test"
+          done
+      - name: Run native host security tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in trusted_pointer_window native_region_registry; do
+            "build/native-pointer-host-only/${name}_test"
+          done
+      - name: Verify negative compiler diagnostics
+        env:
+          CXX: ${{ matrix.compiler }}
+        shell: bash
+        run: bash tests/run_native_pointer_negative_compile.sh
