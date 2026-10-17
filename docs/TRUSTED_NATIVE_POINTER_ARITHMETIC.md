@@ -129,8 +129,8 @@ against the private branch before building:
 For these exact file blobs, both host test executables **passed locally**
 with Clang C++17 ASan+UBSan, GCC C++17 Release -O2 -DNDEBUG,
 and GCC C++17 TSan (each compiled with strict warnings and -Werror).
-Two standalone compile-negative fixtures were also checked with both
-GCC and Clang for private issuance and forbidden bool/float access.
+Three compile-negative configurations were also checked with both
+GCC and Clang: private issuance, forbidden bool access and forbidden float access.
 
 This is *not* a full LLVM compiler build, project CMake/CTest run,
 guest-source test, CI runner pass or production authorization proof.
