@@ -47,7 +47,7 @@ def main():
             require('target triple = "bpfel"' in ir, "wrong eBPF target triple")
             require('section "xdp"' in ir and 'section "license"' in ir,
                     "missing XDP or license section")
-            require(re.search(r"ret i32 %d(?:\\s|$)" % action, ir), "wrong XDP return code")
+            require(re.search(r"ret i32 %d(?:\s|$)" % action, ir), "wrong XDP return code")
             require("define i32 @ores_xdp(" in ir, "missing XDP entrypoint")
             require("define i32 @main" not in ir, "host entrypoint leaked into BPF")
 
@@ -58,14 +58,14 @@ def main():
                             str(irfile), "-o", str(objfile)])
             require(compiled.returncode == 0, "real BPF backend unavailable: " + compiled.stderr)
             elf = objfile.read_bytes()
-            require(len(elf) >= 64 and elf[:4] == b"\\x7fELF" and elf[4:6] == b"\\x02\\x01",
+            require(len(elf) >= 64 and elf[:4] == b"\x7fELF" and elf[4:6] == b"\x02\x01",
                     "BPF result not ELF64 little-endian")
             require(int.from_bytes(elf[18:20], "little") == 247,
                     "wrong ELF e_machine (expected EM_BPF=247)")
             sections = run([readelf, "-W", "-S", str(objfile)])
             require(sections.returncode == 0 and
-                    re.search(r"\\s+xdp\\s+", sections.stdout) and
-                    re.search(r"\\s+license\\s+", sections.stdout),
+                    re.search(r"\s+xdp\s+", sections.stdout) and
+                    re.search(r"\s+license\s+", sections.stdout),
                     "missing real ELF XDP/license sections")
 
         reject("pub fnc main(): int { return 2; }")
