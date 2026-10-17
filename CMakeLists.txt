@@ -1918,3 +1918,40 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Specific front-end surfaces cannot quietly fall through to scalar IR.
+# These diagnostic-only tests supplement (not replace) the positive scalar
+# control and the no-artifact negative harness above.
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  foreach(surface IN ITEMS callable routine-callable param routine-param match-value match-statement)
+    if(surface STREQUAL "callable" OR surface STREQUAL "routine-callable")
+      if(surface STREQUAL "callable")
+        set(fixture "structural-callable-unsupported.ores")
+      else()
+        set(fixture "structural-routine-unsupported.ores")
+      endif()
+      set(diagnostic "native structural callable requires")
+    elseif(surface STREQUAL "param" OR surface STREQUAL "routine-param")
+      if(surface STREQUAL "param")
+        set(fixture "structural-param-unsupported.ores")
+      else()
+        set(fixture "structural-routine-param-unsupported.ores")
+      endif()
+      set(diagnostic "native structural parameter requires")
+    else()
+      if(surface STREQUAL "match-value")
+        set(fixture "structural-match-value-unsupported.ores")
+      else()
+        set(fixture "structural-match-statement-unsupported.ores")
+      endif()
+      set(diagnostic "native structural match expression requires")
+    endif()
+    add_test(NAME native_structural_${surface}_fail_closed
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
+        --compiler "$<TARGET_FILE:oreslang-llvmc>"
+        --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
+        --diagnostic "${diagnostic}")
+    set_tests_properties(native_structural_${surface}_fail_closed PROPERTIES TIMEOUT 25)
+  endforeach()
+endif()
