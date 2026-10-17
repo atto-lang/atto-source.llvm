@@ -1,6 +1,8 @@
 #include "oreslang/runtime/SharedDomainArena.hpp"
 #include <atomic>
 #include <array>
+#include <algorithm>
+#include <vector>
 #include <cstdint>
 #include <future>
 #include <stdexcept>
@@ -29,6 +31,35 @@ template<typename F> void reject(F&& f) {
 }
 int main() {
     static_assert(!std::is_move_constructible_v<SharedDomainArena::Lease>);
+    // Domain IDs must remain unique across concurrent arena construction.
+    // This exercises the real header allocator, not a synthetic copy.
+    {
+        constexpr std::size_t Threads = 8, PerThread = 256;
+        std::array<std::array<std::uint64_t, PerThread>, Threads> issued{};
+        std::array<std::thread, Threads> workers;
+        std::atomic<bool> start{false};
+        for (std::size_t t = 0; t < Threads; ++t) {
+            workers[t] = std::thread([&, t] {
+                while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+                for (std::size_t i = 0; i < PerThread; ++i) {
+                    SharedDomainArena domain;
+                    auto grant = domain.grant(1000 + t, 1, true, false);
+                    issued[t][i] = grant.domain;
+                    require(domain.try_retire());
+                }
+            });
+        }
+        start.store(true, std::memory_order_release);
+        for (auto& worker : workers) worker.join();
+        std::vector<std::uint64_t> values;
+        values.reserve(Threads * PerThread);
+        for (const auto& row : issued) for (auto identity : row) {
+            require(identity != 0 && identity != std::numeric_limits<std::uint64_t>::max());
+            values.push_back(identity);
+        }
+        std::sort(values.begin(), values.end());
+        require(std::adjacent_find(values.begin(), values.end()) == values.end());
+    }
     SharedDomainArena a;
     auto writerGrant=a.grant(101, 1, true, true);
     auto readerGrant=a.grant(102, 1, true, false);
