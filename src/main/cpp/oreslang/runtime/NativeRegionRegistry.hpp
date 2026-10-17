@@ -27,6 +27,8 @@ private:
         Grant grant;
         std::shared_ptr<TrustedPointerWindow> window;
         bool retiring = false;
+        std::uintptr_t begin = 0;
+        std::uintptr_t end = 0;
     };
     std::mutex mu_;
     std::unordered_map<std::uint64_t, Entry> entries_;
@@ -48,13 +50,26 @@ public:
         if (next_slot_ == std::numeric_limits<std::uint64_t>::max() ||
             next_generation_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("native grant identity exhausted");
+        // A second grant over overlapping virtual memory would defeat actor
+        // isolation even if both handles have different owner identities.
+        // Fail closed until the supervisor has a formally shared-memory model.
+        if (!base || !bytes)
+            throw std::invalid_argument("empty native grant region");
+        const auto begin = reinterpret_cast<std::uintptr_t>(base);
+        if (bytes > std::numeric_limits<std::uintptr_t>::max() - begin)
+            throw std::invalid_argument("overflowing native grant region");
+        const auto end = begin + bytes;
+        for (const auto& existing : entries_) {
+            if (begin < existing.second.end && existing.second.begin < end)
+                throw std::logic_error("overlapping native memory grants are forbidden");
+        }
         // Do not consume identity on failed validation/allocation.
         const auto provenance = NativeRegionIdentity::supervisor_minted(
             region, next_generation_, allocation);
         auto window = std::make_shared<TrustedPointerWindow>(
             owner, provenance, base, bytes, mode);
         const Grant grant{next_slot_, provenance, owner};
-        const auto inserted = entries_.emplace(grant.slot, Entry{grant, std::move(window), false});
+        const auto inserted = entries_.emplace(grant.slot, Entry{grant, std::move(window), false, begin, end});
         if (!inserted.second)
             throw std::logic_error("native grant slot collision");
         ++next_slot_;
