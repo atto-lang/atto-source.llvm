@@ -108,6 +108,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Parser/runtime do not yet enforce refinements. A valid compiler control
+    # followed by five rejected sources must emit no partial LLVM IR.
+    add_test(NAME native_refinement_admission_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/refinement_admission_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_refinement_admission_failclosed PROPERTIES TIMEOUT 180)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
