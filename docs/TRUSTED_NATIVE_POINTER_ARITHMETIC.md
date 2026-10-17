@@ -70,7 +70,10 @@ explicit region/generation/allocation provenance, byte length, read/write mode
 and revocation. It supports checked typed element
 offsets, aligned load/store (memcpy for ordinary trivially-copyable objects),
 unsigned 8/16/32/64-bit MMIO volatile load/store, and a synchronous FFI
-address callback that holds the revocation lock until return. The caller must
+address callback that holds the revocation lock until return. Same-thread
+reentry into the window/nested FFI is rejected instead of deadlocking; a
+same-thread revoke request is deferred until the callback releases its raw
+address. The caller must
 keep the backing bytes mapped and alive until revoke returns. This prototype
 uses a shared control block and mutex: zero-copy data, but NOT zero allocation,
 lock-free real time or source/LLVM guest support.
@@ -81,7 +84,9 @@ Known limitations:
   an unforgeable guest capability. There is no compiler admission or
   supervisor-only native capability minting path yet.
 - Native host misuse, early free/unmap, callback pointer retention and invalid
-  mapped device addresses can still be unsafe. The prototype intentionally
+  mapped device addresses can still be unsafe. Cross-thread revocation waits
+  for a callback to finish; same-thread revocation is deferred and applied
+  before the callback lock is released. The prototype intentionally
   cannot make unrestricted native C++ memory-safe.
 - No integration yet with ActorOwnedGraphHeap generation/loan retirement,
   native actor permission policy, async FFI/DMA pins or Java/Graal FFM.
