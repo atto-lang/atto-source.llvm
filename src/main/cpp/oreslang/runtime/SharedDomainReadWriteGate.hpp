@@ -14,6 +14,8 @@
 
 namespace oreslang::runtime {
 
+class SharedDomainSchedulerBridge;
+
 /*
  * Bounded FIFO logical admission for one shared-domain arena.
  *
@@ -31,6 +33,7 @@ public:
 
     class Token final {
         friend class SharedDomainReadWriteGate;
+        friend class SharedDomainSchedulerBridge;
     public:
         Token() = default;
         explicit operator bool() const noexcept { return sequence_ != 0; }
@@ -96,6 +99,21 @@ public:
             return waiter.token == token && same_identity(waiter.owner, owner)
                 && waiter.mode == mode;
         });
+    }
+
+    /* One scheduler-delivered ticket may enter guest code exactly once. */
+    [[nodiscard]] bool try_claim(
+            Token token, OresNativeActorIdentity owner, Mode mode) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (closed_ || !valid_identity(owner) || !token || token.scope_ != scope_)
+            return false;
+        auto it = std::find_if(owners_.begin(), owners_.end(), [&](const Waiter& waiter) {
+            return waiter.token == token && same_identity(waiter.owner, owner)
+                && waiter.mode == mode;
+        });
+        if (it == owners_.end() || it->dispatched) return false;
+        it->dispatched = true;
+        return true;
     }
 
     /*
@@ -164,6 +182,7 @@ private:
         Token token;
         OresNativeActorIdentity owner;
         Mode mode;
+        bool dispatched = false;
     };
 
     static bool valid_identity(OresNativeActorIdentity identity) noexcept {
