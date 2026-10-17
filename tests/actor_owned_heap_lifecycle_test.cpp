@@ -129,11 +129,13 @@ int main(void) {
     /* A live actor cannot take a second physical turn, even on its
      * current native carrier. Busy admission leaves its output untouched. */
     OresActorTurn denied = {0, 0};
-    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &denied) == 0);
+    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &denied)
+          == ORES_ACTOR_TRY_CARRIER_OCCUPIED);
     CHECK(denied.domain == 0 && denied.epoch == 0);
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
     OresActorTurn next = {0, 0};
-    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &next) == 1);
+    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &next)
+          == ORES_ACTOR_TRY_ENTERED);
     CHECK(next.domain == first.domain && next.epoch > first.epoch);
     CHECK(ores_actor_i64_heap_read(heap, next, saved) == 40);
     ores_actor_i64_heap_leave(heap, next); /* shared loan still protects saved */
@@ -197,6 +199,10 @@ int main(void) {
     CHECK(stale_copy.domain == 0 && stale_copy.index == 0 && stale_copy.generation == 0);
     ores_actor_i64_heap_leave(reused_heap, reused_turn);
     ores_actor_i64_heap_retire(reused_heap);
+    OresActorTurn retired_denied = {0, 0};
+    CHECK(ores_actor_i64_heap_try_enter(reused_heap, 42, 3, &retired_denied)
+          == ORES_ACTOR_TRY_RETIRED);
+    CHECK(retired_denied.domain == 0 && retired_denied.epoch == 0);
     CHECK(ores_actor_i64_heap_try_destroy(reused_heap) == 0);
     ores_actor_i64_heap_external_release(reused_heap, &current_lease);
     CHECK(current_lease.domain == 0 && current_lease.index == 0

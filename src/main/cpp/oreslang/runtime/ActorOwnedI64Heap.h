@@ -22,10 +22,19 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                          uint64_t actor_id,
                                          uint64_t incarnation);
-/* Nonparking admission: zero when the actor is busy, one on success.
- * No carrier is parked waiting for the heap mutex or another actor turn. */
-int ores_actor_i64_heap_try_enter(OresActorI64Heap* heap,
-    uint64_t actor_id, uint64_t incarnation, OresActorTurn* out);
+/* Scheduler-visible nonparking admission reasons. These are normal control
+ * states, not actor panics; owner/incarnation forgery and epoch exhaustion
+ * remain fatal contracts. */
+typedef enum {
+    ORES_ACTOR_TRY_LOCK_BUSY = 0,
+    ORES_ACTOR_TRY_ENTERED = 1,
+    ORES_ACTOR_TRY_CARRIER_OCCUPIED = 2,
+    ORES_ACTOR_TRY_ACTOR_ACTIVE = 3,
+    ORES_ACTOR_TRY_RETIRED = 4
+} OresActorTryEnterResult;
+OresActorTryEnterResult ores_actor_i64_heap_try_enter(
+    OresActorI64Heap* heap, uint64_t actor_id, uint64_t incarnation,
+    OresActorTurn* out);
 void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn);
 OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
                                        OresActorTurn turn, int64_t value);
