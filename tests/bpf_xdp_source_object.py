@@ -2,6 +2,7 @@
 """Experimental eBPF XDP: fail-closed .ores source to real BPF ELF object."""
 import argparse
 import hashlib
+import os
 import pathlib
 import re
 import shutil
@@ -166,6 +167,41 @@ def main():
         reject_bytes(base + b"//\xed\xa0\x80\n", "valid utf-8")
         reject_bytes(base + b"//\xf4\x90\x80\x80\n", "valid utf-8")
         reject_bytes(base + b"//\xe2\x82", "valid utf-8")
+
+        # Descriptor-level source admission: symlinks to regular files are
+        # allowed, but special files/directories are rejected without reading
+        # from a potentially blocking stream. Limits still apply after symlink.
+        regular = root / "regular.ores"
+        regular.write_bytes(base)
+        linked = root / "linked.ores"
+        os.symlink(regular.name, linked)
+        linked_run = run([args.compiler, "--target=bpfel", "--bpf-program=xdp", str(linked)])
+        require(linked_run.returncode == 0 and linked_run.stdout == observed_ir[2],
+                "regular source symlink did not preserve exact BPF semantics")
+
+        too_big = root / "too-big.ores"
+        too_big.write_bytes(exact + b"x")
+        too_big_link = root / "too-big-link.ores"
+        os.symlink(too_big.name, too_big_link)
+        linked_big = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                          str(too_big_link)])
+        require(linked_big.returncode != 0 and not linked_big.stdout and
+                "source exceeds" in linked_big.stderr.lower(),
+                "BPF byte limit was bypassed through source symlink")
+
+        directory_run = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                             str(root)])
+        require(directory_run.returncode != 0 and not directory_run.stdout and
+                "regular file" in directory_run.stderr.lower(),
+                "directory source was not rejected")
+
+        fifo = root / "source.fifo"
+        os.mkfifo(fifo)
+        fifo_run = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                        str(fifo)])
+        require(fifo_run.returncode != 0 and not fifo_run.stdout and
+                "regular file" in fifo_run.stderr.lower(),
+                "FIFO source was not rejected fail-closed/nonblocking")
 
         reject("pub fnc main(): int { return 2; }")
         reject("fnc ores_xdp(): int { return 2; }")
