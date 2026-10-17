@@ -2,6 +2,7 @@
 #include "oreslang/runtime/PinnedContinuationGate.hpp"
 #include <csignal>
 #include <cstdint>
+#include <initializer_list>
 #include <stdexcept>
 #include <thread>
 #include <sys/resource.h>
