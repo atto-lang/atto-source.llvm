@@ -33,4 +33,23 @@ int main() {
     if (second.slot == grant.slot || second.provenance.generation == grant.provenance.generation)
         throw std::runtime_error("grant identity reused");
     registry.revoke(second);
+
+    // Self-revocation must not release the allocation while an FFI callback
+    // still holds its raw T*. The callback may request revocation, but the
+    // caller must retry after the active foreign scope has unwound.
+    auto ffiGrant = registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 9, 1,
+        bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite);
+    auto ffiPointer = registry.at<std::uint32_t>(ffiGrant, owner);
+    const int callbackResult = ffiPointer.with_ffi_address(owner, [&](std::uint32_t* raw) {
+        reject([&] { registry.revoke(ffiGrant); });
+        if (*raw != 10) throw std::runtime_error("FFI address released inside callback");
+        reject([&] { (void)registry.at<std::uint32_t>(ffiGrant, other); });
+        return 7;
+    });
+    if (callbackResult != 7) throw std::runtime_error("FFI callback not completed");
+    // Deferred revocation takes effect at callback return, before the retry
+    // completes the registry cleanup.
+    reject([&] { (void)ffiPointer.load(owner); });
+    registry.revoke(ffiGrant);
+    reject([&] { registry.revoke(ffiGrant); });
 }
