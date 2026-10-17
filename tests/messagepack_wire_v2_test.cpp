@@ -38,7 +38,7 @@ static std::pair<Shape, Value> specimen(const std::string& name) {
                                    Value(std::numeric_limits<std::int64_t>::max())})};
     if (name == "demo.Unicode.v1")
         return {Shape::string(),
-                Value(std::string("A\\xc3\\xa9\\xf0\\x9f\\x91\\x8b\\xe4\\xb8\\xad"))};
+                Value(std::string("A\xc3\xa9\xf0\x9f\x91\x8b\xe4\xb8\xad"))};
     if (name == "demo.F64SignedZero.v1")
         return {Shape::floating(),Value(-0.0)};
     if (name == "demo.EmptyTuple.v1")
