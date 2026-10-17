@@ -65,6 +65,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-assert-abi-symbol-guard-test)
 
 
+    # Parser + ownership Boolean gate independent of LLVM codegen.
+    # parse_program() runs name/type-shape validation and ownership admission.
+    add_executable(oreslang-native-bool-parser-ownership-test
+        tests/native_bool_parser_ownership_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-bool-parser-ownership-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-bool-parser-ownership-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_bool_parser_ownership_call_graph
+        COMMAND oreslang-native-bool-parser-ownership-test)
+
     # Generated, verifiable LLVM IR for the primitive scalar ABI only.
     # Compiled guest std/assert linking is a separate milestone.
     add_executable(oreslang-assert-scalar-ir-driver
