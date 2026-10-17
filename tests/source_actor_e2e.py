@@ -30,6 +30,8 @@ def main():
         ("source-actor-method-keyword.ores", 1, 0, None),
         ("source-actor-bare-method.ores", 1, 0, None),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-threads-native-1.ores", 1, 2, 3),
+        ("source-actor-threads-annotated-1.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
@@ -39,6 +41,10 @@ def main():
     ]
     negatives = {
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
+        "source-actor-threads-native-max3-reject.ores": "max > 1 is not yet supported",
+        "source-actor-threads-annotated-max3-reject.ores": "max > 1 is not yet supported",
+        "source-actor-threads-duplicate-reject.ores": "duplicate actor thread policy",
+        "source-actor-threads-invalid-range-reject.ores": "1 <= min <= max",
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
