@@ -88,8 +88,9 @@ static int parse_action(const char *text) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: bpf_xdp_kernel_run object.o expected_action\n");
+    if (argc != 3 && argc != 4 && argc != 6) {
+        fprintf(stderr,
+                "usage: bpf_xdp_kernel_run object.o expected_action [packet_size [set_offset set_byte]]\n");
         return 64;
     }
     const int expected = parse_action(argv[2]);
@@ -142,11 +143,40 @@ int main(int argc, char **argv) {
     unsigned char packet[2048];
     unsigned char packet_out[2048];
     memset(packet, 0xa5, sizeof(packet));
-    const unsigned int packet_sizes[] = {64, 1500};
+
+    unsigned int packet_sizes[2] = {64, 1500};
+    size_t packet_size_count = 2;
+    if (argc >= 4) {
+        char *end = NULL;
+        errno = 0;
+        unsigned long parsed = strtoul(argv[3], &end, 10);
+        if (errno || !end || *end != '\0' || parsed > sizeof(packet)) {
+            fprintf(stderr, "packet_size must be 0..2048\n");
+            bpf_object__close(object);
+            return 64;
+        }
+        packet_sizes[0] = (unsigned int)parsed;
+        packet_size_count = 1;
+    }
+    if (argc == 6) {
+        char *offset_end = NULL;
+        char *byte_end = NULL;
+        errno = 0;
+        unsigned long offset = strtoul(argv[4], &offset_end, 10);
+        unsigned long byte = strtoul(argv[5], &byte_end, 10);
+        if (errno || !offset_end || *offset_end != '\0' ||
+            !byte_end || *byte_end != '\0' ||
+            offset >= packet_sizes[0] || byte > 255) {
+            fprintf(stderr, "packet mutation must be inside packet and byte 0..255\n");
+            bpf_object__close(object);
+            return 64;
+        }
+        packet[offset] = (unsigned char)byte;
+    }
+
     unsigned int final_retval = 0;
     unsigned int final_duration = 0;
-
-    for (size_t i = 0; i < sizeof(packet_sizes) / sizeof(packet_sizes[0]); ++i) {
+    for (size_t i = 0; i < packet_size_count; ++i) {
         memset(packet_out, 0, sizeof(packet_out));
         struct bpf_test_run_opts options;
         memset(&options, 0, sizeof(options));
@@ -179,8 +209,8 @@ int main(int argc, char **argv) {
         final_duration = options.duration;
     }
 
-    printf("BPF_XDP_KERNEL_PASS verifier=accepted action=%u packet_sizes=64,1500 repeat=8 duration_ns=%u\n",
-           final_retval, final_duration);
+    printf("BPF_XDP_KERNEL_PASS verifier=accepted action=%u packets=%zu repeat=8 duration_ns=%u\n",
+           final_retval, packet_size_count, final_duration);
     bpf_object__close(object);
     return 0;
 }
