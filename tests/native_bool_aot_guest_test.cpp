@@ -8,11 +8,38 @@ extern "C" bool oreslang_bool_or_word() asm("BoolProbe.or_word");
 extern "C" bool oreslang_bool_or_symbol() asm("BoolProbe.or_symbol");
 extern "C" bool oreslang_bool_xor_symbol() asm("BoolProbe.xor_symbol");
 extern "C" bool oreslang_bool_nested() asm("BoolProbe.nested");
+extern "C" bool oreslang_bool_and_args(bool, bool) asm("BoolProbe.and_args");
+extern "C" bool oreslang_bool_or_args(bool, bool) asm("BoolProbe.or_args");
+extern "C" bool oreslang_bool_xor_args(bool, bool) asm("BoolProbe.xor_args");
+extern "C" bool oreslang_bool_builtin_and(bool, bool, bool) asm("BoolProbe.builtin_and");
+extern "C" bool oreslang_bool_builtin_or(bool, bool, bool) asm("BoolProbe.builtin_or");
+extern "C" bool oreslang_bool_builtin_xor(bool, bool) asm("BoolProbe.builtin_xor");
+extern "C" bool oreslang_bool_forward(bool, bool) asm("BoolProbe.forward");
+extern "C" bool oreslang_bool_named_forward(bool, bool) asm("BoolProbe.named_forward");
+extern "C" bool oreslang_bool_compose(bool, bool, bool) asm("BoolProbe.compose");
 
 int main() {
     if (!oreslang_bool_yes() || oreslang_bool_no() ||
             oreslang_bool_and_word() || !oreslang_bool_and_symbol() ||
             !oreslang_bool_or_word() || oreslang_bool_or_symbol() ||
-            !oreslang_bool_xor_symbol() || !oreslang_bool_nested())
-        throw std::runtime_error("compiled native i1 logical result mismatch");
+            !oreslang_bool_xor_symbol() || !oreslang_bool_nested() ||
+            !oreslang_bool_and_args(true, true) ||
+            oreslang_bool_and_args(true, false) ||
+            !oreslang_bool_or_args(false, true) ||
+            oreslang_bool_or_args(false, false) ||
+            !oreslang_bool_xor_args(true, false) ||
+            oreslang_bool_xor_args(true, true) ||
+            !oreslang_bool_builtin_and(true, true, true) ||
+            oreslang_bool_builtin_and(true, false, true) ||
+            !oreslang_bool_builtin_or(false, false, true) ||
+            oreslang_bool_builtin_or(false, false, false) ||
+            !oreslang_bool_builtin_xor(true, false) ||
+            oreslang_bool_builtin_xor(true, true) ||
+            !oreslang_bool_forward(true, true) ||
+            oreslang_bool_forward(true, false) ||
+            !oreslang_bool_named_forward(true, true) ||
+            oreslang_bool_named_forward(true, false) ||
+            !oreslang_bool_compose(true, true, false) ||
+            oreslang_bool_compose(false, false, false))
+        throw std::runtime_error("compiled native i1 Boolean graph mismatch");
 }
