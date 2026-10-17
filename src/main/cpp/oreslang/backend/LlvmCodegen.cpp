@@ -894,17 +894,6 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 // bool arms; no implicit fallthrough or untyped default.
                 for (const auto& arm : method.boolean_arms) {
                     builder.SetInsertPoint(arm.match_value ? whenTrue : whenFalse);
-                    for (const auto& assignment : arm.assignments) {
-                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                            [&](const LocalBinding& f) { return f.name == assignment.field; });
-                        if (field == actor.fields.end() || !field->field_mutable)
-                            throw std::runtime_error("invalid receive match field mutation");
-                        auto* updated = lower(*assignment.value, builder, i64,
-                                              parameters, locals, declarations);
-                        throw std::runtime_error(
-                            "legacy match field mutation requires scoped critical handle_state");
-                        builder.CreateStore(updated, locals.at(assignment.field));
-                    }
                     builder.CreateBr(joined);
                 }
                 builder.SetInsertPoint(joined);
@@ -912,18 +901,6 @@ std::string emit_verified_llvm_ir(const Program& source) {
             if (!method.assignments.empty())
                 throw std::runtime_error(
                     "legacy actor field mutation requires scoped critical handle_state");
-            for (const auto& assignment : method.assignments) {
-                const auto match = std::find_if(actor.fields.begin(), actor.fields.end(),
-                    [&](const LocalBinding& f) { return f.name == assignment.field; });
-                // Parser validation proves the field exists and is mutable.
-                if (match == actor.fields.end() || !match->field_mutable)
-                    throw std::runtime_error("invalid actor field mutation lowering");
-                llvm::Value* updated = lower(*assignment.value, builder, i64,
-                                             parameters, locals, declarations);
-                throw std::runtime_error(
-                    "legacy actor field mutation cannot emit persistent store");
-                builder.CreateStore(updated, locals.at(assignment.field));
-            }
             auto* result = lower(*method.result, builder, i64,
                                  parameters, locals, declarations);
             for (auto iter = ownedSlots.rbegin(); iter != ownedSlots.rend(); ++iter) {
