@@ -152,6 +152,24 @@ public:
         return next;
     }
 
+    /** VM-owned one-shot reply directly to the immutable ingress origin.
+     * The full branch path remains sealed inside the frame for audit and
+     * correlation. Intermediate actors need not execute synthetic backward
+     * turns; a returning frame may never be replied or forwarded again. */
+    Handle reply(const Handle& frame) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        require_forward(frame);
+        if (frame->at_ == 0)
+            throw std::logic_error("origin cannot reply to itself");
+        reserve_routes(1);
+        auto next = Handle(new Frame(this, generation_, frame->flow_,
+                                     next_route_, frame->path_, 0, true));
+        active_.emplace(next.get(), next);
+        active_.erase(frame.get());
+        ++next_route_;
+        return next;
+    }
+
     void complete(const Handle& frame) {
         std::lock_guard<std::mutex> lock(mutex_);
         require_active(frame);
