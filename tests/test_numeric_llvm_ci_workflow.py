@@ -50,5 +50,35 @@ class CheckedI64WorkflowAdmissionTest(unittest.TestCase):
                       matching[0])
 
 
+    def test_full_native_ci_steps_are_unique(self):
+        yaml = CI.read_text(encoding="utf-8")
+        names = re.findall(r"(?m)^      - name: ([^\r\n]+)$", yaml)
+        self.assertTrue(names)
+        self.assertEqual(len(names), len(set(names)),
+                         "duplicate step names hide repeated native CI phases")
+        native_steps = (
+            "Verify real checked-result compiler ABI before full CTest",
+            "Verify checked-i64 CTest inventory before full native suite",
+            "Verify parser, IR and native execution",
+            "Repeat actor stress and cancellation races",
+            "ASan and UBSan native actor memory and concurrency smoke",
+            "Sanitized actor-owned generational graph heap",
+            "ThreadSanitizer actor data-race stress",
+        )
+        for step in native_steps:
+            with self.subTest(step=step):
+                self.assertEqual(names.count(step), 1)
+
+    def test_duplicate_native_phase_mutation_would_be_denied(self):
+        yaml = CI.read_text(encoding="utf-8")
+        names = re.findall(r"(?m)^      - name: ([^\r\n]+)$", yaml)
+        self.assertEqual(len(names), len(set(names)))
+        duplicated = yaml + "\n      - name: Verify parser, IR and native execution\n"
+        mutated_names = re.findall(r"(?m)^      - name: ([^\r\n]+)$", duplicated)
+        self.assertNotEqual(len(mutated_names), len(set(mutated_names)),
+                            "duplicate native CTest phase must break the uniqueness invariant")
+
+
+
 if __name__ == "__main__":
     unittest.main()
