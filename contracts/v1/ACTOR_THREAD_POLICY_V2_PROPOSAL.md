@@ -61,8 +61,12 @@ or transferred to a different carrier without return to scheduler admission.
 ## Required v2 safety model
 
 1. Every actor incarnation owns one generation-stamped admission authority
-   with an atomic bounded counter and distinct owner tokens. A ticket is bound
-   to actor identity, generation, task/continuation and native carrier.
+   with an atomic bounded counter and **unique per-execution-segment grant
+   nonces**. A ticket is bound to actor identity, generation, grant nonce,
+   task/continuation and native carrier. Carrier identity alone is never a
+   grant identity: after release/await, the same worker may obtain a fresh
+   ticket, and a delayed release from its previous turn must be rejected.
+   Exhausting the nonce space fails closed rather than wrapping (ABA).
 2. A valid ticket is acquired before entering *any* actor guest code, including
    linked calls, callbacks, timers, FFI, supervisor CONTROL, lifecycle hooks and
    finalizers. Wakeups and foreign threads only enqueue work.
@@ -111,3 +115,25 @@ Stage E: run exact-tree Java/JDK25/native-image and native ASan/UBSan/CTest
 conformance suites across targets. Only then may `max > 1` be admitted.
 
 **Do not** edit v1 exclusivity proofs to falsely imply parallel runtime support.
+
+## Audited v2 ticket model and v1 admission boundary (2026-10-17)
+
+The finite `scripts/verify_actor_thread_policy_v2.py` model now explores
+atomic grants as `(actor_generation, segment_nonce, carrier_owner)` and
+models retirement before incarnation restart. It checks caps 1/2/3, unique
+carrier owners, distinct tickets, stop fencing and stale-generation denial.
+A regression specifically releases one ticket, reclaims the *same* carrier
+with a new ticket, then attempts to release the earlier ticket: the fresh
+grant must survive. Cross-carrier releases and partial shutdown are denied.
+
+Java `ActorThreadAdmission` is independently called by the type-checker,
+compiler API and Truffle guest-execution boundary. JVM host adapter
+annotations must be validated before registration; reflection alone grants
+no scheduler authority. LLVM code generation separately rejects forged
+`Program` objects whose actor limits are not (1,1), even if source parsing
+was bypassed.
+
+These are **v1 fail-closed controls** and abstract v2 protocol evidence.
+They do not certify lock-free grant implementation, actor-field races,
+reentrant critical callbacks, same-actor true parallelism, foreign
+callbacks, supervisor CONTROL or cross-backend scheduler parity.
