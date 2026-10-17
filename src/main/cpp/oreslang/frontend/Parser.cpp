@@ -518,6 +518,23 @@ private:
                 fail("malformed numeric separator");
         }
         digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        // An integer-spelled imaginary literal (for example 2i) is still an
+        // exact integer-to-complex promotion. Do not let the suffix bypass
+        // the same 2^53 exactness gate enforced for ordinary integer values.
+        // Decimal/exponent spellings are explicitly binary64 literals and may
+        // round according to the language's floating-literal contract.
+        if (imaginary &&
+                digits.find('.') == std::string::npos &&
+                digits.find('e') == std::string::npos &&
+                digits.find('E') == std::string::npos) {
+            std::uint64_t integer = 0;
+            const auto parsed_integer = std::from_chars(
+                    digits.data(), digits.data() + digits.size(), integer);
+            if (parsed_integer.ec != std::errc{} ||
+                    parsed_integer.ptr != digits.data() + digits.size() ||
+                    integer > UINT64_C(9007199254740992))
+                fail("native complex128 imaginary integer promotion exceeds exact binary64 range");
+        }
         double value = 0.0;
         const auto parsed = std::from_chars(
                 digits.data(), digits.data() + digits.size(), value,
