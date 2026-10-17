@@ -180,6 +180,9 @@ struct Function {
     bool has_declared_effects = false;
 };
 
+/** Frozen Oreslang scheduler tier, distinct from ActorGroup-wide parallelism. */
+enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
+
 struct ActorDecl {
     std::string name;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
@@ -187,7 +190,7 @@ struct ActorDecl {
     std::size_t offset = 0;
     // Source-level bound, not a host worker pool setting. Native runtime
     // single-owner execution remains mandatory until per-turn state proof.
-    unsigned max_actor_threads = 1;
+    MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
 };
 
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
