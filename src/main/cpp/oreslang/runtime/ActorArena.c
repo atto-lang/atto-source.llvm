@@ -6,17 +6,19 @@
 #include <string.h>
 #define ORES_MAX_SLOTS 4096u
 #define ORES_MAX_LOANS 64u
+#define ORES_MAX_SCRATCH_ALLOCS 4096u
 #define ORES_MAX_SLOT_BYTES (1024u * 1024u)
 #define ORES_MAX_SCRATCH_BYTES (16u * 1024u * 1024u)
 /* Prevent parameter multiplication from creating a multi-GiB actor arena. */
 #define ORES_MAX_ACTOR_BYTES (64u * 1024u * 1024u)
 typedef struct { uint64_t generation; size_t length; uint32_t loans; unsigned char live; } Slot;
 typedef struct { uint64_t nonce, index, generation; } LoanEntry;
+typedef struct { uint64_t offset, length; } ScratchEntry;
 struct OresActorArena {
     atomic_flag lock;
     uint64_t domain, owner, incarnation, epoch, next_loan_nonce;
     size_t slots, slot_bytes, scratch_bytes, scratch_top;
-    uint32_t loans;
+    uint32_t loans, scratch_count;
     int active, retiring;
     Slot* meta;
     /* All metadata is preallocated, so slot admission is O(1) and makes
@@ -26,6 +28,7 @@ struct OresActorArena {
     unsigned char* slab;
     unsigned char* scratch;
     LoanEntry entries[ORES_MAX_LOANS];
+    ScratchEntry scratch_entries[ORES_MAX_SCRATCH_ALLOCS];
 };
 static _Atomic(uint64_t) next_domain = 1;
 /* A turn token alone is not execution authority. Bind the admitted turn to
@@ -33,6 +36,25 @@ static _Atomic(uint64_t) next_domain = 1;
 static _Thread_local OresActorArena* carrier_arena;
 static _Thread_local uint64_t carrier_epoch;
 static void deny(void) { abort(); }
+/* Security-sensitive arena bytes must be scrubbed even when the compiler can
+ * prove that the backing allocation is freed or overwritten immediately after. */
+static void secure_zero(void* ptr, size_t bytes) {
+    volatile unsigned char* p = (volatile unsigned char*) ptr;
+    while (bytes--) *p++ = 0;
+}
+/* Domain IDs are non-recyclable capability provenance. Permanently deny new
+ * arenas at UINT64_MAX instead of wrapping through zero back to live IDs. */
+static uint64_t claim_domain(void) {
+    uint64_t candidate = atomic_load_explicit(&next_domain, memory_order_relaxed);
+    for (;;) {
+        if (!candidate || candidate == UINT64_MAX) deny();
+        const uint64_t desired = candidate + 1;
+        if (atomic_compare_exchange_weak_explicit(
+                &next_domain, &candidate, desired,
+                memory_order_relaxed, memory_order_relaxed))
+            return candidate;
+    }
+}
 static void enter_lock(OresActorArena* a) {
     if (!a) deny();
     for (unsigned n = 0; n < 1000000u; ++n)
@@ -78,8 +100,7 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
     a->scratch = (unsigned char*) calloc(1, scratch_bytes);
     if (!a->meta || !a->free_slots || !a->slab || !a->scratch) deny();
     atomic_flag_clear(&a->lock);
-    a->domain = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
-    if (!a->domain || a->domain == UINT64_MAX) deny();
+    a->domain = claim_domain();
     a->owner = owner;
     a->incarnation = incarnation;
     a->slots = slots;
@@ -114,8 +135,12 @@ void ores_actor_arena_leave(OresActorArena* a, OresArenaTurn turn) {
      * are revoked by require_turn(). */
     if (!a->active || turn.domain != a->domain || turn.epoch != a->epoch
         || carrier_arena != a || carrier_epoch != turn.epoch) deny();
-    memset(a->scratch, 0, a->scratch_top);
+    secure_zero(a->scratch, a->scratch_top);
+    if (a->scratch_count)
+        secure_zero(a->scratch_entries,
+                    (size_t) a->scratch_count * sizeof(a->scratch_entries[0]));
     a->scratch_top = 0;
+    a->scratch_count = 0;
     a->active = 0;
     carrier_arena = NULL;
     carrier_epoch = 0;
@@ -162,7 +187,7 @@ void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandl
     require_turn(a, turn);
     Slot* s = require_slot(a, h);
     if (s->loans || s->generation == UINT64_MAX) deny();
-    memset(a->slab + (size_t) h.index * a->slot_bytes, 0, a->slot_bytes);
+    secure_zero(a->slab + (size_t) h.index * a->slot_bytes, a->slot_bytes);
     s->length = 0;
     s->live = 0;
     ++s->generation;
@@ -210,12 +235,16 @@ OresArenaScratch ores_actor_arena_scratch_alloc(OresActorArena* a, OresArenaTurn
     enter_lock(a);
     require_turn(a, turn);
     if (!bytes || !alignment || alignment > 64 || (alignment & (alignment - 1))) deny();
+    if (a->scratch_count >= ORES_MAX_SCRATCH_ALLOCS) deny();
     const size_t mask = alignment - 1;
     if (a->scratch_top > SIZE_MAX - mask) deny();
     const size_t at = (a->scratch_top + mask) & ~mask;
     if (at > a->scratch_bytes || bytes > a->scratch_bytes - at) deny();
     /* Old scratch is zeroized when each actor turn leaves. */
     a->scratch_top = at + bytes;
+    a->scratch_entries[a->scratch_count++] = (ScratchEntry) {
+        (uint64_t) at, (uint64_t) bytes
+    };
     OresArenaScratch h = {a->domain, turn.epoch, (uint64_t) at, (uint64_t) bytes};
     leave_lock(a);
     return h;
@@ -224,6 +253,19 @@ static void scratch_bounds(OresActorArena* a, OresArenaScratch h,
                            size_t off, size_t bytes) {
     if (h.domain != a->domain || h.epoch != a->epoch
         || h.offset > a->scratch_top || h.length > a->scratch_top - (size_t) h.offset) deny();
+
+    /* Bounds are not authority: require the exact start+length of one
+     * allocation issued during this actor turn. Entries are monotonic by
+     * offset, so binary search stays bounded even at the allocation cap. */
+    size_t lo = 0, hi = a->scratch_count;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (a->scratch_entries[mid].offset < h.offset) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo >= a->scratch_count
+        || a->scratch_entries[lo].offset != h.offset
+        || a->scratch_entries[lo].length != h.length) deny();
     require_span((size_t) h.length, off, bytes);
 }
 void ores_actor_arena_scratch_write(OresActorArena* a, OresArenaTurn turn,
@@ -250,12 +292,14 @@ int ores_actor_arena_try_destroy(OresActorArena* a) {
     if (!a->retiring) deny();
     if (a->active || a->loans) { leave_lock(a); return 0; }
     /* Trusted scheduler fences all timers/wakers/FFI holders before destroy. */
-    memset(a->slab, 0, checked_mul(a->slots, a->slot_bytes));
-    memset(a->scratch, 0, a->scratch_bytes);
-    memset(a->meta, 0, checked_mul(a->slots, sizeof(Slot)));
-    memset(a->free_slots, 0, checked_mul(a->slots, sizeof(size_t)));
+    secure_zero(a->slab, checked_mul(a->slots, a->slot_bytes));
+    secure_zero(a->scratch, a->scratch_bytes);
+    secure_zero(a->meta, checked_mul(a->slots, sizeof(Slot)));
+    secure_zero(a->free_slots, checked_mul(a->slots, sizeof(size_t)));
+    secure_zero(a->entries, sizeof(a->entries));
+    secure_zero(a->scratch_entries, sizeof(a->scratch_entries));
     free(a->slab); free(a->scratch); free(a->meta); free(a->free_slots);
     leave_lock(a);
-    memset(a, 0, sizeof(*a)); free(a);
+    secure_zero(a, sizeof(*a)); free(a);
     return 1;
 }
