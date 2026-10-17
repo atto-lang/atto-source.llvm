@@ -21,6 +21,7 @@ struct OresNativeVM {
     unsigned pending_control_wakes;
     int control_retired;
     int guest_actor_admitted; /* NIO bootstrap barrier: no late reactor creation */
+    int nio_bootstrap_in_progress; /* CONTROL-gated cold-start reservation */
     void* nio_backend;
     OresNativeVMNioDestroy nio_destroy;
     /* Under control_lock. A backend borrow pins accepted host operations
@@ -134,7 +135,7 @@ OresNativeActorRef ores_native_vm_spawn(
     // never race first guest spawn and silently add reactor threads later.
     control_lock(vm);
     OresNativeActorRef admitted = invalid;
-    if (!vm->control_retired) {
+    if (!vm->control_retired && !vm->nio_bootstrap_in_progress) {
         admitted = ores_native_actor_scheduler_spawn(
             vm->schedulers[domain], actor_slot);
         if (admitted.scheduler_domain) vm->guest_actor_admitted = 1;
@@ -159,7 +160,8 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
     if (!vm || !valid_domain(domain)) return invalid;
     control_lock(vm);
     OresNativeActorRef child = invalid;
-    if (!vm->control_retired && vm->typed_failure_enabled[domain]
+    if (!vm->control_retired && !vm->nio_bootstrap_in_progress
+        && vm->typed_failure_enabled[domain]
         && actor_slot < vm->actor_slots[domain]
         && supervisor.actor_slot != (uint64_t)actor_slot
         && ores_native_actor_scheduler_poll_ready(vm->schedulers[domain], supervisor)) {
@@ -350,9 +352,30 @@ int ores_native_vm_nio_can_attach(OresNativeVM* vm) {
     if (!vm) return 0;
     control_lock(vm);
     int ok = !vm->control_retired && !vm->guest_actor_admitted
-        && !vm->nio_backend;
+        && !vm->nio_bootstrap_in_progress && !vm->nio_backend;
     control_unlock(vm);
     return ok;
+}
+
+/* Reserve the cold-start NIO phase before creating OS descriptors or
+ * selector threads. Guest actor spawn fails admission while reserved; it
+ * cannot race an in-progress selector bootstrap into a live actor profile.
+ * These trusted host functions do not allocate memory or wait on reactors.
+ */
+int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    int granted = !vm->control_retired && !vm->guest_actor_admitted
+        && !vm->nio_backend && !vm->nio_bootstrap_in_progress;
+    if (granted) vm->nio_bootstrap_in_progress = 1;
+    control_unlock(vm);
+    return granted;
+}
+void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm) {
+    if (!vm) return;
+    control_lock(vm);
+    vm->nio_bootstrap_in_progress = 0;
+    control_unlock(vm);
 }
 
 /* The VM owns the opaque selector backend, but never calls a C++ symbol
@@ -363,12 +386,13 @@ int ores_native_vm_attach_nio(
     OresNativeVM* vm, void* backend, OresNativeVMNioDestroy destroy) {
     if (!vm || !backend || !destroy) return 0;
     control_lock(vm);
-    const int accepted = !vm->control_retired && !vm->guest_actor_admitted
-        && !vm->nio_backend;
+    const int accepted = vm->nio_bootstrap_in_progress
+        && !vm->control_retired && !vm->guest_actor_admitted && !vm->nio_backend;
     if (accepted) {
         vm->nio_backend = backend;
         vm->nio_destroy = destroy;
     }
+    vm->nio_bootstrap_in_progress = 0;
     control_unlock(vm);
     return accepted;
 }
