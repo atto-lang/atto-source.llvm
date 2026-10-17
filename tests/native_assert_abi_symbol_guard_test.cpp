@@ -257,6 +257,31 @@ int main() {
                 "valid variadic And AST did not lower to short-circuit i1 CFG");
     }
     {
+        auto source = program("boolean_qualified_intrinsic_ast", true);
+        for (const char* name : {"a", "b", "c"}) {
+            oreslang::Parameter param;
+            param.name = name;
+            param.boolean = true;
+            source.functions.front().parameters.push_back(std::move(param));
+        }
+        auto call = std::make_unique<Expression>();
+        call->kind = Expression::Kind::Call;
+        call->name = "BooleanOps.And";
+        for (const char* name : {"a", "b", "c"}) {
+            auto argument = std::make_unique<Expression>();
+            argument->kind = Expression::Kind::Variable;
+            argument->name = name;
+            call->arguments.push_back(std::move(argument));
+            call->argument_names.emplace_back();
+        }
+        source.functions.front().result = std::move(call);
+        const auto ir = oreslang::emit_verified_llvm_ir(source);
+        if (ir.find("phi i1") == std::string::npos ||
+                ir.find("br i1") == std::string::npos)
+            throw std::runtime_error(
+                "valid qualified BooleanOps.And AST did not lower to short-circuit i1 CFG");
+    }
+    {
         auto source = program("boolean_intrinsic_named_ast", true);
         oreslang::Parameter left;
         left.name = "left";
