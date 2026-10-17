@@ -13,7 +13,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR, FORGED_EXTERNAL_LEASE, FORGED_EXTERNAL_DOMAIN, EXTERNAL_AFTER_RETIRE };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR, FORGED_EXTERNAL_LEASE, FORGED_EXTERNAL_DOMAIN, EXTERNAL_AFTER_RETIRE, TRY_WRONG_OWNER, TRY_NESTED_CARRIER };
 static void invalid_call(enum Misuse which) {
     OresActorSlot foreign_slot = {0, 0, 0};
     if (which == FOREIGN_SLOT) {
@@ -83,6 +83,13 @@ static void invalid_call(enum Misuse which) {
     } else if (which == EXTERNAL_AFTER_RETIRE) {
         ores_actor_i64_heap_retire(heap);
         (void) ores_actor_i64_heap_external_acquire(heap, turn);
+    } else if (which == TRY_WRONG_OWNER) {
+        ores_actor_i64_heap_leave(heap, turn);
+        OresActorTurn attempted = {0, 0};
+        (void) ores_actor_i64_heap_try_enter(heap, 30, 7, &attempted);
+    } else if (which == TRY_NESTED_CARRIER) {
+        OresActorTurn attempted = {0, 0};
+        (void) ores_actor_i64_heap_try_enter(heap, 29, 7, &attempted);
     }
     /* None of these calls may finish normally. */
 }
@@ -125,9 +132,20 @@ int main(void) {
     OresActorTurn first = ores_actor_i64_heap_enter(heap, 29, 7);
     OresActorSlot saved = ores_actor_i64_heap_new(heap, first, 40);
     CHECK(ores_actor_i64_heap_read(heap, first, saved) == 40);
+    // A second carrier must not park or receive a token while this actor is
+    // physically executing. A denial MUST clear a reused output token.
+    int was_busy = -1;
+    OresActorTurn denied = {123, 456};
+    std::thread overlapping([&] {
+        was_busy = ores_actor_i64_heap_try_enter(heap, 29, 7, &denied);
+    });
+    overlapping.join();
+    CHECK(was_busy == 0 && denied.domain == 0 && denied.epoch == 0);
     OresActorLoan suspended = ores_actor_i64_heap_borrow(heap, first, saved);
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
-    OresActorTurn next = ores_actor_i64_heap_enter(heap, 29, 7);
+    OresActorTurn next = {0, 0};
+    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &next) == 1);
+    CHECK(next.domain == first.domain && next.epoch > first.epoch);
     CHECK(ores_actor_i64_heap_read(heap, next, saved) == 40);
     ores_actor_i64_heap_leave(heap, next); /* shared loan still protects saved */
     /* A different native thread executes the next actor turn. */
@@ -211,6 +229,8 @@ int main(void) {
     CHECK(rejects(FORGED_EXTERNAL_LEASE));
     CHECK(rejects(FORGED_EXTERNAL_DOMAIN));
     CHECK(rejects(EXTERNAL_AFTER_RETIRE));
+    CHECK(rejects(TRY_WRONG_OWNER));
+    CHECK(rejects(TRY_NESTED_CARRIER));
 #endif
     /* Domain authority must remain unique across repeated actor incarnation
      * creation/destruction. This exercises the saturating CAS issuance path
