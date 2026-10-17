@@ -258,12 +258,20 @@ OresActorExternalLease ores_actor_i64_heap_external_acquire(
 
     unsigned found = MAX_EXTERNAL_LEASES;
     for (unsigned i = 0; i < MAX_EXTERNAL_LEASES; ++i) {
-        if (!heap->external_leases[i].active) { found = i; break; }
+        ActorExternalLeaseEntry* candidate = &heap->external_leases[i];
+        /*
+         * Generation exhaustion permanently retires only this bounded lease
+         * slot. Do not recycle its authority, but also do not let one retired
+         * slot deny admission while another slot remains safe to issue.
+         */
+        if (!candidate->active && candidate->generation != UINT64_MAX) {
+            found = i;
+            break;
+        }
     }
     if (found == MAX_EXTERNAL_LEASES) rejected();
 
     ActorExternalLeaseEntry* entry = &heap->external_leases[found];
-    if (entry->generation == UINT64_MAX) rejected();
     ++entry->generation;
     entry->active = 1;
     ++heap->active_external_leases;
