@@ -118,8 +118,9 @@ std::string emit_verified_bpf_xdp_ir(const Program& source) {
         !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
         !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
         !fn.actor_field_writes.empty() || fn.scalar_while ||
-        fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
-        fn.has_declared_effects)
+        fn.caught_throw_value || !fn.catch_binding.empty() ||
+        !fn.caught_throw_defers.empty() || fn.has_declared_effects ||
+        fn.declared_effects.bits != 0)
         throw std::runtime_error(
             "eBPF XDP admits only basic literal returns and checked packet_u8 guards");
 
