@@ -581,6 +581,13 @@ private:
                 if (token_.text == "structural") {
                     fail("native structural parameter requires public-shape and readonly-loan checking");
                 }
+                // V2 accepts these in the reference backend only. Do not
+                // misinterpret tuple or parenthesized slots as nominal class
+                // parameters until readonly, optional-tail and spread lowering
+                // are actually implemented and compiler-executed.
+                if (token_.text == "tuple" || token_.text == "(") {
+                    fail("native positional tuple parameter requires verified readonly-slot and optional-tail lowering");
+                }
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
