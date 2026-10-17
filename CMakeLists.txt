@@ -1913,7 +1913,8 @@ if(BUILD_TESTING)
         tests/bpf_xdp_lowering_test.cpp
         src/main/cpp/oreslang/backend/BpfXdpLowering.cpp)
     target_include_directories(oreslang-bpf-xdp-lowering-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-bpf-xdp-lowering-test SYSTEM PRIVATE
         "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-bpf-xdp-lowering-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(oreslang-bpf-xdp-lowering-test PRIVATE
