@@ -32,6 +32,17 @@ std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
 }
 
+std::string_view boolean_intrinsic_member(std::string_view name) {
+    if (name == "And" || name == "BooleanOps.And") return "And";
+    if (name == "Or" || name == "BooleanOps.Or") return "Or";
+    if (name == "Xor" || name == "BooleanOps.Xor") return "Xor";
+    return {};
+}
+
+bool boolean_intrinsic_name(std::string_view name) {
+    return !boolean_intrinsic_member(name).empty();
+}
+
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
 // caller-owned slot pointers: passing them to nested borrowed parameters is
@@ -235,7 +246,7 @@ llvm::Value* lower(const Expression& expr,
             const auto found =
                 functions.find(native_function_slot(expr.name, expr.arguments.size()));
             if (found == functions.end()) {
-                if (expr.name == "And" || expr.name == "Or" || expr.name == "Xor")
+                if (boolean_intrinsic_name(expr.name))
                     throw std::runtime_error(
                         "typed bool intrinsic cannot be lowered as native i64");
                 throw std::runtime_error("unresolved native i64 call during lowering");
@@ -431,7 +442,7 @@ llvm::Value* lower_bool(
         }
         case Expression::Kind::Call: {
             const bool intrinsic =
-                (expr.name == "And" || expr.name == "Or" || expr.name == "Xor") &&
+                boolean_intrinsic_name(expr.name) &&
                 shadowed_intrinsics.count(expr.name) == 0;
             if (intrinsic) {
                 if (!expr.argument_names.empty() &&
@@ -443,7 +454,7 @@ llvm::Value* lower_bool(
                             }))
                     throw std::runtime_error(
                         "native Boolean intrinsics do not accept named arguments");
-                if (expr.name == "Xor") {
+                if (boolean_intrinsic_member(expr.name) == "Xor") {
                     if (expr.arguments.size() != 2)
                         throw std::runtime_error(
                             "native Xor expects exactly two scalar bool arguments");
@@ -463,7 +474,7 @@ llvm::Value* lower_bool(
                     throw std::runtime_error(
                         "native And/Or aggregate reducers are unsupported");
                 return lower_short_circuit_args(
-                    expr.arguments, 0, expr.name == "And", builder, values,
+                    expr.arguments, 0, boolean_intrinsic_member(expr.name) == "And", builder, values,
                     functions, shadowed_intrinsics);
             }
 
