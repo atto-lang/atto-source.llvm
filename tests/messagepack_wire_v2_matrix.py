@@ -13,7 +13,7 @@ def main():
     document = json.loads(Path(args.vectors).read_text(encoding="utf-8"))
     assert document["schema"] == "oreslang.messagepack.collections.v2"
     vectors = document["vectors"]
-    assert len(vectors) == 6
+    assert len(vectors) == 10
     for vec in vectors:
         completed = subprocess.run(
             [args.binary, "--vector", vec["schema_id"]],
@@ -25,7 +25,7 @@ def main():
     negative = subprocess.run([args.binary,"--negative"], check=True,
                               capture_output=True, text=True)
     assert "PASS" in negative.stdout, negative.stdout
-    print(f"PASS six exact Java/Python/native MessagePack v2 vectors and hostile inputs")
+    print(f"PASS ten exact Java/Python/native MessagePack v2 vectors and hostile inputs")
 
 if __name__ == "__main__":
     main()
