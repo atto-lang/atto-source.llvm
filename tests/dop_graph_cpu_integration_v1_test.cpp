@@ -218,4 +218,48 @@ int main() {
     }
     std::cout << "PASS " << checks
               << " native owned-F32 + typed-I64 host graph assertions\n";
+
+    // Whole zero-row layouts and zero-length slices are valid CPU no-ops,
+    // but they still require trusted owned roots and one-shot worker admission.
+    // The independent host-only i64 graph must still publish exactly once.
+    for (auto kind : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
+        const Plan empty(kind, 0, 3, 4, 16, kind == Layout::AoSoA ? 4 : 1);
+        require(empty.byte_length() == 0, "zero-row native storage must be empty");
+        auto input = std::make_shared<HostBuffer>(empty);
+        auto output = std::make_shared<HostBuffer>(empty);
+        const Kernel cpu(empty, Element::F32, Op::ScaleBias, 2, 1);
+        const RegionAccess source(input->region_root(), 2, 0, 0, RegionMode::Read);
+        const RegionAccess destination(output->region_root(), 2, 0, 0, RegionMode::Write);
+        std::function<void()> job;
+        auto task = submit_owned_cpu_graph(cpu, input, output, source, destination,
+            answer(), [&](std::function<void()> callback) { job = std::move(callback); });
+        require(!task.ready() && static_cast<bool>(job),
+                "zero-row native task skipped worker admission");
+        job();
+        require(task.get() == 42, "zero-row CPU no-op skipped host graph");
+        reject([&] { (void) output->read(0, 2); },
+                "zero-row native buffer accepted out-of-range access");
+        require(destination.root.is_live_owned(), "zero-row root unexpectedly retired");
+
+        const Plan populated(kind, 3, 2, 4, 16, kind == Layout::AoSoA ? 4 : 1);
+        auto sliceInput = std::make_shared<HostBuffer>(populated);
+        auto sliceOutput = std::make_shared<HostBuffer>(populated);
+        const Kernel sliceCpu(populated, Element::F32, Op::ScaleBias, 2, 1);
+        sliceInput->write(1, 0, 7);
+        sliceOutput->write(1, 0, 19);
+        const RegionAccess readSlice(sliceInput->region_root(), 0, 1, 0, RegionMode::Read);
+        const RegionAccess writeSlice(sliceOutput->region_root(), 0, 1, 0, RegionMode::Write);
+        job = nullptr;
+        auto sliceTask = submit_owned_cpu_graph(sliceCpu, sliceInput, sliceOutput,
+            readSlice, writeSlice, answer(),
+            [&](std::function<void()> callback) { job = std::move(callback); });
+        require(static_cast<bool>(job), "empty native slice not queued");
+        job();
+        require(sliceTask.get() == 42, "empty native slice skipped host graph");
+        require(sliceOutput->read(1, 0) == 19
+                && sliceOutput->read(0, 0) == 0
+                && sliceOutput->read(2, 0) == 0,
+                "empty native slice mutated host output");
+    }
+
 }
