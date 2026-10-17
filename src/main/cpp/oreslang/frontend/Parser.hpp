@@ -26,7 +26,8 @@ struct Expression {
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
-    std::string class_name; // empty means primitive i64
+    std::string class_name; // nonempty means native class pointer
+    bool boolean = false;   // primitive LLVM i1; otherwise primitive i64
     Mode mode = Mode::Value;
 };
 
