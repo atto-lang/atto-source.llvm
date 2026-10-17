@@ -179,6 +179,9 @@ llvm::Value* lower(const Expression& expr,
             throw std::runtime_error(
                 "native Proxy<T> opaque runtime lowering is pending; "
                 "proxy capabilities may not be encoded as scalar i64");
+        case Expression::Kind::ProxyField:
+            throw std::runtime_error(
+                "native Proxy<T> critical-read lowering is pending");
         case Expression::Kind::Take: {
             // Native owned-int transfer reads the scalar before destroying
             // the old heap allocation. It then disables the exit-time drop.
