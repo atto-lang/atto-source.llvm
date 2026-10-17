@@ -331,15 +331,17 @@ source-free gate requires at least **77** unittest methods across each
 of three no-skip rounds. This is metadata verification, not Oreslang runtime
 certification or authorization to export private source.
 
-## Five-backend integration parity reconciliation (2026-10-17)
+## Five-backend integration security gate (2026-10-17)
 
-The integration candidates synchronize the source-free run verifier, 83 distinct
-regression methods (including source-versus-workflow-trigger SHA, isolated report
-writer, pinned credential-free checkout and strict JSON transport admission),
-and a workflow requiring at least 83 completed no-skip tests in each of three
-rounds. This is a source-free regression *contract*, not evidence that the suite
-executed on these PR heads, nor backend-native guest, compiler, runtime, AOT,
-sanitizer or five-backend semantic parity. Do not promote the PR without
-GitHub job/step execution and independent exact-SHA artifact verification.
-Private-source cross-organization export remains prohibited until a merged
-protected-branch policy and independent security approvals explicitly permit it.
+At the audited integration heads, the harmonized source-free verifier has 86
+unique regression methods. It rejects whitespace-only job and step names,
+case/padding-disguised GitHub runner housekeeping, malformed or ambiguous API
+JSON, inexact source HEAD/tree/workflow identity, and synthetic-merge SHA
+misattribution. The source-local workflow requires at least 86 completed,
+no-skip tests for each of three independent rounds and uploads only
+metadata-classified, non-certifying evidence. GitHub workflow/job/step records
+and test artifacts must still be verified for the exact current PR head.
+This contract does **not** prove source backend compiler, runtime, AOT,
+sanitizer or guest conformance, and grants no authorization to export private
+source. Cross-organization mirroring remains suspended pending explicit
+protected-main approval and closure of exposure incident #22.
