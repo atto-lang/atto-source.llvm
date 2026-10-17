@@ -1,0 +1,8 @@
+define class Matrix as
+  pub let int number = 0;
+end
+pub fnc main(): int {
+  let mut Matrix matrix = new Matrix();
+  matrix[1, 2] = 42;
+  return matrix.number;
+}
