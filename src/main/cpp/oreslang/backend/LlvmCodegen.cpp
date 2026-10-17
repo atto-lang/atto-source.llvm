@@ -232,7 +232,15 @@ llvm::Value* lower(const Expression& expr,
             throw std::runtime_error(
                 "native Assert module call awaits typed source-owned linking");
         case Expression::Kind::Call: {
-            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            const auto found =
+                functions.find(native_function_slot(expr.name, expr.arguments.size()));
+            if (found == functions.end()) {
+                if (expr.name == "And" || expr.name == "Or" || expr.name == "Xor")
+                    throw std::runtime_error(
+                        "typed bool intrinsic cannot be lowered as native i64");
+                throw std::runtime_error("unresolved native i64 call during lowering");
+            }
+            llvm::Function* callee = found->second;
             if (callee->getReturnType()->isIntegerTy(1))
                 throw std::runtime_error("typed bool call requires bool-aware expression lowering");
             if (callee->arg_size() != expr.arguments.size()) {
