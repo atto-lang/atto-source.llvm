@@ -111,33 +111,66 @@ public:
 
     bool offer(T&& payload, std::size_t bytes) {
         if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
-        std::lock_guard<std::mutex> guard(state_->mutex);
-        if (state_->closed) throw std::logic_error("actor port closed");
-        if (state_->next_id == 0)
-            throw std::overflow_error("actor frame identity exhausted");
-        if (state_->used_frames >= state_->max_frames ||
-            bytes > state_->max_bytes - state_->used_bytes)
-            return false;
-        // Reserve the queue slot before moving from the sender. Either the
-        // slot allocation or payload allocation may throw; neither may
-        // consume the sender's ownership or a byte/frame credit.
-        state_->queue.push_back(Envelope{state_->next_id, bytes, nullptr});
-        try {
-            state_->queue.back().payload = std::make_unique<T>(std::move(payload));
-        } catch (...) {
-            state_->queue.pop_back();
-            throw;
+        std::uint64_t id;
+        {
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            if (state_->closed) throw std::logic_error("actor port closed");
+            if (state_->next_id == 0)
+                throw std::overflow_error("actor frame identity exhausted");
+            if (state_->used_frames >= state_->max_frames ||
+                bytes > state_->max_bytes - state_->used_bytes)
+                return false;
+            // Publish a NON-deliverable reservation before handing ownership
+            // to user-defined T(T&&). Even a noexcept move may re-enter a
+            // port API; it must never execute while the port mutex is held.
+            // Slot allocation can fail without moving the sender's payload.
+            id = state_->next_id;
+            state_->queue.push_back(Envelope{id, bytes, nullptr});
+            ++state_->next_id;
+            ++state_->used_frames;
+            state_->used_bytes += bytes;
         }
-        // The move is noexcept, and publication/counter updates cannot throw.
-        ++state_->next_id;
-        ++state_->used_frames;
-        state_->used_bytes += bytes;
-        return true;
+
+        std::unique_ptr<T> owned;
+        try {
+            // May allocate, or invoke reentrant noexcept user code. Neither
+            // executes under the non-recursive queue/accounting mutex.
+            owned = std::make_unique<T>(std::move(payload));
+        } catch (...) {
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            // The unfinished slot cannot have been received: receivers only
+            // dequeue frames whose payload is non-null.
+            for (auto it = state_->queue.begin(); it != state_->queue.end(); ++it) {
+                if (it->id != id) continue;
+                state_->queue.erase(it);
+                --state_->used_frames;
+                state_->used_bytes -= bytes;
+                // Reuse a failed identity only if nobody reserved a newer
+                // one. Otherwise a harmless ID gap preserves uniqueness.
+                if (state_->next_id == id + std::uint64_t{1})
+                    state_->next_id = id;
+                throw;
+            }
+            throw std::logic_error("actor port pending reservation lost");
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            for (auto& slot : state_->queue) {
+                if (slot.id != id) continue;
+                slot.payload = std::move(owned);
+                return true;
+            }
+        }
+        throw std::logic_error("actor port pending reservation lost");
     }
 
     std::optional<Delivery> try_receive() {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (state_->queue.empty()) return std::nullopt;
+        // Do not expose an unfinished ownership transfer. Holding the head
+        // reservation also preserves FIFO even if later offers finish first.
+        if (state_->queue.empty() || !state_->queue.front().payload)
+            return std::nullopt;
         auto frame = std::move(state_->queue.front());
         state_->queue.pop_front();
         return std::optional<Delivery>(Delivery(state_, std::move(frame)));
