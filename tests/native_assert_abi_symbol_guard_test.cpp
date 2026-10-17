@@ -63,7 +63,7 @@ int main() {
     {
         auto source = program("boolean_noncanonical", true);
         source.functions.front().result->integer = 2;
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
 
     // Parser and emitter must agree on the *whole* native linker namespace.
@@ -153,23 +153,57 @@ int main() {
     {
         auto source = program("boolean_hidden_operand", true);
         source.functions.front().result->left = std::make_unique<Expression>();
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
     {
         auto source = program("boolean_hidden_arguments", true);
         source.functions.front().result->arguments.push_back(
             std::make_unique<Expression>());
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
     {
         auto source = program("boolean_hidden_labels", true);
         source.functions.front().result->argument_names.push_back("hidden");
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
     {
         auto source = program("boolean_hidden_name", true);
         source.functions.front().result->name = "hidden";
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
+    }
+
+    // Constructed logical trees must obey the same closed shape as parsed
+    // source. A valid AND reaches real short-circuit CFG; malformed children
+    // or hidden call metadata are rejected before LLVM can discard them.
+    {
+        auto source = program("boolean_logical_and", true);
+        auto left = std::make_unique<Expression>();
+        left->kind = Expression::Kind::Boolean;
+        left->integer = 1;
+        auto right = std::make_unique<Expression>();
+        right->kind = Expression::Kind::Boolean;
+        right->integer = 0;
+        auto logical = std::make_unique<Expression>();
+        logical->kind = Expression::Kind::LogicalAnd;
+        logical->left = std::move(left);
+        logical->right = std::move(right);
+        source.functions.front().result = std::move(logical);
+        const auto ir = oreslang::emit_verified_llvm_ir(source);
+        if (ir.find("phi i1") == std::string::npos ||
+                ir.find("br i1") == std::string::npos)
+            throw std::runtime_error("valid logical AND did not lower to i1 CFG");
+    }
+    {
+        auto source = program("boolean_logical_hidden_call", true);
+        auto logical = std::make_unique<Expression>();
+        logical->kind = Expression::Kind::LogicalOr;
+        logical->left = std::make_unique<Expression>();
+        logical->left->kind = Expression::Kind::Boolean;
+        logical->right = std::make_unique<Expression>();
+        logical->right->kind = Expression::Kind::Boolean;
+        logical->arguments.push_back(std::make_unique<Expression>());
+        source.functions.front().result = std::move(logical);
+        rejected(source, "unverified native short-circuit bool AST");
     }
 
     // Shape-check the separate scalar-loop fast path, which returns before
