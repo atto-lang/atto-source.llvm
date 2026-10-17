@@ -87,6 +87,48 @@ int main() {
                  "stale keyed source survived epoch advance");
         keyed.close();
     }
+    // Java parity: self.reply() is a distinct HOST-ONLY terminal
+    // correlation operation. It skips intermediate DATA handlers, does
+    // not change the original flow ID, and carries separate branch IDs.
+    {
+        ActorPipeRouteLedger direct(stages(), edges(), 17, 5);
+        const auto origin = direct.ingress("source");
+        rejected([&] { (void)direct.reply(origin); },
+                 "origin fabricated a reply to itself");
+        const auto fan = direct.forward_all(origin);
+        const auto sink_a = direct.forward(fan[0]);
+        const auto sink_b = direct.forward(fan[1]);
+        const auto answer_a = direct.reply(sink_a);
+        const auto answer_b = direct.reply(sink_b);
+        check(answer_a->receiver() == "source"
+              && answer_b->receiver() == "source"
+              && answer_a->returning() && answer_b->returning()
+              && answer_a->flow_id() == origin->flow_id()
+              && answer_b->flow_id() == origin->flow_id()
+              && answer_a->route_id() != answer_b->route_id()
+              && direct.outstanding() == 5,
+              "direct-origin reply lost one-shot fan-in provenance");
+        rejected([&] { (void)direct.reply(sink_a); },
+                 "consumed sink replayed direct reply");
+        rejected([&] { (void)direct.reply(answer_a); },
+                 "returning DATA fabricated another direct reply");
+        rejected([&] { (void)direct.forward(answer_a); },
+                 "returning DATA reentered forward DAG");
+        rejected([&] { (void)direct.backward(answer_b); },
+                 "terminal origin frame navigated upstream");
+        rejected([&] { direct.advance_generation(18); },
+                 "live terminal reply bypassed quiescence");
+        direct.complete(answer_a);
+        direct.complete(answer_b);
+        direct.complete(fan[0]);
+        direct.complete(fan[1]);
+        direct.complete(origin);
+        check(direct.outstanding() == 0, "direct replies leaked credits");
+        direct.advance_generation(18);
+        rejected([&] { (void)direct.reply(sink_b); },
+                 "stale sink replied after generation advancement");
+        direct.close();
+    }
     ActorPipeRouteLedger ledger(stages(), edges(), 7, 5);
     rejected([&] { (void)ledger.ingress("worker-a"); },
              "a middle worker originated a flow");
