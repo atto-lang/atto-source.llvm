@@ -27,8 +27,9 @@ typedef struct {
     OresNativeNioOutcome outcome;
 } OresNativeNioCompletion;
 
-/* Creates selector resources before guest admission, starts exactly one
- * reactor by default. realtime_preallocated=1 eagerly prestarts configured
+/* Creates bounded selector resources before guest admission. Normal
+ * throughput starts zero reactor pthreads; the first valid try_watch lazily
+ * starts reactor #0. realtime_preallocated=1 eagerly prestarts configured
  * rt_reactors before returning; kernel/OS WCET is NOT guaranteed.
  */
 OresNativeNio* ores_native_nio_open(
