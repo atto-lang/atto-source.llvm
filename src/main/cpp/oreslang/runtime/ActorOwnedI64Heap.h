@@ -41,11 +41,15 @@ OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
 /* Lifetime-only authority for an admitted continuation/FFI/I/O callback.
  * It carries no slot index or memory dereference capability. Release may run
- * on any native carrier and is idempotent, including after lease-slot reuse. */
+ * on any native carrier. The scheduler owns one mutable token per callback:
+ * successful/stale release consumes it by zeroing the token, so retrying that
+ * same token is safe even after CONTROL has destroyed the heap. Do not clone a
+ * token into independently live owners; copied stale tokens are only supported
+ * for replay/ABA rejection while the heap is still alive. */
 OresActorExternalLease ores_actor_i64_heap_external_acquire(
     OresActorI64Heap* heap, OresActorTurn turn);
 void ores_actor_i64_heap_external_release(
-    OresActorI64Heap* heap, OresActorExternalLease lease);
+    OresActorI64Heap* heap, OresActorExternalLease* lease);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
  * fixed-layout owned fields. Field initialization is single-use. */
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
