@@ -282,6 +282,26 @@ llvm::Value* make_complex128(llvm::IRBuilder<>& builder,
     return builder.CreateInsertValue(value, imaginary, {1}, label + ".imag");
 }
 
+bool intrinsically_complex128(const Expression& expr) {
+    switch (expr.kind) {
+        case Expression::Kind::Imaginary:
+            return true;
+        case Expression::Kind::Negate:
+            return expr.left && intrinsically_complex128(*expr.left);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+            return expr.left && expr.right &&
+                (intrinsically_complex128(*expr.left) ||
+                 intrinsically_complex128(*expr.right));
+        case Expression::Kind::ArrayCall:
+            return expr.left && expr.arguments.empty() &&
+                (expr.name == "conj" || expr.name == "conjugate") &&
+                intrinsically_complex128(*expr.left);
+        default:
+            return false;
+    }
+}
+
 llvm::Value* lower_complex128(const Expression& expr,
                               llvm::IRBuilder<>& builder,
                               llvm::Type* f64,
@@ -328,6 +348,9 @@ llvm::Value* lower_complex128(const Expression& expr,
                     (expr.name != "conj" && expr.name != "conjugate"))
                 throw std::runtime_error(
                     "invalid complex128 member reached LLVM lowering");
+            if (!intrinsically_complex128(*expr.left))
+                throw std::runtime_error(
+                    "complex128 conjugation reached LLVM lowering with real-only operand");
             llvm::Value* operand =
                 lower_complex128(*expr.left, builder, f64, complex128);
             llvm::Value* real =
