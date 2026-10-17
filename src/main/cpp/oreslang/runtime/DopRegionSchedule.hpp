@@ -11,11 +11,36 @@
 
 namespace oreslang::dop {
 
-// Reject embedded ASCII C0/DEL controls that can spoof diagnostic lines,
- // operator names or task identities; non-ASCII labels remain unchanged.
-inline bool has_ascii_control(const std::string& label) noexcept {
-    for (unsigned char ch : label) {
-        if (ch < 0x20 || ch == 0x7f) return true;
+// Fail closed for malformed UTF-8, hidden Unicode formatting and
+// control characters in human-facing task/reduction diagnostics.
+inline bool unsafe_label_codepoint(std::uint32_t c) noexcept {
+    return c < 0x20 || (c >= 0x7f && c <= 0x9f)
+        || c == 0xad || c == 0xa0 || c == 0x034f || c == 0x061c
+        || c == 0x1680 || c == 0x180e || (c >= 0x2000 && c <= 0x200f)
+        || (c >= 0x2028 && c <= 0x202f) || c == 0x205f
+        || (c >= 0x2060 && c <= 0x206f) || c == 0x3000
+        || c == 0xfeff || (c >= 0xd800 && c <= 0xdfff);
+}
+inline bool has_unsafe_label_characters(const std::string& label) noexcept {
+    for (std::size_t i = 0; i < label.size();) {
+        const auto b = static_cast<unsigned char>(label[i]);
+        std::uint32_t cp = 0;
+        std::size_t count = 0;
+        if (b < 0x80) { cp = b; count = 1; }
+        else if (b >= 0xc2 && b <= 0xdf) { cp = b & 0x1f; count = 2; }
+        else if (b >= 0xe0 && b <= 0xef) { cp = b & 0x0f; count = 3; }
+        else if (b >= 0xf0 && b <= 0xf4) { cp = b & 0x07; count = 4; }
+        else return true;
+        if (count > label.size() - i) return true;
+        for (std::size_t j = 1; j < count; ++j) {
+            const auto cont = static_cast<unsigned char>(label[i + j]);
+            if ((cont & 0xc0) != 0x80) return true;
+            cp = (cp << 6) | (cont & 0x3f);
+        }
+        if ((count == 2 && cp < 0x80) || (count == 3 && cp < 0x800)
+                || (count == 4 && (cp < 0x10000 || cp > 0x10ffff))
+                || unsafe_label_codepoint(cp)) return true;
+        i += count;
     }
     return false;
 }
@@ -97,7 +122,7 @@ struct RegionAccess {
         const bool valid_operator = !reduction.empty()
             && static_cast<unsigned char>(reduction.front()) > 0x20
             && static_cast<unsigned char>(reduction.back()) > 0x20
-            && !has_ascii_control(reduction);
+            && !has_unsafe_label_characters(reduction);
         if ((mode == RegionMode::Reduce && !valid_operator)
                 || (mode != RegionMode::Reduce && !reduction.empty()))
             throw std::invalid_argument("reduction requires exactly one named operator");
@@ -112,7 +137,7 @@ struct RegionTask {
         if (name.empty()
                 || static_cast<unsigned char>(name.front()) <= 0x20
                 || static_cast<unsigned char>(name.back()) <= 0x20
-                || has_ascii_control(name))
+                || has_unsafe_label_characters(name))
             throw std::invalid_argument("invalid DOP task name");
     }
 };
