@@ -81,12 +81,15 @@ private:
         if (!s.live) throw std::logic_error("revoked native pointer region");
     }
     template<class T> static void validate(const State& s, std::size_t offset, bool access) {
-        static_assert(std::is_trivially_copyable<T>::value
-                      && std::is_trivially_default_constructible<T>::value
-                      && !std::is_pointer<T>::value
-                      && !std::is_same<T, bool>::value,
-                      "C++17 host window requires a trivially-copyable, "
-                      "trivially-default-constructible nonpointer type");
+        // Only integer representations with defined unsigned bit patterns
+        // are supported until typed ABI object-lifetime rules are enforced.
+        // Trivially-copyable floats, enums and structs can have invalid
+        // representations and must not be decoded from arbitrary bytes.
+        static_assert(std::is_integral<T>::value && std::is_unsigned<T>::value
+                      && !std::is_same<T, bool>::value
+                      && (sizeof(T) == 1 || sizeof(T) == 2 ||
+                          sizeof(T) == 4 || sizeof(T) == 8),
+                      "native pointer typed access requires an unsigned 8/16/32/64-bit scalar");
         if (offset > s.bytes || (access && sizeof(T) > s.bytes - offset))
             throw std::out_of_range("native pointer out of region bounds");
         const auto base = reinterpret_cast<std::uintptr_t>(s.base);
