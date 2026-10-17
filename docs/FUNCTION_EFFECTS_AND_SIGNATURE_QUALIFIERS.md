@@ -89,6 +89,7 @@ unknown effects and cannot meet a stricter contract without proof.
 | `alloc` | Potential allocation/resource cost, **not intrinsically impure** |
 | `block` | May block a physical carrier |
 | `ffi` | Foreign effect without stronger trusted summary |
+| `unsafe.memory` | Trusted native raw-address formation/arithmetic/dereference; forbidden in untrusted actors and portable sandbox profiles |
 | `throw<E>` | Ordinary typed exceptional control |
 | `raise<E>` | Non-trappable exceptional escalation |
 | `panic` | Fatal/invariant failure control |
@@ -164,7 +165,7 @@ Callable = Qualifiers? ("fnc" | "routine") Name Params Return?
 EffectClause = "using" Effect ("," Effect)*
 RequirementClause = "requires" Requirement ("," Requirement)*
 Effect = "state.read" | "state.write" | "suspend" | "io" | "alloc"
-       | "block" | "ffi" | "panic" | "throw" TypeArgs?
+       | "block" | "ffi" | "unsafe.memory" | "panic" | "throw" TypeArgs?
        | "raise" TypeArgs? | EffectVariable
 Requirement = "bounded" | "no_alloc" | "no_block" | Identifier
 ```
