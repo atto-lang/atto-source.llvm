@@ -15,7 +15,7 @@ pub fnc ores_xdp(): int {
 Build the compiler, then:
 
 ```sh
-./build/oreslang-llvmc --target=bpfel examples/xdp_pass.ores > /tmp/xdp.ll
+./build/oreslang-llvmc --target=bpfel --bpf-program=xdp examples/xdp_pass.ores > /tmp/xdp.ll
 clang --target=bpfel -O2 -x ir -c /tmp/xdp.ll -o /tmp/xdp.o
 readelf -h /tmp/xdp.o     # ELF64, little endian, EM_BPF (247)
 readelf -W -S /tmp/xdp.o  # xdp, license sections
@@ -25,15 +25,17 @@ The accepted form must contain one **exported**, top-level,
 zero-parameter function named `ores_xdp` with a literal integer return:
 0=XDP_ABORTED, 1=XDP_DROP, 2=XDP_PASS, 3=XDP_TX, 4=XDP_REDIRECT.
 The compiler emits the kernel entry ABI `i32(ptr ctx)`, marks section
-`xdp`, and emits a `GPL\0` license section. It never exposes `ctx`
-to the guest in this stage. Make sure the GPL license declaration is
-appropriate to the distribution and intended program license.
+`xdp`, and emits a `Proprietary\0` license section. This is deliberately a
+**non-GPL kernel capability marker**, not a legal source-license declaration:
+stage 0 has no helpers, and later GPL-only helper/kfunc support must require an
+explicit licensing policy rather than silently inheriting compiler defaults.
+It never exposes `ctx` to the guest in this stage.
 
 The target rejects source modules, additional functions, classes,
 actors, generics, locals, statements, function calls, arithmetic,
 suspension, runtime effects, borrowed objects, map or helper calls,
 recursive code, nonliteral return expressions and all unsupported
-features. Source size is capped at 128 KiB before parsing. There is no
+features. Source size is capped at 4096 bytes before parsing. There is no
 host main wrapper or host runtime linkage. No automatic fallback occurs.
 
 ## Evidence boundary
