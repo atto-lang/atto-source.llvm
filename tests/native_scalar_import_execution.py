@@ -154,6 +154,23 @@ def main():
               'import module util from "+/src/util";\npub fnc main(): int { return 42; }\n')
         expect_failure(args.compiler, root / "package" / "src" / "bad_module.ores",
                        "native import requires a quoted path")
+        # Conformance with Java's [project].root: +/ is not permanently
+        # anchored to the directory containing .ores.pkg.toml.
+        configured = root / "configured"
+        write(configured / ".ores.pkg.toml",
+              'schema_version = "1"\\n[project]\\nroot = "app"\\n[source]\\nroots = ["src"]\\n')
+        write(configured / "app" / "src" / "helper.ores",
+              'pub fnc helper(int v): int { return v + 2; }\\n')
+        write(configured / "app" / "src" / "main.ores",
+              'import fnc helper from "+/src/helper";\\npub fnc main(): int { return helper(40); }\\n')
+        expect_success(args.compiler, args.clang,
+                       configured / "app" / "src" / "main.ores", required_calls=("helper",))
+        write(configured / "outside.ores", 'pub fnc outside(): int { return 42; }\\n')
+        write(configured / "app" / "src" / "outside_main.ores",
+              'import fnc outside from "+/outside";\\npub fnc main(): int { return outside(); }\\n')
+        expect_failure(args.compiler, configured / "app" / "src" / "outside_main.ores",
+                       "native scalar import source not found")
+
         # The canonical root marker is +/; the retired @/ marker must never
         # gain authority through the experimental import concatenation path.
         write(root / "package" / "src" / "retired.ores",
