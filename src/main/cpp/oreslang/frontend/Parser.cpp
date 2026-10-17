@@ -513,6 +513,7 @@ private:
     }
 
     Function function() {
+        consumed_proxy_owners_.clear();
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
@@ -700,6 +701,11 @@ private:
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
+                    } else if (accept("Proxy")) {
+                        require("<");
+                        declared_type.kind = SourceType::Kind::Proxy;
+                        declared_type.argument = identifier();
+                        require(">");
                     } else {
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
@@ -708,6 +714,33 @@ private:
                     }
                 }
                 require("=");
+                if (declared_type.kind == SourceType::Kind::Proxy) {
+                    if (!explicit_type)
+                        fail("Proxy<T> requires explicit source type");
+                    binding.initializer = expression();
+                    if (!binding.initializer ||
+                            binding.initializer->kind != Expression::Kind::Proxy ||
+                            !binding.initializer->left ||
+                            binding.initializer->left->kind != Expression::Kind::Variable)
+                        fail("Proxy<T> requires 'rt proxy' of one named unique owner");
+                    binding.proxy_class_name = declared_type.argument;
+                    binding.proxy_source = binding.initializer->left->name;
+                    if (consumed_proxy_owners_.count(binding.proxy_source))
+                        fail("rt proxy source owner already consumed");
+                    const auto owner = std::find_if(value.locals.begin(), value.locals.end(),
+                        [&](const LocalBinding& local) {
+                            return local.name == binding.proxy_source;
+                        });
+                    if (owner == value.locals.end() ||
+                            owner->class_name != binding.proxy_class_name ||
+                            (!owner->new_class && !owner->move_class) ||
+                            !owner->proxy_class_name.empty())
+                        fail("rt proxy requires a live unique class owner of matching Proxy<T> type");
+                    consumed_proxy_owners_.insert(binding.proxy_source);
+                    require(";");
+                    value.locals.push_back(std::move(binding));
+                    continue;
+                }
                 if (accept("spawn")) {
                     if (explicit_type && !typed_actor_ref)
                         fail("spawn initializer requires ActorRef<T> type or inference");
@@ -1201,7 +1234,8 @@ private:
                             " at byte " + std::to_string(token_.offset));
             }
             if (operation != "borrow" && operation != "copy" &&
-                operation != "take" && operation != "share") {
+                operation != "take" && operation != "share" &&
+                operation != "proxy") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
@@ -1210,6 +1244,7 @@ private:
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
                 operation == "share" ? Expression::Kind::Share :
+                operation == "proxy" ? Expression::Kind::Proxy :
                 mutable_borrow ? Expression::Kind::BorrowMut : Expression::Kind::Borrow,
                 offset);
             if (accept("(")) {
@@ -1253,6 +1288,8 @@ private:
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
+        if (consumed_proxy_owners_.count(expr->name))
+            fail("rt proxy consumed owner is no longer usable");
         if (accept("<")) {
             expr->type_arguments_present = true;
             if (!accept(">")) {
@@ -1503,6 +1540,7 @@ private:
             case Expression::Kind::Copy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
+            case Expression::Kind::Proxy:
             case Expression::Kind::Borrow:
             case Expression::Kind::BorrowMut:
                 validate_expression(*expr.left, parameters, functions);
@@ -1536,6 +1574,15 @@ private:
                 "using effects on actor actions requires trusted actor effect summaries");
         }
         for (const auto& local : fn.locals) {
+            if (!local.proxy_class_name.empty()) {
+                if (!fn.has_declared_effects ||
+                        !fn.declared_effects.has(FunctionEffect::Suspend))
+                    throw std::runtime_error(
+                        "rt proxy admission may suspend and requires using suspend");
+                throw std::runtime_error(
+                    "native Proxy<T> opaque runtime lowering is pending; "
+                    "proxy capabilities may not be encoded as scalar i64");
+            }
             bool allocates_class_array = false;
             if (local.new_class) {
                 const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
@@ -1827,6 +1874,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    std::unordered_set<std::string> consumed_proxy_owners_;
 };
 
 } // namespace
