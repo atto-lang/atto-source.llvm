@@ -102,8 +102,10 @@ inline const char* positionKindName(Kind kind) {
 // An owner ID MUST come from lexical declaration resolution, not runtime data.
 // A future compiler will produce that verified owner token from its AST.
 inline std::string linkSymbol(const std::string& ownerId, const Slot& slot) {
-    if (ownerId.empty() || slot.signature.name.empty()) {
-        throw std::invalid_argument("empty nominal method owner/name");
+    if (ownerId.empty() || ownerId.find_first_not_of(' ') == std::string::npos
+            || slot.signature.name.empty()
+            || slot.signature.name.find_first_not_of(' ') == std::string::npos) {
+        throw std::invalid_argument("empty or blank nominal method owner/name");
     }
     if (ownerId.size() > MaxMethodOwnerBytes ||
             slot.signature.name.size() > MaxMethodNameBytes) {
