@@ -30,9 +30,9 @@ public:
     class Control final {
         friend class SharedDomainArena;
         SharedDomainArena* arena_ = nullptr;
-        std::uint64_t generation_ = 0;
-        Control(SharedDomainArena& arena, std::uint64_t generation)
-            : arena_(&arena), generation_(generation) {}
+        std::uint64_t domain_ = 0;
+        Control(SharedDomainArena& arena, std::uint64_t domain)
+            : arena_(&arena), domain_(domain) {}
     public:
         Control(const Control&) = delete;
         Control& operator=(const Control&) = delete;
@@ -190,7 +190,7 @@ public:
         if (closing_.load(std::memory_order_acquire) || control_issued_)
             throw std::logic_error("shared region control unavailable");
         control_issued_ = true;
-        return Control(*this, control_generation_);
+        return Control(*this, identity_);
     }
     SharedDomainArena(const SharedDomainArena&) = delete;
     SharedDomainArena& operator=(const SharedDomainArena&) = delete;
@@ -309,7 +309,6 @@ private:
     std::shared_mutex mutex_;
     std::atomic<bool> closing_{false};
     std::atomic<std::size_t> lifetime_pins_{0};
-    std::uint64_t control_generation_ = 1;
     bool control_issued_ = false;
     bool retired_ = false;
     std::array<Slot, Slots> slots_{};
@@ -320,7 +319,7 @@ private:
     }
     void validate_control(const Control& control) const {
         if (!control_issued_ || control.arena_ != this ||
-            control.generation_ != control_generation_)
+            control.domain_ != identity_)
             throw std::logic_error("foreign or stale shared region control");
     }
     void release_lifetime_pin() noexcept {
