@@ -1361,11 +1361,19 @@ private:
                 offset);
             field->left = std::move(expr);
             field->name = identifier();
-            if (proxy_receiver && token_.text == "(")
-                fail("Proxy<T> method calls require an explicit capability-safe runtime contract");
-            // Keep ActorRef.send(...) for the outer actor action parser.
-            // Eager ArrayCall parsing would erase the send/stop ordering.
-            if (!proxy_receiver && field->name != "send" && accept("(")) {
+            if (proxy_receiver && accept("(")) {
+                field->kind = Expression::Kind::ProxyMethodCall;
+                if (!accept(")")) {
+                    do {
+                        if (named_argument_ahead())
+                            fail("Proxy<T> method arguments require resolved method signatures");
+                        field->arguments.push_back(expression());
+                    } while (accept(","));
+                    require(")");
+                }
+            } else if (!proxy_receiver && field->name != "send" && accept("(")) {
+                // Keep ActorRef.send(...) for the outer actor action parser.
+                // Eager ArrayCall parsing would erase the send/stop ordering.
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
@@ -1464,6 +1472,12 @@ private:
             case Expression::Kind::ProxyField:
                 if (!expr.left || expr.left->kind != Expression::Kind::Variable)
                     throw std::runtime_error("Proxy<T> field requires direct named proxy receiver");
+                return;
+            case Expression::Kind::ProxyMethodCall:
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                    throw std::runtime_error("Proxy<T> method requires direct named proxy receiver");
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions);
                 return;
             case Expression::Kind::ArrayCall:
                 validate_expression(*expr.left, parameters, functions);
@@ -1613,8 +1627,11 @@ private:
                 if (expr->kind == Expression::Kind::Variable) {
                     return !proxy_receiver && proxy_names.count(expr->name) != 0;
                 }
-                if (expr->kind == Expression::Kind::ProxyField) {
+                if (expr->kind == Expression::Kind::ProxyField ||
+                        expr->kind == Expression::Kind::ProxyMethodCall) {
                     // Compiler-owned synchronized access, never a raw capability escape.
+                    for (const auto& arg : expr->arguments)
+                        if (proxy_escape(arg.get(), false)) return true;
                     return false;
                 }
                 if (proxy_escape(expr->left.get(), false) ||
@@ -1634,6 +1651,19 @@ private:
                     return true;
                 for (const auto& arg : expr->arguments)
                     if (proxy_read(arg.get())) return true;
+                return false;
+            };
+        std::function<bool(const Expression*)> proxy_write =
+            [&](const Expression* expr) -> bool {
+                if (!expr) return false;
+                // Until readonly receiver-effect summaries are proven, every
+                // proxy method is conservatively a critical write per v1.
+                if (expr->kind == Expression::Kind::ProxyMethodCall)
+                    return true;
+                if (proxy_write(expr->left.get()) || proxy_write(expr->right.get()))
+                    return true;
+                for (const auto& arg : expr->arguments)
+                    if (proxy_write(arg.get())) return true;
                 return false;
             };
 
@@ -1662,22 +1692,34 @@ private:
 
         if (!proxy_names.empty()) {
             has_proxy_read = proxy_read(fn.result.get());
-            for (const auto& guard : fn.early_returns)
+            has_proxy_write = proxy_write(fn.result.get());
+            for (const auto& guard : fn.early_returns) {
                 has_proxy_read = has_proxy_read ||
                     proxy_read(guard.lhs.get()) ||
                     proxy_read(guard.rhs.get()) ||
                     proxy_read(guard.result.get());
+                has_proxy_write = has_proxy_write ||
+                    proxy_write(guard.lhs.get()) ||
+                    proxy_write(guard.rhs.get()) ||
+                    proxy_write(guard.result.get());
+            }
             for (const auto& stmt : fn.statements) {
                 has_proxy_read = has_proxy_read ||
                     proxy_read(stmt.expression.get()) ||
                     proxy_read(stmt.condition_lhs.get()) ||
                     proxy_read(stmt.condition_rhs.get());
+                has_proxy_write = has_proxy_write ||
+                    proxy_write(stmt.expression.get()) ||
+                    proxy_write(stmt.condition_lhs.get()) ||
+                    proxy_write(stmt.condition_rhs.get());
                 if (stmt.kind == Statement::Kind::FieldWrite &&
                         proxy_names.count(stmt.receiver) != 0)
                     has_proxy_write = true;
             }
-            for (const auto& send : fn.actor_sends)
+            for (const auto& send : fn.actor_sends) {
                 has_proxy_read = has_proxy_read || proxy_read(send.payload.get());
+                has_proxy_write = has_proxy_write || proxy_write(send.payload.get());
+            }
 
             if (has_proxy_write)
                 throw std::runtime_error(
