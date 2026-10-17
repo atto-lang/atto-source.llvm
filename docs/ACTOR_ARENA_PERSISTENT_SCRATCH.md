@@ -1,9 +1,14 @@
 # ActorArena runtime substrate: persistent slabs and turn-local scratch
 
-The first host-only `ActorArena` bridge deliberately exposes no native
-pointer or actor turn capability to guest source. It is **not** automatic
-Oreslang `ActorArena()` lowering, a production scheduler, or a complete
-class/struct allocator.
+The raw `ActorArena` bridge deliberately exposes no native pointer or actor
+turn capability to guest source. It is **not** a guest-visible
+`ActorArena()` constructor or a complete class/struct allocator.
+
+The LLVM source-actor path now has a compiler-only `ActorPackedState` adapter
+over this arena: existing bounded scalar actor fields are packed into one
+persistent record per actor incarnation. This is compiler-lowered aggregate
+state, but it is intentionally narrower than general class/container heap
+lowering.
 
 ## LLVM native
 `ActorArena.h/.c` preallocates two distinct regions at actor incarnation
@@ -25,10 +30,12 @@ An already admitted turn can still leave. Physical free requires the last
 turn **and** all persistent loans to finish. The trusted supervisor must
 fence timers/wakers/FFI callbacks before the final destroy call.
 
-The arena is a **separate native ABI** from `ActorOwnedI64Heap`: the runtime
-does not yet route compiler-emitted actor-class fields into generic slots,
-and no source-level `spawn`, `await`, `ActorGroup`, or FFI lifecycle
-integration is claimed.
+The raw arena remains a **separate native ABI** from `ActorOwnedI64Heap`.
+`ActorPackedState` now routes compiler-emitted bounded scalar source-actor
+state into one generic persistent slot, but actor fields whose values are
+classes/records/containers are still unsupported. Source `await`,
+`ActorGroup`, FFI lifecycle integration, and general guest allocation remain
+outside this milestone.
 
 ## Java/GraalVM
 `ActorRuntime.ActorMemorySlice.newActorArena(persistentSlots, scratchSlots)`

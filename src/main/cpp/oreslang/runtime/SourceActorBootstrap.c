@@ -14,7 +14,7 @@
 typedef struct {
     uint64_t magic;
     uint64_t id;
-    OresActorI64Heap* heap;
+    OresActorPackedState* state;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
@@ -51,9 +51,10 @@ static SourceActor* lookup(size_t index) {
 static void initialize(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group && payload == 0);
     SourceActor* instance = lookup(slot);
-    OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
-    instance->constructor(instance->heap, turn.domain, turn.epoch);
-    ores_actor_i64_heap_leave(instance->heap, turn);
+    OresActorPackedStateTurn turn =
+        ores_actor_packed_state_enter(instance->state, instance->id, 1);
+    instance->constructor(instance->state, turn.domain, turn.epoch);
+    ores_actor_packed_state_leave(instance->state, turn);
     atomic_store_explicit(&instance->initialized, 1, memory_order_release);
 }
 static void deliver(void* raw, size_t slot, uint64_t payload) {
@@ -61,10 +62,11 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     SourceActor* instance = lookup(slot);
     ensure(instance->on_message != NULL);
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
-    OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    OresActorPackedStateTurn turn =
+        ores_actor_packed_state_enter(instance->state, instance->id, 1);
     const int64_t result = instance->on_message(
-        instance->heap, turn.domain, turn.epoch, (int64_t)payload);
-    ores_actor_i64_heap_leave(instance->heap, turn);
+        instance->state, turn.domain, turn.epoch, (int64_t)payload);
+    ores_actor_packed_state_leave(instance->state, turn);
     atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
 }
@@ -110,7 +112,7 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
-    instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
+    instance->state = ores_actor_packed_state_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref = ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
     ensure(instance->ref.scheduler_domain && instance->ref.actor_slot == slot);
@@ -144,8 +146,8 @@ void oreslang_source_actor_stop(void* opaque) {
     ensure(ores_native_vm_wait_done(group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
     ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
     ensure(ores_native_vm_poll_done(group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
-    ores_actor_i64_heap_retire(instance->heap);
-    ensure(ores_actor_i64_heap_try_destroy(instance->heap));
+    ores_actor_packed_state_retire(instance->state);
+    ensure(ores_actor_packed_state_try_destroy(instance->state));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
         "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\n",
@@ -159,7 +161,7 @@ void oreslang_source_actor_stop(void* opaque) {
     group.live--;
     if (group.live == 0) {
         /* The original group owner has joined every individual actor turn,
-         * so no worker can retain an actor heap before pool destruction. */
+         * so no worker can retain an actor state arena before pool destruction. */
         ensure(ores_native_vm_close(group.vm));
         group.vm = NULL;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
