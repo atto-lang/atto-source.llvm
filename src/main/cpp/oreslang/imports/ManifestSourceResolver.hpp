@@ -215,10 +215,36 @@ inline SourceConfig read_project(const fs::path& source,
     for(const auto& name:{"package.name","package.version","project.name","project.version"})
         (void)one(name);
     if(auto explicit_root=one("project.root")){
-        if(result.package_manifest && *explicit_root!=".")
-            throw std::invalid_argument("package project.root cannot override manifest root");
-        if(!result.package_manifest){
-            auto p=fs::path(*explicit_root);
+        auto p=fs::path(*explicit_root);
+        if(result.package_manifest){
+            // Canonical +/ anchors to [project].root, even for modern
+            // manifests. Do not treat the manifest directory as authority
+            // when it explicitly selects an app/source subdirectory.
+            if(explicit_root->empty() || explicit_root->size()>1024 ||
+               p.is_absolute() || explicit_root->find('\\')!=std::string::npos ||
+               explicit_root->find(':')!=std::string::npos)
+                throw std::invalid_argument("invalid package project.root");
+            for(const auto& component:p)
+                if(component==".." || component.empty() ||
+                   (component=="." && *explicit_root!="."))
+                    throw std::invalid_argument("noncanonical package project.root");
+            const auto manifest_root=result.root;
+            auto selected=normalized_absolute(manifest_root/p);
+            if(!beneath(manifest_root,selected) || !fs::is_directory(selected))
+                throw std::invalid_argument("package project.root outside existing manifest directory");
+            // Intervening nested package manifests own their own authority.
+            for(auto cursor=selected;cursor!=manifest_root;cursor=cursor.parent_path()){
+                if(cursor.empty() || cursor==cursor.root_path() ||
+                   !beneath(manifest_root,cursor))
+                    throw std::invalid_argument("package project.root crosses manifest boundary");
+                for(const auto* name:{".ores.pkg.toml",".oreslangc.cfg.toml"})
+                    if(fs::symlink_status(cursor/name).type()!=fs::file_type::not_found)
+                        throw std::invalid_argument("package project.root crosses nested manifest");
+            }
+            if(!beneath(fs::canonical(manifest_root),fs::canonical(selected)))
+                throw std::invalid_argument("package project.root escapes through symlink");
+            result.root=selected;
+        } else {
             result.root=normalized_absolute(p.is_absolute()?p:result.root/p);
         }
     }
