@@ -129,7 +129,14 @@ inline std::map<std::string,std::string> restricted_manifest_fields(const fs::pa
     std::size_t count=0;
     while(std::getline(input,line)){
         if(++count>8192||line.size()>4096)throw std::invalid_argument("manifest line limit exceeded");
-        if(!line.empty()&&line.back()=='\r')line.pop_back();
+        const auto carriage=line.find('\r');
+        // Reject bare CR, including at EOF. Otherwise a trailing comment
+        // can conceal root authority or a malformed final TOML line.
+        if(carriage!=std::string::npos){
+            if(carriage!=line.size()-1 || input.eof())
+                throw std::invalid_argument("bare carriage return in project manifest");
+            line.pop_back(); // legal CRLF
+        }
         reject_control_bytes(line,"TOML line");
         const std::string stripped=without_toml_comment(line);
         if(stripped.empty())continue;
