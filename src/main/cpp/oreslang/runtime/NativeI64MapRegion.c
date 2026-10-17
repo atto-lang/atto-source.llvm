@@ -19,19 +19,25 @@ static void validate(const OresNativeI64MapRegion* region) {
             region->size > region->capacity)
         fail_closed();
 
-    uint64_t occupied = 0;
+    /*
+     * No deletion/recycling exists, so valid storage is a compact occupied
+     * prefix [0,size) followed by byte-clean empty slots [size,capacity).
+     * Enforcing that invariant catches torn/corrupted occupancy metadata and
+     * prevents hidden stale key/value bytes from becoming future entries.
+     */
     for (uint64_t i = 0; i < region->capacity; ++i) {
         const OresNativeI64MapEntry* entry = &region->entries[i];
         if (entry->occupied > 1) fail_closed();
-        if (entry->occupied) {
-            ++occupied;
-            if (occupied > region->size) fail_closed();
+        for (size_t j = 0; j < sizeof(entry->reserved); ++j)
+            if (entry->reserved[j] != 0) fail_closed();
+
+        if (i < region->size) {
+            if (!entry->occupied) fail_closed();
         } else {
-            for (size_t j = 0; j < sizeof(entry->reserved); ++j)
-                if (entry->reserved[j] != 0) fail_closed();
+            if (entry->occupied || entry->key != 0 || entry->value != 0)
+                fail_closed();
         }
     }
-    if (occupied != region->size) fail_closed();
 }
 
 void oreslang_i64_map_init(

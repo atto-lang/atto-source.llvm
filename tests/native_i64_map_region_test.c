@@ -74,6 +74,21 @@ static void must_abort(int which) {
             if (which == 3) (void)oreslang_i64_map_get(&map, 1, NULL);
             else if (which == 4) (void)oreslang_i64_map_entry_at(&map, 0, NULL, NULL);
             else if (which == 5) { oreslang_i64_map_close(&map); (void)oreslang_i64_map_size(&map); }
+            else if (which == 6) { map.magic ^= UINT64_C(1); (void)oreslang_i64_map_size(&map); }
+            else if (which == 7) { map.size = 1; (void)oreslang_i64_map_size(&map); }
+            else if (which == 8) { storage[0].occupied = 2; (void)oreslang_i64_map_size(&map); }
+            else if (which == 9) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                storage[0].reserved[0] = 1;
+                (void)oreslang_i64_map_size(&map);
+            }
+            else if (which == 10) { storage[1].key = 99; (void)oreslang_i64_map_size(&map); }
+            else if (which == 11) {
+                require(oreslang_i64_map_put(&map, 1, 2) == ORES_NATIVE_I64_MAP_OK);
+                require(oreslang_i64_map_put(&map, 3, 4) == ORES_NATIVE_I64_MAP_OK);
+                storage[0].occupied = 0;
+                (void)oreslang_i64_map_size(&map);
+            }
             else abort();
         }
         _exit(0);
@@ -87,7 +102,7 @@ static void must_abort(int which) {
 int main(void) {
     positives();
 #if defined(__unix__) || defined(__APPLE__)
-    for (int i = 0; i <= 5; ++i) must_abort(i);
+    for (int i = 0; i <= 11; ++i) must_abort(i);
 #endif
     return 0;
 }
