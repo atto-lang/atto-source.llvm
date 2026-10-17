@@ -168,3 +168,40 @@ and FFI entrypoints, scheduler ownership, heap-state parallelism, logical task
 and state-loan retirement, supervisor CONTROL priority, and exact-tree green
 JVM/native CI. In particular, a zero-step GitHub Actions failure is a CI
 infrastructure failure/unknown result rather than an executable test verdict.
+
+## Host prototype hardening: carrier non-nesting and physical-only teardown
+
+The host-only `ActorExecutionGrantGate` must prevent the same platform
+`Thread` from holding execution grants for two different actors concurrently,
+even if each actor is below its local maximum. Cross-actor synchronous nested
+guest execution is **not** a permitted replacement for message dispatch.
+Thread-local carrier ownership must be cleared by the scheduler in a
+`finally` when the executing segment exits. Because the host prototype
+identifies physical ownership via `Thread.currentThread()`, it fails closed
+on Java **virtual threads** rather than incorrectly treating multiple virtual
+threads on one carrier as separate physical workers. A production integration
+may instead use a proven platform-carrier identity abstraction.
+
+A sealed physical gate may expose an interruptible, timeout-bounded
+`awaitPhysicalDrain` that waits for active physical grants to leave. It
+must reject waits from a thread already holding an actor execution grant,
+reject waits before `seal`, and never reopen admission on interruption.
+`tryRetirePhysicalGate` marks only the physical execution gate as retired.
+It **must not** be interpreted as actor completion: queued messages, suspended
+logical tasks, state loans, CONTROL callbacks, supervision and heap cleanup
+have independent retirement barriers.
+
+The host-side prototype and its JUnit tests are not wired into production
+`ActorRuntime`. Its process-wide `ThreadLocal` is a test/development
+prototype and is not the final VM-wide carrier identity mechanism, including
+for classloader isolation and non-JVM backends. The scheduler must never hand
+guest code raw `Grant` objects. Under guest panic/raise/throw, cancellation
+and forced unwind, permits are returned exactly once by a trusted `finally`
+boundary. If a worker dies before returning its ticket, recovery must fence
+the actor incarnation without reusing a still-live ticket identity.
+
+The shared finite model additionally explores a two-actor/four-carrier state
+space with actor capacities 2 and 3 and proves the same carrier cannot hold
+two actor grants in a valid state; disabling the global exclusion guard
+produces a two-claim counterexample. This is a bounded abstract check, not
+end-to-end scheduler or effect-checking evidence.
