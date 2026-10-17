@@ -1,0 +1,10 @@
+define class NumberBox as
+  pub final int number: value + 1;
+  constructor(int value) { return; }
+  constructor(self, int value, int unused) { return; }
+end
+pub fnc main(): int {
+  let NumberBox first = new NumberBox(9);
+  let NumberBox second = new NumberBox(31, 42);
+  return first.number + second.number;
+}
