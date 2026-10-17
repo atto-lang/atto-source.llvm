@@ -74,6 +74,36 @@ math = { zed = "acme/math" }
                 "package project.root crossed nested package authority");
         write(configured/".ores.pkg.toml",
               "schema_version=\"1\"\n[project]\nroot=\"app\"\n");
+        // Existing but malformed modern marker must shadow a valid legacy
+        // manifest in the same directory. Falling back changes +/ ownership.
+        const auto priority=tmp/"manifest-priority";
+        fs::create_directories(priority/"src");
+        write(priority/"src/main.ores","main");
+        write(priority/".oreslangc.cfg.toml","schema_version=\"1\"\n");
+        require(read_project(priority/"src/main.ores").manifest ==
+                priority/".oreslangc.cfg.toml", "valid legacy marker ignored");
+        fs::create_directory(priority/".ores.pkg.toml");
+        rejects([&]{(void)read_project(priority/"src/main.ores");},
+                "directory modern marker fell through to legacy");
+        fs::remove(priority/".ores.pkg.toml");
+        std::error_code malformed_link_error;
+        fs::create_symlink(priority/"missing-modern.toml",
+                           priority/".ores.pkg.toml",malformed_link_error);
+        if(!malformed_link_error)
+            rejects([&]{(void)read_project(priority/"src/main.ores");},
+                    "dangling modern symlink fell through to legacy");
+        fs::remove(priority/".ores.pkg.toml");
+        fs::create_symlink(priority/".oreslangc.cfg.toml",
+                           priority/".ores.pkg.toml",malformed_link_error);
+        if(!malformed_link_error)
+            rejects([&]{(void)read_project(priority/"src/main.ores");},
+                    "intra-directory modern symlink admitted as package manifest");
+        fs::remove(priority/".ores.pkg.toml");
+        fs::remove(priority/".oreslangc.cfg.toml");
+        fs::create_directory(priority/".oreslangc.cfg.toml");
+        rejects([&]{(void)read_project(priority/"src/main.ores");},
+                "malformed legacy manifest silently became manifestless");
+
         auto config=read_project(app/"src/main.ores");
         require(config.package_manifest,"not package manifest");
         require(config.root==app,"bad package root");
