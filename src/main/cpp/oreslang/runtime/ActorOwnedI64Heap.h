@@ -41,7 +41,12 @@ OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
 /* Lifetime-only pin for continuations/FFI/I/O completions. It is registered
  * during an admitted turn, carries no slot coordinates, and may be released
- * from any completion carrier after logical retirement. */
+ * from any completion carrier after logical retirement.
+ *
+ * Pins are linear host authority: EACH independently racing completion holder
+ * must own its own pin and release it exactly once. A duplicate release is a
+ * contract violation, not an idempotent cleanup operation. This is required
+ * because final heap destroy may run immediately after the last pin releases. */
 OresActorLifetimePin ores_actor_i64_heap_pin_external(
     OresActorI64Heap* heap, OresActorTurn turn);
 void ores_actor_i64_heap_release_external(
@@ -63,9 +68,11 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
-/* Returns zero while a turn or loan is outstanding; returns one and frees
- * native memory after quiescence. Never call with an invalidated heap pointer.
- * The supervisor is responsible for fencing stale wakeups/callback holders. */
+/* Returns zero while a turn, read loan, or external lifetime pin is outstanding;
+ * returns one and frees native memory after quiescence. Never call with an
+ * invalidated heap pointer. The supervisor must give every independently racing
+ * callback/continuation its own external pin and fence any raw heap-pointer
+ * holders before or as part of final destroy. */
 int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap);
 #ifdef __cplusplus
 }
