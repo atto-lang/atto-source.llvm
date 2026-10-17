@@ -70,7 +70,13 @@ CRITICAL_TESTS = (
     VISIBILITY_POSITIVE,
 )
 
-TIMED_TESTS = frozenset(CRITICAL_TESTS[:7])
+# Explicit identity avoids silently dropping timeout gates if test order changes.
+TIMED_TESTS = frozenset(CHECKED_I64_GUEST_TESTS) | frozenset({
+    "native_contract_harness_optimize_failclosed",
+    "native_contract_harness_python_O",
+    "native_contract_harness_python_OO",
+    "native_contract_positive_object_verifies",
+})
 # Bind critical CTest *names* to the real commands in CMakeLists.txt. A
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
@@ -326,6 +332,8 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                 raise ManifestFailure(f"critical CTest is disabled/inverted: {name}, {key}")
         if name in TIMED_TESTS:
             value = props.get("TIMEOUT")
+            if isinstance(value, bool):
+                raise ManifestFailure(f"critical CTest timeout is unsafe: {name}")
             try:
                 timeout = float(value)
             except (ValueError, TypeError):
