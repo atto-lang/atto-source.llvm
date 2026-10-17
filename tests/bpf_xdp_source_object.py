@@ -28,7 +28,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ores-bpf-") as tmp:
         root = pathlib.Path(tmp)
         src = root / "probe.ores"
-        cmd = [args.compiler, "--target=bpfel", str(src)]
+        cmd = [args.compiler, "--target=bpfel", "--bpf-program=xdp", str(src)]
 
         def reject(code, fragment="ebpf"):
             src.write_text(code, encoding="utf-8")
@@ -45,6 +45,8 @@ def main():
             require(result.returncode == 0, result.stderr)
             ir = result.stdout
             require('target triple = "bpfel"' in ir, "wrong eBPF target triple")
+            require('target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"' in ir,
+                    "wrong eBPF data layout")
             require('section "xdp"' in ir and 'section "license"' in ir,
                     "missing XDP or license section")
             require(re.search(r"ret i32 %d(?:\s|$)" % action, ir), "wrong XDP return code")
@@ -67,6 +69,23 @@ def main():
                     re.search(r"\s+xdp\s+", sections.stdout) and
                     re.search(r"\s+license\s+", sections.stdout),
                     "missing real ELF XDP/license sections")
+            require(".maps" not in sections.stdout and ".BTF" not in sections.stdout,
+                    "stage-0 object unexpectedly contains maps or BTF metadata")
+            symbols = run([readelf, "-W", "-s", str(objfile)])
+            require(symbols.returncode == 0, symbols.stderr)
+            undefined = []
+            for line in symbols.stdout.splitlines():
+                cols = line.split()
+                if len(cols) >= 8 and cols[6] == "UND" and cols[7]:
+                    undefined.append(cols[7])
+            require(not undefined, "stage-0 BPF object has undefined symbols: " + repr(undefined))
+            reloc = run([readelf, "-W", "-r", str(objfile)])
+            require(reloc.returncode == 0 and "There are no relocations in this file." in reloc.stdout,
+                    "stage-0 BPF object unexpectedly requires relocations")
+            license_dump = run([readelf, "-x", "license", str(objfile)])
+            compact = re.sub(r"[^0-9a-f]", "", license_dump.stdout.lower())
+            require(license_dump.returncode == 0 and "50726f707269657461727900" in compact,
+                    "stage-0 license marker is not Proprietary\\0")
 
         reject("pub fnc main(): int { return 2; }")
         reject("fnc ores_xdp(): int { return 2; }")
@@ -77,12 +96,16 @@ def main():
         reject("pub fnc ores_xdp(): int { return 2; }\nfnc helper(): int { return 1; }")
         reject("pub fnc ores_xdp(): int { val v: int = 2; return v; }")
         reject("pub fnc ores_xdp(): int { return ores_xdp(); }")
-        reject("pub fnc ores_xdp(): int { return 2; }\n" + "// extra\n" * 17000,
+        reject("pub fnc ores_xdp(): int { return 2; }\n" + "// extra\n" * 600,
                "source exceeds")
         src.write_text("pub fnc ores_xdp(): int { return 2; }\n", encoding="utf-8")
-        for flags in (["--target=bpfel", "--target=bpfel"],
-                      ["--target=bpfel", "--experimental-owned-int"],
-                      ["--target=bpfeb"]):
+        for flags in (["--target=bpfel", "--target=bpfel", "--bpf-program=xdp"],
+                      ["--target=bpfel", "--bpf-program=xdp", "--bpf-program=xdp"],
+                      ["--target=bpfel", "--experimental-owned-int", "--bpf-program=xdp"],
+                      ["--target=bpfel"],
+                      ["--bpf-program=xdp"],
+                      ["--target=bpfel", "--bpf-program=socket"],
+                      ["--target=bpfeb", "--bpf-program=xdp"]):
             proc = run([args.compiler, *flags, str(src)])
             require(proc.returncode != 0 and not proc.stdout,
                     "invalid BPF CLI option accepted: " + repr(flags))
