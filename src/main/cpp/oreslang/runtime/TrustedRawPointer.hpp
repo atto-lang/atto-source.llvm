@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -28,6 +30,42 @@ private:
     TrustedUnsafeMemoryAuthority() noexcept = default;
 };
 
+
+/**
+ * Separate compiler proof for mutable raw authority. unsafe.memory alone is
+ * not enough to write: the borrow/ownership checker must also prove exclusive
+ * access to the underlying place/region for the raw lease lifetime.
+ */
+class TrustedExclusiveRawMemoryAuthority final {
+public:
+    static TrustedExclusiveRawMemoryAuthority compiler_trusted() noexcept {
+        return TrustedExclusiveRawMemoryAuthority();
+    }
+
+private:
+    TrustedExclusiveRawMemoryAuthority() noexcept = default;
+};
+
+/**
+ * Opaque compiler/runtime region identity for safe-derived bounded raw views.
+ * Numeric addresses are never substituted for this identity: address reuse
+ * across allocator generations must not create false provenance equality.
+ */
+class TrustedRawProvenance final {
+public:
+    static TrustedRawProvenance compiler_trusted(std::uintptr_t id) {
+        if (id == 0)
+            throw std::invalid_argument("trusted raw provenance id must be nonzero");
+        return TrustedRawProvenance(id);
+    }
+
+    [[nodiscard]] std::uintptr_t id() const noexcept { return id_; }
+
+private:
+    explicit TrustedRawProvenance(std::uintptr_t id) noexcept : id_(id) {}
+    std::uintptr_t id_;
+};
+
 /**
  * Native proof object for the future source-level RawPointer<T> capability.
  *
@@ -54,7 +92,7 @@ public:
             const T* base,
             std::size_t count,
             TrustedUnsafeMemoryAuthority,
-            std::uintptr_t provenance = 0,
+            TrustedRawProvenance provenance,
             std::uint32_t address_space = 0) {
         if (base == nullptr || count == 0)
             throw std::invalid_argument("trusted raw span requires non-null non-empty storage");
@@ -66,8 +104,7 @@ public:
         const auto bytes = static_cast<std::uintptr_t>(count) * sizeof(T);
         if (address > std::numeric_limits<std::uintptr_t>::max() - bytes)
             throw std::overflow_error("trusted raw span address extent overflow");
-        if (provenance == 0) provenance = address;
-        return TrustedRawPointer(address, address, count, 0, true, provenance, address_space,
+        return TrustedRawPointer(address, address, count, 0, true, provenance.id(), address_space,
                                  RawPointerAccess::ReadOnly);
     }
 
@@ -75,7 +112,8 @@ public:
             T* base,
             std::size_t count,
             TrustedUnsafeMemoryAuthority authority,
-            std::uintptr_t provenance = 0,
+            TrustedExclusiveRawMemoryAuthority,
+            TrustedRawProvenance provenance,
             std::uint32_t address_space = 0) {
         auto result = from_span(base, count, authority, provenance, address_space);
         result.access_ = RawPointerAccess::ReadWrite;
@@ -90,13 +128,14 @@ public:
             throw std::invalid_argument("trusted raw address cannot be null");
         if ((address % alignof(T)) != 0)
             throw std::invalid_argument("trusted raw address is misaligned for T");
-        return TrustedRawPointer(address, address, 0, 0, false, address, address_space,
+        return TrustedRawPointer(address, address, 0, 0, false, 0, address_space,
                                  RawPointerAccess::ReadOnly);
     }
 
     static TrustedRawPointer from_mut_address(
             std::uintptr_t address,
             TrustedUnsafeMemoryAuthority authority,
+            TrustedExclusiveRawMemoryAuthority,
             std::uint32_t address_space = 0) {
         auto result = from_address(address, authority, address_space);
         result.access_ = RawPointerAccess::ReadWrite;
@@ -186,12 +225,13 @@ public:
     }
 
     [[nodiscard]] std::ptrdiff_t distance_elements(const TrustedRawPointer& other) const {
+        if (!bounded_ || !other.bounded_ || provenance_ == 0 || other.provenance_ == 0)
+            throw std::invalid_argument(
+                "trusted raw pointer subtraction requires bounded compiler provenance");
         if (address_space_ != other.address_space_ || provenance_ != other.provenance_)
             throw std::invalid_argument("trusted raw pointer subtraction requires common provenance");
-        if (bounded_ != other.bounded_)
-            throw std::invalid_argument("trusted raw pointer subtraction requires compatible provenance mode");
 
-        if (bounded_) {
+        {
             if (index_ >= other.index_) {
                 const auto d = index_ - other.index_;
                 if (d > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
@@ -204,29 +244,13 @@ public:
             return -static_cast<std::ptrdiff_t>(d);
         }
 
-        if (address_ >= other.address_) {
-            const auto bytes = address_ - other.address_;
-            if (bytes % sizeof(T) != 0)
-                throw std::invalid_argument("trusted raw pointer distance is not element-aligned");
-            const auto d = bytes / sizeof(T);
-            if (d > static_cast<std::uintptr_t>(std::numeric_limits<std::ptrdiff_t>::max()))
-                throw std::overflow_error("trusted raw pointer distance overflow");
-            return static_cast<std::ptrdiff_t>(d);
-        }
-        const auto bytes = other.address_ - address_;
-        if (bytes % sizeof(T) != 0)
-            throw std::invalid_argument("trusted raw pointer distance is not element-aligned");
-        const auto d = bytes / sizeof(T);
-        if (d > static_cast<std::uintptr_t>(std::numeric_limits<std::ptrdiff_t>::max()))
-            throw std::overflow_error("trusted raw pointer distance overflow");
-        return -static_cast<std::ptrdiff_t>(d);
     }
 
     [[nodiscard]] T load() const {
         require_dereferenceable();
-        T value{};
-        std::memcpy(&value, reinterpret_cast<const void*>(address_), sizeof(T));
-        return value;
+        std::array<std::byte, sizeof(T)> bytes{};
+        std::memcpy(bytes.data(), reinterpret_cast<const void*>(address_), sizeof(T));
+        return std::bit_cast<T>(bytes);
     }
 
     void store(const T& value) const {
@@ -236,11 +260,15 @@ public:
     }
 
     [[nodiscard]] T load_volatile() const {
+        static_assert(std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_pointer_v<T>,
+                      "volatile raw access is restricted to scalar/MMIO-compatible types");
         require_dereferenceable();
         return *reinterpret_cast<volatile const T*>(address_);
     }
 
     void store_volatile(const T& value) const {
+        static_assert(std::is_arithmetic_v<T> || std::is_enum_v<T> || std::is_pointer_v<T>,
+                      "volatile raw access is restricted to scalar/MMIO-compatible types");
         require_writable();
         require_dereferenceable();
         *reinterpret_cast<volatile T*>(address_) = value;
@@ -250,6 +278,9 @@ public:
     [[nodiscard]] std::uintptr_t provenance() const noexcept { return provenance_; }
     [[nodiscard]] std::uint32_t address_space() const noexcept { return address_space_; }
     [[nodiscard]] bool bounded() const noexcept { return bounded_; }
+    [[nodiscard]] bool has_provenance() const noexcept {
+        return bounded_ && provenance_ != 0;
+    }
     [[nodiscard]] bool writable() const noexcept {
         return access_ == RawPointerAccess::ReadWrite;
     }
