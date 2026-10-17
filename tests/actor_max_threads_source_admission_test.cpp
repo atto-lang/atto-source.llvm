@@ -35,24 +35,24 @@ static void denied(std::string src, const char* diagnostic) {
 int main() {
     auto plain = parse_program(valid_actor);
     check(plain.actors.size() == 1);
-    check(plain.actors.front().max_actor_threads == 1);
+    check(plain.actors.front().max_actor_threads == oreslang::MaxActorThreads::LOW);
 
     auto low = parse_program(std::string(canonical_enum)
             + "@ActorMaxThreads(MaxActorThreads.LOW)\n" + std::string(valid_actor));
     check(low.actors.size() == 1);
-    check(low.actors.front().max_actor_threads == 1);
+    check(low.actors.front().max_actor_threads == oreslang::MaxActorThreads::LOW);
 
     auto implicit = parse_program(
             "@ActorMaxThreads(MaxActorThreads.LOW)\n" + std::string(valid_actor));
     check(implicit.actors.size() == 1);
-    check(implicit.actors.front().max_actor_threads == 1);
+    check(implicit.actors.front().max_actor_threads == oreslang::MaxActorThreads::LOW);
 
     auto module = parse_program(std::string("define module work as\n")
             + std::string(canonical_enum)
             + "@ActorMaxThreads(MaxActorThreads.LOW)\n"
             + std::string(valid_actor) + "end\n");
     check(module.actors.size() == 1);
-    check(module.actors.front().max_actor_threads == 1);
+    check(module.actors.front().max_actor_threads == oreslang::MaxActorThreads::LOW);
 
     for (const auto* tier : {"MEDIUM", "HIGH"}) {
         denied(std::string(canonical_enum)
