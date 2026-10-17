@@ -119,6 +119,15 @@ class ManifestAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(ManifestFailure, "lacks numeric timeout"):
                     check_manifest(doc)
 
+    def test_checked_i64_timeout_boolean_is_not_duration(self):
+        for name in CHECKED_I64_GUEST_TESTS:
+            with self.subTest(name=name):
+                doc = fixture()
+                entry = next(x for x in doc["tests"] if x["name"] == name)
+                entry["properties"][0]["value"] = True
+                with self.assertRaisesRegex(ManifestFailure, "timeout is unsafe"):
+                    check_manifest(doc)
+
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
 
