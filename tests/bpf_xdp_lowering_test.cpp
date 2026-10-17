@@ -85,8 +85,16 @@ int main() {
     rejects("caught throw", [](auto&, auto& f) {
         f.caught_throw_value = std::make_unique<oreslang::Expression>();
     });
+    rejects("catch binding", [](auto&, auto& f) { f.catch_binding = "err"; });
     rejects("caught throw defer", [](auto&, auto& f) { f.caught_throw_defers.emplace_back(); });
-    rejects("declared effects", [](auto&, auto& f) { f.has_declared_effects = true; });
+    rejects("declared effects flag", [](auto&, auto& f) { f.has_declared_effects = true; });
+    rejects("latent effect bits", [](auto&, auto& f) {
+        f.declared_effects.bits =
+            static_cast<std::uint32_t>(oreslang::FunctionEffect::Io);
+    });
+    rejects("forged effect bits", [](auto&, auto& f) {
+        f.declared_effects.bits = 0x80000000u;
+    });
     rejects("negative action", [](auto&, auto& f) { f.result->integer = -1; });
     rejects("redirect action", [](auto&, auto& f) { f.result->integer = 4; });
     rejects("large action", [](auto&, auto& f) { f.result->integer = 0x7fffffff; });
