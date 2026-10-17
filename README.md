@@ -125,7 +125,7 @@ aggregate, call, string, conditional and async feature limits.
 
 ## Experimental eBPF / XDP compiler slice
 
-`oreslang-llvmc --target=bpfel` has an **experimental constant-action XDP
+`oreslang-llvmc --target=bpfel --bpf-program=xdp` has an **experimental constant-action XDP
 entrypoint** for one exported `pub fnc ores_xdp(): int { return 2; }`.
 It emits an XDP-section LLVM function and an ELF license section, with no
 host runtime, actor support or fallback. This is not general BPF, maps,
