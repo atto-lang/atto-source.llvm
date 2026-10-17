@@ -9,6 +9,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+static int prove_negative_verifier(void) {
+    // EXIT reads R0 as the return value, but R0 was never initialized.
+    // LLVM never emits this fixture; it exists only to prove that the real
+    // kernel verifier is active and rejects invalid register state.
+    const struct bpf_insn invalid[] = {
+        { .code = BPF_JMP | BPF_EXIT }
+    };
+    char log[65536];
+    memset(log, 0, sizeof(log));
+    LIBBPF_OPTS(bpf_prog_load_opts, opts,
+        .log_level = 1,
+        .log_buf = log,
+        .log_size = sizeof(log));
+
+    int fd = bpf_prog_load(BPF_PROG_TYPE_XDP, "ores_bad", "Proprietary",
+                           invalid, sizeof(invalid) / sizeof(invalid[0]), &opts);
+    if (fd >= 0) {
+        close(fd);
+        fprintf(stderr, "invalid XDP fixture unexpectedly passed kernel verifier\n");
+        return 1;
+    }
+    if (!log[0]) {
+        fprintf(stderr, "invalid XDP fixture failed without verifier log: %s\n",
+                strerror(errno));
+        return 1;
+    }
+    printf("BPF_NEGATIVE_VERIFIER_PASS rejected_uninitialized_r0=1\n");
+    return 0;
+}
 
 static int parse_action(const char *text) {
     char *end = NULL;
@@ -29,6 +60,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "expected XDP action must be 0..4\n");
         return 64;
     }
+
+    if (prove_negative_verifier() != 0)
+        return 1;
 
     struct bpf_object *object = bpf_object__open_file(argv[1], NULL);
     long open_error = libbpf_get_error(object);
