@@ -19,6 +19,15 @@ def require(ok, message):
         raise RuntimeError(message)
 
 
+def elf_section_size(readelf_sections, name):
+    match = re.search(
+        r"\]\s+" + re.escape(name) +
+        r"\s+PROGBITS\s+\S+\s+\S+\s+([0-9a-fA-F]+)\s+",
+        readelf_sections)
+    require(match is not None, "cannot parse ELF section size for " + name)
+    return int(match.group(1), 16)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--compiler", required=True)
@@ -102,6 +111,10 @@ def main():
             require(re.search(r"\s+xdp\s+", sections_o0.stdout) and
                     re.search(r"\s+license\s+", sections_o0.stdout),
                     "-O0 EM_BPF ELF missing xdp/license sections")
+            require(elf_section_size(sections_o0.stdout, "xdp") == 16,
+                    "-O0 stage-0 XDP code is not exactly two BPF instructions")
+            require(elf_section_size(sections_o0.stdout, "license") == 12,
+                    "-O0 stage-0 license section has unexpected size")
             require(".eh_frame" not in sections_o0.stdout and
                     ".maps" not in sections_o0.stdout and
                     ".BTF" not in sections_o0.stdout,
@@ -130,6 +143,10 @@ def main():
                     "stage-0 object must contain exactly one xdp section")
             require(len(re.findall(r"\s+license\s+", sections.stdout)) == 1,
                     "stage-0 object must contain exactly one license section")
+            require(elf_section_size(sections.stdout, "xdp") == 16,
+                    "stage-0 XDP code is not exactly two BPF instructions")
+            require(elf_section_size(sections.stdout, "license") == 12,
+                    "stage-0 license section has unexpected size")
             symbols = run([readelf, "-W", "-s", str(objfile)])
             require(symbols.returncode == 0, symbols.stderr)
             undefined = []
