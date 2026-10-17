@@ -1,6 +1,8 @@
 #include "oreslang/runtime/MessagePackWireV2.hpp"
 #include <algorithm>
 #include <vector>
+#include <cstdint>
+#include <limits>
 #include <iostream>
 #include <stdexcept>
 #include <string>
