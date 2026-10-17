@@ -217,7 +217,7 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("@")) {
-                const unsigned cap = actor_max_threads_attribute();
+                const MaxActorThreads cap = actor_max_threads_attribute();
                 // One known compile-time policy, never inert metadata on a
                 // class, function, or arbitrary enum.
                 require("define");
@@ -287,18 +287,18 @@ private:
         actor_threads_enum_seen_ = true;
     }
 
-    unsigned actor_max_threads_attribute() {
+    MaxActorThreads actor_max_threads_attribute() {
         require("ActorMaxThreads");
         require("(");
         require("MaxActorThreads");
         require(".");
-        unsigned level = 0;
-        if (accept("LOW")) level = 1;
-        else if (accept("MEDIUM")) level = 2;
-        else if (accept("HIGH")) level = 3;
+        MaxActorThreads level = MaxActorThreads::LOW;
+        if (accept("LOW")) level = MaxActorThreads::LOW;
+        else if (accept("MEDIUM")) level = MaxActorThreads::MEDIUM;
+        else if (accept("HIGH")) level = MaxActorThreads::HIGH;
         else fail("@ActorMaxThreads requires MaxActorThreads.LOW/MEDIUM/HIGH");
         require(")");
-        if (level > 1) {
+        if (level != MaxActorThreads::LOW) {
             fail("@ActorMaxThreads(MEDIUM/HIGH) requires compiler-proven per-turn"
                  " actor state isolation; source parallel actors are not enabled");
         }
