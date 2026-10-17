@@ -404,16 +404,34 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
-    # Complex128 is deliberately fail-closed until the native frontend has a
-    # typed {f64,f64} value category and exact finite scalar lowering. These
-    # tests prevent an imaginary/decimal token or type annotation from being
-    # misparsed as the existing checked-i64 subset or emitting partial IR.
-    oreslang_contract_test(native_complex128_type_failclosed
+    # First typed complex128 native slice: zero-argument return-only
+    # functions lower to a by-value {double,double} LLVM aggregate. Complex
+    # parameters/calls/locals/multiply/divide remain fail-closed until their
+    # ABI, ownership and exact-rounding paths are separately admitted.
+    oreslang_contract_test(native_complex128_parameter_failclosed
         native-complex-type-reject.ores
-        --diagnostic "native complex128 type requires verified LLVM scalar lowering")
-    oreslang_contract_test(native_complex128_literal_failclosed
+        --diagnostic "native complex128 parameters require typed complex ABI lowering")
+    oreslang_contract_test(native_complex128_literal_in_int_failclosed
         native-complex-literal-reject.ores
-        --diagnostic "native complex128/f64 literal requires verified LLVM numeric lowering")
+        --diagnostic "native floating/imaginary literal requires complex128 return context")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_complex128_return_ir_verifies
+            native-complex128-return.ores
+            --ir "ret { double, double }"
+            --verify-object --clang "${ORE_CLANG}")
+        add_test(NAME native_complex128_return_aot_raw_bits
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_complex128_aot.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-complex128-return.ores")
+        set_tests_properties(
+            native_complex128_return_ir_verifies
+            native_complex128_return_aot_raw_bits
+            PROPERTIES TIMEOUT 120)
+    else()
+        message(FATAL_ERROR "Native complex128 ABI verification requires Clang")
+    endif()
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
