@@ -16,6 +16,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+    src/main/cpp/oreslang/backend/BpfXdpLowering.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
 )
 
@@ -1904,4 +1905,14 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/value_boundaries.py"
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
+endif()
+
+# Fail-closed eBPF XDP source/LLVM IR and real EM_BPF object gate.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME bpf_xdp_source_object
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/bpf_xdp_source_object.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(bpf_xdp_source_object PROPERTIES TIMEOUT 120)
 endif()
