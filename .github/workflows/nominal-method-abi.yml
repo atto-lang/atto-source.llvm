@@ -17,7 +17,7 @@ permissions:
   contents: read
 jobs:
   golden-reference:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Checkout exact source-owned candidate (no persisted token)
@@ -30,7 +30,7 @@ jobs:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain)"
+          test -z "$(git status --porcelain --untracked-files=all)"
       - name: Verify nominal ABI reference and fail-closed vectors
         run: |
           python3 -B -m unittest discover -s contracts/v1 -p 'test_nominal_method_slot_abi_v1.py' -v
