@@ -5,6 +5,8 @@ on:
       - "contracts/v1/scoped_permission_policy.hpp"
       - "contracts/v1/scoped_permission_policy_test.cpp"
       - "contracts/v1/scoped-permissions-v1.json"
+      - "CMakeLists.txt"
+      - "contracts/v1/SCOPED_PERMISSIONS_V1.md"
       - "contracts/v1/verify_scoped_permissions.py"
       - "contracts/v1/scoped_tcp_boundary.hpp"
       - "contracts/v1/scoped_tcp_boundary_test.cpp"
@@ -20,7 +22,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
-      - name: Check SHA-256-pinned 44-case canonical permission corpus (not runtime proof)
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Check SHA-256-pinned 52-case canonical permission corpus (not runtime proof)
         run: python3 contracts/v1/verify_scoped_permissions.py --validate-only
       - name: Compile with strict GCC warnings
         run: |
@@ -38,3 +41,40 @@ jobs:
         run: |
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -I contracts/v1 contracts/v1/scoped_tcp_boundary_test.cpp -o /tmp/ores-native-tcp-clang
           /tmp/ores-native-tcp-clang
+      - name: Write source-free exact-head native test receipt
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          expected = "de3594482d10623241a94cf531fd9e4fe71c49769dd68b2098f4ed5363870ac5"
+          observed = hashlib.sha256(pathlib.Path("contracts/v1/scoped-permissions-v1.json").read_bytes()).hexdigest()
+          if observed != expected:
+              raise SystemExit("canonical policy corpus changed after test")
+          record = {
+              "schema": "oreslang-scoped-host-policy-ci-v1",
+              "tested_head_sha": os.environ["EXPECTED_SHA"],
+              "canonical_vectors_sha256": expected,
+              "canonical_vectors": 52,
+              "authorization_cases": 45,
+              "deserialization_cases_in_corpus": 7,
+              "native_commands_completed": [
+                  "gcc-scoped-policy", "clang-scoped-policy",
+                  "gcc-pinned-tcp", "clang-pinned-tcp"
+              ],
+              "scope": "host-policy-only",
+              "compiler_executed": False,
+              "guest_host_io_parity_proven": False
+          }
+          target = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ores-scoped-native-receipt.json"
+          target.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          print("SOURCE_ONLY_NATIVE_RECEIPT_OK", target)
+          PY
+      - name: Upload source-free native test receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scoped-native-host-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ores-scoped-native-receipt.json
+          if-no-files-found: error
+          retention-days: 7
