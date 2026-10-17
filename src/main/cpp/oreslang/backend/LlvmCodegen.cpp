@@ -86,6 +86,10 @@ llvm::Value* lower(const Expression& expr,
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
+        case Expression::Kind::Floating:
+        case Expression::Kind::Imaginary:
+            throw std::runtime_error(
+                "floating/imaginary value reached i64 LLVM lowering");
         case Expression::Kind::Variable: {
             llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
                 expr.name + ".read");
@@ -287,7 +291,7 @@ llvm::Value* lower_complex128(const Expression& expr,
     };
     switch (expr.kind) {
         case Expression::Kind::Integer: {
-            constexpr std::int64_t exact_limit = INT64_C(9007199254740992);
+            constexpr std::int64_t exact_limit = 9007199254740992LL;
             if (expr.integer < -exact_limit || expr.integer > exact_limit)
                 throw std::runtime_error(
                     "native complex128 integer promotion exceeds exact binary64 range");
