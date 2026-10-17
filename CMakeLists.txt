@@ -800,6 +800,39 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
 
+    # Shared-domain proxy source admission. Proxy<T> is deliberately distinct
+    # from the scalar i64 ABI: syntax/ownership/effect rules execute now, but
+    # codegen remains fail-closed until the opaque scheduler/runtime bridge is
+    # compiler-lowered. Never accept a numeric domain/permit as Proxy<T>.
+    oreslang_contract_test(native_rt_proxy_opaque_lowering_pending
+        native-rt-proxy-opaque-lowering-pending.ores
+        --diagnostic "native Proxy<T> opaque runtime lowering is pending")
+    oreslang_contract_test(native_rt_proxy_requires_suspend_effect
+        native-rt-proxy-missing-suspend-reject.ores
+        --diagnostic "rt proxy admission may suspend and requires using suspend")
+    oreslang_contract_test(native_rt_proxy_type_mismatch_reject
+        native-rt-proxy-type-mismatch-reject.ores
+        --diagnostic "rt proxy requires a live unique class owner of matching Proxy<T> type")
+    oreslang_contract_test(native_rt_proxy_use_after_consume_reject
+        native-rt-proxy-use-after-consume-reject.ores
+        --diagnostic "rt proxy consumed owner is no longer usable")
+    oreslang_contract_test(native_rt_proxy_double_consume_reject
+        native-rt-proxy-double-consume-reject.ores
+        --diagnostic "rt proxy consumed owner is no longer usable")
+
+    oreslang_contract_test(native_rt_proxy_critical_read_pending
+        native-rt-proxy-critical-read-pending.ores
+        --diagnostic "native Proxy<T> critical-read lowering is pending")
+    oreslang_contract_test(native_rt_proxy_critical_write_pending
+        native-rt-proxy-critical-write-pending.ores
+        --diagnostic "native Proxy<T> critical-write lowering is pending")
+    oreslang_contract_test(native_rt_proxy_return_escape_reject
+        native-rt-proxy-return-escape-reject.ores
+        --diagnostic "Proxy<T> capability cannot escape through a scalar return")
+    oreslang_contract_test(native_rt_proxy_call_escape_reject
+        native-rt-proxy-call-escape-reject.ores
+        --diagnostic "Proxy<T> capability cannot escape through a scalar return")
+
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
     # Source await/select/Futures still fail closed pending pinned-frame lowering.
@@ -1521,6 +1554,21 @@ if(BUILD_TESTING)
     add_test(NAME native_shared_domain_arena_leases
         COMMAND oreslang-native-shared-domain-arena-test)
     set_tests_properties(native_shared_domain_arena_leases PROPERTIES TIMEOUT 25)
+
+    # Scheduler-derived shared-domain authority: FIFO logical admission,
+    # dedicated capability wakes, exact current-turn identity, and lifetime pins.
+    add_executable(oreslang-native-shared-domain-scheduler-bridge-test
+        tests/native_shared_domain_scheduler_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_shared_domain_scheduler_authority
+        COMMAND oreslang-native-shared-domain-scheduler-bridge-test)
+    set_tests_properties(native_shared_domain_scheduler_authority PROPERTIES TIMEOUT 30)
 
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
