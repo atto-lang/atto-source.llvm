@@ -432,6 +432,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_complex128_call_from_complex_failclosed
         native-complex128-call-from-complex-reject.ores
         --diagnostic "native complex128 calls require typed complex call ABI lowering")
+    oreslang_contract_test(native_complex128_real_conjugate_failclosed
+        native-complex128-real-conjugate-reject.ores
+        --diagnostic "native complex128 conjugation requires a complex operand")
     if(ORE_CLANG)
         oreslang_contract_test(native_complex128_return_ir_verifies
             native-complex128-return.ores
