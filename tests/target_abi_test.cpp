@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
         check(std::to_string(target.pointer_bits()) == cells[1]);
         check(target.endian() == cells[2] && target.abi() == cells[3] && target.emission() == cells[4]);
         check(target.experimental_wasm32_ir() == (cells[4] == "experimental-wasm32-ir"));
-        check(target.experimental_bpf_xdp_ir() == (cells[4] == "experimental-bpf-xdp-ir"));
+        check(target.experimental_bpf_ir() == (cells[4] == "experimental-bpf-ir"));
         if (target.pointer_bits() == 32) {
             check(target.checked_contiguous_bytes(2147483647ULL) == 2147483647ULL);
             rejects<std::overflow_error>([&] { (void)target.checked_contiguous_bytes(2147483648ULL); });
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
         "thumbv7m-none-eabi", "wasm32-unknown-unknown", "bpfel"};
     check(seen == expected && count == expected.size());
     check(oreslang::TargetAbi::parse("thumbv7m-none-eabi").experimental_cortexm_ir());
-    check(oreslang::TargetAbi::parse("bpfel").experimental_bpf_xdp_ir());
+    check(oreslang::TargetAbi::parse("bpfel").experimental_bpf_ir());
     rejects<std::invalid_argument>([] { (void)oreslang::TargetAbi::parse("bpfeb"); });
     static_assert(CHAR_BIT == 8, "native ABI requires 8-bit bytes");
     static_assert(sizeof(float) == 4, "DOP F32 requires 32-bit float");
