@@ -14,6 +14,22 @@ pub fnc complex_conjugate(): complex {
   return (3.0 + 4.0i).conjugate();
 }
 
-pub fnc complex_imag_exact_limit(): complex {
-  return 9007199254740992i;
+pub fnc complex_imag_binary64_rounding(): complex {
+  return 9007199254740993i;
+}
+
+pub fnc complex_imag_overflow(): complex {
+  return 1e309i;
+}
+
+pub fnc complex_imag_underflow(): complex {
+  return 1e-4000i;
+}
+
+pub fnc complex_imag_negative_underflow(): complex {
+  return -1e-4000i;
+}
+
+pub fnc complex_imag_min_subnormal(): complex {
+  return 3e-324i;
 }
