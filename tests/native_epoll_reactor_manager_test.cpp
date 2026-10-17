@@ -105,6 +105,25 @@ int main() {
         ::close(endpoints[0]);
         ::close(endpoints[1]);
     }
+    {
+        NativeEpollReactorManager manager(1);
+        int endpoints[2]{-1, -1};
+        check(::pipe2(endpoints, O_NONBLOCK | O_CLOEXEC) == 0);
+        auto watch = manager.try_watch(endpoints[0], EPOLLIN);
+        check(watch.has_value());
+        manager.stop();
+        // Retirement must win every later cancellation. Stopped terminal
+        // records are still consumable by trusted host cleanup code.
+        check(!manager.try_cancel(*watch));
+        auto stopped = manager.try_pop();
+        check(stopped.has_value());
+        check(stopped->event.ticket.value == watch->ticket.value);
+        check(stopped->event.outcome == NativeEpollReactor::Outcome::stopped);
+        check(!manager.try_cancel(*watch));
+        check(!manager.try_watch(endpoints[0], EPOLLIN).has_value());
+        ::close(endpoints[0]);
+        ::close(endpoints[1]);
+    }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
     catch (const std::invalid_argument&) { bad = true; }
