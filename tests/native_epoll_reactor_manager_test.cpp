@@ -12,7 +12,9 @@ static void check(bool good) { if (!good) throw std::runtime_error("reactor mana
 int main() {
     {
         NativeEpollReactorManager manager(4);
-        check(manager.started_threads() == 1);
+        check(manager.started_threads() == 0);
+        check(!manager.try_watch(-1, EPOLLIN).has_value());
+        check(manager.started_threads() == 0); // rejected admission stays cold
         std::array<std::array<int, 2>, 5> fds{};
         for (auto& p : fds) p = {-1, -1};
         std::array<NativeEpollReactorManager::Watch, 5> tokens{};
@@ -22,6 +24,7 @@ int main() {
             check(watch.has_value());
             tokens[i] = *watch;
             check(tokens[i].reactor == 0);
+            if (i == 0) check(manager.started_threads() == 1);
         }
         check(manager.started_threads() == 1); // five pending I/O != five threads
         for (auto& p : fds) check(::write(p[1], "x", 1) == 1);
