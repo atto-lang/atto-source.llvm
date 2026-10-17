@@ -857,6 +857,25 @@ if(BUILD_TESTING)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
     endif()
 
+    # Hidden source-actor continuation wake ABI. This is host/runtime plumbing
+    # only: no guest Proxy execution is enabled by this C regression.
+    add_executable(oreslang-source-actor-capability-resume-test
+        tests/native_source_actor_capability_resume_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-source-actor-capability-resume-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-source-actor-capability-resume-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_compile_definitions(oreslang-source-actor-capability-resume-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
+    target_link_libraries(oreslang-source-actor-capability-resume-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_capability_resume
+        COMMAND oreslang-source-actor-capability-resume-test)
+    set_tests_properties(native_source_actor_capability_resume PROPERTIES TIMEOUT 30)
+
     # Trusted host resource reclamation: close in reverse acquisition order only
     # after active turns, outstanding loans and native callbacks quiesce.
     add_executable(oreslang-actor-resource-registry-test
