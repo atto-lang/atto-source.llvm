@@ -122,3 +122,13 @@ See [admission limits](docs/CORTEXM_SCALAR_IR.md).
 
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
+
+## Experimental eBPF / XDP compiler slice
+
+`oreslang-llvmc --target=bpfel` has an **experimental constant-action XDP
+entrypoint** for one exported `pub fnc ores_xdp(): int { return 2; }`.
+It emits an XDP-section LLVM function and an ELF license section, with no
+host runtime, actor support or fallback. This is not general BPF, maps,
+packet parsing or Linux kernel verifier/attach validation. See
+[the XDP target contract](docs/EBPF_XDP_EXPERIMENT.md) and the dedicated
+`bpf_xdp_source_object` CTest, which requires a BPF-capable Clang and readelf.
