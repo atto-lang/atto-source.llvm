@@ -48,6 +48,28 @@ int main() {
         require(third.load() == 30, "element arithmetic load");
         third.store(77);
         require(values[2] == 77, "element arithmetic store");
+
+        auto bytes = base.byte_offset(static_cast<std::ptrdiff_t>(sizeof(std::int32_t)));
+        require(bytes.address() == base.address() + sizeof(std::int32_t),
+                "byte offset must scale in bytes");
+        require(bytes.writable(), "byte view must preserve mutable authority");
+        auto recast = bytes.reinterpret_as<std::int32_t>();
+        require(recast.load() == 20, "byte view must cast back with shared provenance");
+        require(recast.distance_elements(base) == 1,
+                "cast-back element distance must preserve provenance");
+        require_throws<std::invalid_argument>(
+            [&] {
+                (void)base.byte_offset(1).reinterpret_as<std::int32_t>();
+            },
+            "misaligned typed reinterpret cast must reject");
+
+        auto readonly_bytes = readonly.byte_offset(0);
+        require(!readonly_bytes.writable(),
+                "reinterpretation must not upgrade read-only raw authority");
+        require_throws<std::logic_error>(
+            [&] { readonly_bytes.store(std::byte{0}); },
+            "read-only byte view must reject store");
+
         require(third.distance_elements(base) == 2, "positive pointer distance");
         require(base.distance_elements(third) == -2, "negative pointer distance");
 
@@ -69,6 +91,12 @@ int main() {
         require_throws<std::invalid_argument>(
             [&] { (void)base.distance_elements(other); },
             "unrelated provenance subtraction must reject");
+
+        auto other_address_space = TrustedRawPointer<std::int32_t>::from_span(
+            values.data(), values.size(), authority, 0xA11CEu, 7);
+        require_throws<std::invalid_argument>(
+            [&] { (void)base.distance_elements(other_address_space); },
+            "cross-address-space subtraction must reject");
 
         auto raw = TrustedRawPointer<std::int32_t>::from_address(
             reinterpret_cast<std::uintptr_t>(values.data()), authority);
@@ -102,6 +130,13 @@ int main() {
         require_throws<std::overflow_error>(
             [&] { (void)near_max.offset_elements(1); },
             "raw arithmetic overflow must reject");
+
+        require_throws<std::overflow_error>(
+            [&] {
+                (void)raw.offset_elements(
+                    std::numeric_limits<std::ptrdiff_t>::min());
+            },
+            "PTRDIFF_MIN element arithmetic must reject without signed overflow");
 
         std::cout << "trusted raw pointer arithmetic/provenance contract: PASS\n";
         return 0;
