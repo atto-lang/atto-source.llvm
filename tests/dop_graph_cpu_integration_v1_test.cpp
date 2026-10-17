@@ -108,6 +108,45 @@ int main() {
         queued();
         require(output->read(2, 1) == 99, "late rejected task mutated buffer");
 
+        // Inline dispatch is not a valid asynchronous executor. No kernel
+        // loans or writes may occur while the scheduler is still admitting.
+        {
+            output->write(2, 1, 123.0f);
+            auto inline_result = submit_owned_cpu_graph(kernel, input, output,
+                source, destination, answer(),
+                [&](std::function<void()> callback) { callback(); });
+            reject([&] { (void) inline_result.get(); },
+                "inline executor executed owned CPU task");
+            require(output->read(2, 1) == 123.0f,
+                "inline executor modified native destination");
+        }
+
+        // A scheduler may launch a worker, wait for it to begin, THEN throw.
+        // A cancelled-bit check alone is insufficient: the already-running
+        // worker must remain behind an independent admission barrier.
+        for (int trial = 0; trial < 128; ++trial) {
+            output->write(2, 1, static_cast<float>(trial + 100));
+            std::promise<void> launched;
+            auto launched_event = launched.get_future();
+            std::thread premature_worker;
+            auto early_reject = submit_owned_cpu_graph(kernel, input, output,
+                source, destination, answer(),
+                [&](std::function<void()> callback) {
+                    premature_worker = std::thread([
+                            job = std::move(callback), &launched]() mutable {
+                        launched.set_value();
+                        job();
+                    });
+                    launched_event.wait();
+                    throw std::runtime_error("worker started, scheduler rejected");
+                });
+            premature_worker.join();
+            reject([&] { (void) early_reject.get(); },
+                "rejected already-started task unexpectedly published");
+            require(output->read(2, 1) == static_cast<float>(trial + 100),
+                "rejected already-started worker wrote native buffer");
+        }
+
         // Match the Java/.NET/Forge one-shot scheduling stress intent:
         // two simultaneous deliveries cannot re-run the claimed native kernel.
         for (int trial = 0; trial < 128; ++trial) {
