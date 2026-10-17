@@ -404,6 +404,17 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Complex128 is deliberately fail-closed until the native frontend has a
+    # typed {f64,f64} value category and exact finite scalar lowering. These
+    # tests prevent an imaginary/decimal token or type annotation from being
+    # misparsed as the existing checked-i64 subset or emitting partial IR.
+    oreslang_contract_test(native_complex128_type_failclosed
+        native-complex-type-reject.ores
+        --diagnostic "native complex128 type requires verified LLVM scalar lowering")
+    oreslang_contract_test(native_complex128_literal_failclosed
+        native-complex-literal-reject.ores
+        --diagnostic "native complex128/f64 literal requires verified LLVM numeric lowering")
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
