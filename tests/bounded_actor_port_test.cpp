@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <iostream>
+#include <atomic>
+#include <thread>
 #include <new>
 #include <functional>
 #include <utility>
@@ -174,6 +176,35 @@ int main() {
     check(movedFrame->acknowledge_released());
     check(reentrantMove.used_frames() == 0 && reentrantMove.used_bytes() == 0);
     reentrantMove.close();
+
+    // A later reservation may finish before the first move. It must not
+    // overtake a not-yet-published head, and its own payload stays owned.
+    BoundedActorPort<ReentrantMovePayload> staged(2, 16);
+    std::atomic<bool> head_pending{false}, release_head{false};
+    bool first_admitted = false;
+    ReentrantMovePayload headSender([&] {
+        head_pending.store(true, std::memory_order_release);
+        while (!release_head.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    });
+    std::thread headProducer([&] {
+        first_admitted = staged.offer(std::move(headSender), 8);
+    });
+    while (!head_pending.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    ReentrantMovePayload followingSender([] {});
+    const bool second_admitted = staged.offer(std::move(followingSender), 8);
+    const bool premature_receive = staged.try_receive().has_value();
+    release_head.store(true, std::memory_order_release);
+    headProducer.join();
+    check(first_admitted && second_admitted && !premature_receive);
+    auto headFrame = staged.try_receive(), followingFrame = staged.try_receive();
+    check(headFrame.has_value() && followingFrame.has_value());
+    check(headFrame->id() < followingFrame->id());
+    check(headFrame->acknowledge_released() &&
+          followingFrame->acknowledge_released());
+    check(staged.used_frames() == 0 && staged.used_bytes() == 0);
+    staged.close();
 
     std::cout << "PASS native owned actor port allocation rollback and acknowledged transfer\\n";
 }
