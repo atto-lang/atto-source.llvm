@@ -104,6 +104,20 @@ int main() {
         h=writer.allocate(sizeof(std::uint64_t));
         std::uint64_t x=0x1234567890abcdefull;
         writer.write(h, &x,sizeof(x));
+        // The standard does not grant recursive shared_mutex ownership, even
+        // if some platform's try_lock_shared happens to allow it. Fail before
+        // trying to acquire a second lease for this same arena/carrier.
+        reject([&] { (void)a.read(101, 1, writerGrant); });
+        reject([&] { (void)a.write(101, 1, writerGrant); });
+        // Separate domains can nest: the carrier-local guard must track the
+        // full domain stack, not accidentally replace the outer authority.
+        {
+            auto nested = other.read(104, 1, foreignGrant);
+            reject([&] { (void)a.read(101, 1, writerGrant); });
+        }
+        std::uint64_t nestedCheck = 0;
+        writer.read(h, &nestedCheck, sizeof(nestedCheck));
+        require(nestedCheck == x);
         // A trusted lease object may be referenced from another OS thread,
         // but the lock-holding carrier is the only one authorized to use it.
         std::atomic<bool> foreignReadDenied{false}, foreignWriteDenied{false};

@@ -53,9 +53,18 @@ public:
         std::shared_lock<std::shared_mutex> read_;
         std::unique_lock<std::shared_mutex> write_;
         bool exclusive_;
+        Lease* previous_ = nullptr;
+        // std::shared_mutex does not permit recursive locking by one thread,
+        // including a second shared admission. Detect same-domain recursion
+        // BEFORE try_lock rather than invoking undefined lock behavior.
+        inline static thread_local Lease* active_lease_ = nullptr;
         Lease(SharedDomainArena& arena, std::uint64_t actor, std::uint64_t incarnation, Grant grant, bool exclusive)
             : arena_(&arena), owner_carrier_(detail::current_carrier_identity()), exclusive_(exclusive) {
             if (!actor || !incarnation) throw std::logic_error("shared region actor incarnation required");
+            for (Lease* held = active_lease_; held; held = held->previous_) {
+                if (held->arena_ == &arena)
+                    throw std::logic_error("shared region recursive lease denied");
+            }
             // Actor carrier threads must not park behind another actor's
             // critical lease. Admission is fail-fast; the scheduler may
             // resubmit a turn after the owner releases its lease.
@@ -67,6 +76,8 @@ public:
                 if (!read_.owns_lock()) throw std::logic_error("shared region busy");
             }
             arena.validate_grant(grant, actor, incarnation, exclusive_);
+            previous_ = active_lease_;
+            active_lease_ = this;
         }
         void require_live(bool write = false) const {
             if (!arena_ || owner_carrier_ != detail::current_carrier_identity() ||
@@ -91,7 +102,9 @@ public:
         ~Lease() noexcept {
             // Destructing on a foreign carrier would unlock a shared_mutex
             // from the wrong thread (undefined behavior), so fail closed.
-            if (owner_carrier_ != detail::current_carrier_identity()) std::terminate();
+            if (owner_carrier_ != detail::current_carrier_identity()
+                || active_lease_ != this) std::terminate();
+            active_lease_ = previous_;
         }
         Handle allocate(std::size_t bytes) {
             require_live(true);
