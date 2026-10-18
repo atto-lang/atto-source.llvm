@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Source-free AOT driver/linker gate, NOT an Oreslang compiler test.
+
+Uses an explicitly synthetic IR emitter to check the real Clang/LLD invocation,
+mode admission and atomic output preservation. Source-level Oreslang tests are
+separate and mandatory (see test_aot_driver.py).
+"""
+from pathlib import Path
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+driver, clang = map(str, sys.argv[1:])
+with tempfile.TemporaryDirectory(prefix="ores lto smoke ") as tmp:
+    root=Path(tmp); source=root/"guest input.ores"; output=root/"guest binary"
+    emitter=root/"fake-llvmc.py"
+    emitter.write_text('''#!/usr/bin/env python3
+import pathlib,sys
+if len(sys.argv)!=3 or sys.argv[1]!='--target=host':sys.exit(64)
+data=pathlib.Path(sys.argv[2]).read_text()
+if data.strip()!='good':print('not valid LLVM IR');sys.exit(0)
+print('define i32 @main() { ret i32 42 }')
+''')
+    emitter.chmod(0o700)
+    source.write_text("good\n")
+    env=dict(os.environ, ORESLANG_LLVMC=str(emitter), CLANG=clang)
+    modes=['off']+(['full','thin'] if shutil.which('ld.lld') else [])
+    for mode in modes:
+        current=dict(env, ORESLANG_LTO=mode)
+        done=subprocess.run([driver,str(source),str(output)],env=current,
+            capture_output=True,text=True)
+        assert done.returncode==0,(mode,done.stderr,done.stdout)
+        assert subprocess.run([str(output)],env={'PATH':'/nonexistent'}).returncode==42
+        good_bytes=output.read_bytes()
+        # Unsupported guest code may never overwrite the published executable.
+        source.write_text('not-admitted\n')
+        bad=subprocess.run([driver,str(source),str(output)],env=current,
+            capture_output=True,text=True)
+        assert bad.returncode!=0,(mode,bad.stderr)
+        assert output.read_bytes()==good_bytes,mode
+        source.write_text("good\n")
+    invalid=subprocess.run([driver,str(source),str(output)],
+        env=dict(env,ORESLANG_LTO='unknown'),capture_output=True,text=True)
+    assert invalid.returncode==64
+    # A source cannot be the destination (even with a space in its name).
+    invalid=subprocess.run([driver,str(source),str(source)],
+        env=dict(env,ORESLANG_LTO='off'),capture_output=True,text=True)
+    assert invalid.returncode==64
+    assert source.read_text()=="good\n"
+    assert not list(root.glob('.ores-aot.*'))
+print('source-free driver/Clang/LLD smoke: PASS; NOT Oreslang language parity')
