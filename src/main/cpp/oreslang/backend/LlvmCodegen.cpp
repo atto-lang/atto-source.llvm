@@ -272,8 +272,72 @@ llvm::Value* lower(const Expression& expr,
 
 
 std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
-    if (plan.functions.empty() || plan.returnCalls.empty()) {
-        throw std::invalid_argument("native enum AOT requires checked declarations and calls");
+    // This API receives an ordinary C++ Plan aggregate, not an unforgeable
+    // typechecker token. Revalidate its declaration and call provenance
+    // BEFORE LLVM IR emission, including when invoked outside main.cpp.
+    if (plan.enumId != "local_unit.__root__.Foo" &&
+        (plan.enumId.rfind("local_unit.__root__.", 0) != 0)) {
+        throw std::invalid_argument("native enum AOT requires resolved local root enum");
+    }
+    if (plan.cases.empty() || plan.cases.size() > types::case_overloads::MaxCases ||
+        plan.functions.empty() ||
+        plan.functions.size() > types::case_overloads::MaxCandidates ||
+        plan.returnCalls.empty() || plan.returnCalls.size() > 64) {
+        throw std::invalid_argument("invalid native enum AOT plan bounds");
+    }
+    std::vector<std::string> cases;
+    cases.reserve(plan.cases.size());
+    std::unordered_set<std::string> names;
+    std::unordered_set<std::int32_t> validTags;
+    std::int32_t priorTag = 0;
+    for (const auto& item : plan.cases) {
+        types::case_overloads::identifier(item.name);
+        if (!names.insert(item.name).second || item.tag <= priorTag ||
+            !validTags.insert(item.tag).second) {
+            throw std::invalid_argument("invalid native enum AOT case identity/tag");
+        }
+        priorTag = item.tag;
+        cases.push_back(item.name);
+    }
+    types::case_overloads::Registry certified{
+        {plan.enumId, {plan.enumId, cases, true}}
+    };
+    std::vector<types::case_overloads::Signature> family;
+    family.reserve(plan.functions.size());
+    for (const auto& fn : plan.functions) {
+        const auto& sig = fn.signature;
+        if (sig.domain != types::case_overloads::Domain::Module ||
+            sig.owner != "local_unit.__root__" || sig.params.size() != 1 ||
+            sig.params[0].identity != plan.enumId ||
+            (sig.params[0].kind != types::case_overloads::Kind::Enum &&
+             sig.params[0].kind != types::case_overloads::Kind::Case)) {
+            throw std::invalid_argument("invalid native enum AOT callable declaration");
+        }
+        family.push_back(sig);
+    }
+    types::case_overloads::checkFamily(family, certified);
+    for (const auto& call : plan.returnCalls) {
+        if (validTags.count(call.tag) == 0) {
+            throw std::invalid_argument("invalid statically constructed AOT enum tag");
+        }
+        const auto argument = call.staticallyProvenCase.empty()
+            ? types::case_overloads::Parameter::whole(plan.enumId)
+            : types::case_overloads::Parameter::selectedCase(
+                plan.enumId, call.staticallyProvenCase);
+        const auto chosen = types::case_overloads::selectStatic(
+            family, certified, {argument});
+        if (call.exactSymbol != family.at(chosen).symbolId()) {
+            throw std::invalid_argument("forged or stale native AOT exact-call identity");
+        }
+        if (!call.staticallyProvenCase.empty()) {
+            bool matchingTag = false;
+            for (const auto& item : plan.cases)
+                if (item.name == call.staticallyProvenCase &&
+                    item.tag == call.tag) matchingTag = true;
+            if (!matchingTag) {
+                throw std::invalid_argument("forged enum refinement/tag proof");
+            }
+        }
     }
     llvm::LLVMContext context;
     llvm::Module module("oreslang.native.enum.case.aot", context);
