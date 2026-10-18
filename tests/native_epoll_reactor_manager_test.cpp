@@ -379,6 +379,51 @@ int main() {
         ::close(alias); ::close(pipefd[0]); ::close(pipefd[1]);
     }
     {
+        // Concurrent attempts by separate managers must never both admit
+        // one underlying pipe endpoint, even when one uses a duplicated FD.
+        for (int round = 0; round < 32; ++round) {
+            NativeEpollReactorManager left(1,
+                NativeEpollReactorManager::Profile::preallocated_rt, 1);
+            NativeEpollReactorManager right(1,
+                NativeEpollReactorManager::Profile::preallocated_rt, 1);
+            int pipefd[2]{-1, -1};
+            check(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+            const int alias = ::dup(pipefd[0]);
+            check(alias >= 0);
+            std::atomic<int> gate{0};
+            std::optional<NativeEpollReactorManager::Watch> a, b;
+            std::thread t1([&] {
+                gate.fetch_add(1);
+                while (gate.load() != 2) std::this_thread::yield();
+                a = left.try_watch(pipefd[0], EPOLLIN);
+            });
+            std::thread t2([&] {
+                gate.fetch_add(1);
+                while (gate.load() != 2) std::this_thread::yield();
+                b = right.try_watch(alias, EPOLLIN);
+            });
+            t1.join(); t2.join();
+            check(!(a && b)); // at-most-one safety, including try-lock loss
+            // A race-loser may retry only after the existing owner consumes
+            // its terminal completion and releases the global claim.
+            if (a) {
+                check(!right.try_watch(alias, EPOLLIN).has_value());
+                left.stop();
+                check(left.try_pop().has_value());
+                check(right.try_watch(alias, EPOLLIN).has_value());
+            } else if (b) {
+                check(!left.try_watch(pipefd[0], EPOLLIN).has_value());
+                right.stop();
+                check(right.try_pop().has_value());
+                check(left.try_watch(pipefd[0], EPOLLIN).has_value());
+            }
+            left.stop(); right.stop();
+            while (left.try_pop()) { }
+            while (right.try_pop()) { }
+            ::close(alias); ::close(pipefd[0]); ::close(pipefd[1]);
+        }
+    }
+    {
         // Even if the retiring manager is destroyed before the host reads its
         // stopped completion, global claims must be reclaimed at teardown.
         int pipefd[2]{-1, -1};
