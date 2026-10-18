@@ -106,6 +106,31 @@ static void connection_attempt_churn_is_rate_limited() {
     c.lease.release();
 }
 
+static void pre_dispatch_abort_refunds_exactly_once() {
+    TrustedUntrustedNetworkQuota quota({}, 0);
+    auto http = quota.try_start_http(0);
+    check(http.status == Status::admitted);
+    check(http.lease.abort_before_dispatch(0));
+    check(!http.lease.abort_before_dispatch(0));
+    check(!http.lease.commit_dispatch());
+    http.lease.release();
+    check(quota.http_in_flight() == 0);
+    auto first = quota.try_start_http(0);
+    auto second = quota.try_start_http(0);
+    check(first.status == Status::admitted && second.status == Status::admitted);
+    check(quota.try_start_http(0).status == Status::rate_limited);
+    check(first.lease.commit_dispatch());
+    check(!first.lease.abort_before_dispatch(0));
+    first.lease.release();
+    second.lease.release();
+
+    auto tcp = quota.try_open_tcp(0);
+    check(tcp.status == Status::admitted);
+    check(tcp.lease.abort_before_dispatch(0));
+    check(!tcp.lease.abort_before_dispatch(0));
+    check(quota.tcp_connections() == 0);
+}
+
 static void invalid_policy_fails_closed() {
     TrustedUntrustedNetworkQuota::Policy p;
     p.max_tcp_connections = 0;
@@ -119,6 +144,7 @@ int main() {
     request_rate_and_failed_connect_release();
     concurrent_tcp_open_is_bounded();
     connection_attempt_churn_is_rate_limited();
+    pre_dispatch_abort_refunds_exactly_once();
     invalid_policy_fails_closed();
     std::cout << "UNTRUSTED_NETWORK_QUOTA_HOST_ONLY_PASS\n";
 }
