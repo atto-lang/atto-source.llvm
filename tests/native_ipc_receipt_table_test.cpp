@@ -77,6 +77,34 @@ int main() {
     assert(settled.load() == 1);
     assert(racing.counters() == (std::pair<std::size_t,std::size_t>{0,0}));
     assert(racing.invariant());
+    // Competing transport-loss cleanup and remote ACKs must not leak
+    // credits or resurrect a previously terminal correlation.
+    NativeIpcReceiptTable disconnect_race(1);
+    auto in_flight = envelope();
+    disconnect_race.admit(in_flight);
+    workers.clear();
+    std::atomic<int> ack_winners{0}, loss_winners{0};
+    for (int i=0; i<16; ++i) {
+        workers.emplace_back([&, i] {
+            if (i % 2 == 0) {
+                try {
+                    disconnect_race.accept_verified(
+                        in_flight, IpcReceiptStage::remote_accepted);
+                    ++ack_winners;
+                } catch(const std::invalid_argument&) { }
+            } else {
+                loss_winners += static_cast<int>(
+                    disconnect_race.mark_transport_lost("session"));
+            }
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    assert(ack_winners.load() <= 1 && loss_winners.load() == 1);
+    assert(disconnect_race.counters() ==
+        (std::pair<std::size_t,std::size_t>{0,0}));
+    assert(disconnect_race.invariant());
+    rejects([&]{ disconnect_race.accept_verified(
+        in_flight, IpcReceiptStage::handler_committed); });
     std::mt19937_64 rng(20261018);
     for(int trial=0;trial<2048;++trial) {
         NativeIpcReceiptTable book(3);
