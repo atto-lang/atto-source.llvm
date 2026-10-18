@@ -70,7 +70,8 @@ inline void identifier(const std::string& s) {
             || (scalar >= 0x2000 && scalar <= 0x2006)
             || (scalar >= 0x2008 && scalar <= 0x200a)
             || scalar == 0x2028 || scalar == 0x2029
-            || scalar == 0x205f || scalar == 0x3000)
+            || scalar == 0x205f || scalar == 0x3000
+            || scalar == 0x00a0 || scalar == 0x2007 || scalar == 0x202f)
             throw std::invalid_argument("Unicode control/whitespace in identity");
         // Explicit version-independent bidi and invisible-format denylist.
         // Must agree with Java's EnumCaseOverloadPolicy.identifier().
