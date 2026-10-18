@@ -848,6 +848,10 @@ if(BUILD_TESTING)
         --diagnostic "native specialized actor proxy requires typed adapter")
     oreslang_contract_test(native_reject_websocket_actor native-transport-websocket.ores
         --diagnostic "native specialized actor websocket requires typed adapter")
+    oreslang_contract_test(native_reject_actor_requires_unverified native-actor-requires-unverified.ores
+        --diagnostic "native actor requires/with clauses need verified capability/effect lowering")
+    oreslang_contract_test(native_reject_actor_with_unverified native-actor-with-unverified.ores
+        --diagnostic "native actor requires/with clauses need verified capability/effect lowering")
 
     # Optional instance method marker: fnc, method, and no marker all lower
     # to the same native supported on_message(int) handler.
