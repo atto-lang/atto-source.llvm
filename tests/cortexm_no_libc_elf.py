@@ -129,6 +129,7 @@ def main():
         elf = root / "baremetal.elf"
         run([args.clang, "--target=thumbv7m-none-eabi",
              "-fuse-ld=lld", "-nostdlib", "-nodefaultlibs",
+             "-Wl,--no-undefined",
              str(root / "guest.o"), str(root / "startup.o"),
              "-Wl,-T," + str(root / "linker.ld"), "-o", str(elf)])
 
@@ -197,6 +198,7 @@ def main():
             negative_elf = root / "negative.elf"
             run([args.clang, "--target=thumbv7m-none-eabi",
                  "-fuse-ld=lld", "-nostdlib", "-nodefaultlibs",
+             "-Wl,--no-undefined",
                  str(root / "guest.o"), str(root / "startup-negative.o"),
                  "-Wl,-T," + str(root / "linker.ld"),
                  "-o", str(negative_elf)])
