@@ -87,7 +87,7 @@ print('define i32 @main() { ret i32 42 }')
     # A harmless local shell shim stands in for Clang: never point the test's
     # output at an actual installed Clang executable.
     clang_shim=root/'clang wrapper'
-    clang_shim.write_text('#!/bin/sh\\nexec '+shlex.quote(clang)+' "$@"\\n')
+    clang_shim.write_text('#!/bin/sh\nexec '+shlex.quote(clang)+' "$@"\n')
     clang_shim.chmod(0o700)
     shim_bytes=clang_shim.read_bytes()
     denied=subprocess.run([driver,str(source),str(clang_shim)],
