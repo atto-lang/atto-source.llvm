@@ -8,10 +8,20 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 using oreslang::runtime::SharedDomainArena;
 using oreslang::runtime::SharedDomainReadWriteGate;
 using oreslang::runtime::SharedDomainSchedulerBridge;
+
+template <class T, class = void>
+struct has_public_domain_id : std::false_type {};
+template <class T>
+struct has_public_domain_id<T,
+    std::void_t<decltype(std::declval<const T&>().domain_id())>> : std::true_type {};
+static_assert(!has_public_domain_id<SharedDomainSchedulerBridge::Permit>::value,
+    "shared-domain permit must not expose numeric domain coordinates");
 
 static void require_at(bool value, int line) {
     if (!value)
