@@ -20,6 +20,11 @@ namespace oreslang::runtime {
 // Reserve UINT64_MAX as terminal exhaustion so no old handle can become
 // valid again if the domain allocator is stressed to its numeric limit.
 namespace detail {
+// Shared by ALL ActorOwnedGraphHeap template specializations in this binary.
+// A class-template static counter would restart at 1 for every capacity/layout
+// and permit foreign graph handles to alias a different heap configuration.
+inline std::atomic<std::uint64_t> next_actor_graph_heap_id{1};
+
 inline std::uint64_t reserve_actor_graph_heap_id(
         std::atomic<std::uint64_t>& next) {
     std::uint64_t current = next.load(std::memory_order_relaxed);
@@ -72,7 +77,6 @@ private:
         bool live = false;
     };
 
-    inline static std::atomic<std::uint64_t> next_heap_id_{1};
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
     ActorHeapBorrowGate borrow_gate_;
@@ -128,7 +132,8 @@ private:
 
 public:
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
-        : owner_(owner), heap_id_(detail::reserve_actor_graph_heap_id(next_heap_id_)),
+        : owner_(owner), heap_id_(detail::reserve_actor_graph_heap_id(
+              detail::next_actor_graph_heap_id)),
           borrow_gate_(owner) {
         if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
             throw std::invalid_argument("invalid actor graph heap identity");
