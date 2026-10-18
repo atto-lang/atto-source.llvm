@@ -24,7 +24,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ -n "$output" ]] || exit 2
-printf 'fake executable\n' >"$output"
+printf '#!/bin/sh\nexit %d\n' "${MOCK_PROBE_EXIT:-0}" >"$output"
+chmod +x "$output"
 EOF
 chmod +x "$work/mock-compiler" "$work/mock-clang"
 export MOCK_CLANG_LOG="$work/clang.log"
@@ -35,7 +36,7 @@ printf 'previous executable\n' >"$work/app"
 : >"$MOCK_CLANG_LOG"
 ORESLANG_AOT_LTO=off bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
 ! grep -q -- '-flto' "$MOCK_CLANG_LOG"
-# Full and Thin modes run a toolchain probe plus final IR link.
+# Full and Thin modes run an executable two-unit LLVM IR canary plus final IR link.
 for mode in full thin; do
   : >"$MOCK_CLANG_LOG"
   ORESLANG_AOT_LTO="$mode" bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
@@ -45,11 +46,17 @@ for mode in full thin; do
     grep -qx -- '-flto=thin' "$MOCK_CLANG_LOG"
   fi
   grep -qx -- '-fuse-ld=lld' "$MOCK_CLANG_LOG"
+  grep -q -- '/lto-helper.ll' "$MOCK_CLANG_LOG"
+  grep -q -- '/lto-main.ll' "$MOCK_CLANG_LOG"
 done
-# An unsupported option fails before publication, preserving existing output.
+# Unsupported toolchains or incorrect canary results preserve the published artifact.
 printf 'preserved\n' >"$work/app"
 if MOCK_FAIL_LTO=1 ORESLANG_AOT_LTO=full bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"; then
   echo 'unexpected successful LTO fallback' >&2; exit 1
+fi
+[[ "$(cat "$work/app")" == preserved ]]
+if MOCK_PROBE_EXIT=1 ORESLANG_AOT_LTO=thin bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"; then
+  echo 'unexpected acceptance of failed or incorrect canary' >&2; exit 1
 fi
 [[ "$(cat "$work/app")" == preserved ]]
 if ORESLANG_AOT_LTO=bogus bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"; then
