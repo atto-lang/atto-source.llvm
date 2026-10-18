@@ -52,7 +52,7 @@ static inline ores_actor_state_acquisition ores_state_handle_request(
         unsigned int declared_using, unsigned int inferred_effects,
         ores_std_access mode) {
     ores_actor_state_acquisition out = {0};
-    if (!state || mode != ORES_STD_READ && mode != ORES_STD_WRITE) {
+    if (!state || (mode != ORES_STD_READ && mode != ORES_STD_WRITE)) {
         out.verification = ORES_STATE_INVALID;
     } else if (!ores_state_identity_valid(state, trusted_actor_id, trusted_incarnation)) {
         out.verification = ORES_STATE_WRONG_ACTOR;
