@@ -67,6 +67,38 @@ int main() {
     REQUIRE(symbol(general) != symbol(aSpecific));
     REQUIRE(symbol(sig({a})) != symbol(sig({foo})));
     REQUIRE(symbol(aSpecific) == "ores-enum-variant-slot-v1|12:66696c653a3a6d6f64756c65|6:4d4f44554c45|1:66|1:32|1:56|9:66696c653a3a466f6f|1:41|1:50|3:696e74");
+
+    // AOT linker oracle: all definitions exist, exact checked target symbol
+    // is frozen, and an image from another compilation cannot accept it.
+    std::map<std::string, std::string> bodies;
+    for (const auto& entry : family) bodies.emplace(validatedSymbol(registry, entry),
+                                                    std::string(64, 'a'));
+    AotImage image(registry, family, bodies);
+    REQUIRE(image.definitionCount() == family.size());
+    const DirectRelocation rA = image.bindDirect({a, n});
+    REQUIRE(rA.targetSymbol == validatedSymbol(registry, aSpecific));
+    REQUIRE(rA.exactBodyDigest == std::string(64, 'a'));
+    image.requireImage(rA);
+    REQUIRE(image.bindDirect({bar, n}).targetSymbol == validatedSymbol(registry, other));
+    REQUIRE(image.bindDirect({foo, n}).targetSymbol == validatedSymbol(registry, general));
+    rejects([&] { (void)image.bindDirect({{Kind::Variant, "file::Foo", "Z"}, n}); });
+    rejects([&] { (void)image.bindDirect({{Kind::Primitive, "string", ""}, n}); });
+    auto missingBodies = bodies;
+    missingBodies.erase(validatedSymbol(registry, aSpecific));
+    rejects([&] { AotImage invalid(registry, family, missingBodies); });
+    auto unexpectedBodies = bodies;
+    unexpectedBodies["untrusted::fake"] = std::string(64, 'b');
+    rejects([&] { AotImage invalid(registry, family, unexpectedBodies); });
+    auto upperDigest = bodies;
+    upperDigest[validatedSymbol(registry, aSpecific)] = std::string(64, 'A');
+    rejects([&] { AotImage invalid(registry, family, upperDigest); });
+    AotImage anotherImage(registry, family, bodies);
+    rejects([&] { anotherImage.requireImage(rA); });
+    auto swappedDigest = rA;
+    swappedDigest.exactBodyDigest = std::string(64, 'f');
+    rejects([&] { image.requireImage(swappedDigest); });
+    bodies.clear(); // The compilation image owns its immutable exports.
+    REQUIRE(image.bindDirect({a, n}).targetSymbol == rA.targetSymbol);
     // Closed-world native compiler policy only; actual guest enum dispatch remains disabled.
     std::puts("PASS native enum variant host policy");
 }
