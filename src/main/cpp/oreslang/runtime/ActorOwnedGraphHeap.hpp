@@ -64,13 +64,14 @@ private:
     std::array<Slot, NodeCapacity> slots_{};
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
-    bool retired_ = false;
+    std::atomic<bool> retired_{false};
     bool dropping_ = false;
 
     void require_owner(ActorHeapIdentity requester) const {
         if (!(requester == owner_))
             throw std::logic_error("actor graph heap belongs to a different execution domain");
-        if (retired_) throw std::logic_error("actor graph heap has retired");
+        if (retired_.load(std::memory_order_acquire))
+            throw std::logic_error("actor graph heap has retired");
     }
 
     void require_open_access(ActorHeapIdentity requester) const {
@@ -111,7 +112,7 @@ private:
     void erase_all() noexcept {
         // Revoke every public handle BEFORE any destructor can observe it.
         // Destructor glue must not reenter this arena or follow weak links.
-        retired_ = true;
+        retired_.store(true, std::memory_order_release);
         dropping_ = true;
         for (auto& slot : slots_) {
             auto* drop = slot.drop;
@@ -153,7 +154,9 @@ public:
 
     std::uint64_t heap_id() const noexcept { return heap_id_; }
     ActorHeapIdentity owner() const noexcept { return owner_; }
-    bool retired() const noexcept { return retired_; }
+    bool retired() const noexcept {
+        return retired_.load(std::memory_order_acquire);
+    }
 
     /** Supervisor/FFI must hold a lease before any reference survives a turn. */
     std::optional<ActorHeapBorrowGate::Lease> borrow(ActorHeapIdentity actor) {
@@ -244,8 +247,12 @@ public:
         if (slot.drop) throw std::logic_error("owned objects cannot be overwritten as bytes");
         if (length > NodeBytes || (length && !bytes))
             throw std::invalid_argument("invalid actor graph payload");
-        std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
-        if (length) std::memcpy(slot.payload.data(), bytes, length);
+        // Zeroing before memcpy corrupts self-overlapping native buffers.
+        // memmove handles the overlap, then deterministically scrubs the
+        // truncated tail without hidden heap allocations.
+        if (length) std::memmove(slot.payload.data(), bytes, length);
+        std::fill(slot.payload.begin() + length,
+                  slot.payload.end(), std::byte{0});
         slot.length = length;
     }
 
@@ -265,7 +272,9 @@ public:
     bool is_linked(ActorHeapIdentity actor, Handle source, Handle target) {
         auto loan = require_read_access(actor);
         Slot& from = require_node(source);
-        if (target.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
+        // Queries are no exemption from generation checking: an old slot
+        // identity must not be treated as an authoritative false edge.
+        (void)require_node(target);
         for (std::size_t i = 0; i < from.link_count; ++i) {
             if (from.links[i] == target) return true;
         }
