@@ -57,6 +57,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-ipc-receipts-test)
     set_tests_properties(native_ipc_receipt_bounded_correlation_and_races
         PROPERTIES TIMEOUT 25)
+    # Deliberate std::bad_alloc injection during the retirement snapshot:
+    # either all correlations remain, or every retired identity is returned.
+    add_executable(oreslang-native-ipc-loss-failpoint-test
+        tests/native_ipc_receipt_loss_failpoint_test.cpp)
+    target_include_directories(oreslang-native-ipc-loss-failpoint-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ipc-loss-failpoint-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ipc-loss-failpoint-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_ipc_loss_retirement_allocation_failure
+        COMMAND oreslang-native-ipc-loss-failpoint-test)
+    set_tests_properties(native_ipc_loss_retirement_allocation_failure
+        PROPERTIES TIMEOUT 25)
 
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
