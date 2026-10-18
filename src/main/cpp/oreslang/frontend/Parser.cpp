@@ -203,12 +203,21 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("static")) {
+                if (accept("contract"))
+                    fail("native static contract lowering unsupported; reject before LLVM IR");
+                fail("native static top-level declaration unsupported");
+            }
+            if (accept("contract"))
+                fail("native module contract lowering unsupported; reject before LLVM IR");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
                 program.module = identifier();
+                if (token_.text == "conforms")
+                    fail("native module contract conformance lowering unsupported; reject before LLVM IR");
                 accept("as");
                 wrapped_module = true;
             } else {
@@ -223,6 +232,13 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("static")) {
+                    if (accept("contract"))
+                        fail("native static contract lowering unsupported; reject before LLVM IR");
+                    fail("native static top-level declaration unsupported");
+                }
+                if (accept("contract"))
+                    fail("native module contract lowering unsupported; reject before LLVM IR");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
@@ -337,6 +353,8 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (token_.text == "implements")
+            fail("native class contract conformance lowering unsupported; reject before LLVM IR");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
