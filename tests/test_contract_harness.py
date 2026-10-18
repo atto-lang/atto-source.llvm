@@ -21,13 +21,16 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         self.fixture = self.root / "fixture.ores"
         self.fixture.write_text("fixture", encoding="utf-8")
 
-    def compiler(self, *, status=0, stdout="", stderr=""):
+    def compiler(self, *, status=0, stdout="", stderr="", leaked_artifact=None):
         path = self.root / "fake-compiler"
         path.write_text(
             "#!" + sys.executable + "\n"
             + "import sys\n"
+            + "from pathlib import Path\n"
             + f"sys.stdout.write({stdout!r})\n"
             + f"sys.stderr.write({stderr!r})\n"
+            + (f"Path({leaked_artifact!r}).write_text('leaked', encoding='utf-8')\n"
+               if leaked_artifact is not None else "")
             + f"sys.exit({status})\n",
             encoding="utf-8",
         )
@@ -163,6 +166,15 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         compiler = self.compiler(status=1, stderr="private class field")
         p = self.run_contract(compiler, "--diagnostic", "private class field")
         self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_rejected_source_must_not_leave_object_or_ir_files(self):
+        for name in ("leaked.ll", "leaked.o", ".hidden-cache"):
+            with self.subTest(name=name):
+                compiler = self.compiler(
+                    status=1, stderr="private class field", leaked_artifact=name)
+                p = self.run_contract(compiler, "--diagnostic", "private class field")
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("filesystem artifacts after rejection", p.stderr)
 
     def test_rejection_must_not_accept_successful_compilation(self):
         compiler = self.compiler(status=0, stdout="; ModuleID = 'wrong'\n")
