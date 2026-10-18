@@ -1922,3 +1922,38 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_hot_upgrade_epoch_gate_host_only
         PROPERTIES TIMEOUT 20)
 endif()
+
+# Trusted POSIX fixture ONLY: two offline AOT-compiled PIC modules, an ABI
+# incompatible module, and generation-pinned dynamic loader host regression.
+# Not a production dynamic code loader, sandbox or cryptographic artifact gate.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_library(oreslang-test-hot-image-old MODULE
+        tests/fixtures/hot_aot_image_old.cpp)
+    add_library(oreslang-test-hot-image-new MODULE
+        tests/fixtures/hot_aot_image_new.cpp)
+    add_library(oreslang-test-hot-image-incompatible MODULE
+        tests/fixtures/hot_aot_image_incompatible.cpp)
+    foreach(image_target IN ITEMS
+            oreslang-test-hot-image-old
+            oreslang-test-hot-image-new
+            oreslang-test-hot-image-incompatible)
+        target_compile_options(${image_target} PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        set_target_properties(${image_target} PROPERTIES
+            POSITION_INDEPENDENT_CODE ON)
+    endforeach()
+    add_executable(oreslang-test-hot-aot-pic-host
+        tests/native_hot_aot_pic_loader_host_test.cpp)
+    target_link_libraries(oreslang-test-hot-aot-pic-host PRIVATE
+        ${CMAKE_DL_LIBS} Threads::Threads)
+    target_compile_options(oreslang-test-hot-aot-pic-host PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_hot_aot_pic_loader_host_only
+        COMMAND oreslang-test-hot-aot-pic-host
+            "$<TARGET_FILE:oreslang-test-hot-image-old>"
+            "$<TARGET_FILE:oreslang-test-hot-image-new>"
+            "$<TARGET_FILE:oreslang-test-hot-image-incompatible>")
+    set_tests_properties(native_hot_aot_pic_loader_host_only
+        PROPERTIES TIMEOUT 20)
+endif()
