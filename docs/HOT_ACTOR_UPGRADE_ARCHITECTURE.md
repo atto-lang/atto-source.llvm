@@ -142,6 +142,58 @@ cannot be accidentally fulfilled by an older worker's late CONTROL message.
   of unrestricted host `dlopen`. Untrusted code-image sharing must be explicitly
   tenant-authorized and cannot grant ambient host capabilities.
 
+
+## Follow-up implementation slice: real ingress fence and trusted PIC fixture (2026-10-17)
+
+The Java `ActorRuntime` now has package-private, supervisor-only
+`freezeUserIngressForHotUpgrade(ActorRef)` returning an opaque, idempotent
+`HotUpgradeIngressFreeze` handle. It checks the actual runtime's two-phase
+user-mailbox admission gates (both the initial slot reservation and final
+committed-envelope admission) under `lifecycleLock`, rejecting new user messages
+with `ActorSealedException`. Previously accepted messages and CONTROL
+continuations remain eligible to finish. A bounded `schedulerDrained()`
+observation checks execution-carrier ownership, scheduled dispatch, mailbox
+accounting under its own lock, source suspension and registered pending
+operations; a stale/closed handle cannot lift another handle's seal. The
+reservation is released by `close()` on rollback. Runtime-termination
+invalidates it.
+
+**Critical limit:** `schedulerDrained()` is an observation, not a durable
+quiescence certificate. It does not pin every timer, filesystem callback,
+JNI/FFI frame, GPU/OS resource, external broker or shared-region mapping;
+a new callback may become eligible after it returns true. Nothing in this slice
+changes a source actor's immutable `codeExecutor`, copies its
+`ActorOwnedGuestState`, rebinds a stable `ActorRef` to another address space,
+or emits a compiler-attested image receipt. The real code+state commit API
+must remain unavailable until those requirements are implemented.
+
+The LLVM backend now includes a POSIX **test-only** AOT/PIC experiment.
+CTest compiles three independent shared objects (old, new, incompatible) and
+a host binary that exercises `dlopen`/`dlsym`, exact ABI descriptor checks,
+stale routing epochs, generation-scoped leases, old-version calls after
+publication, and no premature `dlclose`. This explicitly proves neither
+source-generated LLVM IR nor trusted artifact admission. Arbitrary native
+`dlopen` executes initializers **before** metadata inspection; production must
+verify the artifact's actual bytes, signature, authorized dependency closure
+and execution domain BEFORE the target can run any code. Untrusted actors must
+never enter this loader in the supervisor address space.
+
+Next release gates in dependency order:
+1. Compiler-private image/state/message/capability receipts with cryptographic
+   byte provenance, plus a trusted supervisor admission API.
+2. Scheduler-wide epoch pins for outstanding task lifetimes, late timer
+   callbacks, FFI and resource leases; `freeze + schedulerDrained` alone is
+   insufficient to prove a safe swap.
+3. Typed canonical actor-state snapshot/restore and verifier; strict same-schema
+   admission first, explicit state migrations only after that.
+4. Stable logical actor routing to fresh worker/arena with a single commit epoch,
+   old mailbox version handling, and rollback-before-commit.
+5. Production native PIC/ORC loader whose authorization boundary executes
+   BEFORE code is dynamically linked, real AOT actor sample, ASan/UBSan and
+   cross-process sandbox tests.
+6. JDK25/Maven, Graal Native Image, LLVM CMake/CTest and exact-head evidence,
+   including nonzero Actions job steps and an authorized private source runner.
+
 ## Required executable test matrix
 
 1. **Language:** compiler-produced schema/ABI digests; type-safe migration;
