@@ -4,6 +4,8 @@
 // LLVM parser, checker, guest codegen and virtual calls MUST still reject this
 // source feature until type-identity-preserving lowering has been verified.
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <cstddef>
 #include <map>
 #include <set>
@@ -224,4 +226,122 @@ inline std::string symbol(const Signature& s) {
     }
     return output;
 }
+
+/**
+ * Host-only closed-world AOT link proof.
+ *
+ * Every source declaration must have a compiled body with a canonical SHA-256
+ * digest. The caller's statically proven argument tags yield exactly one
+ * relocatable *symbol*, never a runtime enum-switch or a name/arity fallback.
+ * The in-memory generation is NOT serialized into the executable ABI.
+ */
+inline bool canonicalSha256(const std::string& value) {
+    if (value.size() != 64) return false;
+    for (const char c : value) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+inline std::string validatedSymbol(const Registry& registry, const Signature& signature) {
+    qualified(signature.owner);
+    simple(signature.name);
+    need(signature.arity() <= MaxArity, "AOT symbol arity limit");
+    need(signature.domain == Domain::Module || signature.domain == Domain::Instance
+         || signature.domain == Domain::Static, "invalid AOT callable domain");
+    validateRegistry(registry);
+    for (const Parameter& parameter : signature.parameters) validate(parameter, registry);
+    return symbol(signature);
+}
+
+struct DirectRelocation {
+    std::string targetSymbol;
+    std::string exactBodyDigest;
+    std::uint64_t imageIdentity;
+};
+
+class AotImage final {
+public:
+    AotImage(Registry registry, std::vector<Signature> declarations,
+             std::map<std::string, std::string> compiledBodies)
+        : registry_(std::move(registry)), declarations_(std::move(declarations)),
+          compiledBodies_(std::move(compiledBodies)), imageIdentity_(nextIdentity()) {
+        admit(registry_, declarations_);
+        need(compiledBodies_.size() == declarations_.size(), "missing or extra AOT definitions");
+        for (std::size_t i = 0; i < declarations_.size(); ++i) {
+            const Signature& declaration = declarations_[i];
+            const std::string token = validatedSymbol(registry_, declaration);
+            auto found = compiledBodies_.find(token);
+            need(found != compiledBodies_.end(), "unresolved AOT definition");
+            need(canonicalSha256(found->second), "noncanonical AOT body digest");
+            byArity_[declaration.arity()].push_back(i);
+        }
+    }
+    AotImage(const AotImage&) = delete;
+    AotImage& operator=(const AotImage&) = delete;
+    AotImage(AotImage&&) = delete;
+    AotImage& operator=(AotImage&&) = delete;
+
+    std::size_t definitionCount() const noexcept { return compiledBodies_.size(); }
+
+    DirectRelocation bindDirect(const std::vector<Parameter>& provenArguments) const {
+        need(provenArguments.size() <= MaxArity, "AOT call arity limit");
+        for (const Parameter& p : provenArguments) validate(p, registry_);
+        const auto group = byArity_.find(provenArguments.size());
+        need(group != byArity_.end(), "no AOT overload at this arity");
+        std::vector<std::size_t> matches;
+        for (std::size_t candidateIndex : group->second) {
+            const Signature& candidate = declarations_[candidateIndex];
+            bool applies = true;
+            for (std::size_t i = 0; i < provenArguments.size(); ++i) {
+                if (!subset(provenArguments[i], candidate.parameters[i])) {
+                    applies = false;
+                    break;
+                }
+            }
+            if (applies) matches.push_back(candidateIndex);
+        }
+        need(!matches.empty(), "no statically proven AOT call target");
+        std::size_t winner = declarations_.size();
+        for (std::size_t candidateIndex : matches) {
+            bool dominates = true;
+            for (std::size_t otherIndex : matches) {
+                if (!subset(declarations_[candidateIndex], declarations_[otherIndex])) {
+                    dominates = false;
+                    break;
+                }
+            }
+            if (dominates) {
+                need(winner == declarations_.size(), "ambiguous AOT target");
+                winner = candidateIndex;
+            }
+        }
+        need(winner < declarations_.size(), "ambiguous AOT target");
+        const std::string token = validatedSymbol(registry_, declarations_[winner]);
+        auto entry = compiledBodies_.find(token);
+        need(entry != compiledBodies_.end(), "unresolved direct-call relocation");
+        return DirectRelocation{token, entry->second, imageIdentity_};
+    }
+
+    void requireImage(const DirectRelocation& relocation) const {
+        need(relocation.imageIdentity == imageIdentity_, "stale AOT image relocation");
+        auto body = compiledBodies_.find(relocation.targetSymbol);
+        need(body != compiledBodies_.end()
+             && body->second == relocation.exactBodyDigest, "invalid AOT body mapping");
+    }
+
+private:
+    static std::uint64_t nextIdentity() {
+        static std::atomic<std::uint64_t> counter{1};
+        const auto id = counter.fetch_add(1, std::memory_order_relaxed);
+        need(id != 0, "AOT compilation identity exhaustion");
+        return id;
+    }
+    const Registry registry_;
+    const std::vector<Signature> declarations_;
+    const std::map<std::string, std::string> compiledBodies_;
+    std::map<std::size_t, std::vector<std::size_t>> byArity_;
+    const std::uint64_t imageIdentity_;
+};
+
 } // namespace oreslang::types::variant_overloads
