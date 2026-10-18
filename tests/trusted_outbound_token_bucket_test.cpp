@@ -23,6 +23,16 @@ static void fractional_refill_and_rollback() {
     require(bucket.available(UINT64_MAX) == 5);
 }
 
+static void unsigned_nano_wrap_refills_but_backwards_time_does_not() {
+    TrustedOutboundTokenBucket bucket(1000000000ULL, 5, UINT64_MAX - 2);
+    require(bucket.try_consume(5, UINT64_MAX - 2));
+    // Four forward nanoseconds across the unsigned timestamp wrap.
+    require(bucket.available(1) == 4);
+    require(bucket.available(0) == 4); // backwards sample
+    require(bucket.available(2) == 5);
+    require(bucket.available(UINT64_MAX - 1) == 5); // old epoch is not forward
+}
+
 static void failed_enqueue_refunds_only_prior_charge() {
     TrustedOutboundTokenBucket bucket(1, 2, 0);
     require(bucket.try_consume(2, 0));
@@ -66,6 +76,7 @@ static void invalid_policy_or_charge_denied() {
 
 int main() {
     fractional_refill_and_rollback();
+    unsigned_nano_wrap_refills_but_backwards_time_does_not();
     failed_enqueue_refunds_only_prior_charge();
     concurrent_senders_cannot_overspend();
     invalid_policy_or_charge_denied();
