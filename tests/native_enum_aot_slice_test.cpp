@@ -81,7 +81,8 @@ int main() {
     rejectedSealed(std::string("// ores: capability=filesystem\n") + fixture());
     for (const char* whitespaceVariant : {
         "//ores: target=wasm32", "//  ores : target=host",
-        "//\tores:\tcapability=filesystem", "// ores\t: target=wasm32"
+        "//\tores:\tcapability=filesystem", "// ores\t: target=wasm32",
+        "/// ores: target=wasm32", "//// ores : capability=network"
     }) {
         rejectedSealed(fixture() + whitespaceVariant);
     }
