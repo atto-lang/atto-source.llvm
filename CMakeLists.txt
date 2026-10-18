@@ -2005,3 +2005,17 @@ if(BUILD_TESTING)
     set_tests_properties(native_persistent_actor_map_host_prototype
         PROPERTIES TIMEOUT 20)
 endif()
+
+if(BUILD_TESTING)
+    # Host-only ownership/type boundary: Sendable DATA != wire Serializable != CONTROL.
+    add_executable(oreslang-native-actor-message-boundary-test
+        tests/native_actor_message_boundary_test.cpp)
+    target_include_directories(oreslang-native-actor-message-boundary-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-message-boundary-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_data_control_boundary_host_prototype
+        COMMAND oreslang-native-actor-message-boundary-test)
+    set_tests_properties(native_actor_data_control_boundary_host_prototype
+        PROPERTIES TIMEOUT 20)
+endif()
