@@ -51,6 +51,25 @@ class NativeEnumGuestAot(unittest.TestCase):
                                     text=True, timeout=10, check=False)
             self.assertEqual(native.returncode, 10, native.stderr)
 
+    def test_retagging_changes_native_value_but_not_exact_dispatch(self):
+        original = pathlib.Path(self.fixture).read_text(encoding="utf-8")
+        self.assertIn("A, B end", original)
+        symbols = None
+        for tag in (1, 5, 17, 1009, 65537, 2147483646):
+            text = original.replace("A, B end",
+                                    f"A = {tag}, B = {tag + 1} end")
+            result = self.compile(text)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            selected = re.findall(r'call i64 @("?eos2[^\\s(]+"?)\\(', result.stdout)
+            self.assertEqual(len(selected), 2)
+            self.assertNotEqual(selected[0], selected[1])
+            if symbols is None:
+                symbols = selected
+            else:
+                self.assertEqual(selected, symbols,
+                                 "wire tag changes must not change overload ABI")
+            self.assertIn(f"i64 {tag}", result.stdout)
+
     def test_without_experimental_flag_remains_rejected(self):
         with tempfile.TemporaryDirectory(prefix="ores-enum-gate-") as temp:
             src = pathlib.Path(temp) / "guest.ores"
