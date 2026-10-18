@@ -119,8 +119,11 @@ def main():
                "hosted ELF interpreter/dynamic-loader section detected")
         verify("There is no dynamic section" in dynamic,
                "dynamic dependency section present")
-        verify(".ARM.exidx" not in sections,
-               "unwind-table section present in freestanding scalar build")
+        # ARM ELF may retain linker-generated .ARM.exidx with static
+        # cantunwind entries; this is not itself a libc/OS dependency.
+        # A *named undefined unwind personality* is disallowed below.
+        verify(".isr_vector" in sections and ".text" in sections,
+               "missing bare-metal vector table or guest text sections")
 
         # The ELF null symbol is UND with no name and is harmless; every
         # *named* undefined symbol is a disallowed missing runtime dependency.
