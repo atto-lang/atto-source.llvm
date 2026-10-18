@@ -111,10 +111,10 @@ struct Loan {
     bool exclusive = false;
 };
 
-// Only named, OWNED int parameter storage is currently addressable. A loan
-// exists only as a call argument and must be returned at the call boundary.
-// No borrow of a temporary, return of a reference, or reborrow of an existing
-// borrowed parameter can enter native LLVM lowering.
+// Only named scalar storage and admitted scalar-class layouts are addressable.
+// A call loan lasts through evaluation of every later argument and the call.
+// Reborrows retain the caller's provenance; shared-to-exclusive escalation,
+// temporary loans, escaping references and unsupported projections fail closed.
 Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     const bool exclusive = expr.kind == Expression::Kind::BorrowMut;
     if (expr.kind != Expression::Kind::Borrow &&

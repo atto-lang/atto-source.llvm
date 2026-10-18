@@ -495,6 +495,11 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_class_methods_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    add_test(NAME native_shared_borrow_contract
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/borrow_contract.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+    set_tests_properties(native_shared_borrow_contract PROPERTIES TIMEOUT 120)
+
     add_test(NAME native_source_module_graph_execution
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_module_imports.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
