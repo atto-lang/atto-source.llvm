@@ -812,6 +812,11 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "do") {
+                Lexer next = lexer_;
+                if (next.next().text == "nb" && next.next().text == "{")
+                    fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
+            }
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -1196,6 +1201,11 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (token_.text == "nb") {
+            Lexer next = lexer_;
+            if (next.next().text == "{")
+                fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
+        }
         if (token_.text == "trap") {
             // Reserved for Option-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase
