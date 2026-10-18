@@ -38,7 +38,7 @@ int main() {
         {"ready", Codec::Kind::Bool},
         {"name", Codec::Kind::String}};
     const std::vector<Codec::Value> values{
-        std::int64_t{42}, true, std::string{"worker-\\xCF\\x80"}};
+        std::int64_t{42}, true, std::string{"worker-\xCF\x80"}};
     const auto golden = Codec::encode(fields, values);
     check(golden.size() == 57);
     check(sha256(golden)
