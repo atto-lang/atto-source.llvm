@@ -221,3 +221,72 @@ model proofs and host-only Java/C++ tests are useful, but cannot certify
 guest actors, native-image execution, protected address spaces or AOT reload.
 Never export private source to another GitHub organization without the explicit
 reviewed cross-org authorization policy.
+
+
+## Second audit pass: completion-publication race, canonical checkpoint and router provenance
+
+A production upgrade must never infer quiescence from the absence of a Future
+in `pendingOperations` alone. Its completion callback may run after the
+Future's removal hook but before the callback enqueues the actor continuation.
+**Java's `ActorRuntime.enqueueOnCompletion` now owns a separate bounded
+`pendingCompletionPublications` reservation**, created before the Future is
+registered and released only after its continuation has been enqueued or its
+registration failed. The scheduler drain observation also requires this
+reservation count to reach zero. Registration failures release exactly once;
+the reservation cannot be exhausted through integer wraparound. A new
+real-scheduler JUnit regression stages a pending Future and then completes it
+under a frozen ingress gate.
+
+The Java backend also now has `ActorCheckpointEnvelopeV1`, a host-only
+canonical envelope for a prevalidated **byte snapshot**:
+`ORESCP01` (8 bytes), big-endian u32 version 1, UUID actor identity (16
+bytes), big-endian u64 incarnation, four canonical 32-byte SHA-256 digests
+(code/state schema/message ABI/capability policy), big-endian u32 payload
+length, at most 1 MiB of opaque state bytes, and an unkeyed 32-byte SHA-256
+trailer over all preceding bytes. Fixed header is 168 bytes; total length
+is exactly 200 + payload length. The decoded record and returned bytes
+are defensive copies. Decoder rejects wrong magic/version, foreign actor,
+incorrect generation or digests, truncated/trailing data, length overflows,
+and checksum modifications. **The checksum is NOT an authentication
+signature, and a byte envelope is NOT a serialized guest object graph.**
+No executor state is captured, transferred, restored or replaced in this
+version; compiler receipts and independent state semantics are still required.
+
+For cross-language conformance, Java JUnit fixes a golden frame digest
+`c054268972740370c1be5ff20ceeda21edd17282a69692203acca15b4e6c1793`
+for the canonical two-byte sample. An independent, source-free Python model
+performs deterministic roundtrips, one-bit corruption and hostile
+identity/ABI checks. LLVM CTest registers it in regular and `python -O`
+modes, with explicit assertions that remain live under optimization.
+
+The native PIC test router now binds each staged candidate to an opaque
+unforgeable per-router authority, *in addition* to its monotonic routing
+epoch. A candidate staged by one supervisor cannot be published by another
+supervisor merely because their epochs and schemas happen to match. This is
+still a **trusted fixture**, not an authenticated artifact loader.
+
+### Evidence for this audit pass
+
+Local checks on exact GitHub blobs:
+- Java `ActorCheckpointEnvelopeV1.java` blob
+  `885e46f2333d7e89a564db89cb572b5b14076782` compiled using JDK21
+  `javac --release 21 -Xlint:all -Werror`. A separately executed
+  standalone package-local smoke exercised **2,256** deterministic
+  checkpoint assertions and the cross-language golden.
+- Source-free Python wire corpus has blob
+  `606f9154b8aee9b29fc176ad10b14abc23fa6c24` **identical in Java
+  and LLVM repositories**, and the exact local blob passed **1,236 checks
+  in each of normal and `python -O` runs**.
+- Native PIC test blob
+  `54fa36bf9e8b06d0d0bbf2c7e22b0e9c434fe101` and the
+  exact four fixture blobs compiled with Clang C++17 warnings-as-errors;
+  the test passed once with ASan+UBSan/leak detection and passed in
+  **500 additional consecutive optimized executions**. This proves
+  host-only PIC generational pinning, stale/foreign candidate rejection
+  and safe controlled fixture unloading, *not* LLVM-generated actor code.
+
+The Java ActorRuntime scheduling-race fix and its JUnit integration test
+have not been executed through full Maven on the exact PR head. Neither
+source repository currently offers usable Actions runner execution; the
+private-source cross-org export policy presently authorizes no destination
+and must not be bypassed by mirroring a Git tree. Stay in DRAFT.
