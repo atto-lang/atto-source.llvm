@@ -14,3 +14,13 @@ const OresTestHotAotImageV1 image = {
 extern "C" const OresTestHotAotImageV1* ores_test_hot_aot_image_v1() {
     return &image;
 }
+
+namespace {
+void (*test_unload_hook)() = nullptr;
+__attribute__((destructor)) void on_unload() {
+    if (test_unload_hook) test_unload_hook();
+}
+}
+extern "C" void ores_test_hot_aot_set_unload_hook(void (*fn)()) {
+    test_unload_hook = fn;
+}
