@@ -1905,3 +1905,20 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only native actor hot-upgrade epoch/pin proof.
+# Does NOT establish source actor migration, protected workers, PIC or ORC JIT.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-hot-upgrade-gate-test
+        tests/actor_hot_upgrade_gate_test.cpp)
+    target_include_directories(oreslang-actor-hot-upgrade-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-hot-upgrade-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-hot-upgrade-gate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_hot_upgrade_epoch_gate_host_only
+        COMMAND oreslang-actor-hot-upgrade-gate-test)
+    set_tests_properties(native_actor_hot_upgrade_epoch_gate_host_only
+        PROPERTIES TIMEOUT 20)
+endif()
