@@ -112,6 +112,18 @@ CASES = {
         "pub fnc main(): int { return (async |int a| -> nb { return a; })(5); }",
         "native async Future lambda lowering unsupported",
     ),
+    "task-new-spelling": (
+        "pub fnc main(): int { return task { return 7; }; }",
+        "native Task block lowering unsupported",
+    ),
+    "task-discard-new-spelling": (
+        "pub fnc main(): int { do task { return 7; }; return 0; }",
+        "native Task block lowering unsupported",
+    ),
+    "reject-redundant-nb-task": (
+        "pub fnc main(): int { return nb task { return 7; }; }",
+        "nb task is not a language construct",
+    ),
     "recover-statement": (
         "pub fnc main(): int { recover 42; return 0; }",
         "native exceptional-control boundary unsupported",
