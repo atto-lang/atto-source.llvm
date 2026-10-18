@@ -108,11 +108,58 @@ static void concurrent_tenant_cap_cannot_overspend() {
           == Status::rate_limited);
 }
 
+static void retired_scope_cannot_partially_commit_http_or_tcp() {
+    for (int retired = 0; retired != 3; ++retired) {
+        for (int http = 0; http != 2; ++http) {
+            Gate gate;
+            Gate::Scope child(gate, policy(), 0);
+            Gate::Scope supervisor(gate, policy(), 0);
+            Gate::Scope tenant(gate, policy(), 0);
+            auto admitted = http
+                ? gate.try_start_http(child, supervisor, tenant, 0)
+                : gate.try_open_tcp(child, supervisor, tenant, 0);
+            check(admitted.status == Status::admitted);
+            if (retired == 0) child.close();
+            else if (retired == 1) supervisor.close();
+            else tenant.close();
+            // Before preflight this aborted OresVM after partial commit.
+            check(!admitted.lease.commit_dispatch());
+            check(admitted.lease.abort_before_dispatch(0));
+            check(!admitted.lease.abort_before_dispatch(0));
+            admitted.lease.release();
+        }
+    }
+}
+
+static void concurrent_revoke_commit_has_once_only_settlement() {
+    for (int round = 0; round < 64; ++round) {
+        Gate gate;
+        Gate::Scope child(gate, policy(), 0);
+        Gate::Scope supervisor(gate, policy(), 0);
+        Gate::Scope tenant(gate, policy(), 0);
+        auto admitted = gate.try_start_http(child, supervisor, tenant, 0);
+        check(admitted.status == Status::admitted);
+        std::atomic<bool> start{false};
+        std::thread closer([&] {
+            while (!start.load()) std::this_thread::yield();
+            supervisor.close();
+        });
+        start.store(true);
+        const bool committed = admitted.lease.commit_dispatch();
+        closer.join();
+        if (!committed) check(admitted.lease.abort_before_dispatch(0));
+        admitted.lease.release();
+        check(!admitted.lease.commit_dispatch());
+    }
+}
+
 int main() {
     hierarchical_http_rolls_back_after_supervisor_denial();
     tenant_rollback_and_once_only_pre_dispatch_cancel();
     child_fanout_cannot_bypass_shared_supervisor_tcp_cap();
     invalid_or_closed_scope_fails_closed();
     concurrent_tenant_cap_cannot_overspend();
+    retired_scope_cannot_partially_commit_http_or_tcp();
+    concurrent_revoke_commit_has_once_only_settlement();
     std::cout << "HIERARCHICAL_NETWORK_GATE_HOST_ONLY_PASS\n";
 }
