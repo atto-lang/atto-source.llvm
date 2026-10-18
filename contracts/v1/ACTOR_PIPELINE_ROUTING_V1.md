@@ -238,3 +238,35 @@ both before and after the actual mailbox enqueue produce distinguishable
 admission outcomes; sibling-frame rollback stays identity-checked.
 A test that imports only a subset of identical Git blobs is evidence
 for that subset, **never proof of a complete exact-tree build**.
+
+## In-flight publication versus generation fencing (2026-10-17)
+
+A mailbox route claim is an outstanding publication lifetime even before
+DATA is enqueued. Trusted generation `advance`, `abort`, and terminal
+`close` paths must not silently invalidate a frame while its publication
+claim is unresolved. In Java, claim acquisition checks the live generation
+and performs the `FREE → CLAIMED` CAS atomically under the session monitor,
+and a preallocated in-flight-claim counter is released through allocation-
+free `CLAIMED → FREE` or `CLAIMED → PUBLISHED` transitions. A generation
+fence rejects an outstanding claim and can proceed once the admission
+outcome resolves. The mailbox success marker still remains nonthrowing
+and does not acquire a monitor after successful enqueue.
+
+In LLVM's **host-only ledger**, a move-only `PublicationClaim` owns the
+exclusive reservation, performs a nonthrowing `commit()` immediately
+after successful mailbox enqueue, and automatically `abort()`s a
+prepublication failure at lifetime exit. A losing concurrent publisher
+does not obtain a claim object, and therefore cannot release the winner.
+The native ledger rejects generation abort and explicit completion
+of an actively claimed frame. Its `close()` and actual scheduler DATA
+publication have **not yet been integrated** into one native mailbox
+lifecycle barrier: the host ledger alone does not prove native STOP
+atomicity, delivery or guest-language parity. That integration is
+required before changing the evidence label.
+
+Required tests: a claimed frame blocks generation abort/close, an
+aborted claim permits a new generation fence, an old-generation handle
+cannot reacquire admission, and eight competing senders generate exactly
+one publication. Compile the real source on an executing exact-tree
+runner; an isolated Java/C++ model or verified subset of source blobs
+is separate and weaker evidence.
