@@ -165,6 +165,9 @@ class NativeEnumGuestAot(unittest.TestCase):
         original = pathlib.Path(self.fixture).read_text(encoding="utf-8")
         for source in ("// ores: target=wasm32\n" + original,
                        original + "\n// ores: capability=filesystem",
+                       original + "\n//ores: target=host",
+                       original + "\n//  ores : capability=filesystem",
+                       original + "\n//\tores:\tcapability=filesystem",
                        original.replace("define enum",
                                         "// ores: target=host\ndefine enum", 1)):
             with self.subTest(position=source.index("// ores:")):
