@@ -52,6 +52,14 @@ int main(void) {
      * start at slot 1 / generation 1. Public ABI size remains unchanged. */
     OresNativeNio* foreign_runtime = ores_native_nio_open(1, 1, 1);
     require(foreign_runtime != NULL);
+    /* Same pipe open-file-description, separate C ABI runtime: deny alias. */
+    int copied_pipe_read = dup(pipefd[0]);
+    require(copied_pipe_read >= 0);
+    OresNativeNioWatch alias_forbidden = {0};
+    require(!ores_native_nio_try_watch(
+        foreign_runtime, copied_pipe_read, EPOLLIN, &alias_forbidden));
+    require(alias_forbidden.ticket == 0);
+    close(copied_pipe_read);
     int foreign_pipe[2] = {-1, -1};
     require(pipe2(foreign_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
     OresNativeNioWatch foreign_watch = {0};

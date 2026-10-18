@@ -345,6 +345,61 @@ int main() {
         check(!source.try_watch(*token, EPOLLIN).has_value());
     }
     {
+        // Two distinct NIO manager instances must not concurrently own
+        // aliases of the same pipe read endpoint. Cancellation alone does
+        // not transfer ownership; terminal completion consumption does.
+        NativeEpollReactorManager source(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        NativeEpollReactorManager other(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        int pipefd[2]{-1, -1};
+        check(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+        const int alias = ::dup(pipefd[0]);
+        check(alias >= 0);
+        auto first = source.try_watch(pipefd[0], EPOLLIN);
+        check(first.has_value());
+        check(!other.try_watch(alias, EPOLLIN).has_value());
+        check(source.try_cancel(*first));
+        check(!other.try_watch(alias, EPOLLIN).has_value());
+        auto done = source.try_pop();
+        check(done.has_value() && done->event.ticket.value == first->ticket.value
+              && done->event.outcome == NativeEpollReactor::Outcome::cancelled);
+        auto transferred = other.try_watch(alias, EPOLLIN);
+        check(transferred.has_value());
+        check(!source.try_watch(pipefd[0], EPOLLIN).has_value());
+        other.stop();
+        auto stopped = other.try_pop();
+        check(stopped.has_value() && stopped->event.ticket.value == transferred->ticket.value);
+        check(stopped->event.outcome == NativeEpollReactor::Outcome::stopped);
+        auto newWatch = source.try_watch(pipefd[0], EPOLLIN);
+        check(newWatch.has_value());
+        source.stop();
+        auto retired = source.try_pop();
+        check(retired.has_value() && retired->event.ticket.value == newWatch->ticket.value);
+        ::close(alias); ::close(pipefd[0]); ::close(pipefd[1]);
+    }
+    {
+        // Even if the retiring manager is destroyed before the host reads its
+        // stopped completion, global claims must be reclaimed at teardown.
+        int pipefd[2]{-1, -1};
+        check(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+        const int alias = ::dup(pipefd[0]);
+        check(alias >= 0);
+        NativeEpollReactorManager survivor(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        {
+            NativeEpollReactorManager retired(1,
+                NativeEpollReactorManager::Profile::preallocated_rt, 1);
+            check(retired.try_watch(pipefd[0], EPOLLIN).has_value());
+            check(!survivor.try_watch(alias, EPOLLIN).has_value());
+        }
+        auto afterTeardown = survivor.try_watch(alias, EPOLLIN);
+        check(afterTeardown.has_value());
+        survivor.stop();
+        check(survivor.try_pop().has_value());
+        ::close(alias); ::close(pipefd[0]); ::close(pipefd[1]);
+    }
+    {
         // Two freshly created managers can have equal reactor-local slot and
         // generation. A public ticket from either must not authorize
         // cancellation in the other domain.

@@ -75,6 +75,14 @@ public:
     NativeEpollReactorManager& operator=(const NativeEpollReactorManager&) = delete;
     ~NativeEpollReactorManager() noexcept {
         stop();
+        // Host-only teardown. After producer fencing and reactor stop, retire
+        // even completions never consumed by the host. No accepted raw watch
+        // can leave a process-domain ownership claim permanently stranded.
+        {
+            std::lock_guard<std::mutex> process_guard(process_claim_mu_);
+            for (auto& entry : process_claims_)
+                if (entry.occupied && entry.instance == instance_) entry.occupied = false;
+        }
         // Trusted producers must be fenced before destroying the manager.
         for (auto& entry : owned_) {
             if (!entry.live) continue;
@@ -213,6 +221,26 @@ private:
                      claim.access_mode == access_mode)) return std::nullopt;
         }
         if (!available) return std::nullopt;
+        // Raw sockets and pipes are also subject to a bounded claim domain
+        // shared by manager instances in THIS linked runtime image. Acquire
+        // it before epoll_ctl, and publish only on successful admission.
+        // Never park on a manager/actor hot path; a contended gate rejects.
+        std::unique_lock<std::mutex> process_gate(process_claim_mu_,
+                                                   std::defer_lock);
+        ProcessClaim* process_slot = nullptr;
+        if (stream_identity) {
+            if (!process_gate.try_lock()) return std::nullopt;
+            for (auto& active : process_claims_) {
+                if (!active.occupied) {
+                    if (!process_slot) process_slot = &active;
+                } else if (active.device == identity.st_dev &&
+                           active.inode == identity.st_ino &&
+                           active.access_mode == access_mode) {
+                    return std::nullopt;
+                }
+            }
+            if (!process_slot) return std::nullopt;
+        }
         // Tickets returned by each kernel reactor encode only local
         // slot/generation. Two managers can therefore issue identical
         // reactor tokens. Reserve a process-unique public ID BEFORE any
@@ -247,6 +275,10 @@ private:
                 *available = FdClaim{true, fd, stream_identity, identity.st_dev,
                                      identity.st_ino, access_mode, result, owner,
                                      *token};
+                if (process_slot) {
+                    *process_slot = ProcessClaim{true, identity.st_dev,
+                        identity.st_ino, access_mode, instance_, public_id};
+                }
                 // The manager lock covers both the ownership table and the
                 // bootstrap phase; no creator can race this barrier.
                 if (profile_ == Profile::preallocated_rt)
@@ -281,6 +313,12 @@ public:
         // Never wait behind producer registration or shutdown on a carrier.
         std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
         if (!gate.owns_lock()) return std::nullopt;
+        // Serialize retirement with admission in *all* other local managers.
+        // Reserve the global gate before popping a reactor ticket so that a
+        // transient try-lock miss cannot release a claim prematurely.
+        std::unique_lock<std::mutex> process_gate(process_claim_mu_,
+                                                   std::try_to_lock);
+        if (!process_gate.owns_lock()) return std::nullopt;
         const auto count = started_.load(std::memory_order_acquire);
         if (count == 0) return std::nullopt;
         const auto first = next_completion_.fetch_add(1, std::memory_order_relaxed) % count;
@@ -294,6 +332,15 @@ public:
                     // Translate the trusted reactor-local completion to the
                     // globally minted public ticket before exposing the ABI.
                     event->ticket = claim.watch.ticket;
+                    if (claim.stream_identity) {
+                        for (auto& global : process_claims_) {
+                            if (global.occupied && global.instance == instance_ &&
+                                global.ticket == event->ticket.value) {
+                                global.occupied = false;
+                                break;
+                            }
+                        }
+                    }
                     claim.occupied = false;
                     return Completion{static_cast<std::uint8_t>(index), *event};
                 }
@@ -356,11 +403,24 @@ private:
         std::uint64_t owner = 0;
         NativeEpollReactor::Ticket reactor_ticket{};
     };
-    // Fixed-size, process-local ownership table. No allocation on reactor
-    // registration/completion paths; protected by mu_ with try-lock admission.
+    // Bounded manager-local ownership table; stream claims additionally enter
+    // a bounded cross-manager table for this linked C++ runtime image only.
+    // This does not authenticate cross-DSO or cross-process supervisor FDs.
     static constexpr std::size_t maximum_claims =
         maximum_reactors * NativeEpollReactor::capacity;
     std::array<FdClaim, maximum_claims> claimed_fds_{};
+    struct ProcessClaim {
+        bool occupied;
+        dev_t device;
+        ino_t inode;
+        int access_mode;
+        std::uint64_t instance;
+        std::uint64_t ticket;
+    };
+    // Finite global admission budget: exhaustion rejects without allocating.
+    // Instance IDs are non-reused until UINT64_MAX exhaustion.
+    inline static std::mutex process_claim_mu_{};
+    inline static std::array<ProcessClaim, maximum_claims * 4> process_claims_{};
     static constexpr std::size_t owned_capacity = 256;
     struct OwnedEntry {
         bool live = false;
