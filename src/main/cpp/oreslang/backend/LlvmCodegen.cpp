@@ -271,11 +271,11 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 
-std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
-    enum_aot::validatePlan(plan); // Compiler-side sealed invariant, fail-closed.
-    // This API receives an ordinary C++ Plan aggregate, not an unforgeable
-    // typechecker token. Revalidate its declaration and call provenance
-    // BEFORE LLVM IR emission, including when invoked outside main.cpp.
+std::string emit_verified_enum_aot_ir(const enum_aot::VerifiedPlan& sealed) {
+    const enum_aot::Plan& plan = sealed.readOnly();
+    // Defensive revalidation supplements the constructor-only seal;
+    // mutable test aggregates are no longer accepted as backend arguments.
+    enum_aot::validatePlan(plan);
     const std::string localPrefix = "local_unit.__root__.";
     if (plan.enumId.rfind(localPrefix, 0) != 0 ||
         plan.enumId.size() <= localPrefix.size()) {
