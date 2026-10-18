@@ -27,6 +27,13 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Compile and execute real enum-case guest AOT binary (opt-in)
+        run: |
+          set -euo pipefail
+          python3 tests/native_enum_guest_aot.py \
+            --compiler "$(realpath build/oreslang-llvmc)" \
+            --clang "$(command -v clang)" \
+            --fixture tests/fixtures/enum-aot-basic.ores
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
