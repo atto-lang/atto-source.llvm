@@ -49,6 +49,17 @@ int main() {
         "the sealed source plan must expose only const data");
     const VerifiedPlan sealed = oreslang::enum_aot::parseVerified(fixture());
     REQUIRE(oreslang::enum_aot::checkedNativeExit(sealed.readOnly()) == 10);
+    const auto rejectedSealed = [](std::string_view input) {
+        bool denied = false;
+        try { (void)oreslang::enum_aot::parseVerified(input); }
+        catch (const std::invalid_argument&) { denied = true; }
+        REQUIRE(denied);
+    };
+    std::string embeddedNul = fixture();
+    embeddedNul.push_back(char(0));
+    rejectedSealed(embeddedNul);
+    // Ensure direct library callers cannot bypass the 8MiB CLI source gate.
+    rejectedSealed(std::string(8u * 1024u * 1024u + 1u, ' '));
 
     auto plan = oreslang::enum_aot::parse(fixture());
     oreslang::enum_aot::validatePlan(plan);
