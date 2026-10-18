@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/ActorHeapIdentity.hpp"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
