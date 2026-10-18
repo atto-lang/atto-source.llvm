@@ -480,6 +480,43 @@ private:
     const Plan plan_;
 };
 
+/**
+ * Validate source bytes before the opt-in lexer, including bytes skipped
+ * inside comments. This matches the production CLI UTF-8 admission contract
+ * and keeps direct library callers from introducing a second parser policy.
+ */
+inline void requireSourceUtf8(std::string_view source) {
+    for (std::size_t i = 0; i < source.size();) {
+        const auto lead = static_cast<unsigned char>(source[i]);
+        if (lead == 0)
+            throw std::invalid_argument("native enum AOT: source contains NUL byte");
+        if (lead <= 0x7fu) { ++i; continue; }
+        std::size_t count = 0;
+        unsigned char firstMin = 0x80u, firstMax = 0xbfu;
+        if (lead >= 0xc2u && lead <= 0xdfu) count = 1;
+        else if (lead >= 0xe0u && lead <= 0xefu) {
+            count = 2;
+            if (lead == 0xe0u) firstMin = 0xa0u;
+            if (lead == 0xedu) firstMax = 0x9fu;
+        } else if (lead >= 0xf0u && lead <= 0xf4u) {
+            count = 3;
+            if (lead == 0xf0u) firstMin = 0x90u;
+            if (lead == 0xf4u) firstMax = 0x8fu;
+        } else {
+            throw std::invalid_argument("native enum AOT: invalid UTF-8 leader");
+        }
+        if (source.size() - i <= count)
+            throw std::invalid_argument("native enum AOT: truncated UTF-8");
+        for (std::size_t j = 1; j <= count; ++j) {
+            const auto byte = static_cast<unsigned char>(source[i+j]);
+            if (byte < (j == 1 ? firstMin : 0x80u) ||
+                byte > (j == 1 ? firstMax : 0xbfu))
+                throw std::invalid_argument("native enum AOT: malformed UTF-8 continuation");
+        }
+        i += count + 1;
+    }
+}
+
 inline VerifiedPlan parseVerified(std::string_view source) {
     // This API may also be invoked directly by host compiler libraries:
     // enforce the CLI's source-byte and binary-NUL admission limits here.
@@ -487,6 +524,7 @@ inline VerifiedPlan parseVerified(std::string_view source) {
         source.find(char(0)) != std::string_view::npos) {
         throw std::invalid_argument("native enum AOT: source size/NUL admission failed");
     }
+    requireSourceUtf8(source);
     Plan plan = parse(source);
     validatePlan(plan);
     return VerifiedPlan(std::move(plan));
