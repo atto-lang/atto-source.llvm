@@ -22,7 +22,7 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ModuleCall, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -169,6 +169,7 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    bool returns_bool = false; // AST-only until typed LLVM codegen
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
@@ -197,9 +198,16 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+struct ModuleImport {
+    std::string symbol;
+    std::string canonical_path;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
+    std::vector<ModuleImport> imports;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
