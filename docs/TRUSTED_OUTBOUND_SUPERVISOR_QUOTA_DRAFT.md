@@ -14,3 +14,9 @@ This draft adds a bounded, integer, host-only token-bucket helper and a multithr
 6. Document exact test command, commit SHA and actual isolated runtime evidence before ready-for-review.
 
 The bounded policy parameters here are an intentionally conservative prototype limit, **not** validated throughput defaults. Tests prove only helper arithmetic/race behavior.
+
+## Addition: untrusted HTTP and TCP egress budgets
+
+`TrustedUntrustedNetworkQuota.hpp` is a second, *host-only*, fixed-storage quota prototype: 10 HTTP requests in flight, 10 request starts/second (burst 2), and 10 simultaneously connecting/open TCP sockets. Distinct RAII leases have once-only release. New native CTest `untrusted_network_quota_host_only` is registered in CMake. It does not hook `NonblockingTcpLinux`, NativeOresVM guest operations, or real secure egress. **No arbitrary LLVM UNTRUSTED code may be admitted to in-process execution as a result of this prototype.**
+
+Integrate only behind a protected trusted egress bridge with authenticated lineage/tenant policy, DNS and redirect/SSRF permission enforcement, physical socket accounting including HTTP pools, connection-start rate limits, stable quotas across restart, and cancellation/teardown fences. Both pending source and cross-backend CI tests must execute before claiming enforcement.
