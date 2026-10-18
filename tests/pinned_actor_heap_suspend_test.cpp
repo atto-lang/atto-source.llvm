@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <thread>
 #include <atomic>
+#include <vector>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -191,8 +192,27 @@ int main() {
             }
             if (frame.lifetime_pinned()) retiredWithPin.store(true);
         });
-        check(frame.try_retire(ticket) && !frame.try_retire(ticket),
-              "pinned continuation double-retired");
+        // Multiple schedulers may observe readiness concurrently. Exactly one
+        // may release the native lease; losers must not touch the heap token.
+        constexpr int contenders = 8;
+        std::atomic<int> ready{0};
+        std::atomic<bool> go{false};
+        std::atomic<int> winners{0};
+        std::vector<std::thread> retirees;
+        retirees.reserve(contenders);
+        for (int i = 0; i < contenders; ++i) {
+            retirees.emplace_back([&] {
+                ready.fetch_add(1, std::memory_order_release);
+                while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+                if (frame.try_retire(ticket)) winners.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+        while (ready.load(std::memory_order_acquire) != contenders)
+            std::this_thread::yield();
+        go.store(true, std::memory_order_release);
+        for (auto& contender : retirees) contender.join();
+        check(winners.load() == 1 && !frame.try_retire(ticket),
+              "concurrent pinned continuation retirement was not exactly once");
         observer.join();
         check(!retiredWithPin.load(),
               "published retirement before actor-heap lifetime release");
