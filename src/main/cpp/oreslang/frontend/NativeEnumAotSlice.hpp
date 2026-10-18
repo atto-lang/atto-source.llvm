@@ -241,13 +241,22 @@ private:
         if (eat("-")) negative = true;
         if (token_.text.empty() || token_.text[0] < '0' || token_.text[0] > '9')
             fail("integer literal required");
-        std::int64_t value = 0;
+        // Parse the *magnitude* as unsigned. Parsing into int64_t first
+        // incorrectly rejects the valid -9223372036854775808 literal, and
+        // negating INT64_MIN after parsing would be undefined behavior.
+        std::uint64_t magnitude = 0;
         auto parsed = std::from_chars(token_.text.data(),
-                                      token_.text.data()+token_.text.size(), value);
+                                      token_.text.data()+token_.text.size(), magnitude);
+        const std::uint64_t maximum =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
         if (parsed.ec != std::errc{} ||
-            parsed.ptr != token_.text.data()+token_.text.size())
+            parsed.ptr != token_.text.data()+token_.text.size() ||
+            magnitude > maximum + (negative ? 1u : 0u))
             fail("invalid or out-of-range integer literal");
         advance();
+        if (negative && magnitude == maximum + 1u)
+            return std::numeric_limits<std::int64_t>::min();
+        const std::int64_t value = static_cast<std::int64_t>(magnitude);
         return negative ? -value : value;
     }
     std::int32_t positiveTag() {
