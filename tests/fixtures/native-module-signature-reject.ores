@@ -1,0 +1,5 @@
+define module M as
+  define signature Service as
+    fnc ping(): int;
+  end
+end
