@@ -19,6 +19,14 @@ pub fnc foo(Foo value, int n): void { /* optional parent fallback */ }
 * **No implicit runtime tag switch** for `foo(v)` where `v: Foo`. An explicit `match v over on Foo.A ... on Foo.B ... end` has ordinary explicit pattern semantics; the compiler can still lower that match to an AOT jump table. This deliberately corrects an earlier suggestion to dynamically select among overloads: implicit runtime multimethod dispatch would break the canonical preselected-target rule.
 * This proposal does **not** change constructor overloads: constructors remain selected by caller-visible arity only (optional initial `self` excluded). Ordinary class methods, static methods, free `fnc` and `routine` are proposed; actors' private abstract lifecycle hooks and sealed `receive` are not new overload entrypoints.
 
+## Canonical enum syntax / legacy migration milestone
+
+Java draft #1240 now records `Ast.EnumDecl(name, visibility, cases)` with explicit `PRIVATE` or `PUBLIC`, and the parser recognizes `define pub enum` at file and module scopes. The compatibility constructor without visibility intentionally defaults to `PRIVATE`; it does **not** infer import exportability.
+
+For this staged v2 AST, wire tags are **positive, monotonically increasing signed Int32** (`1..2147483647`) with optional explicit assignments and auto-increment for omitted cases. They are stable serialization identifiers and must **not** define overload identity. Older Java #907 uses positive Int64 variant tags and record-only payloads; `EnumV2Migration` is an explicit lossless *unlinked schema* adapter which rejects tags outside signed Int32, nonmonotonic case order and nonrecord payload changes rather than truncating or silently reordering. Canonical v2 can describe scalar payloads, but the legacy adapter cannot synthesize a record for them. This helper neither assigns origin identities nor makes `Foo.A` executable.
+
+The first executable milestone should support **nullary enum case values** with explicit nominal type refinement and static selection. In expression position `Foo.A` is intended to be a nullary **value**; the old #907 evaluator currently treats enum members as constructor callables even when payloadless, so it must be migrated deliberately. Future payload-bearing cases require an explicit constructor; an unloaded old runtime must never reinterpret nullary case values as callable targets. Preserve old wire tags and payload ownership through migration, or reject compatibility.
+
 ## Admission: safe overlap lattice
 
 Resolve lexical owner, callable domain (MODULE, INSTANCE, STATIC), name, exact value arity, aliases, imports, and ownership first. `fnc` and `routine` occupy one MODULE domain. A same-arity family may vary only at **eligible enum positions**, and any unchanged ordinary positions must have precisely the same canonical declared type ID. No primitive/class/record/return/effect/generic-count overloading is introduced.
