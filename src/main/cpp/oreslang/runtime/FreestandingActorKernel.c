@@ -1,17 +1,34 @@
 #include "oreslang/runtime/FreestandingActorKernel.h"
 
+/* Detect damaged queue metadata before a bad head can index outside the
+ * statically allocated mailbox.  The kernel trusts its owner-provided RAM,
+ * but fails closed on detectable damage instead of attempting delivery. */
+static int metadata_valid(const OresKernelActor *actor) {
+    return actor->head < ORES_KERNEL_MAILBOX &&
+           actor->length <= ORES_KERNEL_MAILBOX &&
+           actor->closing <= 1u && actor->handler != 0;
+}
+
+static void record_fault(OresKernel *kernel) {
+    if (kernel->fault_count != UINT32_MAX) kernel->fault_count++;
+}
+
 static OresKernelActor *locate(OresKernel *kernel, OresKernelRef ref) {
     if (kernel == 0 || kernel->magic != ORES_KERNEL_MAGIC ||
         ref.slot >= ORES_KERNEL_ACTORS || ref.generation == 0u) return 0;
     OresKernelActor *actor = &kernel->actors[ref.slot];
-    if (actor->active != 1u || actor->generation != ref.generation) return 0;
+    if (actor->active != 1u || actor->generation != ref.generation ||
+        !metadata_valid(actor)) return 0;
     return actor;
 }
 
 static void retire(OresKernelActor *actor) {
     /* Clear owned data and queued messages BEFORE invalidating the ref. */
-    for (uint32_t i=0; i<ORES_KERNEL_FIELDS; ++i) actor->fields[i] = 0;
-    for (uint32_t i=0; i<ORES_KERNEL_MAILBOX; ++i) actor->messages[i] = 0;
+    /* Volatile writes retain zeroization even under optimizing/LTO builds. */
+    volatile uint64_t *const fields = actor->fields;
+    volatile int64_t *const messages = actor->messages;
+    for (uint32_t i=0; i<ORES_KERNEL_FIELDS; ++i) fields[i] = 0;
+    for (uint32_t i=0; i<ORES_KERNEL_MAILBOX; ++i) messages[i] = 0;
     actor->handler = 0;
     actor->head = 0;
     actor->length = 0;
@@ -100,7 +117,14 @@ OresKernelTick ores_kernel_tick(OresKernel *kernel) {
     for (uint32_t k=0; k<ORES_KERNEL_ACTORS; ++k) {
         const uint32_t slot = (kernel->next_slot + k) % ORES_KERNEL_ACTORS;
         OresKernelActor *actor = &kernel->actors[slot];
-        if (!actor->active) continue;
+        if (actor->active == 0u) continue;
+        if (actor->active != 1u || !metadata_valid(actor)) {
+            retire(actor);
+            record_fault(kernel);
+            kernel->next_slot = (slot + 1) % ORES_KERNEL_ACTORS;
+            kernel->executing = 0;
+            return ORES_KERNEL_HANDLER_FAILED;
+        }
         if (actor->length == 0) {
             if (actor->closing) {
                 retire(actor);
@@ -119,12 +143,12 @@ OresKernelTick ores_kernel_tick(OresKernel *kernel) {
         kernel->next_slot = (slot + 1) % ORES_KERNEL_ACTORS;
         if (!ok) {
             retire(actor);
-            if (kernel->fault_count != UINT32_MAX) kernel->fault_count++;
+            record_fault(kernel);
             kernel->executing = 0;
             return ORES_KERNEL_HANDLER_FAILED;
         }
         actor->last_result = result;
-        actor->processed++;
+        if (actor->processed != UINT64_MAX) actor->processed++;
         kernel->executing = 0;
         return ORES_KERNEL_DELIVERED;
     }
