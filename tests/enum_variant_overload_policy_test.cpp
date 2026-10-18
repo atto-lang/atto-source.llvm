@@ -73,6 +73,11 @@ int main() {
     std::map<std::string, std::string> bodies;
     for (const auto& entry : family) bodies.emplace(validatedSymbol(registry, entry),
                                                     std::string(64, 'a'));
+    auto dynamicMethod = sig({n});
+    dynamicMethod.owner = "file::Class";
+    dynamicMethod.domain = Domain::Instance;
+    rejects([&] { AotImage forbidden(registry, {dynamicMethod},
+            {{validatedSymbol(registry, dynamicMethod), std::string(64, 'a')}}); });
     AotImage image(registry, family, bodies);
     REQUIRE(image.definitionCount() == family.size());
     const DirectRelocation rA = image.bindDirect({a, n});
