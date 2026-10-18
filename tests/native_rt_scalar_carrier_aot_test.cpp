@@ -209,6 +209,50 @@ static ActorStep busy_handler(void* raw, ActorMessage,
 static std::int64_t dummy_io(void*, std::int64_t, const std::atomic<bool>&) noexcept {
     return 0;
 }
+static bool cleanup_ack_success(void*, ActorMessage) noexcept {
+    return true;
+}
+static bool cleanup_ack_failure(void*, ActorMessage) noexcept {
+    return false;
+}
+static void retirement_proof_requires_acknowledged_abandoned_frame_cleanup() {
+    const ActorHeapIdentity owner{77, 91, 3};
+    for (int mode = 0; mode < 3; ++mode) {
+        BusyState state;
+        HungryCarrier::Options options{};
+        options.heap_owner = owner;
+        if (mode == 1) options.cancel_handler = cleanup_ack_failure;
+        if (mode == 2) options.cancel_handler = cleanup_ack_success;
+        HungryCarrier carrier(&state, busy_handler, nullptr, dummy_io, options);
+        carrier.start();
+        CHECK(carrier.producer_handle().try_send({1, 0}));
+        CHECK(until([&] { return state.cpu.load() >= 16; }, 2s));
+        carrier.request_stop();
+        carrier.join();
+        const auto stats = carrier.stats();
+        CHECK(stats.completed == 0 && stats.abandoned_on_stop == 1);
+        if (mode == 0) {
+            CHECK(stats.cancel_callbacks == 0);
+            CHECK(stats.cancel_callback_failures == 0);
+            CHECK(stats.unclean_abandonments == 1);
+            CHECK(!carrier.retirement_proof().has_value());
+        } else if (mode == 1) {
+            CHECK(stats.cancel_callbacks == 1);
+            CHECK(stats.cancel_callback_failures == 1);
+            CHECK(stats.unclean_abandonments == 0);
+            CHECK(stats.protocol_failures >= 1);
+            CHECK(!carrier.retirement_proof().has_value());
+        } else {
+            CHECK(stats.cancel_callbacks == 1);
+            CHECK(stats.cancel_callback_failures == 0);
+            CHECK(stats.unclean_abandonments == 0);
+            const auto proof = carrier.retirement_proof();
+            CHECK(proof.has_value());
+            CHECK(proof->owner() == owner);
+        }
+    }
+}
+
 static void stop_preserves_unfinished_logical_turn() {
     BusyState state;
     HungryCarrier carrier(&state, busy_handler, nullptr, dummy_io, {});
@@ -249,6 +293,7 @@ static void expect_protocol_rejection(Handler handler) {
 int main() {
     real_compiled_guest_frame();
     stop_runs_compiled_frame_cancellation_exactly_once();
+    retirement_proof_requires_acknowledged_abandoned_frame_cleanup();
     stop_preserves_unfinished_logical_turn();
     expect_protocol_rejection(invalid_legacy);
     expect_protocol_rejection(invalid_v2);
