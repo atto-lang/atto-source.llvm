@@ -193,7 +193,9 @@ public:
     // graph. Deliberately terminate instead of reclaiming dangling storage.
     // Normal production cleanup must use retire() after a joined carrier.
     ~ActorOwnedGraphHeap() noexcept {
-        if (!borrow_gate_.seal_and_quiesced(owner_) ||
+        if ((retirement_cohort_ != nullptr &&
+                !retirement_cohort_->safe_for_bound_heap_destruction()) ||
+                !borrow_gate_.seal_and_quiesced(owner_) ||
                 reclamation_busy_.test_and_set(std::memory_order_acq_rel))
             std::terminate();
         erase_all();
@@ -201,6 +203,9 @@ public:
 
     std::uint64_t heap_id() const noexcept { return heap_id_; }
     ActorHeapIdentity owner() const noexcept { return owner_; }
+    std::uint64_t retirement_cohort_id() const noexcept {
+        return retirement_cohort_ ? retirement_cohort_->cohort_id() : 0;
+    }
     bool retired() const noexcept {
         return retired_.load(std::memory_order_acquire);
     }
