@@ -137,3 +137,33 @@ Exact mirrored host regression (GCC -O2 and Clang ASan+UBSan):
 https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39090397220
 The test validates code-only AOT/JIT/AOT generation labels and ownership
 bookkeeping. **It does not execute AOT/JIT generated guest machine code.**
+
+## Reclamation ordering / abandoned release safety audit
+
+Native image ownership now starts at the code slot's API boundary, not
+only after ABI checks or candidate allocation. For every accepted or rejected
+image the host-owned `CodeImage` wrapper must be destroyed **before** the
+reclamation callback may unload a shared object or ORC ResourceTracker.
+Consequently the runtime requires `CodeImage` to be **nothrow movable and
+nothrow destructible**. The callbacks must only schedule trusted host-side
+cleanup, never execute guest code. A callback throwing during reclamation is
+suppressed by the C++ destructor; actual unload failure reporting and
+quarantine still need a runtime-managed error sink before production release.
+
+The supervisor `Ticket` is move-only and has RAII rollback. When an
+uncommitted ticket is abandoned by an exception, its destructor reopens
+DATA admission, but only if its token still matches the currently frozen
+generation. Terminally closed actors and active publication transactions are
+never reopened. Releasing a stale ticket cannot undo a later freeze.
+
+Any compilation, ABI encoding, or image staging that may allocate must be
+performed **before** transferring code and cleanup ownership to the
+underlying immutable code slot. Stage/activate must not assume C++
+function argument evaluation order will automatically preserve callback
+ownership if an earlier expression throws.
+
+Evidence: exact-source private mirror [run #39091951068](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39091951068)
+covers policy destruction-before-unload, early/invalid admission, throwing
+`std::function` copies, abandoned frozen tickets and held continuation pins.
+Full executable image teardown, source compiler lowering, and runtime-owned
+error quarantine remain explicit release blockers.
