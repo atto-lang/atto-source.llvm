@@ -222,12 +222,16 @@ public:
         struct Candidate final {
             CodeImage code;
             std::function<void()> reclaim;
+            Candidate(CodeImage image, std::function<void()> cleanup)
+                : code(std::move(image)), reclaim(std::move(cleanup)) {}
+            Candidate(const Candidate&) = delete;
+            Candidate& operator=(const Candidate&) = delete;
             ~Candidate() noexcept {
                 try { if (reclaim) reclaim(); } catch (...) {}
             }
         };
         auto candidate = std::make_unique<Candidate>(
-            Candidate{std::move(candidate_code), std::move(reclaim)});
+            std::move(candidate_code), std::move(reclaim));
         auto state = state_;
         {
             std::lock_guard<std::mutex> lock(state->mutex);
