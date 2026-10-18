@@ -77,6 +77,12 @@ int main() {
     const VerifiedPlan allowedUtf8 = oreslang::enum_aot::parseVerified(
         fixture() + "// " + std::string(1, char(0xc3)) + std::string(1, char(0xa9)));
     REQUIRE(oreslang::enum_aot::checkedNativeExit(allowedUtf8.readOnly()) == 10);
+    rejectedSealed(fixture() + "// ores: target=wasm32");
+    rejectedSealed(std::string("// ores: capability=filesystem\n") + fixture());
+    // Do not turn harmless comments without the directive syntax into errors.
+    const VerifiedPlan harmless = oreslang::enum_aot::parseVerified(
+        fixture() + "// ores companion note");
+    REQUIRE(oreslang::enum_aot::checkedNativeExit(harmless.readOnly()) == 10);
 
     auto plan = oreslang::enum_aot::parse(fixture());
     oreslang::enum_aot::validatePlan(plan);
