@@ -81,3 +81,39 @@ contains a guest-result check and semihosting observation, but no actual QEMU
 execution evidence is available until an exact-head emulator run completes.
 This is neither real MCU hardware nor actor/async/panic parity. The next gate must execute the actual linked guest under
 QEMU or hardware and observe an independently checked result.
+
+## Physical MCU memory-map and vector-table hardening
+
+The QEMU `lm3s6965evb` emulates **256 KiB flash** at `0x00000000`
+and **64 KiB SRAM** at `0x20000000`. Earlier versions of this proof
+incorrectly reserved 512 KiB/128 KiB, placing `__stack_top` outside
+the actual emulated RAM at `0x20020000`. This could pass linker checks
+but crash on first stack use or exception entry.
+
+The linker now sets flash to 256 KiB, SRAM to 64 KiB and the initial
+stack value to `0x20010000`. The ELF audit independently parses
+ELF32 program headers and the first eight vector-table bytes. It rejects:
+
+- Non-ARM, non-ELF32 or non-executable inputs; malformed program headers.
+- Load segments outside the board's *real* flash and RAM ranges.
+- Vector-table placement away from the flash base or invalid initial SP.
+- Reset vectors without the Thumb bit or outside executable flash.
+- RAM-initialized load segments: no `.data` copy or `.bss` zeroing
+  startup exists yet, so admitting them would not be a valid boot proof.
+
+The link test deliberately mutates the ELF's stack and reset vector and
+requires distinct rejection diagnostics, preventing accidental checks
+that always pass. A local Clang 17 + LLD **synthetic-IR** build produced
+an ARM ELF with stack `0x20010000` and reset vector `0x11`; both
+invalid-vector mutations were rejected in a local verification.
+Neither compiled Oreslang output nor QEMU is tested by this local result.
+
+The semihosting test uses `SYS_WRITE0` and `SYS_EXIT_EXTENDED` only
+to observe success/failure and terminate the *test process*. It does
+not claim that semihosting is available on standalone production MCUs.
+QEMU's ARM semihosting implementation maps `ADP_Stopped_ApplicationExit`
+to zero (or the supplied extended subcode) and nonapplication stop
+reasons to a nonzero emulator exit. Both observation and exit status
+are checked in the positive/negative suite.
+
+Reference: QEMU LM3S6965EVB board documentation and the ARM semihosting ABI.
