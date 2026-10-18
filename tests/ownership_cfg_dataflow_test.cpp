@@ -309,6 +309,76 @@ int main() {
     assert(direct.at("x").shared_loans == 0 &&
            !direct.at("x").exclusive_loan);
 
+    // A scheduling boundary must reject ordinary stack/lexical loans from
+    // *every* place, not just the place being evaluated by the source AST.
+    // Without this check a carrier migration could outlive an owning frame.
+    Graph suspension;
+    suspension.entry = {{"x", cell(kOwned)}, {"y", cell(kOwned)}};
+    suspension.blocks = {{{{Kind::Suspend, ""}, {Kind::Move, "x"}}, {}}};
+    verify(suspension);
+    assert(verify(suspension).outgoing[0]->at("x").possible == kMoved);
+
+    suspension.blocks = {{{{Kind::BorrowShared, "x"},
+                           {Kind::Suspend, ""},
+                           {Kind::ReleaseShared, "x"}}, {}}};
+    assert(rejected([&] { verify(suspension); }));
+    suspension.blocks = {{{{Kind::BorrowExclusive, "y"},
+                           {Kind::Suspend, ""},
+                           {Kind::ReleaseExclusive, "y"}}, {}}};
+    assert(rejected([&] { verify(suspension); }));
+
+    // A loan whose proven scope ends before suspension is accepted.
+    suspension.blocks = {{{{Kind::BorrowShared, "x"},
+                           {Kind::ReleaseShared, "x"},
+                           {Kind::Suspend, ""},
+                           {Kind::Move, "x"}}, {}}};
+    verify(suspension);
+    suspension.blocks = {{{{Kind::BorrowExclusive, "y"},
+                           {Kind::ReleaseExclusive, "y"},
+                           {Kind::Suspend, ""},
+                           {Kind::Drop, "y"}}, {}}};
+    verify(suspension);
+
+    // Lowering must not pretend a global suspend is a per-place operation.
+    suspension.blocks = {{{{Kind::Suspend, "x"}}, {}}};
+    assert(rejected([&] { verify(suspension); }));
+    suspension.blocks = {{{{Kind::Suspend, "", 17}}, {}}};
+    assert(rejected([&] { verify(suspension); }));
+
+    // Every branch reaching a suspend site must release its loans, and
+    // a branch that leaves a loan outstanding may not escape through a
+    // later join, even if another branch has already released its loan.
+    suspension.blocks = {
+        {{}, {1, 2}},
+        {{{Kind::BorrowShared, "x", 701},
+          {Kind::ReleaseShared, "x", 701}}, {3}},
+        {{{Kind::BorrowExclusive, "y", 702},
+          {Kind::ReleaseExclusive, "y", 702}}, {3}},
+        {{{Kind::Suspend, ""}, {Kind::Move, "x"}}, {}}
+    };
+    verify(suspension);
+    suspension.blocks[1].operations.pop_back();
+    assert(rejected([&] { verify(suspension); }));
+
+    // Projected/sibling state must not hide a loan at suspension.
+    suspension.entry = {{"p.a", cell(kOwned)}, {"p.b", cell(kOwned)}};
+    suspension.blocks = {{{{Kind::BorrowShared, "p.a"},
+                           {Kind::Suspend, ""},
+                           {Kind::ReleaseShared, "p.a"}}, {}}};
+    assert(rejected([&] { verify(suspension); }));
+    suspension.blocks = {{{{Kind::BorrowShared, "p.a"},
+                           {Kind::ReleaseShared, "p.a"},
+                           {Kind::Suspend, ""},
+                           {Kind::Read, "p.b"}}, {}}};
+    verify(suspension);
+
+    // Direct one-step helpers must enforce the same global boundary.
+    State borrowed_before_suspend = {{"x", cell(kOwned)}, {"y", cell(kOwned)}};
+    apply({Kind::BorrowShared, "y", 901}, borrowed_before_suspend);
+    assert(rejected([&] { apply({Kind::Suspend, ""}, borrowed_before_suspend); }));
+    apply({Kind::ReleaseShared, "y", 901}, borrowed_before_suspend);
+    apply({Kind::Suspend, ""}, borrowed_before_suspend);
+
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
     Graph maybe_drop;
