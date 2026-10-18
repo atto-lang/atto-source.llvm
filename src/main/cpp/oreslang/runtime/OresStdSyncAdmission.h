@@ -40,6 +40,7 @@ typedef enum ores_std_access {
 typedef struct ores_std_sync_gate ores_std_sync_gate;
 typedef struct ores_std_ticket {
     const ores_std_sync_gate* scope;
+    uint64_t scope_generation;
     uint64_t sequence;
 } ores_std_ticket;
 
@@ -62,6 +63,7 @@ struct ores_std_sync_gate {
     ores_std_sync_kind kind;
     ores_core_mutex_gate mutex;
     ores_core_rw_gate rw;
+    uint64_t scope_generation; /* trusted nonzero incarnation, never reused at this address */
     uint64_t next_sequence;
     bool exhausted;
     bool sealed;
@@ -72,6 +74,12 @@ struct ores_std_sync_gate {
     .mutex=ORES_CORE_MUTEX_GATE_INIT, .rw=ORES_CORE_RW_GATE_INIT }
 #define ORES_STD_RW_INIT { .metadata=ATOMIC_FLAG_INIT, .kind=ORES_STD_RW, \
     .mutex=ORES_CORE_MUTEX_GATE_INIT, .rw=ORES_CORE_RW_GATE_INIT }
+#define ORES_STD_MUTEX_INIT_SCOPE(GEN) { .metadata=ATOMIC_FLAG_INIT, \
+    .kind=ORES_STD_MUTEX, .mutex=ORES_CORE_MUTEX_GATE_INIT, \
+    .rw=ORES_CORE_RW_GATE_INIT, .scope_generation=(GEN) }
+#define ORES_STD_RW_INIT_SCOPE(GEN) { .metadata=ATOMIC_FLAG_INIT, \
+    .kind=ORES_STD_RW, .mutex=ORES_CORE_MUTEX_GATE_INIT, \
+    .rw=ORES_CORE_RW_GATE_INIT, .scope_generation=(GEN) }
 
 /* Notifications contain only opaque tickets, never callbacks or payloads.
  * An exhausted native generation fails all queued tickets explicitly. */
@@ -95,8 +103,28 @@ static inline bool ores_std_enter_metadata(ores_std_sync_gate* gate) {
 static inline void ores_std_leave_metadata(ores_std_sync_gate* gate) {
     atomic_flag_clear_explicit(&gate->metadata, memory_order_release);
 }
+/* A freestanding embedding/scheduler must provide a new nonzero generation
+ * on each allocation/restart, including when the address is reused. The gate
+ * cannot mint this identity from an OS clock or random generator. */
+static inline ores_std_sync_code ores_std_bind_scope(
+        ores_std_sync_gate* gate, uint64_t trusted_generation) {
+    if (!gate || !trusted_generation) return ORES_STD_SYNC_INVALID;
+    if (!ores_std_enter_metadata(gate)) return ORES_STD_SYNC_RETRY;
+    ores_std_sync_code code = ORES_STD_SYNC_INVALID;
+    if (gate->scope_generation == trusted_generation) {
+        code = ORES_STD_SYNC_GRANTED;
+    } else if (gate->scope_generation == 0 && !gate->next_sequence &&
+               !gate->sealed && !gate->exhausted) {
+        gate->scope_generation = trusted_generation;
+        code = ORES_STD_SYNC_GRANTED;
+    }
+    ores_std_leave_metadata(gate);
+    return code;
+}
 static inline ores_std_slot* ores_std_find(ores_std_sync_gate* gate, ores_std_ticket ticket) {
-    if (ticket.scope != gate || ticket.sequence == 0) return NULL;
+    if (ticket.scope != gate || ticket.scope_generation == 0 ||
+        ticket.scope_generation != gate->scope_generation || ticket.sequence == 0)
+        return NULL;
     for (unsigned int i = 0; i < ORES_STD_SYNC_CAPACITY; i++)
         if (gate->slots[i].state != ORES_STD_FREE &&
             gate->slots[i].ticket.sequence == ticket.sequence)
@@ -193,7 +221,9 @@ static inline ores_std_sync_result ores_std_request(
     if (!ores_std_enter_metadata(gate)) return ores_std_empty(ORES_STD_SYNC_RETRY);
     ores_std_sync_result out = ores_std_empty(ORES_STD_SYNC_QUEUED);
     ores_std_slot* slot = ores_std_free_slot(gate);
-    if (gate->sealed) {
+    if (gate->scope_generation == 0) {
+        out.code = ORES_STD_SYNC_INVALID;
+    } else if (gate->sealed) {
         out.code = ORES_STD_SYNC_CLOSED;
     } else if (gate->exhausted || gate->next_sequence == UINT64_MAX) {
         out.code = ORES_STD_SYNC_EXHAUSTED;
@@ -201,6 +231,7 @@ static inline ores_std_sync_result ores_std_request(
         out.code = ORES_STD_SYNC_FULL;
     } else {
         slot->ticket.scope = gate;
+        slot->ticket.scope_generation = gate->scope_generation;
         slot->ticket.sequence = ++gate->next_sequence;
         slot->access = access;
         slot->state = ORES_STD_WAITING;
@@ -325,7 +356,8 @@ static inline ores_std_sync_code ores_std_quiescent(ores_std_sync_gate* gate) {
  * any live admission, it still carries an active loan and cannot suspend. */
 static inline ores_std_sync_code ores_std_ready_to_suspend(
         ores_std_sync_gate* gate, ores_std_ticket ticket) {
-    if (!gate || ticket.scope != gate || !ticket.sequence)
+    if (!gate || ticket.scope != gate || !ticket.sequence ||
+        !ticket.scope_generation || ticket.scope_generation != gate->scope_generation)
         return ORES_STD_SYNC_INVALID;
     if (!ores_std_enter_metadata(gate)) return ORES_STD_SYNC_RETRY;
     ores_std_sync_code code = ores_std_find(gate, ticket)
