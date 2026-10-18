@@ -2035,3 +2035,21 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_checkpoint_v1_wire_oracle
         source_actor_checkpoint_v1_wire_oracle_optimized PROPERTIES TIMEOUT 20)
 endif()
+
+# Native parity for Java evaluator's ORESAS01 scalar actor-state payload.
+# This validates serialization only; executable-image provenance and actor
+# routing remain separate production gates.
+if(BUILD_TESTING AND OpenSSL_FOUND)
+    add_executable(oreslang-native-source-actor-checkpoint-v1-test
+        tests/native_source_actor_checkpoint_v1_test.cpp)
+    target_include_directories(oreslang-native-source-actor-checkpoint-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-source-actor-checkpoint-v1-test PRIVATE
+        OpenSSL::Crypto)
+    target_compile_options(oreslang-native-source-actor-checkpoint-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_source_actor_checkpoint_v1_java_parity_host_only
+        COMMAND oreslang-native-source-actor-checkpoint-v1-test)
+    set_tests_properties(native_source_actor_checkpoint_v1_java_parity_host_only
+        PROPERTIES TIMEOUT 20)
+endif()
