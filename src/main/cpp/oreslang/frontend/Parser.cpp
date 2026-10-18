@@ -203,6 +203,12 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("abstract")) {
+                if (accept("class")) {
+                    fail("native private abstract method slots unsupported: general class inheritance, originating-declaration virtual dispatch and trusted actor-hook lowering required; no IR may be emitted");
+                }
+                fail("native abstract declarations require general class-method and virtual-slot lowering");
+            }
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -223,6 +229,12 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("abstract")) {
+                    if (accept("class")) {
+                        fail("native private abstract method slots unsupported: general class inheritance, originating-declaration virtual dispatch and trusted actor-hook lowering required; no IR may be emitted");
+                    }
+                    fail("native abstract declarations require general class-method and virtual-slot lowering");
+                }
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
@@ -283,6 +295,9 @@ private:
             fail("native final actor fields require typed field initialization and ownership lowering");
         }
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
+        if (token_.text == "receive" || at_private_abstract_member()) {
+            fail("native actor receive/private abstract slots unsupported: ActorMail<T>, explicit/implicit Self receiver, originating-slot authority and trusted mailbox virtual dispatch lowering required; no IR may be emitted");
+        }
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
@@ -341,6 +356,12 @@ private:
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            if (at_private_abstract_member()) {
+                fail("native private abstract method slots unsupported: general class inheritance, originating-declaration virtual dispatch and trusted actor-hook lowering required; no IR may be emitted");
+            }
+            if (token_.text == "abstract") {
+                fail("native abstract class methods unsupported: virtual slot layout and override dispatch lowering required; no IR may be emitted");
+            }
             const bool publicly_visible = accept("pub");
             if (accept("constructor")) {
                 if (result.explicit_constructor)
@@ -1332,6 +1353,12 @@ private:
         if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
         Lexer lookahead = lexer_;
         return lookahead.next().text == ":";
+    }
+
+    bool at_private_abstract_member() const {
+        if (token_.text != "private") return false;
+        Lexer lookahead = lexer_;
+        return lookahead.next().text == "abstract";
     }
 
     bool accept(std::string_view text) {
