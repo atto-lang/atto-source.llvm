@@ -321,3 +321,60 @@ External-resource capture is not automatic; all runtime brokers must
 participate before any image or arena may be retired. The draft must remain
 unmerged until full exact-head integration and independent source-CI
 authorization succeed.
+
+
+## Fourth audit slice: live host counter transaction and rollback (2026-10-17)
+
+This draft now includes a **trusted-host counter actor hot-upgrade proof** in both
+backends, built from the real generation gates and the canonical checkpoint
+envelope. It is not compiler-produced Oreslang source hot reloading.
+
+**Java**: `ActorCounterUpgradeProof` creates a real `ActorRuntime`
+SHARED actor with a stable physical `ActorRef<Long>`, receives actual
+mailbox messages, and calls the trusted Java behavior selected by the
+host-controlled version. Each executing counter turn holds an
+`ActorUpgradeEpochGate.Lease` while committing its
+`VersionedActorCell` state. The supervisor's upgrade attempt atomically
+fences user ingress, checks the real scheduler's physical quiescence,
+prepares an ABI-compatible image, snapshots the one int64 through
+`ActorCheckpointEnvelopeV1`, restores into a fresh state cell, publishes
+the next generation and swaps the trusted behavior before reopening ingress.
+If an old actor carrier is still active, the attempt returns NOT READY without
+blocking. Failed restore, incompatible ABI or same-schema state drift abort
+before publication and release the ingress fence. Host observations take the
+transaction mutex so they cannot read an incarnation after retirement.
+`ActorCounterUpgradeProofTest` exercises 42 -> 42 -> 43, stable
+`ActorRef` and address, a meaningfully changed v2 behavior, a busy carrier,
+incompatible digests, initializer faults and lost-state rejection.
+
+**LLVM**: `NativeCounterUpgradeProof.hpp` composes
+`ActorHotUpgradeGate`, `VersionedActorCell` and the portable 1 MiB-bounded
+`ActorCheckpointEnvelopeV1`, requiring an injected SHA-256 provider.
+The C++17 test `native_counter_hot_upgrade_proof_test.cpp` covers
+ABI refusal, failed restore, explicit restore-value drift, preserved state,
+changed host behavior, and a concurrent pinned old-generation worker.
+Versioned native state observations are synchronized with routing commit.
+CTest registers `native_counter_hot_upgrade_transaction_host_only` when
+OpenSSL Crypto is available. It does **not** compile or dynamically load
+a source-generated LLVM `.ores` code image.
+
+**Reference-model verification**: the identical source-free file
+`tests/actor_hot_upgrade_transaction_model.py` in both repos has Git blob
+`eaf52579fc0e27deffc994e2601a3e94c5f8c3cf`.
+The byte-identical local model ran **96,000 randomized deterministic
+interleavings in ordinary Python and another 96,000 under `python -O`**,
+including admitted-message conservation, delivery-ticket ordering,
+pending-pin refusal, rollback, 23 successful upgrades per run,
+and complete no-loss/no-duplicate draining across 32 seeds.
+The model's assertions were deliberately replaced with explicit checks
+so optimized Python cannot silently disable invariants.
+These tests are **model-level**, not evidence that actual Java/GraalVM or
+native actor scheduler integration passed.
+
+**Production remaining**: code fingerprints in these narrow examples are
+trusted inputs, not signed/compiler-attested executable bytes. A host
+Java function and host native function pointer are not a replaceable
+compiled Oreslang guest actor. Compiler-generated owned-state schemas,
+automatic resource/FFI pinning, protected worker boundaries, rebindable
+stable source `ActorRef`, actual AOT/ORC image admission, and full CI
+must all pass before releasing a real source actor upgrade.
