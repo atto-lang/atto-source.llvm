@@ -133,6 +133,11 @@ def verify_vector_table(elf_path):
         off = phoff + i * phentsize
         kind, file_off, vaddr, paddr, filesz, memsz, flags, alignment = (
             struct.unpack_from("<IIIIIIII", raw, off))
+        # Reject loader-managed program headers in the *binary*, not only
+        # human-readable readelf output. A freestanding ELF cannot depend on
+        # PT_INTERP / PT_DYNAMIC, even with ordinary-looking load segments.
+        if kind in (2, 3):
+            raise RuntimeError("hosted ELF interpreter/dynamic-loader program header forbidden")
         if kind != 1:  # PT_LOAD
             continue
         verify(file_off <= len(raw) and filesz <= len(raw)-file_off,
@@ -259,6 +264,10 @@ def main():
              "ELF entry point must match"),
             ("writable-executable", text_phoff + 24, 7,
              "writable executable"),
+            ("forged-interpreter", vector_phoff, 3,
+             "interpreter/dynamic-loader program header forbidden"),
+            ("forged-dynamic", vector_phoff, 2,
+             "interpreter/dynamic-loader program header forbidden"),
         )
         for label, offset, value, diagnostic in mutations:
             mutated = bytearray(original)
