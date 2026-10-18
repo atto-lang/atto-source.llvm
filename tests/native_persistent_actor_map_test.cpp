@@ -2,6 +2,9 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <limits>
+#include <map>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -40,10 +43,45 @@ int main() {
     assert(transition.commands.size() == 1);
     assert(transition.commands[0].target == 7);
 
+    bool nonfinite_denied = false;
+    try { (void)empty.with("bad", PersistentActorMap::Value(
+        std::numeric_limits<double>::infinity())); }
+    catch (const std::invalid_argument&) { nonfinite_denied = true; }
+    assert(nonfinite_denied);
+
     bool bad_target = false;
     try { PureActorTransition invalid(empty, {{0, 1}}); }
     catch (const std::invalid_argument&) { bad_target = true; }
     assert(bad_target);
+
+    // Deterministic differential model exercises path-copy insert/update/delete.
+    PersistentActorMap subject = empty;
+    std::map<std::string, std::int64_t> oracle;
+    std::mt19937_64 rng(0x0A57A11u);
+    for (int step = 0; step < 10000; ++step) {
+        auto key = std::string("model-") + std::to_string(rng() % 1024);
+        if ((rng() & 3u) == 0) {
+            subject = subject.without(key);
+            oracle.erase(key);
+        } else {
+            auto value = static_cast<std::int64_t>(rng() & 0x7fffffff);
+            auto prior = subject;
+            subject = subject.with(key, value);
+            oracle[key] = value;
+            // A path copy may change the new root but never mutate the old map.
+            if (const auto* previous = prior.get(key))
+                (void)previous->storage();
+        }
+        assert(subject.size() == oracle.size());
+        for (int probe = 0; probe < 4; ++probe) {
+            auto pkey = std::string("model-") + std::to_string(rng() % 1024);
+            auto it = oracle.find(pkey);
+            const auto* actual = subject.get(pkey);
+            assert((it == oracle.end()) == (actual == nullptr));
+            if (actual)
+                assert(std::get<std::int64_t>(actual->storage()) == it->second);
+        }
+    }
 
     PersistentActorMap flood = empty;
     for (int n = 0; n < 64; ++n) {
