@@ -30,7 +30,9 @@ print('define i32 @main() { ret i32 42 }')
     emitter.chmod(0o700)
     source.write_text("good\n")
     env=dict(os.environ, ORESLANG_LLVMC=str(emitter), CLANG=clang)
-    modes=['off']+(['full','thin'] if shutil.which('ld.lld') else [])
+    require(shutil.which('ld.lld') is not None,
+            'LLD missing: FullLTO and ThinLTO smoke must never silently skip')
+    modes=['off','full','thin']
     for mode in modes:
         current=dict(env, ORESLANG_LTO=mode)
         done=subprocess.run([driver,str(source),str(output)],env=current,
