@@ -1941,3 +1941,29 @@ if(BUILD_TESTING)
         COMMAND oreslang-freestanding-actor-kernel-model-test)
     set_tests_properties(freestanding_actor_kernel_model_100k PROPERTIES TIMEOUT 30)
 endif()
+
+# Standalone MCU firmware with C actor handlers, not Oreslang source actors.
+# Only register the positive + negative QEMU gate when all tools exist.
+# CI targeting freestanding Cortex-M MUST set ORE_REQUIRE_CORTEXM_QEMU=ON,
+# so missing emulator/toolchain cannot silently reduce test coverage.
+option(ORE_REQUIRE_CORTEXM_QEMU "Require Cortex-M3/QEMU actor runtime validation" OFF)
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_CORTEXM_ARM_CLANG NAMES clang-18 clang)
+    find_program(ORE_CORTEXM_READELF NAMES readelf llvm-readelf)
+    find_program(ORE_CORTEXM_QEMU NAMES qemu-system-arm)
+    if(ORE_REQUIRE_CORTEXM_QEMU AND
+            (NOT ORE_CORTEXM_ARM_CLANG OR NOT ORE_CORTEXM_READELF OR NOT ORE_CORTEXM_QEMU))
+        message(FATAL_ERROR "Cortex-M actor QEMU test requires clang, readelf and qemu-system-arm")
+    endif()
+    if(ORE_CORTEXM_ARM_CLANG AND ORE_CORTEXM_READELF AND ORE_CORTEXM_QEMU)
+        add_test(NAME freestanding_actor_kernel_cortexm_qemu_positive_negative
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/freestanding_actor_kernel_qemu.py"
+                --clang "${ORE_CORTEXM_ARM_CLANG}"
+                --readelf "${ORE_CORTEXM_READELF}"
+                --qemu "${ORE_CORTEXM_QEMU}")
+        set_tests_properties(freestanding_actor_kernel_cortexm_qemu_positive_negative
+            PROPERTIES TIMEOUT 120)
+    endif()
+endif()
