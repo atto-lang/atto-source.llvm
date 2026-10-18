@@ -166,7 +166,68 @@ static void reclamation_closure_is_terminal() {
             "terminal close reopened DATA admission");
     require(first == 1 && second == 1, "reentrant close lost cleanup callbacks");
 }
+static void initial_image_admission_fail_closed() {
+    const ActorHeapIdentity id{84, 9, 1};
+    std::atomic<int> cleanup{0};
+    require(fails([&] {
+        Coordinator actor(id, actor_id(), shape(), version(0xaa, nullptr),
+                          0, &sha, [&] { ++cleanup; });
+    }), "null initial code was accepted");
+    require(cleanup == 1, "null initial image was not reclaimed exactly once");
+    require(fails([&] {
+        auto invalid = version(0xaa, v1);
+        invalid.manifest.actor_id[0] ^= 0x01;
+        Coordinator actor(id, actor_id(), shape(), invalid,
+                          0, &sha, [&] { ++cleanup; });
+    }), "foreign actor checkpoint metadata was accepted");
+    require(cleanup == 2, "foreign image leaked initial cleanup");
+    require(fails([&] {
+        auto invalid = version(0xaa, v1);
+        invalid.manifest.incarnation = 0;
+        Coordinator actor(id, actor_id(), shape(), invalid,
+                          0, &sha, [&] { ++cleanup; });
+    }), "zero checkpoint incarnation was accepted");
+    require(cleanup == 3, "invalid initial checkpoint leaked cleanup");
+    require(fails([&] {
+        Coordinator actor(id, actor_id(), shape(), version(0xaa, v1),
+                          0, nullptr, [&] { ++cleanup; });
+    }), "null digest provider was accepted");
+    require(cleanup == 4, "null hash provider leaked loaded image");
+}
+
+static Coordinator* restoring_actor = nullptr;
+static std::atomic<int> denied_during_restore{0};
+static std::int64_t restoration_probe(std::int64_t value) {
+    if (restoring_actor) {
+        try {
+            restoring_actor->deliver(7);
+            throw std::runtime_error("checkpoint restore admitted a DATA turn");
+        } catch (const std::logic_error&) {
+            ++denied_during_restore;
+        }
+    }
+    return value;
+}
+static void restore_callback_does_not_admit_data() {
+    const ActorHeapIdentity id{85, 9, 1};
+    std::atomic<int> old{0}, next{0};
+    Coordinator actor(id, actor_id(), shape(), version(0xaa, v1),
+                      33, &sha, [&] { ++old; });
+    restoring_actor = &actor;
+    denied_during_restore.store(0);
+    require(actor.try_upgrade(1, version(0xbb, v2), restoration_probe,
+                              [&] { ++next; }),
+            "compatible upgrade rejected after callback admission denial");
+    restoring_actor = nullptr;
+    require(denied_during_restore == 1 && actor.value() == 33
+            && actor.current().revision == 2,
+            "checkpoint restore admitted concurrent DATA or changed actor state");
+    actor.close();
+    require(old == 1 && next == 1, "restore probe leaked a code generation");
+}
 int main() {
+    initial_image_admission_fail_closed();
+    restore_callback_does_not_admit_data();
     transaction_and_rollback();
     inflight_turn_cannot_be_replaced();
     reclamation_closure_is_terminal();
