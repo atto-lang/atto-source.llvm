@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -72,7 +73,10 @@ private:
         require(pos + 8 <= in.size(), "truncated source actor int64");
         std::uint64_t bits = 0;
         for (int i = 0; i < 8; ++i) bits = (bits << 8) | in[pos++];
-        return static_cast<std::int64_t>(bits);
+        std::int64_t value = 0;
+        static_assert(sizeof(value) == sizeof(bits), "int64 representation mismatch");
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
     }
 
     static bool valid_utf8(const std::string& text) noexcept {
