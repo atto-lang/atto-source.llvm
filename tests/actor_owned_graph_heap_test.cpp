@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <sys/wait.h>
@@ -310,7 +311,70 @@ static void atomic_mutation_vs_loan_races() {
     }
 }
 
+// Model-test edge accounting under slot reuse, self-cycles and partial
+// deletion. The model has independent edge and liveness storage.
+static void graph_accounting_model_stress() {
+    using Heap = ActorOwnedGraphHeap<6, 8, 3>;
+    using Handle = Heap::Handle;
+    const ActorHeapIdentity owner{45, 71, 9};
+    Heap graph(owner);
+    std::array<std::optional<Handle>, 6> live{};
+    std::array<std::array<bool, 6>, 6> edges{};
+    std::uint32_t seed = 0x6f726573;
+    auto random = [&]() {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return seed;
+    };
+    for (int iteration = 0; iteration < 6000; ++iteration) {
+        const auto action = random() % 4;
+        const auto first = static_cast<std::size_t>(random() % 6);
+        const auto second = static_cast<std::size_t>(random() % 6);
+        if (action == 0) {
+            std::uint64_t bytes = static_cast<std::uint64_t>(iteration);
+            const auto result = graph.allocate(owner, &bytes, sizeof(bytes));
+            bool has_free = false;
+            for (const auto& cell : live) if (!cell) has_free = true;
+            check(result.has_value() == has_free, "model allocation capacity disagrees");
+            if (result) {
+                check(!live[result->slot].has_value(), "reused occupied graph slot");
+                live[result->slot] = *result;
+                for (auto& row : edges) row[result->slot] = false;
+                edges[result->slot].fill(false);
+            }
+        } else if (action == 1 && live[first] && live[second]) {
+            std::size_t outgoing = 0;
+            for (bool linked : edges[first]) if (linked) ++outgoing;
+            const bool expected = !edges[first][second] && outgoing < 3;
+            const bool actual = graph.link(owner, *live[first], *live[second]);
+            check(expected == actual, "bounded graph model link disagrees");
+            if (actual) edges[first][second] = true;
+        } else if (action == 2 && live[first]) {
+            const auto old = *live[first];
+            graph.remove(owner, old);
+            live[first].reset();
+            for (auto& row : edges) row[first] = false;
+            edges[first].fill(false);
+            must_reject([&] { graph.remove(owner, old); },
+                        "stale recycled actor graph slot accepted");
+        } else if (live[first] && live[second]) {
+            check(graph.is_linked(owner, *live[first], *live[second]) ==
+                    edges[first][second], "model edge query disagrees");
+        }
+        std::size_t model_nodes = 0, model_edges = 0;
+        for (std::size_t i = 0; i < 6; ++i) {
+            if (live[i]) ++model_nodes;
+            for (bool linked : edges[i]) if (linked) ++model_edges;
+        }
+        check(graph.live_nodes(owner) == model_nodes, "graph active node accounting diverged");
+        check(graph.live_edges(owner) == model_edges, "graph edge accounting diverged");
+    }
+}
+
 int main() {
+    graph_accounting_model_stress();
+    standalone_borrow_gate_destruction_fail_closed();
     atomic_mutation_vs_loan_races();
     live_loans_fence_mutations_and_destructor();
     cycles_reclaim_without_gc();
