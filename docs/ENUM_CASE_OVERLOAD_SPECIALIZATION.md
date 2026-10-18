@@ -137,3 +137,37 @@ debug and optimized, and GCC C++17 optimized `-Werror`. Canonical fixture
 **These tests do not establish Graal JDK25 guest execution, Native Image,
 LLVM native guest execution, CTest/ASan, or Actions success.**
 
+
+
+## 2026-10-17 eos2 closed-world direct-call staging
+
+`src/main/cpp/oreslang/types/EnumCaseAotLinkPlan.hpp` now seals the
+same canonical `eos2` signature tokens used by the native static
+enum-case policy, rather than introducing the incompatible side-branch
+oracle symbol format. Every declared signature in a bounded, admitted
+MODULE/STATIC family requires one exact compiled-body digest in the
+image; missing, extra, malformed, foreign-image and unproven static
+targets are rejected. INSTANCE domains cannot be direct-body linked:
+inherited virtual root slots and concrete override body identities
+remain a separate release blocker. The new
+`native_enum_case_eos2_closed_aot_link` CTest covers static `Foo.A`,
+`Foo.B`, a widened `Foo` fallback, export closure, invalid digests,
+stale image refs and virtual/direct separation.
+
+**Not production-enabled:** native guest `define enum`, source
+`Foo.A` values/types, HIR selected declaration IDs, ownership,
+callee LLVM IR generation and executable native binary integration are
+still absent; the source parser continues to reject this input.
+A SHA-256-shaped body token is not itself evidence of compiled code.
+The Java companion PR #1240 now stages a restricted real parsed-AST
+source-call binder and closed `eos2` image but also keeps its
+TypeChecker syntax-only release gate.
+
+Exact-source LLVM CTest/ASan and JDK25 Maven/Native Image remain
+unverified because source-org Actions fail before runner allocation.
+An independently authored **source-free** model (no private source
+mirroring) was actually run in funded Sagitta Actions
+https://github.com/sagitta-stack/sagitta-infra/actions/runs/39098238358
+at synthetic commit `7d176c4c8c42a40aabef953cc3f29334e7bb34ee`.
+Runner logs confirm 6/6 tests in each of three Python modes, not an
+exact-source compiler qualification.
