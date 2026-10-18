@@ -16,6 +16,22 @@
 
 namespace oreslang::runtime {
 
+// Heap domains are lifetime-unique capability IDs, not a wrapping counter.
+// Reserve UINT64_MAX as terminal exhaustion so no old handle can become
+// valid again if the domain allocator is stressed to its numeric limit.
+namespace detail {
+inline std::uint64_t reserve_actor_graph_heap_id(
+        std::atomic<std::uint64_t>& next) {
+    std::uint64_t current = next.load(std::memory_order_relaxed);
+    while (current != 0 && current != std::numeric_limits<std::uint64_t>::max()) {
+        if (next.compare_exchange_weak(current, current + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return current;
+    }
+    throw std::overflow_error("actor graph heap ID space exhausted");
+}
+} // namespace detail
+
 // Fixed-capacity, strictly owner-confined native graph heap.
 //
 // Node bytes are owned by the arena; graph edges hold non-owning generational
@@ -112,7 +128,7 @@ private:
 
 public:
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
-        : owner_(owner), heap_id_(next_heap_id_.fetch_add(1, std::memory_order_relaxed)),
+        : owner_(owner), heap_id_(detail::reserve_actor_graph_heap_id(next_heap_id_)),
           borrow_gate_(owner) {
         if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
             throw std::invalid_argument("invalid actor graph heap identity");
