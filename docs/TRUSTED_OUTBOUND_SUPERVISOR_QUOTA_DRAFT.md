@@ -20,3 +20,11 @@ The bounded policy parameters here are an intentionally conservative prototype l
 `TrustedUntrustedNetworkQuota.hpp` is a second, *host-only*, fixed-storage quota prototype: 10 HTTP requests in flight, 10 request starts/second (burst 2), and 10 simultaneously connecting/open TCP sockets. Distinct RAII leases have once-only release. New native CTest `untrusted_network_quota_host_only` is registered in CMake. It does not hook `NonblockingTcpLinux`, NativeOresVM guest operations, or real secure egress. **No arbitrary LLVM UNTRUSTED code may be admitted to in-process execution as a result of this prototype.**
 
 Integrate only behind a protected trusted egress bridge with authenticated lineage/tenant policy, DNS and redirect/SSRF permission enforcement, physical socket accounting including HTTP pools, connection-start rate limits, stable quotas across restart, and cancellation/teardown fences. Both pending source and cross-backend CI tests must execute before claiming enforcement.
+
+## Native audit: actual kernel-boundary hooks still pending
+
+`NonblockingTcpLinux.hpp` provides Linux socket and epoll primitives, not a protected UNTRUSTED guest network broker. `NativeOresVM`'s scheduler domain called UNTRUSTED does not isolate arbitrary native machine code. Keep untrusted network source execution denied until a protected process/Wasm bridge exists.
+
+This branch now also contains `TrustedHierarchicalNetworkGate.hpp` (child lineage + supervisor + tenant) with atomic three-scope HTTP/TCP admission and all-or-nothing pre-dispatch refund. Its scopes and leases must remain in protected host memory. Native CTest `trusted_hierarchical_network_gate_host_only` is registered but not yet evidenced as executed. Real integration must bind authenticated routing ID, charge before DNS/connect/HTTP submission, settle on actual socket closure, share the total socket budget with HTTP client pools, enforce DNS/SSRF permissions, and preserve tenant/lineage identity across actor restart/hot code reload. No new tracing GC should be added to LLVM runtime hot paths.
+
+C++'s lease owner must outlive every outstanding lease; destroying a quota with live leases fails closed. Test teardown and cancellation/stop barriers before making this production code.
