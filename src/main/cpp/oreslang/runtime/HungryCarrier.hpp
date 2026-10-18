@@ -51,7 +51,7 @@ using ActorHandlerV2 = ActorStep (*)(void* actor_state, ActorMessage message,
 // Optional generated-frame cleanup. It runs at most once, on the actor carrier
 // thread, when shutdown/protocol failure abandons a logical turn that already
 // entered user code. Queued envelopes that never started have no frame to clean.
-using ActorCancelHandler = void (*)(void* actor_state, ActorMessage message) noexcept;
+using ActorCancelHandler = bool (*)(void* actor_state, ActorMessage message) noexcept;
 // The IO callback runs on a separate broker thread, with separate owned IO
 // state: it must NOT dereference the actor's private heap or use the carrier.
 // It must periodically check the cancellation flag and use bounded/nonblocking
@@ -70,7 +70,9 @@ struct CarrierStats {
     std::uint64_t actor_thread_tag = 0;
     std::uint64_t abandoned_on_stop = 0; // accepted minus finished turns; valid after join()
     std::uint64_t cooperations = 0;      // physical handoffs, not completed turns
-    std::uint64_t cancel_callbacks = 0;    // generated-frame cancellation hooks run
+    std::uint64_t cancel_callbacks = 0;       // generated-frame cancellation hooks run
+    std::uint64_t cancel_callback_failures = 0; // callback reported cleanup failure
+    std::uint64_t unclean_abandonments = 0;    // active turn had no cancel callback
 };
 
 // Construction and thread start allocate and use syscalls, BEFORE any future
@@ -162,7 +164,8 @@ public:
     // A single external lifecycle owner calls join; it also initiates stop.
     // Joining/destroying from the actor or broker thread is fatal, not safe.
     void join() noexcept;
-    // May be minted only after all carrier/broker/producers are joined/drained.
+    // May be minted only after all carrier/broker/producers are joined/drained
+    // AND every started-but-abandoned logical frame proved cancellation cleanup.
     std::optional<CarrierRetirementProof> retirement_proof() const noexcept;
     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
     CarrierStats stats() const noexcept;
@@ -215,6 +218,9 @@ private:
     std::atomic<bool> joined_{false};
     std::atomic<bool> setup_done_{false};
     std::atomic<bool> setup_ok_{false};
+    // Monotonic fail-closed retirement fence: once an abandoned frame lacks
+    // an acknowledged cancellation cleanup, no heap retirement proof is minted.
+    std::atomic<bool> retirement_cleanup_blocked_{false};
     std::atomic<OperationTerminal> terminal_{OperationTerminal::idle};
     std::thread actor_thread_;
     std::thread broker_thread_;
@@ -232,6 +238,7 @@ private:
     // Atomic telemetry allows reads without touching actor-local state.
     std::atomic<std::uint64_t> accepted_{0}, completed_{0}, io_done_{0},
         parked_{0}, canceled_{0}, stale_{0}, failures_{0}, thread_tag_{0},
-        abandoned_on_stop_{0}, cooperations_{0}, cancel_callbacks_{0};
+        abandoned_on_stop_{0}, cooperations_{0}, cancel_callbacks_{0},
+        cancel_callback_failures_{0}, unclean_abandonments_{0};
 };
 } // namespace oreslang::runtime
