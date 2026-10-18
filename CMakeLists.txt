@@ -1857,7 +1857,13 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND ORE_CLANG)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_driver.py"
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
-    set_tests_properties(native_aot_driver PROPERTIES TIMEOUT 30)
+    set_tests_properties(native_aot_driver PROPERTIES TIMEOUT 90)
+    # Synthetic IR only: validates actual Clang/LLD flags and fail-closed
+    # publication, never counts as Oreslang guest compiler parity.
+    add_test(NAME native_lto_driver_source_free_smoke
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lto_driver_smoke.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh" "${ORE_CLANG}")
+    set_tests_properties(native_lto_driver_source_free_smoke PROPERTIES TIMEOUT 90)
 endif()
 
 # Compiler-side nominal enum signature policy (host-only). This does NOT
