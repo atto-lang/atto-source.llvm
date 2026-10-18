@@ -309,7 +309,8 @@ void HungryCarrier::join() noexcept {
 }
 
 std::optional<CarrierRetirementProof> HungryCarrier::retirement_proof() const noexcept {
-    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value())
+    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value() ||
+            retirement_cleanup_blocked_.load(std::memory_order_acquire))
         return std::nullopt;
     return CarrierRetirementProof{*options_.heap_owner};
 }
@@ -325,7 +326,9 @@ CarrierStats HungryCarrier::stats() const noexcept {
             thread_tag_.load(std::memory_order_acquire),
             abandoned_on_stop_.load(std::memory_order_acquire),
             cooperations_.load(std::memory_order_acquire),
-            cancel_callbacks_.load(std::memory_order_acquire)};
+            cancel_callbacks_.load(std::memory_order_acquire),
+            cancel_callback_failures_.load(std::memory_order_acquire),
+            unclean_abandonments_.load(std::memory_order_acquire)};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -427,9 +430,20 @@ void HungryCarrier::cancel_active_turn() noexcept {
     // see actor memory, and terminal_ has already canceled any pending I/O.
     if (options_.cancel_handler != nullptr) {
         tls_actor_heap = &actor_heap_;
-        options_.cancel_handler(actor_state_, current_);
+        const bool cleaned = options_.cancel_handler(actor_state_, current_);
         tls_actor_heap = nullptr;
         cancel_callbacks_.fetch_add(1, std::memory_order_release);
+        if (!cleaned) {
+            cancel_callback_failures_.fetch_add(1, std::memory_order_relaxed);
+            retirement_cleanup_blocked_.store(true, std::memory_order_release);
+            failures_.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        // A started frame existed but no generated cancellation/drop authority
+        // was supplied. It is safe to stop execution, but NOT to certify that
+        // external actor-owned memory can be retired.
+        unclean_abandonments_.fetch_add(1, std::memory_order_relaxed);
+        retirement_cleanup_blocked_.store(true, std::memory_order_release);
     }
     pending_ = false;
     cooperating_ = false;
