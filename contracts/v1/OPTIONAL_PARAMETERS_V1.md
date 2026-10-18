@@ -33,7 +33,7 @@ This contract extends named value arguments from mandatory-only slots to omittab
 - The declared value type is string, and the body-visible local type is Option<string>. An omitted parameter is None (not null, empty string or uninitialized storage). An explicit plain string is wrapped as Some(string) by the checked call plan; an explicit Option<string> can be passed as-is. This lifting is limited to this optional-parameter boundary and is never a general implicit nullable conversion.
 - Do not silently broaden the meaning of question mark in general type positions, record fields, or casts. Ordinary Option<string> parameter spelling without the question mark is NOT omittable.
 - For v1, disallow applying the optional marker to an already-optional Option<T> value type to prevent ambiguous nested-option conversion; reject it explicitly.
-- An ordinary required parameter can follow an optional one. A caller wishing to skip an interior optional slot must use named arguments for the later slots.
+- An ordinary required parameter can follow an optional one. A caller may skip an interior optional slot using named arguments for later slots, or with the dedicated positional `omit` marker specified below.
 - Optional parameters do not implicitly have arbitrary defaults. A future default-expression feature requires its own evaluation order, dependency, side-effect and ownership contract; reject parameter declarations containing both postfix ? and = for now.
 - All parameters still have unique exact, case-sensitive labels. No runtime dictionary or record allocation is required.
 
@@ -128,7 +128,7 @@ Canonical future **variadic declaration** spelling follows existing prefix-sprea
     emit(id: 3, active: true);            // tags=[]
     emit(id: 3, active: true, tags: ["a", "b"]); // named rest PACK only
 
-The declared `...T rest` must appear ONCE, at the FINAL parameter position, and cannot also be marked optional with `?`, be a defaulted parameter, or be passed `None`/`omit` directly. Rest has zero-or-more elements, each of exact/assignable `T`; an empty variadic rest is a length-0 collection, **not** `None`. Keep separate `RestParameter` metadata rather than encoding rest as `T?`, Option<Array<T>>, or a generic `Array<T>` field. Rest named argument is one `List<T>`/`Array<T>` pack rather than a single `T` element; mixing it with trailing positional rest elements is a duplicate binding. The two forms `tags: [..]` and `...tagList` must produce the same element sequence but retain different source binding kinds.
+The declared `...T rest` must appear ONCE, at the FINAL parameter position, and cannot also be marked optional with `?` or be a defaulted parameter. It never takes `omit` as a rest element. `None` is a valid ELEMENT only when the rest element type itself is `Option<U>` (for example `...Option<string> tags`); it is not a substitute for an absent rest collection and is never accepted as a named rest PACK. Rest has zero-or-more elements, each of exact/assignable `T`; an empty variadic rest is a length-0 collection, **not** `None`. Keep separate `RestParameter` metadata rather than encoding rest as `T?`, Option<Array<T>>, or a generic `Array<T>` field. Rest named argument is one `List<T>`/`Array<T>` pack rather than a single `T` element; mixing it with trailing positional rest elements is a duplicate binding. The two forms `tags: [..]` and `...tagList` must produce the same element sequence but retain different source binding kinds.
 
 V1 constraints for safety:
 - No middle-position rest or multiple rest declarations. No runtime-spread into fixed-arity signatures. Fixed-arity tuple spread retains its existing independent semantics.
@@ -205,3 +205,7 @@ null/void/rest cases. **These are tests of a proposed static contract**,
 not evidence that either frontend parses optional or rest declarations,
 that typed Option wrappers lower in any backend, or that CI/runtime parity
 is established. Dynamic and foreign calls remain fail-closed.
+
+### Compatibility and migration guard
+
+Before promoting this proposal to syntax, audit all reachable user-visible call signatures and the existing use of identifier `omit` (including imports, methods, symbols and backtick escaping) to decide how to reserve it without shadowing existing value bindings. v1 only reserves a bare `omit` **argument item**, not every occurrence of the letters in a longer expression. For callable overrides and imported signatures, preserve exact optional/rest markers and source names in versioned public metadata; reject metadata drift rather than guessing. A typed Option-like value and an omitted slot are still separately represented even when both lower to None. Treat any unsupported variadic/constructor/actor-suspending form as a compile-time error, never silently lower to zero/null/empty string.
