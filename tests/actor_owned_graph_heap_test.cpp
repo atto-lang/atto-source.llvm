@@ -48,6 +48,27 @@ static HungryCarrier::Options bound_options(
     return options;
 }
 
+static void retirement_cohort_registry_does_not_grow_with_actor_churn() {
+    using Cohort = oreslang::runtime::ActorHeapRetirementCohort;
+    const auto baseline = Cohort::registry_entries_for_diagnostics();
+    for (std::uint64_t generation = 1; generation <= 4096; ++generation) {
+        {
+            auto cohort = Cohort::create(
+                ActorHeapIdentity{501, 41, generation}, 1);
+            check(cohort->cohort_id() != 0,
+                  "actor churn cohort received zero identity");
+        }
+        // Every new create sweeps the prior dead weak entry, so the registry
+        // remains bounded by pre-existing live cohorts plus this iteration.
+        check(Cohort::registry_entries_for_diagnostics() <= baseline + 1,
+              "retirement cohort registry grew with dead actor generations");
+    }
+    auto survivor = Cohort::create(ActorHeapIdentity{501, 42, 1}, 1);
+    check(Cohort::registry_entries_for_diagnostics() <= baseline + 1,
+          "final cohort sweep retained dead actor-generation keys");
+    (void)survivor;
+}
+
 static void multi_lane_cohort_requires_every_carrier_to_join() {
     using Heap = ActorOwnedGraphHeap<4, 32, 2>;
     const ActorHeapIdentity owner{109, 71, 5};
@@ -619,6 +640,7 @@ static void concurrent_graph_read_write_links_are_exclusive() {
 }
 
 int main() {
+    retirement_cohort_registry_does_not_grow_with_actor_churn();
     multi_lane_cohort_requires_every_carrier_to_join();
     heap_identity_never_wraps_and_remains_unique_under_races();
     heap_identity_unique_across_graph_specializations();
