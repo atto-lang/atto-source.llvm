@@ -1,9 +1,12 @@
 #include "oreslang/runtime/NativeIpcReceiptTable.hpp"
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <random>
 #include <stdexcept>
+#include <thread>
+#include <vector>
 using namespace oreslang::runtime;
 
 static IpcReceiptEnvelope envelope(std::uint64_t seq = 1) {
@@ -46,6 +49,34 @@ int main() {
     rejects([&]{ table.admit(oldinc); });
     table.accept_verified(third,IpcReceiptStage::outcome_unknown);
     assert(table.invariant());
+    // Competing authenticated receipts may race on distinct transport carriers;
+    // exactly one terminal transition must win without double-credit release.
+    NativeIpcReceiptTable racing(1);
+    auto race_message = envelope();
+    racing.admit(race_message);
+    std::atomic<int> accepted{0};
+    std::vector<std::thread> workers;
+    for (int i=0; i<16; ++i) workers.emplace_back([&] {
+        try {
+            racing.accept_verified(race_message, IpcReceiptStage::remote_accepted);
+            ++accepted;
+        } catch(const std::invalid_argument&) { }
+    });
+    for (auto& worker : workers) worker.join();
+    assert(accepted.load() == 1);
+    assert(racing.counters() == (std::pair<std::size_t,std::size_t>{1,0}));
+    workers.clear();
+    std::atomic<int> settled{0};
+    for (int i=0; i<16; ++i) workers.emplace_back([&] {
+        try {
+            racing.accept_verified(race_message, IpcReceiptStage::handler_committed);
+            ++settled;
+        } catch(const std::invalid_argument&) { }
+    });
+    for (auto& worker : workers) worker.join();
+    assert(settled.load() == 1);
+    assert(racing.counters() == (std::pair<std::size_t,std::size_t>{0,0}));
+    assert(racing.invariant());
     std::mt19937_64 rng(20261018);
     for(int trial=0;trial<2048;++trial) {
         NativeIpcReceiptTable book(3);
