@@ -62,6 +62,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_stdlib_mutex_rw_queue_and_quiescence
         PROPERTIES TIMEOUT 60)
 
+    add_executable(oreslang-native-actor-state-rw-test
+        tests/native_actor_state_rw_admission_test.c)
+    set_target_properties(oreslang-native-actor-state-rw-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-actor-state-rw-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-state-rw-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-state-rw-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_state_rw_critical_using_admission
+        COMMAND oreslang-native-actor-state-rw-test)
+    set_tests_properties(native_actor_state_rw_critical_using_admission
+        PROPERTIES TIMEOUT 60)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
