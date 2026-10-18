@@ -17,6 +17,26 @@
 
 namespace oreslang::runtime {
 
+namespace detail {
+// One process-wide namespace for all graph capacities and payload shapes.
+// A per-template-specialization counter permits two different arena layouts
+// to issue identical heap IDs and accept each other's re-encoded handles.
+class ActorGraphHeapIdSource final {
+    inline static std::atomic<std::uint64_t> next_{1};
+public:
+    static std::uint64_t mint() {
+        auto candidate = next_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (candidate == 0)
+                throw std::overflow_error("actor graph heap identity space exhausted");
+            if (next_.compare_exchange_weak(candidate, candidate + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return candidate;
+        }
+    }
+};
+} // namespace detail
+
 // Fixed-capacity, strictly owner-confined native graph heap.
 //
 // Node bytes are owned by the arena; graph edges hold non-owning generational
@@ -57,7 +77,6 @@ private:
         bool live = false;
     };
 
-    inline static std::atomic<std::uint64_t> next_heap_id_{1};
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
     mutable ActorHeapBorrowGate borrow_gate_;
@@ -137,7 +156,7 @@ private:
 
 public:
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
-        : owner_(owner), heap_id_(next_heap_id_.fetch_add(1, std::memory_order_relaxed)),
+        : owner_(owner), heap_id_(detail::ActorGraphHeapIdSource::mint()),
           borrow_gate_(owner) {
         if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
             throw std::invalid_argument("invalid actor graph heap identity");
