@@ -87,9 +87,15 @@ private:
 class TrustedFixtureRouter {
 public:
     using Lease = std::shared_ptr<const Image>;
-    struct Candidate {
-        Lease image;
-        std::uint64_t expected_epoch = 0;
+    class Candidate {
+        friend class TrustedFixtureRouter;
+        Lease image_;
+        std::uint64_t expected_epoch_;
+        std::shared_ptr<const int> owner_;
+        Candidate(Lease image, std::uint64_t epoch, std::shared_ptr<const int> owner)
+            : image_(std::move(image)), expected_epoch_(epoch), owner_(std::move(owner)) {}
+    public:
+        Candidate(const Candidate&) = default;
     };
 
     void install_initial(Lease image) {
@@ -112,16 +118,17 @@ public:
         if (closed_ || !current_) throw std::logic_error("not active");
         if (!image->compatible(*current_)) throw std::logic_error("incompatible state/wire/capability ABI");
         if (image->code() == current_->code()) throw std::logic_error("identical image");
-        return Candidate{std::move(image), epoch_};
+        return Candidate(std::move(image), epoch_, authority_);
     }
 
     bool publish(Candidate prepared) {
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) throw std::logic_error("router closed");
-        if (!prepared.image || prepared.expected_epoch != epoch_) return false;
-        if (!prepared.image->compatible(*current_)) return false;
+        if (prepared.owner_ != authority_ || !prepared.image_
+                || prepared.expected_epoch_ != epoch_) return false;
+        if (!prepared.image_->compatible(*current_)) return false;
         if (epoch_ == UINT64_MAX) throw std::overflow_error("routing epoch exhausted");
-        current_ = std::move(prepared.image);
+        current_ = std::move(prepared.image_);
         ++epoch_;
         return true;
     }
@@ -134,6 +141,9 @@ public:
 private:
     mutable std::mutex mutex_;
     Lease current_;
+    // Opaque, nonforgeable per-router identity. A matching epoch/ABI from
+    // another supervisor is not authorization to publish here.
+    const std::shared_ptr<const int> authority_ = std::make_shared<const int>(0);
     std::uint64_t epoch_ = 0;
     bool closed_ = false;
 };
@@ -160,6 +170,10 @@ int main(int argc, char** argv) {
     assert(rejects([&] { (void) route.stage(old); }));
     auto candidate = route.stage(next);
     auto stale = route.stage(next);
+    TrustedFixtureRouter foreign;
+    foreign.install_initial(old);
+    assert(!foreign.publish(candidate));
+    assert(foreign.acquire()->apply(7) == 17);
     assert(route.publish(candidate));
     assert(route.acquire()->apply(7) == 27);
     assert(first->apply(7) == 17);  // old image remains pinned
