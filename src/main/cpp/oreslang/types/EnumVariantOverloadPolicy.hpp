@@ -254,10 +254,21 @@ inline std::string validatedSymbol(const Registry& registry, const Signature& si
     return symbol(signature);
 }
 
-struct DirectRelocation {
-    std::string targetSymbol;
-    std::string exactBodyDigest;
-    std::uint64_t imageIdentity;
+class DirectRelocation final {
+public:
+    const std::string& targetSymbol() const noexcept { return targetSymbol_; }
+    const std::string& exactBodyDigest() const noexcept { return exactBodyDigest_; }
+
+private:
+    friend class AotImage;
+    DirectRelocation(std::string targetSymbol, std::string exactBodyDigest,
+                     std::uint64_t imageIdentity)
+        : targetSymbol_(std::move(targetSymbol)), exactBodyDigest_(std::move(exactBodyDigest)),
+          imageIdentity_(imageIdentity) {}
+
+    std::string targetSymbol_;
+    std::string exactBodyDigest_;
+    std::uint64_t imageIdentity_;
 };
 
 class AotImage final {
@@ -324,14 +335,14 @@ public:
         const std::string token = validatedSymbol(registry_, declarations_[winner]);
         auto entry = compiledBodies_.find(token);
         need(entry != compiledBodies_.end(), "unresolved direct-call relocation");
-        return DirectRelocation{token, entry->second, imageIdentity_};
+        return DirectRelocation(token, entry->second, imageIdentity_);
     }
 
     void requireImage(const DirectRelocation& relocation) const {
-        need(relocation.imageIdentity == imageIdentity_, "stale AOT image relocation");
-        auto body = compiledBodies_.find(relocation.targetSymbol);
+        need(relocation.imageIdentity_ == imageIdentity_, "stale AOT image relocation");
+        auto body = compiledBodies_.find(relocation.targetSymbol_);
         need(body != compiledBodies_.end()
-             && body->second == relocation.exactBodyDigest, "invalid AOT body mapping");
+             && body->second == relocation.exactBodyDigest_, "invalid AOT body mapping");
     }
 
 private:
