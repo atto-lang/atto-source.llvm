@@ -95,6 +95,9 @@ int main() {
     auto control = a.take_control();
     reject([&] { (void)a.take_control(); });
     auto writerGrant=a.grant(control, 101, 1, true, true);
+    // Old and restarted actor incarnations may not share live membership.
+    reject([&] { (void)a.grant(control, 101, 1, true, false); });
+    reject([&] { (void)a.grant(control, 101, 2, true, true); });
     auto readerGrant=a.grant(control, 102, 1, true, false);
     // A default invalid handle can exist for delayed assignment, but raw live
     // authority coordinates cannot be constructed outside the arena/lease.
@@ -305,6 +308,25 @@ int main() {
         require(pinned.try_retire(pinnedControl));
         require(pinned.try_retire(pinnedControl));
         reject([&] { (void)pinned.pin(301, 7, pinnedGrant); });
+    }
+
+    // Duplicate completion callbacks may arrive on distinct carriers.
+    // Exactly one thread consumes the same lifetime-only token; no release
+    // may underflow the counter or permit early physical arena destruction.
+    for (int round = 0; round < 64; ++round) {
+        SharedDomainArena duplicateCallbacks;
+        auto ownership = duplicateCallbacks.take_control();
+        auto member = duplicateCallbacks.grant(ownership, 811, 1, true, false);
+        auto token = duplicateCallbacks.pin(811, 1, member);
+        require(!duplicateCallbacks.try_retire(ownership));
+        std::array<std::thread, 8> callbacks;
+        for (auto& callback : callbacks) callback = std::thread([&] {
+            for (int duplicate = 0; duplicate < 8; ++duplicate) token.release();
+        });
+        for (auto& callback : callbacks) callback.join();
+        require(!token.live());
+        require(duplicateCallbacks.try_retire(ownership));
+        require(duplicateCallbacks.try_retire(ownership));
     }
 
     std::cout << "shared domain arena tests passed\n";
