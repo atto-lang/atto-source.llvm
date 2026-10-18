@@ -85,6 +85,13 @@ public:
     bool cleanup_failed() const noexcept {
         return cleanup_failed_.load(std::memory_order_acquire);
     }
+    // Cold-path observability only. This is the number of registry keys
+    // currently retained (live cohorts plus any expired entries awaiting the
+    // next create() sweep), not the number of active actor execution lanes.
+    static std::size_t registry_entries_for_diagnostics() {
+        std::lock_guard<std::mutex> lock{registry_mutex()};
+        return registry().size();
+    }
     bool ready_for_retirement() const noexcept {
         return !cleanup_failed()
             && registered_lanes() == expected_lanes_
