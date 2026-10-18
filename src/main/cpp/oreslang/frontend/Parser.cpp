@@ -1201,6 +1201,21 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (token_.text == "async") {
+            // Java distinguishes ordinary async lambdas (Future<R>)
+            // from whole-body async task lambdas (Task<R>). Native
+            // bootstrap does not have typed closure frames, capture
+            // ownership or awaitable Task/Future continuations. Reject
+            // explicitly before emitting even partial LLVM IR.
+            Lexer lookahead = lexer_;
+            const auto next = lookahead.next().text;
+            if (next == "|") {
+                fail("native async Future lambda lowering unsupported: closure and suspension required");
+            }
+            if (next == "task" && lookahead.next().text == "|") {
+                fail("native async task lambda lowering unsupported: owned captures and scheduler required");
+            }
+        }
         if (token_.text == "nb") {
             Lexer next = lexer_;
             if (next.next().text == "{")
