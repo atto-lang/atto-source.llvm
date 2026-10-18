@@ -155,6 +155,11 @@ def main():
                 router.process()
             else:
                 token = router.begin_upgrade()
+                if token is not None:
+                    # Model host calls arriving while Java's route monitor is
+                    # paused. They linearize only after commit/rollback.
+                    for _ in range(rng.randrange(4)):
+                        router.send(rng.randrange(-5, 6))
                 if token is not None and next_gen < len(generations):
                     candidate = Physical(
                         generations[next_gen],
