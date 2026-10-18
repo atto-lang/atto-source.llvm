@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory(prefix='ores aot ') as directory:
         assert result.returncode!=0
         assert output.read_bytes()==original
     # The IR fence is a release *screen*, not linked-image certification.
-    source.write_text('fnc main(): int { return 42; }\\n')
+    source.write_text('fnc main(): int { return 42; }\n')
     fake=root/'fake-ir-compiler.sh'
     for invalid_ir in [
         'define void @guest() gc "shadow-stack" { ret void }',
@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='ores aot ') as directory:
         'declare ptr @GC_malloc(i64)',
         'declare void @gc_collect()',
     ]:
-        fake.write_text("#!/bin/sh\\ncat <<'IR'\\n" + invalid_ir + "\\nIR\\n")
+        fake.write_text("#!/bin/sh\ncat <<'IR'\n" + invalid_ir + "\nIR\n")
         fake.chmod(0o755)
         bad_env=dict(env,ORESLANG_LLVMC=str(fake))
         bad=subprocess.run([driver,str(source),str(output)],env=bad_env,capture_output=True)
