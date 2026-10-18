@@ -290,30 +290,48 @@ public:
                 ticket.expected_revision_, std::move(abi),
                 std::move(candidate.code), std::move(candidate.cleanup.callback));
         } catch (...) {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->publishing = false;
-            state->cv.notify_all();
+            bool close_slot;
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->publishing = false;
+                close_slot = state->closed;
+                state->cv.notify_all();
+            }
+            // Cleanup callback can call close() while publication is active.
+            // The pending closer never waits or runs guest work in its callback.
+            if (close_slot) state->code->close();
             throw;
         }
+        bool close_slot;
         {
             std::lock_guard<std::mutex> lock(state->mutex);
             state->publishing = false;
-            state->frozen = false;
+            close_slot = state->closed;
+            if (!close_slot) state->frozen = false;
             state->cv.notify_all();
         }
+        // If a retiring old image requested terminal close from its
+        // reclaim callback, honor that request after publication finishes.
+        // Do not re-open mailbox admission for a terminally closed actor.
+        if (close_slot) state->code->close();
         return published;
     }
 
     void close() noexcept {
         auto state = state_;
+        bool close_slot;
         {
-            std::unique_lock<std::mutex> lock(state->mutex);
+            std::lock_guard<std::mutex> lock(state->mutex);
             if (state->closed) return;
             state->closed = true;
             state->frozen = true;
-            state->cv.wait(lock, [&] { return !state->publishing; });
+            // Never wait for publication: a generation reclaim callback
+            // may synchronously invoke close() *from* activate(). Waiting
+            // here deadlocks the actor's last publisher. The publisher
+            // completes the pending physical close outside both locks.
+            close_slot = !state->publishing;
         }
-        state->code->close(); // last-pin reclamation outside the actor mutex
+        if (close_slot) state->code->close();
     }
 };
 
