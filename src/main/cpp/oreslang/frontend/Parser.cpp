@@ -338,7 +338,7 @@ private:
             } while (accept(","));
         }
         require(")");
-        if (max < min) fail("actor threads require 1 <= min <= max");
+        if (max < min || max > 3) fail("actor threads require 1 <= min <= max <= 3");
         if (max > 1) fail("parallel actor threads require state effects and "
                           "scheduler admission; max > 1 is not yet supported");
         return {min, max};
