@@ -75,7 +75,13 @@ inline void validateRegistry(const Registry& registry) {
         need(!entry.second.cases.empty() && entry.second.cases.size() <= MaxCases, "enum case limit");
         for (const auto& item : entry.second.cases) {
             simple(item.first);
-            need(item.second != Payload::Complex, "complex enum payload not eligible");
+            switch (item.second) {
+                case Payload::Nullary:
+                case Payload::Primitive:
+                case Payload::PrimitiveTuple:
+                case Payload::Complex: break;
+                default: throw std::invalid_argument("unknown enum payload layout");
+            }
         }
     }
 }
@@ -85,6 +91,9 @@ inline void validate(const Parameter& p, const Registry& registry) {
     } else if (p.kind == Kind::Enum || p.kind == Kind::Variant) {
         const auto it = registry.find(p.id);
         need(it != registry.end(), "unknown enum declaration identity");
+        for (const auto& member : it->second.cases) {
+            need(member.second != Payload::Complex, "complex enum payload not overload-eligible");
+        }
         if (p.kind == Kind::Enum) {
             need(p.variant.empty(), "whole enum cannot have case selector");
         } else {
@@ -137,6 +146,8 @@ inline void admit(const Registry& registry, const std::vector<Signature>& signat
     const Signature& first = signatures.front();
     qualified(first.owner);
     simple(first.name);
+    need(first.domain == Domain::Module || first.domain == Domain::Instance
+         || first.domain == Domain::Static, "invalid callable domain");
     for (const Signature& s : signatures) {
         need(s.owner == first.owner && s.domain == first.domain && s.name == first.name,
              "mixed callable family");
