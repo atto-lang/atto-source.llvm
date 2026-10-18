@@ -16,8 +16,9 @@ OS address space per Erlang process. Oreslang must distinguish:
 | Kind | Ordinary mutable allocations | Shared data | OS address-space protection | Hot code policy |
 | --- | --- | --- | --- | --- |
 | SHARED | Actor-owned arena/heap, even for siblings | Only explicit frozen regions or capability-governed, synchronized shared regions | Same process is normal; no hostile-code isolation claim | Same-process generation/code-table switch after all actor and shared-region pins reach the barrier |
-| PRIVATE / ISOLATED (trusted) | Actor-owned heap/arena and runtime state | Typed serialized messages, immutable code, explicitly authorized imports | **Target:** separate protected address space for isolated actors; ordinary Java Context alone does not provide that guarantee | Supervisor can replace a worker incarnation, restoring checked state and stable logical ActorRef |
-| UNTRUSTED | Separate heap and independently revocable capabilities | Serialized/copy-only by default; no host handles or mutable shared pointer graph | **Required target:** enforceable sandbox (exec worker + OS sandbox, or separately proven isolate). Native C++ arena alone is not containment | Start candidate in quarantined sandbox, validate capabilities, then transfer routing epoch; never dynamically link untrusted machine code into trusted host |
+| PRIVATE (trusted) | Independent actor-owned mutable heap/arena and runtime state | Typed messages, immutable code, explicitly authorized imports | May share the trusted host address space; logical privacy does **not** imply an OS sandbox | Supervisor replaces a checked code generation without sharing mutable actor heap; stable logical ActorRef |
+| UNTRUSTED | One owned mutable heap/arena **per actor** inside a separate pooled untrusted execution domain | Serialized/copy-only by default; no host handles or mutable trusted pointers | Java/Graal profile uses **one separately restricted pooled JIT guest isolate for untrusted actors**, not an isolate per actor; enforce a separately validated capability/security boundary | Stage and validate a new untrusted generation within that pool before transferring the routing epoch; never link untrusted native machine code directly into the trusted host |
+| PROTECTED WORKER (optional stronger tier) | Independent actor-owned heap/arena | Explicit serialized broker boundary | Separate sandboxed OS process/address space where a deployment expressly requires physical isolation | Verified worker-incarnation handoff and state rebinding; do not silently substitute this tier for ordinary PRIVATE actors |
 
 Here `SHARED` means *permitted to access an explicitly shared data domain*, not
 that two actor instances allocate normal mutable objects in a common heap. An
@@ -26,11 +27,20 @@ arenas can live in the same OS address space. Native Image isolates, WASM
 instances, or an independent process each need their own separately proven
 pointer/capability and failure boundaries.
 
-A protected actor worker may be **one actor per address space** when that is the
-contract; pooling multiple isolated actors in a single worker without full isolate
-teardown changes the contract. Shared code pages and read-only artifact caches may
-be reused across domains only with identity/tenant authorization and memory-safe
-boundaries. Address-space changes are orthogonal to code-generation changes.
+The default trusted PRIVATE actor is **not** one OS process or isolate per actor.
+Trusted SHARED and PRIVATE actors both own independent mutable heaps; SHARED
+only adds explicitly authorized, synchronized shared-data access. The Java
+UNTRUSTED profile uses one pooled JIT guest isolate separate from the trusted
+host, while retaining independent actor heaps, quotas and capabilities inside
+that pool. A separate sandboxed process is an optional stronger deployment
+profile that must prove its own boundary; a Java Context, native arena or
+shared JIT isolate alone is not proof of hostile-code containment.
+
+Immutable compiled code units may be shared across actors **only within an
+authorized trust/allocation domain and exact code generation**. Shared code
+pages and read-only caches must never export private actor pointers or defeat
+tenant capability boundaries. Physical protection and code-generation
+retirement are separate contracts.
 
 ## JIT is not required for hot reload
 
