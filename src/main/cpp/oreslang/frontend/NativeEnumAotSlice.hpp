@@ -481,6 +481,12 @@ private:
 };
 
 inline VerifiedPlan parseVerified(std::string_view source) {
+    // This API may also be invoked directly by host compiler libraries:
+    // enforce the CLI's source-byte and binary-NUL admission limits here.
+    if (source.size() > 8u * 1024u * 1024u ||
+        source.find(char(0)) != std::string_view::npos) {
+        throw std::invalid_argument("native enum AOT: source size/NUL admission failed");
+    }
     Plan plan = parse(source);
     validatePlan(plan);
     return VerifiedPlan(std::move(plan));
