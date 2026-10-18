@@ -2,6 +2,7 @@
 #include <openssl/evp.h>
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <cstdint>
 #include <stdexcept>
 #include <thread>
@@ -316,7 +317,61 @@ static void concurrent_checkpoint_snapshot_and_upgrade() {
                 "concurrent checkpoint leaked native image cleanup");
     }
 }
+static void pinned_native_generation_outlives_wrapper() {
+    std::atomic<int> reclaimed{0};
+    std::optional<Coordinator::SuspendedCodeLease> detached;
+    {
+        const ActorHeapIdentity id{88, 9, 1};
+        Coordinator actor(id, actor_id(), shape(), version(0xaa, v1),
+                          21, &sha, [&] { ++reclaimed; });
+        detached.emplace(actor.suspend_code());
+        actor.close();
+        require(reclaimed == 0, "close unloaded code held by detached continuation");
+    }
+    require(reclaimed == 0 && detached->descriptor().revision == 1
+            && detached->invoke_pinned(20, 2) == 22,
+            "coordinator destruction invalidated live continuation code");
+    detached.reset();
+    require(reclaimed == 1, "detached last lease did not reclaim image exactly once");
+}
+
+static void terminal_close_vs_snapshot_race() {
+    for (std::uint64_t round = 1; round <= 128; ++round) {
+        const ActorHeapIdentity id{89, round, 1};
+        std::atomic<int> reclaimed{0};
+        Coordinator actor(id, actor_id(), shape(), version(0xaa, v1),
+                          4, &sha, [&] { ++reclaimed; });
+        std::atomic<bool> start{false};
+        std::atomic<int> observed{0}, rejected{0};
+        std::exception_ptr thread_error;
+        std::thread observer([&] {
+            try {
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                try {
+                    auto bytes = actor.snapshot_frame();
+                    require(Wire::decode(bytes, version(0xaa, v1).manifest, &sha)
+                            .state_bytes.size() == 8, "snapshot failed integrity");
+                    ++observed;
+                } catch (const std::logic_error&) {
+                    ++rejected;
+                }
+            } catch (...) { thread_error = std::current_exception(); }
+        });
+        start.store(true, std::memory_order_release);
+        actor.close();
+        observer.join();
+        if (thread_error) std::rethrow_exception(thread_error);
+        require(observed + rejected == 1 && reclaimed == 1,
+                "terminal close and concurrent frame capture were not linearizable");
+        require(fails([&] { (void)actor.snapshot_frame(); }),
+                "terminally closed actor produced a new checkpoint frame");
+    }
+}
+
 int main() {
+    pinned_native_generation_outlives_wrapper();
+    terminal_close_vs_snapshot_race();
     suspended_continuation_pins_old_generation();
     concurrent_checkpoint_snapshot_and_upgrade();
     initial_image_admission_fail_closed();
