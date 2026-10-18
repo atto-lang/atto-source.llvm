@@ -949,6 +949,10 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
+    target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ndarray_write_view_reference COMMAND oreslang-native-ndarray-view-admission-test)
     # Prove control-plane stop requests honor existing loan-gated native heaps.
     add_executable(oreslang-actor-group-heap-quiescence-test
         tests/actor_group_heap_quiescence_test.cpp
