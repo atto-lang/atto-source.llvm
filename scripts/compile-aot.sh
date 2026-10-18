@@ -18,6 +18,9 @@ command -v "$clang" >/dev/null || { echo 'Install Clang or set CLANG.' >&2; exit
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 "$compiler" --target=host "$source_file" > "$work/program.ll"
+# First release fence: refuse known tracing-GC IR before invoking the linker.
+# This is NOT a full transitive-image or dynamic-plugin collector audit.
+"${PYTHON3:-python3}" "$root/scripts/audit-no-gc-ir.py" "$work/program.ll" >/dev/null
 "$clang" -O2 -x ir "$work/program.ll" -o "$work/program"
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s\n' "$output_file"
