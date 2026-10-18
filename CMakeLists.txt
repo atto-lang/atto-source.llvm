@@ -29,6 +29,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Test-only Linux two-process local socket and EOF crash ambiguity.
+    # The test fixture does NOT authenticate a remote actor/peer.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-ipc-two-process-test
+            tests/native_ipc_receipt_two_process_test.cpp)
+        target_include_directories(oreslang-native-ipc-two-process-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-ipc-two-process-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_ipc_two_process_eof_and_session_retirement
+            COMMAND oreslang-native-ipc-two-process-test)
+        set_tests_properties(native_ipc_two_process_eof_and_session_retirement
+            PROPERTIES TIMEOUT 25)
+    endif()
     # Native host-only IPC receipt ledger (not source compiler parity or
     # remote-peer authentication). Execute strict transitions and carrier races.
     find_package(Threads REQUIRED)
