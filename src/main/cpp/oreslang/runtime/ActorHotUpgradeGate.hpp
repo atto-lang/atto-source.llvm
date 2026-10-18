@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -49,6 +50,14 @@ private:
 
     std::shared_ptr<State> state_;
 
+    struct LeaseToken {
+        LeaseToken(std::shared_ptr<State> owner, std::uint64_t generation)
+            : state(std::move(owner)), epoch(generation) {}
+        std::shared_ptr<State> state;
+        std::uint64_t epoch;
+        std::atomic<bool> released{false};
+    };
+
     static void check_digest(const std::string& value) {
         if (value.size() != 64
                 || !std::all_of(value.begin(), value.end(),
@@ -67,10 +76,9 @@ private:
 public:
     class Lease final {
         friend class ActorHotUpgradeGate;
-        std::shared_ptr<State> state_;
-        std::uint64_t epoch_ = 0;
+        std::shared_ptr<LeaseToken> token_;
         explicit Lease(std::shared_ptr<State> state, std::uint64_t epoch)
-            : state_(std::move(state)), epoch_(epoch) {}
+            : token_(std::make_shared<LeaseToken>(std::move(state), epoch)) {}
     public:
         Lease() = default;
         Lease(const Lease&) = delete;
@@ -79,20 +87,20 @@ public:
         Lease& operator=(Lease&& rhs) noexcept {
             if (this != &rhs) {
                 close();
-                state_ = std::move(rhs.state_);
-                epoch_ = rhs.epoch_;
-                rhs.epoch_ = 0;
+                token_ = std::move(rhs.token_);
             }
             return *this;
         }
         ~Lease() { close(); }
 
-        std::uint64_t epoch() const noexcept { return epoch_; }
+        std::uint64_t epoch() const noexcept {
+            return token_ ? token_->epoch : 0;
+        }
         void close() noexcept {
-            auto state = std::move(state_);
-            if (!state) return;
-            std::lock_guard<std::mutex> guard(state->mutex);
-            if (state->pins != 0) --state->pins;
+            if (!token_ || token_->released.exchange(true, std::memory_order_acq_rel))
+                return;
+            std::lock_guard<std::mutex> guard(token_->state->mutex);
+            if (token_->state->pins != 0) --token_->state->pins;
         }
     };
 
@@ -145,14 +153,19 @@ public:
             throw std::logic_error("closed or upgrade-frozen actor");
         if (state_->pins == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("actor pins exhausted");
+        // Construct before charging: allocation failure must never leak a pin.
+        Lease lease(state_, state_->epoch);
         ++state_->pins;
-        return Lease(state_, state_->epoch);
+        return lease;
     }
 
     bool permits(const Lease& lease) const {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        return lease.state_.get() == state_.get()
-            && lease.epoch_ == state_->epoch && !state_->closed;
+        const auto token = lease.token_;
+        return token && token->state.get() == state_.get()
+            && token->epoch == state_->epoch
+            && !token->released.load(std::memory_order_acquire)
+            && !state_->closed;
     }
 
     Candidate prepare(Image proposed) {
