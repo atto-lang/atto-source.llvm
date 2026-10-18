@@ -834,6 +834,21 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
+    # Native parser must reject every unsupported transport actor as such,
+    # before IR emission (no silent fallback to a generic mailbox actor).
+    oreslang_contract_test(native_reject_serial_unary_http_actor native-transport-serial-unary-http.ores
+        --diagnostic "native specialized actor serial unary http requires typed adapter")
+    oreslang_contract_test(native_reject_ipc_actor native-transport-ipc.ores
+        --diagnostic "native specialized actor ipc requires typed adapter")
+    oreslang_contract_test(native_reject_tcp_actor native-transport-tcp.ores
+        --diagnostic "native specialized actor tcp requires typed adapter")
+    oreslang_contract_test(native_reject_ffi_actor native-transport-ffi.ores
+        --diagnostic "native specialized actor ffi requires typed adapter")
+    oreslang_contract_test(native_reject_proxy_actor native-transport-proxy.ores
+        --diagnostic "native specialized actor proxy requires typed adapter")
+    oreslang_contract_test(native_reject_websocket_actor native-transport-websocket.ores
+        --diagnostic "native specialized actor websocket requires typed adapter")
+
     # Optional instance method marker: fnc, method, and no marker all lower
     # to the same native supported on_message(int) handler.
     oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores
