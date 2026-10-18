@@ -40,6 +40,7 @@ public:
         // async operation and is not assumed equal to the heap incarnation.
         lifetime_lease_ = ores_actor_i64_heap_external_acquire_for_actor(
                 heap, turn, ticket.actor_id);
+        lifetime_pin_active_.store(true, std::memory_order_release);
     }
 
     PinnedContinuationGate(const PinnedContinuationGate&) = delete;
@@ -128,8 +129,11 @@ public:
         if (!valid(ticket) || !broker_quiesced_.load(std::memory_order_acquire)
                 || !resume_finished_.load(std::memory_order_acquire)
                 || loans_.load(std::memory_order_acquire) != 0) return false;
+        // Claim cleanup before touching the heap, but do NOT publish
+        // retired=true until physical lease-release has returned. Observers
+        // cannot mistake an in-progress native reclamation for quiescence.
         bool old = false;
-        if (!retired_.compare_exchange_strong(old, true,
+        if (!retirement_claimed_.compare_exchange_strong(old, true,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             return false;
         }
@@ -137,14 +141,16 @@ public:
             ores_actor_i64_heap_external_release(
                     lifetime_heap_, &lifetime_lease_);
             lifetime_heap_ = nullptr;
+            lifetime_pin_active_.store(false, std::memory_order_release);
         }
+        retired_.store(true, std::memory_order_release);
         return true;
     }
 
     bool lifetime_pinned() const noexcept {
-        return lifetime_heap_ != nullptr
-            && lifetime_lease_.domain != 0
-            && lifetime_lease_.generation != 0;
+        // Safe for read-only observers racing the retiring scheduler.
+        // Never race a raw pointer or mutable C lifetime token here.
+        return lifetime_pin_active_.load(std::memory_order_acquire);
     }
 
     AsyncIoTerminal terminal() const noexcept { return terminal_.load(std::memory_order_acquire); }
@@ -166,6 +172,8 @@ private:
     std::atomic<bool> broker_quiesced_{false};
     std::atomic<bool> resume_claimed_{false};
     std::atomic<bool> resume_finished_{false};
+    std::atomic<bool> retirement_claimed_{false};
+    std::atomic<bool> lifetime_pin_active_{false};
     std::atomic<bool> retired_{false};
 };
 } // namespace oreslang::runtime
