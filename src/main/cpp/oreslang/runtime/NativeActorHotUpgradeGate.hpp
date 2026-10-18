@@ -151,6 +151,10 @@ public:
             return *this;
         }
         ~Ticket() noexcept { release(); }
+        // CONTROL may explicitly relinquish an in-flight ticket without
+        // destroying the object still referenced by promote(). Publication
+        // either completes or restores DATA admission on failure.
+        void abandon() noexcept { release(); }
     private:
         void release() noexcept {
             auto state = std::move(state_);
