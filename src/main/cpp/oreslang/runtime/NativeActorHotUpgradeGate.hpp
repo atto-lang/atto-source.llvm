@@ -261,8 +261,9 @@ public:
             Candidate(const Candidate&) = delete;
             Candidate& operator=(const Candidate&) = delete;
         };
-        auto candidate = std::make_unique<Candidate>(
-            std::move(candidate_code), std::move(reclaim));
+        // Stack-owned RAII avoids a heap allocation before this gate owns
+        // the reclaim callback. The admitted CodeImage is noexcept movable.
+        Candidate candidate(std::move(candidate_code), std::move(reclaim));
         auto state = state_;
         {
             std::lock_guard<std::mutex> lock(state->mutex);
@@ -287,7 +288,7 @@ public:
             auto abi = fingerprint(candidate_shape);
             published = state->code->activate(
                 ticket.expected_revision_, std::move(abi),
-                std::move(candidate->code), std::move(candidate->cleanup.callback));
+                std::move(candidate.code), std::move(candidate.cleanup.callback));
         } catch (...) {
             std::lock_guard<std::mutex> lock(state->mutex);
             state->publishing = false;
