@@ -216,6 +216,11 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::ModuleCall:
+            // Import AST has no native symbol until typed stdlib linking is
+            // certified. Do not create a fake user/host function.
+            throw std::runtime_error(
+                "native Assert module call awaits typed source-owned linking");
         case Expression::Kind::Call: {
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
             if (callee->arg_size() != expr.arguments.size()) {
@@ -272,6 +277,10 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // Fail before LLVM context, scalar-loop special lowering or exports.
+    if (!source.imports.empty())
+        throw std::runtime_error(
+            "native module imports are unsupported until linked stdlib and typed assertion/trap lowering are implemented");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -498,6 +507,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
     for (const auto& fn : source.functions) {
+        if (source.module.empty() && fn.name.rfind("oreslang_assert_", 0) == 0)
+            throw std::runtime_error(
+                "reserved native runtime ABI symbol '" + fn.name + "'");
         const std::string base_symbol = cortex_m_target && fn.name == "main"
             ? "oreslang_cortexm_bootstrap"
             : (native_main && source.module.empty() && fn.name == "main"
