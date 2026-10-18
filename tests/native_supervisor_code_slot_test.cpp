@@ -1,6 +1,7 @@
 #include "oreslang/runtime/NativeSupervisorCodeSlot.hpp"
 #include "oreslang/runtime/NativeSupervisorRegistry.hpp"
 #include <atomic>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -88,6 +89,52 @@ static void exercise_rejected_hot_reload_reclamation() {
           "latest revision cleanup did not run when slot closed");
 }
 
+// Runtime ownership proof: unload callbacks must run AFTER the Policy value
+// has been destroyed, including on invalid ABI, stale CAS and slot closure.
+struct TrackedImage final {
+    std::shared_ptr<std::atomic<int>> live;
+    explicit TrackedImage(std::shared_ptr<std::atomic<int>> counter)
+        : live(std::move(counter)) { ++*live; }
+    TrackedImage(const TrackedImage&) = delete;
+    TrackedImage& operator=(const TrackedImage&) = delete;
+    TrackedImage(TrackedImage&&) noexcept = default;
+    TrackedImage& operator=(TrackedImage&&) noexcept = default;
+    ~TrackedImage() noexcept { if (live) --*live; }
+};
+static void exercise_destructor_before_image_unload() {
+    auto live = std::make_shared<std::atomic<int>>(0);
+    std::atomic<int> callbacks{0}, wrong_order{0};
+    auto cleanup = [&] {
+        ++callbacks;
+        if (live->load() != 0) ++wrong_order;
+    };
+    {
+        NativeSupervisorCodeSlot<TrackedImage> slot("actor-abi", TrackedImage(live),
+                                                     cleanup);
+        check(live->load() == 1, "initial generation wrapper not retained");
+        bool denied = false;
+        try { slot.activate(0, "actor-abi", TrackedImage(live), cleanup); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied && live->load() == 1, "stale code wrapper not destroyed");
+        denied = false;
+        try { slot.activate(1, "", TrackedImage(live), cleanup); }
+        catch (const std::invalid_argument&) { denied = true; }
+        check(denied && live->load() == 1, "invalid ABI code wrapper not destroyed");
+        check(slot.activate(1, "actor-abi", TrackedImage(live), cleanup).revision == 2,
+              "valid tracked upgrade failed");
+        check(live->load() == 1, "previous accepted code wrapper was not destroyed");
+        slot.close();
+    }
+    check(callbacks == 4 && wrong_order == 0 && live->load() == 0,
+          "native image unloaded before Policy destruction or leaked");
+    // Initial construction with invalid ABI owns its cleanup, too.
+    bool denied = false;
+    try { NativeSupervisorCodeSlot<TrackedImage> bad("", TrackedImage(live), cleanup); }
+    catch (const std::invalid_argument&) { denied = true; }
+    check(denied && callbacks == 5 && wrong_order == 0 && live->load() == 0,
+          "rejected initial admission leaked or unloaded a live image wrapper");
+}
+
 int main(){
     std::atomic<int> reclaimed{0};
     NativeSupervisorRegistry supervisors(42, 8, 8);
@@ -154,4 +201,5 @@ int main(){
     check(reclaimed.load()==6,"new policy or rejected candidate leaked after final pinned turn");
     group->close();
     exercise_rejected_hot_reload_reclamation();
+    exercise_destructor_before_image_unload();
 }
