@@ -79,6 +79,14 @@ int main() {
     REQUIRE(oreslang::enum_aot::checkedNativeExit(allowedUtf8.readOnly()) == 10);
     rejectedSealed(fixture() + "// ores: target=wasm32");
     rejectedSealed(std::string("// ores: capability=filesystem\n") + fixture());
+    for (const char* whitespaceVariant : {
+        "//ores: target=wasm32", "//  ores : target=host",
+        "//\tores:\tcapability=filesystem", "// ores\t: target=wasm32"
+    }) {
+        rejectedSealed(fixture() + whitespaceVariant);
+    }
+    REQUIRE(oreslang::enum_aot::hasUnverifiedEnvironmentDirective(
+        "// a regular note\n// ores : capability=network"));
     // Do not turn harmless comments without the directive syntax into errors.
     const VerifiedPlan harmless = oreslang::enum_aot::parseVerified(
         fixture() + "// ores companion note");
