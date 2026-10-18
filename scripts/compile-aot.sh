@@ -6,6 +6,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 compiler="${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
 clang="${CLANG:-clang}"
+lto="${ORESLANG_LTO:-off}"
+case "$lto" in off|full|thin) ;; *) echo 'ORESLANG_LTO must be off, full or thin.' >&2; exit 64 ;; esac
 source_dir="$(cd "$(dirname "$1")" && pwd -P)"
 source_file="$source_dir/$(basename "$1")"
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
@@ -14,10 +16,21 @@ output_file="$output_dir/$(basename "$2")"
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
 command -v "$clang" >/dev/null || { echo 'Install Clang or set CLANG.' >&2; exit 69; }
+# An explicitly requested LTO mode must never silently degrade to normal -O2.
+# The current source compiler produces one LLVM module; LTO here is a link-mode
+# plumbing gate, NOT proof of cross-Oreslang-module optimization.
+if [[ "$lto" != off ]]; then
+  command -v ld.lld >/dev/null || { echo 'LTO requires ld.lld (LLVM LLD) on PATH.' >&2; exit 69; }
+  "$clang" --version | grep -qi clang || { echo 'LTO requires Clang.' >&2; exit 69; }
+fi
 # Build beside the output so publication is atomic and errors preserve old output.
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 "$compiler" --target=host "$source_file" > "$work/program.ll"
-"$clang" -O2 -x ir "$work/program.ll" -o "$work/program"
+if [[ "$lto" == off ]]; then
+  "$clang" -O2 -x ir "$work/program.ll" -o "$work/program"
+else
+  "$clang" -O2 "-flto=$lto" -fuse-ld=lld -x ir "$work/program.ll" -o "$work/program"
+fi
 mv -f -- "$work/program" "$output_file"
-printf 'Native executable: %s\n' "$output_file"
+printf 'Native executable: %s (LTO mode: %s)\n' "$output_file" "$lto"
