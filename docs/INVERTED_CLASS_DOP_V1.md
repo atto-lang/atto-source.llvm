@@ -17,10 +17,10 @@ define inverted class Particle as
     float vx;
     float vy;
 
-    move(float dt) as
+    move(float dt): void {
         self.x += self.vx * dt;
         self.y += self.vy * dt;
-    end
+    }
 end
 
 let particles = InvertedArray<Particle>.with_capacity(100000);
