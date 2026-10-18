@@ -1226,7 +1226,9 @@ private:
             Lexer next = lexer_;
             const auto following = next.next().text;
             if (following == "task") {
-                fail("nb task is not a language construct; use task {}, do task {}, or await task {}");
+                // Accepted source spelling. Native Task execution remains
+                // fail-closed until ownership, quiescence and cancellation land.
+                fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
             }
             if (following == "{")
                 fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
