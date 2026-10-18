@@ -597,7 +597,7 @@
           "value_type": "bool"
         }
       ],
-      "error": "missing"
+      "error": "type mismatch"
     },
     {
       "id": "required-last-missing",
