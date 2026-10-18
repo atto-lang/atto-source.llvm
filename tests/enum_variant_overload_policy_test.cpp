@@ -5,7 +5,7 @@
 #include <vector>
 
 #define REQUIRE(expr) do { if (!(expr)) { \
-  std::fprintf(stderr, "native enum variant policy failed: %s at %s:%d\\n", #expr, __FILE__, __LINE__); \
+  std::fprintf(stderr, "native enum variant policy failed: %s at %s:%d\n", #expr, __FILE__, __LINE__); \
   std::abort(); } } while (false)
 using namespace oreslang::types::variant_overloads;
 namespace {
