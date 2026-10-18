@@ -36,10 +36,16 @@ STARTUP = """.syntax unified
 .type Reset_Handler,%function
 .thumb_func
 Reset_Handler:
+  @ Source Oreslang int is i64 on thumbv7m-none-eabi. AAPCS32 passes
+  @ first i64 in r0:r1, second i64 in r2:r3; return i64 in r0:r1.
   movs r0, #9
-  movs r1, #4
+  movs r1, #0
+  movs r2, #4
+  movs r3, #0
   bl ores_embedded_probe
-  @ 3 * 9 + 4 = 31. Only guest-compiled code can provide this result.
+  @ 3 * 9 + 4 = 31. Verify BOTH halves of the 64-bit result.
+  cmp r1, #0
+  bne guest_fail
   cmp r0, #31
   bne guest_fail
 guest_pass:
@@ -187,6 +193,10 @@ def main():
                "compiler did not select the Cortex-M target")
         verify("@ores_embedded_probe" in ir,
                "Oreslang guest probe was not emitted")
+        verify("define i64 @ores_embedded_probe(i64 %a, i64 %b)" in ir,
+               "Cortex-M Oreslang int ABI must be i64 parameters and return")
+        verify("define i64 @sum(i64 %a, i64 %b)" in ir,
+               "Cortex-M helper must retain the i64 int ABI")
         verify("define i32 @main" not in ir,
                "guest must not emit a hosted main()")
         (root / "guest.ll").write_text(ir)
@@ -316,7 +326,7 @@ def main():
                    "positive guest reported result mismatch: " + output)
 
             (root / "startup-negative.S").write_text(
-                STARTUP.replace("movs r1, #4", "movs r1, #5", 1))
+                STARTUP.replace("movs r2, #4", "movs r2, #5", 1))
             run(common + ["-c", str(root / "startup-negative.S"), "-o",
                           str(root / "startup-negative.o")])
             negative_elf = root / "negative.elf"
