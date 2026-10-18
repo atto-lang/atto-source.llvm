@@ -25,13 +25,19 @@ public:
         std::uint64_t http_burst = 2;
         std::uint32_t max_http_in_flight = 10;
         std::uint32_t max_tcp_connections = 10;
+        std::uint64_t tcp_starts_per_second = 10;
+        std::uint64_t tcp_burst = 2;
         bool valid() const noexcept {
             return http_starts_per_second > 0
                 && http_starts_per_second <= TrustedOutboundTokenBucket::kMaxRateOrBurst
                 && http_burst > 0
                 && http_burst <= TrustedOutboundTokenBucket::kMaxRateOrBurst
                 && max_http_in_flight > 0 && max_http_in_flight <= 1000000
-                && max_tcp_connections > 0 && max_tcp_connections <= 1000000;
+                && max_tcp_connections > 0 && max_tcp_connections <= 1000000
+                && tcp_starts_per_second > 0
+                && tcp_starts_per_second <= TrustedOutboundTokenBucket::kMaxRateOrBurst
+                && tcp_burst > 0
+                && tcp_burst <= TrustedOutboundTokenBucket::kMaxRateOrBurst;
         }
     };
 
@@ -79,7 +85,14 @@ public:
 
     TrustedUntrustedNetworkQuota(Policy policy, std::uint64_t initial_host_nanos) noexcept
         : policy_(policy),
-          http_start_(policy.http_starts_per_second, policy.http_burst, initial_host_nanos) {}
+          http_start_(policy.http_starts_per_second, policy.http_burst, initial_host_nanos),
+          tcp_start_(policy.tcp_starts_per_second, policy.tcp_burst, initial_host_nanos) {}
+    ~TrustedUntrustedNetworkQuota() noexcept {
+        // A broker must drain/close all host operations before destroying
+        // the quota owner; a live RAII lease may never outlive this object.
+        std::lock_guard<std::mutex> hold(lock_);
+        if (http_in_flight_ != 0 || tcp_connections_ != 0) std::abort();
+    }
 
     TrustedUntrustedNetworkQuota(const TrustedUntrustedNetworkQuota&) = delete;
     TrustedUntrustedNetworkQuota& operator=(const TrustedUntrustedNetworkQuota&) = delete;
@@ -97,13 +110,17 @@ public:
         return {Status::admitted, Lease(this, Kind::http)};
     }
 
-    Admission try_open_tcp() noexcept {
-        if (!policy_.valid() || !http_start_.valid_policy())
+    Admission try_open_tcp(std::uint64_t trusted_nanos) noexcept {
+        if (!policy_.valid() || !http_start_.valid_policy() || !tcp_start_.valid_policy())
             return {Status::invalid_policy, Lease{}};
         std::lock_guard<std::mutex> hold(lock_);
         if (closed_) return {Status::closed, Lease{}};
         if (tcp_connections_ == policy_.max_tcp_connections)
             return {Status::too_many_connections, Lease{}};
+        // Charge the dial attempt independently from the live socket slot:
+        // repeated DNS/connect failures still consume start-rate tokens.
+        if (!tcp_start_.try_consume(1, trusted_nanos))
+            return {Status::rate_limited, Lease{}};
         ++tcp_connections_;
         return {Status::admitted, Lease(this, Kind::tcp)};
     }
@@ -131,6 +148,7 @@ private:
 
     const Policy policy_;
     TrustedOutboundTokenBucket http_start_;
+    TrustedOutboundTokenBucket tcp_start_;
     mutable std::mutex lock_;
     std::uint32_t http_in_flight_ = 0;
     std::uint32_t tcp_connections_ = 0;
