@@ -6,12 +6,16 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
-static void check(int valid) { if (!valid) abort(); }
+#define check(valid) do { if (!(valid)) { \
+    fprintf(stderr, "NIO lifecycle check failed at %s:%d: %s\n", __FILE__, __LINE__, #valid); \
+    abort(); \
+} } while (0)
 
 typedef struct {
     pid_t ids[128];
@@ -73,7 +77,7 @@ static void await_retirement(OresNativeVM* vm) {
         if (!ores_native_vm_control_notify(vm, ORES_NATIVE_VM_MAIN)) return;
         nanosleep(&pause, NULL);
     }
-    abort();
+    check(0 && "timed out waiting for lifecycle transition");
 }
 static void on_data(void* ignored, size_t slot, uint64_t value) {
     (void)ignored; (void)slot; (void)value;
@@ -96,7 +100,7 @@ static OresNativeNioCompletion await_completion(OresNativeVM* vm) {
         if (ores_native_vm_nio_try_pop(vm, &completed)) return completed;
         nanosleep(&pause, NULL); /* test harness only; never actor/CONTROL */
     }
-    abort();
+    check(0 && "timed out waiting for lifecycle transition");
 }
 int main(void) {
     OresNativeVMConfig cfg = config();
