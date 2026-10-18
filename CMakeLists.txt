@@ -1918,3 +1918,16 @@ if(BUILD_TESTING)
         COMMAND oreslang-enum-variant-policy-test)
     set_tests_properties(native_enum_variant_static_proof PROPERTIES TIMEOUT 15)
 endif()
+
+# Shared source-free enum/case AOT linker and overlap oracle.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_enum_variant_source_free_model
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/enum-variant-aot/test_static_aot_model.py")
+    set_tests_properties(native_enum_variant_source_free_model PROPERTIES TIMEOUT 15)
+    add_test(NAME native_enum_variant_source_free_model_optimized
+        COMMAND "${Python3_EXECUTABLE}" -B -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/enum-variant-aot/test_static_aot_model.py")
+    set_tests_properties(native_enum_variant_source_free_model_optimized PROPERTIES TIMEOUT 15)
+endif()
