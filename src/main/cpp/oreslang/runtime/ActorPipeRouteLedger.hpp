@@ -261,8 +261,13 @@ public:
         return cancelled;
     }
 
-    void close() noexcept {
+    void close() {
         std::lock_guard<std::mutex> lock(mutex_);
+        // Terminal close is a routing-generation fence. Never discard a
+        // frame whose publisher already owns the one-shot mailbox lease;
+        // the sender must first commit or abort that admission.
+        if (any_claimed_publication())
+            throw std::logic_error("actor route publication still in flight");
         closed_ = true;
         active_.clear();
     }
