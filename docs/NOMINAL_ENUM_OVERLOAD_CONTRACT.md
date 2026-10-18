@@ -4,7 +4,7 @@
 Decision: 2026-10-13. Applies to module `fnc`, `routine`, instance methods, and
 `static fnc` (subject to their existing namespace and actor/effect rules).
 
-This contract supersedes the *proposed future* same-arity portion of
+> **Separate proposal, not enabled:** [enum case overload specialization](ENUM_CASE_OVERLOAD_SPECIALIZATION.md) extends static nominal selection to certified case-refinement types. The present contract remains normative until compiler, ownership, interpreter, JIT/AOT and native backends implement the extension together.\n\nThis contract supersedes the *proposed future* same-arity portion of
 `METHOD_OVERLOAD_ARITY_CONTRACT.md`. The **currently implemented** arity-only
 admission and dispatch remain in force until both the nominal enum runtime
 representation and overload tables implement this extension together.
