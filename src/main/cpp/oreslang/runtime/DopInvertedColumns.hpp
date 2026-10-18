@@ -22,8 +22,10 @@ namespace oreslang::dop {
 template<class... Fields>
 class InvertedColumns {
     static_assert(sizeof...(Fields) != 0, "an inverted class needs at least one field");
+    static_assert(((std::is_arithmetic_v<Fields> || std::is_enum_v<Fields>) && ...),
+                  "phase-one columns only support pointer-free arithmetic and enum fields");
     static_assert((std::is_trivially_copyable_v<Fields> && ...),
-                  "phase-one columns support fixed-size trivial fields only");
+                  "phase-one columns require trivial field copies");
     static constexpr std::size_t field_count = sizeof...(Fields);
     // vector<bool> is bit-packed and has no data() span; represent bool
     // as canonical 0/1 bytes in the initial SoA ABI instead.
