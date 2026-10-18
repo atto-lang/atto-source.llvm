@@ -1920,3 +1920,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-trusted-outbound-token-bucket-host-test)
     set_tests_properties(trusted_outbound_token_bucket_host_only PROPERTIES TIMEOUT 15)
 endif()
+
+# HOST-ONLY UNTRUSTED HTTP/TCP budget helper test. No guest network admission
+# path is wired here and no in-process native security claim is made.
+if(BUILD_TESTING)
+    add_executable(oreslang-untrusted-network-quota-host-test
+        tests/trusted_untrusted_network_quota_test.cpp)
+    target_include_directories(oreslang-untrusted-network-quota-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-untrusted-network-quota-host-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-untrusted-network-quota-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME untrusted_network_quota_host_only
+        COMMAND oreslang-untrusted-network-quota-host-test)
+    set_tests_properties(untrusted_network_quota_host_only PROPERTIES TIMEOUT 20)
+endif()
