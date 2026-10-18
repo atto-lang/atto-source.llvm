@@ -54,6 +54,7 @@ class Router:
     active: Physical
     logical_id: int = 0xA670
     incarnation: int = 1
+    route_epoch: int = 1
     upgrading: bool = False
     accepted: int = 0
     delivered: int = 0
@@ -87,20 +88,20 @@ class Router:
         if self.upgrading or self.active.mailbox:
             return None
         self.upgrading = True
-        return (self.active, self.incarnation, self.active.state)
+        return (self.active, self.route_epoch, self.active.state)
 
     def finish_upgrade(self, token, candidate, compatible=True,
                        restore_ok=True, publish_ok=True):
         require(self.upgrading, "finishing absent upgrade")
-        old, expected_epoch, checkpoint = token
-        require(old is self.active and expected_epoch == self.incarnation,
+        old, expected_route_epoch, checkpoint = token
+        require(old is self.active and expected_route_epoch == self.route_epoch,
                 "stale route token")
         committed = False
         if compatible and restore_ok and publish_ok:
             candidate.generation.pin()
             candidate.state = checkpoint
             self.active = candidate
-            self.incarnation += 1
+            self.route_epoch += 1
             old.alive = False
             self.retiring.append(old)
             committed = True
@@ -124,7 +125,9 @@ class Router:
 
     def verify(self):
         require(self.logical_id == 0xA670, "logical actor identity changed")
-        require(self.incarnation >= 1, "invalid incarnation")
+        require(self.incarnation == 1,
+                "transparent hot upgrade changed logical actor incarnation")
+        require(self.route_epoch >= 1, "invalid route epoch")
         require(self.active.alive, "authoritative route points at dead actor")
         require(self.active.generation.pins >= 1,
                 "active route lost its generation pin")
