@@ -1,0 +1,12 @@
+// Native executable-AOT smoke: static case refinement differs from widened Foo.
+define enum Foo as A, B end
+
+fnc classify(Foo.A value): int { return 10; }
+fnc classify(Foo.B value): int { return 20; }
+fnc classify(Foo value): int { return 0; }
+
+fnc main(): int {
+    const Foo.A specific = Foo.A;
+    const Foo widened = Foo.A;
+    return classify(specific) + classify(widened);
+}
