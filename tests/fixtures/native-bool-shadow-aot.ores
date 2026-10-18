@@ -8,6 +8,6 @@ define module BooleanOps as
     }
 
     pub fnc probe_qualified(bool left, bool right): bool {
-        return BooleanOps.And(left, right);
+        return BooleanOps.And(right: right, left: left);
     }
 end
