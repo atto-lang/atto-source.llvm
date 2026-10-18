@@ -310,6 +310,14 @@ private:
     std::vector<Pending> unresolved_;
 };
 
-inline Plan parse(std::string_view text) { return Parser(text).parse(); }
+inline Plan parse(std::string_view text) {
+    try {
+        return Parser(text).parse();
+    } catch (const std::invalid_argument& error) {
+        const std::string message(error.what());
+        if (message.rfind("native enum AOT:", 0) == 0) throw;
+        throw std::invalid_argument("native enum AOT: " + message);
+    }
+}
 
 } // namespace oreslang::enum_aot
