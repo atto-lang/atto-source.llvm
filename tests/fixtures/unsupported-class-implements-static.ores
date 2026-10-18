@@ -1,0 +1,5 @@
+define class Worker implements static Factory as
+  int value = 1;
+end
+
+pub fnc main(): int { return 0; }
