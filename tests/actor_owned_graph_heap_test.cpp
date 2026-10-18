@@ -9,6 +9,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -38,17 +39,22 @@ static std::int64_t io_noop(void*, std::int64_t value,
                             const std::atomic<bool>&) noexcept {
     return value;
 }
-static HungryCarrier::Options bound_options(ActorHeapIdentity owner) {
+static HungryCarrier::Options bound_options(
+        ActorHeapIdentity owner,
+        std::shared_ptr<oreslang::runtime::ActorHeapRetirementCohort> cohort = {}) {
     HungryCarrier::Options options{};
     options.heap_owner = owner;
+    options.retirement_cohort = std::move(cohort);
     return options;
 }
 
 static void cycles_reclaim_without_gc() {
     using Heap = ActorOwnedGraphHeap<16, 32, 4>;
     ActorHeapIdentity owner{9, 7, 1};
-    Heap graph(owner);
-    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    auto cohort = oreslang::runtime::ActorHeapRetirementCohort::create(owner, 1);
+    Heap graph(cohort);
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop,
+                          bound_options(owner, cohort));
     carrier.start();
     check(!carrier.retirement_proof().has_value(),
           "heap retirement proof available before carrier join");
@@ -186,7 +192,8 @@ static void stale_generation_and_foreign_heap_rejected() {
 static void bounded_capacity_and_purge() {
     using Heap = ActorOwnedGraphHeap<2, 4, 1>;
     ActorHeapIdentity actor{1, 3, 9};
-    Heap h(actor);
+    auto cohort = oreslang::runtime::ActorHeapRetirementCohort::create(actor, 1);
+    Heap h(cohort);
     const std::uint32_t data = 1234;
     const auto a = h.allocate(actor, &data, sizeof(data)).value();
     const auto b = h.allocate(actor, &data, sizeof(data)).value();
@@ -209,7 +216,8 @@ static void bounded_capacity_and_purge() {
     must_reject([&]{ h.retire(actor, *foreign_proof); },
                 "foreign/stale actor epoch proof retired live heap");
     check(h.live_nodes(actor) == 2, "stale actor epoch modified heap");
-    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(actor));
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop,
+                          bound_options(actor, cohort));
     carrier.start();
     carrier.join();
     const auto proof = carrier.retirement_proof();
@@ -229,8 +237,9 @@ struct DroppableActorObject final {
 static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
     using Heap = ActorOwnedGraphHeap<4, 64, 3>;
     const ActorHeapIdentity owner{14, 21, 2};
+    auto cohort = oreslang::runtime::ActorHeapRetirementCohort::create(owner, 1);
     std::atomic<int> drops{0};
-    Heap h(owner);
+    Heap h(cohort);
 
     const auto a = h.emplace_owned<DroppableActorObject>(owner, &drops).value();
     const auto b = h.emplace_owned<DroppableActorObject>(owner, &drops).value();
@@ -252,7 +261,8 @@ static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
     must_reject([&] { h.remove(owner, a); },
                 "stale destructor slot was not rejected");
 
-    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop,
+                          bound_options(owner, cohort));
     carrier.start();
     carrier.join();
     const auto proof = carrier.retirement_proof();
@@ -446,11 +456,13 @@ static void graph_accounting_model_stress() {
 static void concurrent_retirement_drops_once() {
     using Heap = ActorOwnedGraphHeap<4, 64, 2>;
     const ActorHeapIdentity owner{89, 29, 3};
-    Heap graph(owner);
+    auto cohort = oreslang::runtime::ActorHeapRetirementCohort::create(owner, 1);
+    Heap graph(cohort);
     std::atomic<int> drops{0};
     const auto object = graph.emplace_owned<DroppableActorObject>(owner, &drops);
     check(object.has_value(), "no tracked native object for retirement race");
-    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop,
+                          bound_options(owner, cohort));
     carrier.start();
     carrier.join();
     const auto proof = carrier.retirement_proof();
