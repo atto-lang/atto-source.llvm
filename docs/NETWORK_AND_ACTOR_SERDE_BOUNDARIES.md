@@ -81,3 +81,41 @@ runtime-only lane and does NOT expose a user-implementable source interface.
 Related: `docs/audits/MESSAGEPACK_ACTOR_TRANSPORT_AUDIT_20261011.md`,
 `docs/NATIVE_ACTOR_SEND_OWNERSHIP.md`, `docs/NATIVE_ACTOR_SEND_OWNERSHIP.md`
 and `docs/SUPERVISOR_SCHEDULER_MAILMAN_PARITY.md`.
+
+
+## Erased callable type and native backend parity gate
+
+`AnyCallable` is the sealed compiler-native erased supertype of reifiable
+function values (the callable subtype hierarchy is `Fnc<signature> <:
+AnyCallable <: Any`). It is **not** a user-implementable interface or
+trait; defining a `call` method does not make an object callable.
+`AnyCallable` does not carry parameter/return metadata that would permit
+direct invocation, and a concrete signature must be statically proven
+before a call. Non-reifiable `routine` declarations do not become ordinary
+callable values.
+
+Crucially, neither `AnyCallable` nor a closure/function value or a
+record/list/tuple containing one can be `Sendable`, `Serializable`,
+a generic `NetworkCodec<T,F>` payload, or an `ActorMessageCodec<T>`
+payload merely by virtue of being locally callable. Such values may hold
+captured references, borrows, host handles, and actor CONTROL authority.
+Never serialize their environment or reconstitute executable pointers
+from untrusted bytes. Protobuf/JSON/MessagePack are **data codecs**, not
+function-pointer, privilege or callback-ABI codecs.
+
+The native source compiler **must reject** a program that requires
+`AnyCallable` ABI/subtyping/dynamic narrowing, until native callable value
+representation and ownership semantics have been explicitly implemented
+and tested. Parsing its spelling as an opaque nominal and emitting an
+`i64`/pointer or treating it as a network/actor DATA value is not parity.
+This fail-closed policy also applies to mixed Java/native interface schemas
+and to module-qualified builtin lookalikes.
+
+Native parity cases to add before support is claimed: ordinary concrete
+function -> `AnyCallable` widening; rejection of `AnyCallable()`,
+`AnyCallable.user_property`, ordinary `class call()` impostors and
+`routine`-as-value; rejection of nested callable/codec capability actor
+payloads; capture and construction-`self` lifetime enforcement; pinned
+schema and receiver epoch checks under malformed/hostile wire inputs.
+None of these native source tests is implied by the existing MessagePack
+component tests.
