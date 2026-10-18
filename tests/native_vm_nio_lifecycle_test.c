@@ -6,12 +6,16 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
-static void check(int valid) { if (!valid) abort(); }
+#define check(valid) do { if (!(valid)) { \
+    fprintf(stderr, "NIO lifecycle check failed at %s:%d: %s\n", __FILE__, __LINE__, #valid); \
+    abort(); \
+} } while (0)
 
 typedef struct {
     pid_t ids[128];
@@ -41,7 +45,28 @@ static ThreadIdSet snapshot_thread_ids(void) {
     return set;
 }
 
+/* pthread_join can finish before procfs stops listing the exiting worker
+ * from the previous VM. Establish the exact expected RT thread census during
+ * bootstrap; never normalize/retry the post-operation identity assertion. */
+static ThreadIdSet await_thread_count(size_t expected) {
+    const struct timespec pause = {0, 1000000};
+    for (int attempt = 0; attempt < 3000; ++attempt) {
+        const ThreadIdSet set = snapshot_thread_ids();
+        if (set.count == expected) return set;
+        nanosleep(&pause, NULL);
+    }
+    check(0 && "RT bootstrap thread census did not settle");
+    return (ThreadIdSet){{0}, 0};
+}
+
 static void check_same_thread_ids(ThreadIdSet before, ThreadIdSet after) {
+    if (before.count != after.count) {
+        fprintf(stderr, "thread census before(%zu):", before.count);
+        for (size_t i = 0; i < before.count; ++i) fprintf(stderr, " %ld", (long)before.ids[i]);
+        fprintf(stderr, "\nafter(%zu):", after.count);
+        for (size_t i = 0; i < after.count; ++i) fprintf(stderr, " %ld", (long)after.ids[i]);
+        fprintf(stderr, "\n");
+    }
     check(before.count == after.count);
     for (size_t i = 0; i < before.count; ++i)
         check(before.ids[i] == after.ids[i]);
@@ -73,7 +98,7 @@ static void await_retirement(OresNativeVM* vm) {
         if (!ores_native_vm_control_notify(vm, ORES_NATIVE_VM_MAIN)) return;
         nanosleep(&pause, NULL);
     }
-    abort();
+    check(0 && "timed out waiting for lifecycle transition");
 }
 static void on_data(void* ignored, size_t slot, uint64_t value) {
     (void)ignored; (void)slot; (void)value;
@@ -96,7 +121,7 @@ static OresNativeNioCompletion await_completion(OresNativeVM* vm) {
         if (ores_native_vm_nio_try_pop(vm, &completed)) return completed;
         nanosleep(&pause, NULL); /* test harness only; never actor/CONTROL */
     }
-    abort();
+    check(0 && "timed out waiting for lifecycle transition");
 }
 int main(void) {
     OresNativeVMConfig cfg = config();
@@ -232,7 +257,11 @@ int main(void) {
         check(ores_native_vm_started_carriers(vm, (enum OresNativeVMDomain)i) == 2);
     check(ores_native_vm_enable_nio(vm, 3, 1, 3));
     check(ores_native_vm_nio_started(vm) == 3);
-    const ThreadIdSet rt_threads = snapshot_thread_ids();
+    size_t expected_rt_threads = 1 + ores_native_vm_nio_started(vm);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        expected_rt_threads += ores_native_vm_started_carriers(
+            vm, (enum OresNativeVMDomain)i);
+    const ThreadIdSet rt_threads = await_thread_count(expected_rt_threads);
 
     int rt_pipe[2] = {-1, -1};
     check(pipe2(rt_pipe, O_NONBLOCK | O_CLOEXEC) == 0);

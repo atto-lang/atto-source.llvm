@@ -47,10 +47,22 @@ for toolchain in gcc clang; do
     "$cxx" -std=c++17 "${shared[@]}" -c "$runtime/$name.cpp" -o "$dest/$name.o"
   done
   "$cxx" "${shared[@]}" "$dest"/*.o -o "$dest/lifecycle"
-  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-  UBSAN_OPTIONS=halt_on_error=1 \
-    timeout 60s "$dest/lifecycle"
+  for attempt in {1..30}; do
+    printf "NIO_LIFECYCLE_ATTEMPT=%s toolchain=%s\n" "$attempt" "$toolchain"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 60s "$dest/lifecycle"
+  done
   printf 'PASS: %s C VM + C++ epoll lifecycle / close races (ASan+UBSan)\n' "$toolchain"
+  # Include the byte-identical standalone epoll and bootstrap-failure
+  # fixtures in the source-local native sanitizer gate.
+  for fixture in native_epoll_reactor_test native_epoll_reactor_bootstrap_failure_test; do
+    "$cxx" -std=c++17 "${shared[@]}" "tests/$fixture.cpp" -o "$dest/$fixture"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 60s "$dest/$fixture"
+    printf 'PASS: %s %s (ASan+UBSan)\n' "$toolchain" "$fixture"
+  done
 done
 
 # Independent source parser admission for @ActorMaxThreads(LOW) and rejection

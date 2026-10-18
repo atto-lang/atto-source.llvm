@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeEpollReactor.hpp"
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -135,5 +136,151 @@ int main() {
     expect(!reactor.try_watch(accepted, EPOLLIN).has_value(), "admission fenced after shutdown");
     reactor.stop(); // idempotent host teardown must preserve terminal state
     ::close(accepted); ::close(client); ::close(server);
+
+    // Race two independent host teardown callers against one outstanding
+    // readiness ticket. The std::thread join handle has exactly one owner,
+    // and a stopped completion must not be duplicated by the second caller.
+    for (int round = 0; round < 24; ++round) {
+        NativeEpollReactor competing;
+        expect(competing.start(), "start concurrent-stop reactor");
+        int ends[2]{-1, -1};
+        expect(::pipe(ends) == 0, "create concurrent-stop pipe");
+        const int flags = ::fcntl(ends[0], F_GETFL);
+        expect(flags >= 0
+               && ::fcntl(ends[0], F_SETFL, flags | O_NONBLOCK) == 0,
+               "make concurrent-stop pipe nonblocking");
+        const auto ticket = competing.try_watch(ends[0], EPOLLIN);
+        expect(ticket.has_value(), "register stop-race ticket");
+
+        std::atomic<bool> cancel_won{false};
+        std::thread first([&] { competing.stop(); });
+        std::thread second([&] { competing.stop(); });
+        // In alternating rounds cancellation contends with both teardown
+        // calls; whichever wins determines the one terminal record.
+        std::optional<std::thread> cancellation;
+        if ((round & 1) != 0) {
+            cancellation.emplace([&] {
+                cancel_won.store(competing.try_cancel(*ticket),
+                                 std::memory_order_release);
+            });
+        }
+        first.join();
+        second.join();
+        if (cancellation) cancellation->join();
+
+        auto completion = until_completion(competing);
+        const auto expected_outcome = cancel_won.load(std::memory_order_acquire)
+                ? NativeEpollReactor::Outcome::cancelled
+                : NativeEpollReactor::Outcome::stopped;
+        expect(completion.has_value()
+               && completion->ticket.value == ticket->value
+               && completion->outcome == expected_outcome,
+               "exactly one correctly owned terminal completion after competing teardown");
+        expect(!competing.try_pop().has_value(),
+               "competing stop must not emit duplicate terminal completion");
+        expect(competing.pending() == 0, "stop-race completion must reclaim ticket");
+        expect(!competing.try_cancel(*ticket), "stop-race ticket cannot cancel after teardown");
+        expect(!competing.try_watch(ends[0], EPOLLIN).has_value(),
+               "stop-race reactor must reject late watch");
+        ::close(ends[0]);
+        ::close(ends[1]);
+    }
+    // Readiness, cancellation and shutdown each compete for one terminal
+    // ticket, but the outcome must have exactly one winner. In particular a
+    // late epoll event may not resurrect a cancelled or stopped watch.
+    for (int round = 0; round < 48; ++round) {
+        NativeEpollReactor contender;
+        expect(contender.start(), "start readiness/cancel/stop contender");
+        int pipe_ends[2]{-1, -1};
+        expect(::pipe(pipe_ends) == 0, "create readiness/cancel/stop pipe");
+        const int flags = ::fcntl(pipe_ends[0], F_GETFL);
+        expect(flags >= 0
+               && ::fcntl(pipe_ends[0], F_SETFL, flags | O_NONBLOCK) == 0,
+               "make readiness/cancel/stop pipe nonblocking");
+        auto ticket = contender.try_watch(pipe_ends[0], EPOLLIN);
+        expect(ticket.has_value(), "admit readiness/cancel/stop watch");
+
+        std::atomic<bool> cancelled_won{false};
+        std::atomic<bool> write_succeeded{false};
+        std::thread writer([&] {
+            const char byte = 'x';
+            write_succeeded.store(::write(pipe_ends[1], &byte, 1) == 1,
+                                  std::memory_order_release);
+        });
+        std::thread canceller([&] {
+            cancelled_won.store(contender.try_cancel(*ticket),
+                                std::memory_order_release);
+        });
+        std::thread stopper([&] { contender.stop(); });
+        writer.join();
+        canceller.join();
+        stopper.join();
+        expect(write_succeeded.load(std::memory_order_acquire),
+               "readiness producer could not write to nonblocking pipe");
+
+        auto terminal = until_completion(contender);
+        expect(terminal.has_value() && terminal->ticket.value == ticket->value,
+               "terminal ticket must survive readiness/cancel/stop race");
+        if (cancelled_won.load(std::memory_order_acquire))
+            expect(terminal->outcome == NativeEpollReactor::Outcome::cancelled,
+                   "successful cancellation owns the terminal completion");
+        else
+            expect(terminal->outcome == NativeEpollReactor::Outcome::ready
+                   || terminal->outcome == NativeEpollReactor::Outcome::stopped,
+                   "readiness or shutdown must own the terminal completion");
+        expect(!contender.try_pop().has_value(),
+               "one watch must yield only one terminal completion");
+        expect(contender.pending() == 0, "race must reclaim the ticket");
+        expect(!contender.try_cancel(*ticket), "stale cancel must fail");
+        ::close(pipe_ends[0]);
+        ::close(pipe_ends[1]);
+    }
+    // Full bounded terminal ring: shutdown must emit exactly one stopped
+    // record for every admitted watch without overflowing the fixed queue.
+    {
+        NativeEpollReactor full;
+        expect(full.start(), "start capacity-saturation reactor");
+        std::array<std::array<int, 2>, NativeEpollReactor::capacity> pipes{};
+        std::array<NativeEpollReactor::Ticket, NativeEpollReactor::capacity> tickets{};
+        for (std::size_t i = 0; i < NativeEpollReactor::capacity; ++i) {
+            expect(::pipe(pipes[i].data()) == 0, "create saturation pipe");
+            const int flags = ::fcntl(pipes[i][0], F_GETFL);
+            expect(flags >= 0
+                   && ::fcntl(pipes[i][0], F_SETFL, flags | O_NONBLOCK) == 0,
+                   "make saturation pipe nonblocking");
+            auto ticket = full.try_watch(pipes[i][0], EPOLLIN);
+            expect(ticket.has_value(), "admit capacity saturation watch");
+            tickets[i] = *ticket;
+        }
+        expect(full.pending() == NativeEpollReactor::capacity,
+               "all bounded watch slots occupied");
+        full.stop();
+        std::array<bool, NativeEpollReactor::capacity> seen{};
+        for (std::size_t received = 0; received < NativeEpollReactor::capacity; ++received) {
+            auto completion = until_completion(full);
+            expect(completion.has_value(), "missing saturation terminal completion");
+            expect(completion->outcome == NativeEpollReactor::Outcome::stopped,
+                   "saturation shutdown must settle unready watches as stopped");
+            bool matched = false;
+            for (std::size_t index = 0; index < tickets.size(); ++index) {
+                if (completion->ticket.value == tickets[index].value) {
+                    expect(!seen[index], "duplicate ticket during ring drain");
+                    seen[index] = true;
+                    matched = true;
+                    break;
+                }
+            }
+            expect(matched, "terminal record had no admitted ticket");
+        }
+        for (bool delivered : seen)
+            expect(delivered, "admitted ticket never terminated");
+        expect(!full.try_pop().has_value(), "saturation emitted extra completion");
+        expect(full.pending() == 0, "saturation leaked a reserved ticket");
+        full.stop();
+        for (auto& ends : pipes) {
+            ::close(ends[0]);
+            ::close(ends[1]);
+        }
+    }
     return 0;
 }
