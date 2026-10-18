@@ -142,3 +142,32 @@ not executed in a trusted source runner as of this revision. Synthetic
 Sagitta contract tests previously passed but are not compiler validation.
 The PR remains draft until actual exact-head compilation, Clang execution,
 and negative regression checks pass.
+
+## October 18 compiler-owned sealed static-call image
+
+The released general Oreslang compiler frontend still does **not** support
+refined enum source. In the opt-in LLVM vertical slice, the normal production
+`oreslang-llvmc` CLI now calls `enum_aot::parseVerified()` instead of
+passing a publicly mutable `Plan` directly to code generation.
+`VerifiedPlan` has a private constructor, has no copy or move API, stores
+a const owned parsed plan and exposes only a const view. Its constructor
+can only be reached via successful source parsing and `validatePlan()`.
+`emit_verified_enum_aot_ir` accepts `const VerifiedPlan&`, not
+`const Plan&`, then independently revalidates the plan before emitting IR.
+A forged, internally consistent ordinary `Plan` therefore cannot enter
+the production backend through the previous unchecked C++ API.
+
+The sealed library parser also enforces the exact 8 MiB and binary-NUL
+source admission limits. A separate UTF-8 gate checks all source bytes,
+including otherwise skipped comments, denying overlong sequences, UTF-16
+surrogate scalars, truncated encodings and >U+10FFFF code points while
+permitting valid UTF-8 comments. The original CLI still performs its
+independent source-validation preflight.
+
+C++17 compile-time tests forbid constructing a `VerifiedPlan` from a
+mutable `Plan`, copying/moving the seal or obtaining a mutable data
+reference. Additional runtime tests verify the sealed legal fixture,
+source budget, binary NUL and hidden invalid Unicode. Tests still require
+a real source-runner execution; a zero-step Actions failure is **not**
+evidence of a successful compilation. Source policy still forbids
+unapproved cross-org private Git-tree transfer.
