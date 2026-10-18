@@ -31,6 +31,8 @@ class NativeSupervisorCodeSlot final {
     // finishes destroying the wrapper still referencing that image.
     static_assert(std::is_nothrow_move_constructible_v<Policy>,
                   "native code image must be nothrow-move-constructible");
+    static_assert(std::is_nothrow_destructible_v<Policy>,
+                  "native code image destructor must not throw");
     // Runs *after* the Policy object has been destroyed. Running dlclose /
     // ORC removal first could unload Policy's destructor or captured vtable.
     struct ReclaimOwner final {
