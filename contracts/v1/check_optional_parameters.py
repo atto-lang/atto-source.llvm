@@ -70,6 +70,7 @@ def bind(formals, actuals):
     seen_named = False
     positional = 0
     order = []
+    evaluated_call_item_indices = []
 
     for source_index, item in enumerate(actuals):
         kind = item.get("kind", "value")
@@ -108,6 +109,7 @@ def bind(formals, actuals):
                 rest_items.append(check_pack(item, formals[-1]))
                 rest_mode = "rest_pack"
                 order.append(item["expr"])
+                evaluated_call_item_indices.append(source_index)
             elif kind == "spread":
                 if rest_mode is not None:
                     raise ValueError("rest spread must be final and unique")
@@ -116,6 +118,7 @@ def bind(formals, actuals):
                 rest_items.append(check_pack(item, formals[-1]))
                 rest_mode = "rest_spread"
                 order.append(item["expr"])
+                evaluated_call_item_indices.append(source_index)
             else:
                 if rest_mode in ("rest_pack", "rest_spread"):
                     raise ValueError("rest spread must be final")
@@ -124,6 +127,7 @@ def bind(formals, actuals):
                 rest_items.append(item["expr"])
                 rest_mode = "rest_values"
                 order.append(item["expr"])
+                evaluated_call_item_indices.append(source_index)
             continue
 
         if index >= len(fixed):
@@ -141,6 +145,7 @@ def bind(formals, actuals):
         else:
             bound[index] = check_value(item, param)
             order.append(item["expr"])
+            evaluated_call_item_indices.append(source_index)
 
     slots, statuses = [], []
     for index, formal in enumerate(fixed):
@@ -156,7 +161,11 @@ def bind(formals, actuals):
     if has_rest:
         slots.append(rest_items)
         statuses.append(rest_mode if rest_mode is not None else "rest_empty")
-    return {"slots": slots, "statuses": statuses, "evaluation_order": order}
+    if any(b <= a for a, b in zip(
+            evaluated_call_item_indices, evaluated_call_item_indices[1:])):
+        raise AssertionError("evaluated argument indexes must preserve lexical order")
+    return {"slots": slots, "statuses": statuses, "evaluation_order": order,
+            "call_item_index_by_evaluated_source": evaluated_call_item_indices}
 
 
 def admit(signatures):
@@ -178,7 +187,8 @@ def main():
     data = json.loads(CASES.read_text(encoding="utf-8"))
     for case in data["accepts"]:
         result = bind(case.get("parameters", data["parameters"]), case["args"])
-        for field in ("slots", "statuses", "evaluation_order"):
+        for field in ("slots", "statuses", "evaluation_order",
+                      "call_item_index_by_evaluated_source"):
             if field in case:
                 assert result[field] == case[field], (
                     case["id"], field, result[field], case[field])
