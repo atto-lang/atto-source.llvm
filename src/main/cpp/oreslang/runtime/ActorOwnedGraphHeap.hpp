@@ -10,6 +10,7 @@
 #include <exception>
 #include <limits>
 #include <new>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -83,6 +84,7 @@ private:
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
     mutable ActorHeapBorrowGate borrow_gate_;
+    std::shared_ptr<ActorHeapRetirementCohort> retirement_cohort_;
     std::array<Slot, NodeCapacity> slots_{};
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
@@ -91,6 +93,13 @@ private:
     // supervisor retire()/destructor calls from invoking drop glue twice.
     std::atomic_flag reclamation_busy_ = ATOMIC_FLAG_INIT;
     bool dropping_ = false;
+
+    static ActorHeapIdentity require_cohort_owner(
+            const std::shared_ptr<ActorHeapRetirementCohort>& cohort) {
+        if (!cohort)
+            throw std::invalid_argument("actor graph retirement cohort required");
+        return cohort->owner();
+    }
 
     void require_owner(ActorHeapIdentity requester) const {
         if (!(requester == owner_))
