@@ -1937,6 +1937,19 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-epoll-reactor-test)
     set_tests_properties(native_epoll_reactor_generation_completion PROPERTIES TIMEOUT 20)
 
+    # Separate translation unit interposes eventfd only for controlled
+    # constructor failure-injection, checking both errno and FD reclamation.
+    add_executable(oreslang-native-epoll-reactor-bootstrap-failure-test
+        tests/native_epoll_reactor_bootstrap_failure_test.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-bootstrap-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-reactor-bootstrap-failure-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-bootstrap-failure-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_eventfd_bootstrap_failclosed
+        COMMAND oreslang-native-epoll-reactor-bootstrap-failure-test)
+    set_tests_properties(native_epoll_reactor_eventfd_bootstrap_failclosed PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-epoll-reactor-manager-test
         tests/native_epoll_reactor_manager_test.cpp)
     target_include_directories(oreslang-native-epoll-reactor-manager-test PRIVATE
