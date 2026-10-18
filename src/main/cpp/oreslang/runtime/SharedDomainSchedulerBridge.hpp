@@ -42,12 +42,18 @@ public:
         Permit& operator=(const Permit&) = default;
     };
 
-    struct Request final {
-        Gate::Token token;
-        Mode mode;
-        Gate::Admission admission;
-        explicit operator bool() const noexcept { return static_cast<bool>(token); }
-        bool acquired() const noexcept { return admission == Gate::Admission::Acquired; }
+    class Request final {
+        friend class SharedDomainSchedulerBridge;
+        Gate::Token token_;
+        Mode mode_;
+        Gate::Admission admission_;
+        Request(Gate::Token token, Mode mode, Gate::Admission admission)
+            : token_(token), mode_(mode), admission_(admission) {}
+    public:
+        explicit operator bool() const noexcept { return static_cast<bool>(token_); }
+        bool acquired() const noexcept {
+            return admission_ == Gate::Admission::Acquired;
+        }
     };
 
 private:
@@ -186,13 +192,13 @@ public:
         const auto current = require_current_identity();
         require_permit_owner(permit, current);
         const auto request = gate_.request(current, mode);
-        return {request.token, mode, request.admission};
+        return Request(request.token, mode, request.admission);
     }
 
     [[nodiscard]] Access enter(const Permit& permit, const Request& request) {
         if (!request.acquired())
             throw std::logic_error("queued shared-domain request requires scheduler wake");
-        return claim_and_enter(permit, request.token, request.mode);
+        return claim_and_enter(permit, request.token_, request.mode_);
     }
 
     [[nodiscard]] Access resume(
@@ -214,7 +220,7 @@ public:
         if (request.acquired())
             throw std::logic_error("active shared-domain access must unwind lexically");
         auto ready = gate_.cancel_pending(
-            request.token, permit.identity_);
+            request.token_, permit.identity_);
         enqueue_ready(ready);
         (void)pump_wakes();
     }
