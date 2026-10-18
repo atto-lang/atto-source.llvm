@@ -1,0 +1,11 @@
+// The field layout/ABI is BYTE-FOR-BYTE compatible with v1; only compiled
+// receive behavior changes. Hot replacement MUST NOT call actor init again.
+define actor Counter as {
+  const base: int = 40;
+  val delta: int = 2;
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + base + delta + n + n;
+    return total;
+  }
+}
