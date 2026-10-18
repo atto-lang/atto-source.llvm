@@ -212,6 +212,12 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
+                if (accept("enum")) {
+                    fail("native enum case overload declarations require typed enum and static ABI lowering");
+                }
+                if (accept("enum")) {
+                    fail("native enum case overload declarations require typed enum and static ABI lowering");
+                }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
