@@ -29,6 +29,53 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
+    # is freestanding and nonparking; pthreads are used only in this test.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-core-sync-test tests/native_core_sync_test.c)
+    set_target_properties(oreslang-native-core-sync-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-core-sync-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-core-sync-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-core-sync-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    # Keep assert() live in Release/NDEBUG: these are security admission checks.
+    target_compile_options(oreslang-native-core-sync-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-UNDEBUG>)
+    add_test(NAME native_core_atomic_mutex_rw_admission
+        COMMAND oreslang-native-core-sync-test)
+    set_tests_properties(native_core_atomic_mutex_rw_admission
+        PROPERTIES TIMEOUT 45)
+    # Oreslang stdlib scheduler adapter: bounded nonparking logical tickets,
+    # FIFO mutex, reader cohorts, physical-quiescence fences and cancellation.
+    add_executable(oreslang-native-std-sync-test tests/native_std_sync_admission_test.c)
+    set_target_properties(oreslang-native-std-sync-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-std-sync-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-std-sync-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-std-sync-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_stdlib_mutex_rw_queue_and_quiescence
+        COMMAND oreslang-native-std-sync-test)
+    set_tests_properties(native_stdlib_mutex_rw_queue_and_quiescence
+        PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-native-actor-state-rw-test
+        tests/native_actor_state_rw_admission_test.c)
+    set_target_properties(oreslang-native-actor-state-rw-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-actor-state-rw-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-state-rw-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-state-rw-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_state_rw_critical_using_admission
+        COMMAND oreslang-native-actor-state-rw-test)
+    set_tests_properties(native_actor_state_rw_critical_using_admission
+        PROPERTIES TIMEOUT 60)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
