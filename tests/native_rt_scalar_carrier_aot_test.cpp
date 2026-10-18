@@ -260,6 +260,57 @@ static void retirement_proof_requires_acknowledged_abandoned_frame_cleanup() {
     }
 }
 
+static void one_failed_lane_cleanup_poisons_actor_retirement_cohort() {
+    const ActorHeapIdentity owner{78, 92, 4};
+    auto cohort = ActorHeapRetirementCohort::create(owner, 3);
+    BusyState firstState, secondState, thirdState;
+
+    HungryCarrier::Options firstOptions{};
+    firstOptions.retirement_cohort = cohort;
+    firstOptions.cancel_handler = cleanup_ack_success;
+    HungryCarrier::Options secondOptions{};
+    secondOptions.retirement_cohort = cohort;
+    secondOptions.cancel_handler = cleanup_ack_failure;
+    HungryCarrier::Options thirdOptions{};
+    thirdOptions.retirement_cohort = cohort;
+    thirdOptions.cancel_handler = cleanup_ack_success;
+
+    HungryCarrier first(&firstState, busy_handler, nullptr, dummy_io, firstOptions);
+    HungryCarrier second(&secondState, busy_handler, nullptr, dummy_io, secondOptions);
+    HungryCarrier third(&thirdState, busy_handler, nullptr, dummy_io, thirdOptions);
+    CHECK(cohort->registered_lanes() == 3);
+
+    first.start();
+    second.start();
+    third.start();
+    CHECK(first.producer_handle().try_send({1, 0}));
+    CHECK(second.producer_handle().try_send({1, 0}));
+    CHECK(third.producer_handle().try_send({1, 0}));
+    CHECK(until([&] {
+        return firstState.cpu.load() >= 16 &&
+               secondState.cpu.load() >= 16 &&
+               thirdState.cpu.load() >= 16;
+    }, 2s));
+
+    first.request_stop();
+    second.request_stop();
+    third.request_stop();
+    first.join();
+    second.join();
+    third.join();
+
+    CHECK(cohort->registered_lanes() == 3);
+    CHECK(cohort->joined_lanes() == 3);
+    CHECK(cohort->cleanup_failed());
+    CHECK(!cohort->ready_for_retirement());
+    CHECK(!first.retirement_proof().has_value());
+    CHECK(!second.retirement_proof().has_value());
+    CHECK(!third.retirement_proof().has_value());
+    CHECK(first.stats().cancel_callback_failures == 0);
+    CHECK(second.stats().cancel_callback_failures == 1);
+    CHECK(third.stats().cancel_callback_failures == 0);
+}
+
 static void stop_preserves_unfinished_logical_turn() {
     BusyState state;
     HungryCarrier carrier(&state, busy_handler, nullptr, dummy_io, {});
@@ -301,6 +352,7 @@ int main() {
     real_compiled_guest_frame();
     stop_runs_compiled_frame_cancellation_exactly_once();
     retirement_proof_requires_acknowledged_abandoned_frame_cleanup();
+    one_failed_lane_cleanup_poisons_actor_retirement_cohort();
     stop_preserves_unfinished_logical_turn();
     expect_protocol_rejection(invalid_legacy);
     expect_protocol_rejection(invalid_v2);
