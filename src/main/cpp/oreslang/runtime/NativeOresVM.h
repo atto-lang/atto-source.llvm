@@ -105,6 +105,10 @@ int ores_native_vm_stop(
  * Never call wait_done from a VM carrier callback. */
 int ores_native_vm_poll_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Retained immutable post-mortem for the exact domain-scoped ActorRef. */
+int ores_native_vm_actor_terminal_state(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, OresNativeActorTerminalState* output);
 int ores_native_vm_wait_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 int ores_native_vm_publish_control(
