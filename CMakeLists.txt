@@ -2021,3 +2021,17 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_hot_upgrade_transaction_model.py")
     set_tests_properties(actor_hot_upgrade_model PROPERTIES TIMEOUT 25)
 endif()
+
+# Source-actor persistent-state wire oracle shared with Java evaluator v1.
+# This remains a source-independent model, not guest actor execution.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME source_actor_checkpoint_v1_wire_oracle
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_checkpoint_v1_wire.py")
+    add_test(NAME source_actor_checkpoint_v1_wire_oracle_optimized
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_checkpoint_v1_wire.py")
+    set_tests_properties(source_actor_checkpoint_v1_wire_oracle
+        source_actor_checkpoint_v1_wire_oracle_optimized PROPERTIES TIMEOUT 20)
+endif()
