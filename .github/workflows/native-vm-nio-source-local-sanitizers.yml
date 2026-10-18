@@ -51,7 +51,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -I -m unittest discover -s tests -p test_native_nio_source_integrity.py -v
+          # Isolated mode does not suppress bytecode; -B prevents ignored
+          # tests/__pycache__ from tainting the subsequent exact-tree gate.
+          python3 -I -B -m unittest discover -s tests -p test_native_nio_source_integrity.py -v
           python3 -I scripts/verify-native-nio-source-local.py \
             "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
 
