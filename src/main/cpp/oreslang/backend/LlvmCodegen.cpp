@@ -170,8 +170,11 @@ llvm::Value* lower(const Expression& expr,
             }
             return storage.at(expr.left->name);
         }
-        case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
+        case Expression::Kind::Negate: {
+            auto* operand = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            return expr.logical_not ? builder.CreateXor(operand, llvm::ConstantInt::get(i64, 1), "bool.not")
+                                    : builder.CreateNeg(operand, "neg");
+        }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);

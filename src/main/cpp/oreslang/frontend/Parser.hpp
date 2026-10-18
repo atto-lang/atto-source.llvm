@@ -10,7 +10,7 @@
 
 namespace oreslang {
 
-// Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
+// Restricted scalar int/bool AST with i64 native storage. Not the full Java Ast.Program.
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
     std::string type; // native stage 1 admits only int
@@ -26,6 +26,8 @@ struct Expression {
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
+    bool boolean_literal = false;
+    bool logical_not = false;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
@@ -38,8 +40,9 @@ struct Expression {
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
-    std::string class_name; // empty means primitive i64
+    std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
+    bool boolean = false;
     Mode mode = Mode::Value;
 };
 
@@ -47,6 +50,7 @@ struct Parameter {
 struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
+    bool boolean = false;
     bool heap_owned = false;
     bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
@@ -66,6 +70,7 @@ struct ClassField {
     std::int64_t initial = 0;
     std::unique_ptr<Expression> initializer_expression;
     bool public_member = false;
+    bool boolean = false;
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
@@ -179,6 +184,7 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    bool returns_bool = false;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;

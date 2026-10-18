@@ -16,6 +16,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/frontend/ModuleLoader.cpp
     src/main/cpp/oreslang/frontend/MethodResolver.cpp
+    src/main/cpp/oreslang/types/NativeScalarTypes.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
@@ -493,6 +494,17 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_methods.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" ${native_method_extra})
         set_tests_properties(native_source_class_methods_${mode} PROPERTIES TIMEOUT 120)
+    endforeach()
+
+    foreach(mode IN ITEMS release sanitizer)
+        set(native_bool_extra)
+        if(mode STREQUAL "sanitizer")
+            set(native_bool_extra --sanitize)
+        endif()
+        add_test(NAME native_source_bool_${mode}
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_types.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" ${native_bool_extra})
+        set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
     add_test(NAME native_shared_borrow_contract

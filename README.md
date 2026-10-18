@@ -136,3 +136,5 @@ See [admission limits](docs/CORTEXM_SCALAR_IR.md).
 
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
+
+Native typed booleans and ownership boundaries: [NATIVE_BOOL_TYPES](docs/NATIVE_BOOL_TYPES.md).

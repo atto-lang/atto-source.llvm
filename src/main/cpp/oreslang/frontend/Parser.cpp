@@ -1,6 +1,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
+#include "oreslang/types/NativeScalarTypes.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -52,7 +53,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "quantum", "over", "structural", "int", "bool", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -141,7 +142,7 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -476,9 +477,10 @@ private:
                 require(")");
                 class_field_terminator(initializer_end);
             } else {
-                if (mutable_referent && token_.text != "int")
-                    fail("native class field supports only scalar int or mut Array<int>");
-                require("int");
+                if (mutable_referent && token_.text != "int" && token_.text != "bool")
+                    fail("native class field supports only scalar int/bool or mut Array<int>");
+                field.boolean = accept("bool");
+                if (!field.boolean) require("int");
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
@@ -487,7 +489,8 @@ private:
                         ? "final class field requires declaration-site initializer"
                         : "class field requires declaration-site initializer");
                 const std::size_t literal_end = token_.offset + token_.text.size();
-                if (literal_const && token_.kind != Kind::Integer)
+                if (literal_const && token_.kind != Kind::Integer &&
+                        !(field.boolean && (token_.text == "true" || token_.text == "false")))
                     fail("class field requires i64 literal initializer");
                 auto initializer = expression();
                 if (literal_const && initializer->kind != Expression::Kind::Integer)
@@ -670,7 +673,8 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (!accept("int")) {
+                parameter.boolean = accept("bool");
+                if (!parameter.boolean && !accept("int")) {
                     const std::string type = type_identifier();
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
@@ -687,7 +691,8 @@ private:
             if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
         if (!accept(":")) require("->");
         value.returns_void = accept("void");
-        if (!value.returns_void && !accept("int")) {
+        value.returns_bool = !value.returns_void && accept("bool");
+        if (!value.returns_void && !value.returns_bool && !accept("int")) {
             const std::string type = identifier();
             const bool generic = std::any_of(value.generic_parameters.begin(),
                 value.generic_parameters.end(),
@@ -726,7 +731,11 @@ private:
                 binding.owner_mutable = accept("mut");
                 // Class construction is stack-only. No reference to an
                 // uninitialized, moved, or temporary class can escape.
-                if (token_.text == "Array") {
+                if (token_.text == "bool") {
+                    advance(); binding.boolean = true;
+                    binding.name = identifier(); require("=");
+                    binding.initializer = expression();
+                } else if (token_.text == "Array") {
                     // Native slice #265: only a lexical, exclusively owned Array<int>.
                     // No implicit copies, fields, captures, cross-call transfers, or
                     // suspension can enter the current synchronous array ABI.
@@ -799,7 +808,8 @@ private:
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
-                        require("int");
+                        binding.boolean = !binding.heap_owned && accept("bool");
+                        if (!binding.boolean) require("int");
                     }
                 }
                 require("=");
@@ -866,7 +876,8 @@ private:
                     statement.branch_local->offset = statement.offset;
                     statement.branch_local->name = identifier();
                     require(":");
-                    require("int");
+                    statement.branch_local->boolean = accept("bool");
+                    if (!statement.branch_local->boolean) require("int");
                     require("=");
                     statement.branch_local->initializer = expression();
                     require(";");
@@ -1041,8 +1052,14 @@ private:
                 require("if");
                 require("(");
                 auto lhs = expression();
-                if (!accept("eq")) require("==");
-                auto rhs = expression();
+                std::unique_ptr<Expression> rhs;
+                if (token_.text == ")") {
+                    rhs = make_expression(Expression::Kind::Integer, lhs->offset);
+                    rhs->boolean_literal = true; rhs->integer = 1;
+                } else {
+                    if (!accept("eq")) require("==");
+                    rhs = expression();
+                }
                 if (terminal_try_finally &&
                         (!nonthrowing_protected_read(*lhs) ||
                          !nonthrowing_protected_read(*rhs)))
@@ -1316,10 +1333,12 @@ private:
             }
             return result;
         }
-        if (token_.text == "-") {
+        if (token_.text == "-" || token_.text == "!") {
             const auto offset = token_.offset;
+            const bool logical = token_.text == "!";
             advance();
             auto expr = make_expression(Expression::Kind::Negate, offset);
+            expr->logical_not = logical;
             expr->left = unary();
             return expr;
         }
@@ -1332,6 +1351,12 @@ private:
             auto inner = expression();
             require(")");
             return inner;
+        }
+        if (token_.text == "true" || token_.text == "false") {
+            auto expr = make_expression(Expression::Kind::Integer, offset);
+            expr->boolean_literal = true;
+            expr->integer = token_.text == "true" ? 1 : 0;
+            advance(); return expr;
         }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
@@ -1964,6 +1989,7 @@ void resolve_and_validate_program(Program& program) {
     resolve_native_methods(program);
     Parser::validate_complete(program);
     validate_i64_ownership(program);
+    validate_native_scalar_types(program);
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
