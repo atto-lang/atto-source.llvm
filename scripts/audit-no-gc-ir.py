@@ -23,14 +23,39 @@ GC_RUNTIME = re.compile(
     r'gc_(?:collect|alloc|mark|sweep|root))'
 )
 MAX_IR_BYTES = 64 * 1024 * 1024
+# LLVM quoted symbol names support byte escapes. Until strict LLVM decoding
+# is integrated, reject escaped quoted identifiers rather than letting a GC
+# intrinsic alias evade a byte-oriented name screen.
+ESCAPED_QUOTED_SYMBOL = re.compile(r'@"(?:[^"\\\\]|\\\\.)*\\\\[0-9A-Fa-f]{2}')
+
+
+def executable_ir_line(raw):
+    # Semicolons delimit comments only OUTSIDE quoted LLVM names and strings.
+    # A declaration with a quoted identifier containing a semicolon can still
+    # have a real forbidden `gc` strategy later on the same line.
+    quoted = False
+    escaped = False
+    for index, char in enumerate(raw):
+        if escaped:
+            escaped = False
+        elif quoted and char == "\\\\":
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif char == ";" and not quoted:
+            return raw[:index]
+    if quoted:
+        raise ValueError("unterminated LLVM IR string or quoted symbol")
+    return raw
 
 
 def audit_ir(text):
     for line_number, raw in enumerate(text.splitlines(), 1):
-        # An IR comment may contain literal examples and is not an instruction.
-        # The compiler currently emits no embedded ';' in symbol names; if it
-        # ever does, use an LLVM parser instead of loosening this admission.
-        line = raw.split(";", 1)[0]
+        # Quotes can contain semicolons: naive splitting would conceal
+        # a genuine GC annotation later in the same LLVM instruction.
+        line = executable_ir_line(raw)
+        if ESCAPED_QUOTED_SYMBOL.search(line):
+            raise ValueError(f"line {line_number}: escaped quoted symbol requires semantic admission")
         if GC_STRATEGY.search(line):
             raise ValueError(f"line {line_number}: tracing GC strategy forbidden")
         if GC_INTRINSIC.search(line):
