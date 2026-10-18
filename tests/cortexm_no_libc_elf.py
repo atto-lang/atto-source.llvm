@@ -203,7 +203,8 @@ def main():
                  "-Wl,-T," + str(root / "linker.ld"),
                  "-o", str(negative_elf)])
             neg_code, neg_output = qemu_execute(negative_elf)
-            verify("ORESLANG_BAREMETAL_GUEST_FAIL" in neg_output
+            verify(neg_code != 0
+                   and "ORESLANG_BAREMETAL_GUEST_FAIL" in neg_output
                    and "ORESLANG_BAREMETAL_GUEST_PASS" not in neg_output,
                    "negative guest did not take mismatch branch: "
                    + str(neg_code) + " " + neg_output)
