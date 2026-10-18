@@ -2,6 +2,9 @@
 // Test-only trusted peer fixture; this is NOT an authenticated production wire.
 #include "oreslang/runtime/NativeIpcReceiptTable.hpp"
 #include <cassert>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +14,7 @@
 #include <cerrno>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -30,33 +34,59 @@ static IpcReceiptEnvelope message(std::uint64_t seq, std::string session) {
 #ifdef __linux__
 enum class ChildCase { crash_before_ack, crash_after_ack, completed, forged_ack };
 static void run_case(ChildCase scenario) {
-    int sockets[2] = {-1,-1};
-    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    // A freshly connected AF_UNIX stream supplies actual Linux SO_PEERCRED
+    // identity; socketpair created before fork does not bind the child PID.
+    int listener = socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(listener >= 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    address.sun_path[0] = '\0';  // Linux abstract namespace, no path/symlink.
+    const int length = std::snprintf(address.sun_path + 1,
+            sizeof(address.sun_path) - 1, "oreslang-receipt-%ld",
+            static_cast<long>(getpid()));
+    assert(length > 0 && static_cast<std::size_t>(length) < sizeof(address.sun_path) - 1);
+    const socklen_t address_size = static_cast<socklen_t>(
+            offsetof(sockaddr_un, sun_path) + 1 + length);
+    assert(bind(listener, reinterpret_cast<const sockaddr*>(&address), address_size) == 0);
+    assert(listen(listener, 1) == 0);
     NativeIpcReceiptTable table(2);
     const auto original = message(1, "sessionA");
     table.admit(original);
     pid_t pid = fork();
     assert(pid >= 0);
     if (pid == 0) {
-        close(sockets[0]);
+        close(listener);
+        const int client = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (client < 0 || connect(client,
+                reinterpret_cast<const sockaddr*>(&address), address_size) != 0)
+            _exit(90);
         const char* bytes = scenario == ChildCase::crash_before_ack ? "" :
             scenario == ChildCase::crash_after_ack ? "A" :
             scenario == ChildCase::completed ? "AD" : "X";
         const std::size_t count = std::char_traits<char>::length(bytes);
-        if (count > 0 && send(sockets[1], bytes, count, MSG_NOSIGNAL)
+        if (count > 0 && send(client, bytes, count, MSG_NOSIGNAL)
                 != static_cast<ssize_t>(count))
             _exit(91);
-        close(sockets[1]);
+        close(client);
         _exit(0);
     }
-    close(sockets[1]);
+    const int connection = accept(listener, nullptr, nullptr);
+    assert(connection >= 0);
+    close(listener);
+    struct PeerCredentials { pid_t pid; uid_t uid; gid_t gid; } credentials{};
+    socklen_t cred_size = sizeof(credentials);
+    assert(getsockopt(connection, SOL_SOCKET, SO_PEERCRED,
+                      &credentials, &cred_size) == 0);
+    assert(cred_size == sizeof(credentials));
+    assert(credentials.pid == pid && credentials.uid == geteuid()
+           && credentials.gid == getegid());
     struct timeval timeout = {3, 0};
-    assert(setsockopt(sockets[0], SOL_SOCKET, SO_RCVTIMEO,
+    assert(setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO,
                       &timeout, sizeof(timeout)) == 0);
     bool ack = false, done = false, forged_rejected = false;
     char step = 0;
     for (;;) {
-        ssize_t n = recv(sockets[0], &step, 1, 0);
+        ssize_t n = recv(connection, &step, 1, 0);
         if (n == 0) break;
         assert(n == 1);
         if (step == 'A') {
@@ -77,7 +107,7 @@ static void run_case(ChildCase scenario) {
         }
         assert(table.invariant());
     }
-    close(sockets[0]);
+    close(connection);
     int status = 0;
     assert(waitpid(pid, &status, 0) == pid);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
