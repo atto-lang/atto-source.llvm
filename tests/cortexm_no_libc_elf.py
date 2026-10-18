@@ -7,6 +7,7 @@ It deliberately does not link Zephyr, crt0, libc, libgcc or an actor runtime.
 import argparse
 import pathlib
 import shutil
+import struct
 import subprocess
 import tempfile
 
@@ -70,8 +71,8 @@ exit_failure: .word 0x20023, 1
 
 LINKER = """ENTRY(Reset_Handler)
 MEMORY {
- FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 512K
- RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+ FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 256K
+ RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 64K
 }
 __stack_top = ORIGIN(RAM) + LENGTH(RAM);
 SECTIONS {
@@ -91,6 +92,54 @@ fnc sum(int a, int b): int {
 }
 """
 
+
+
+# The lm3s6965evb board emulated by QEMU has exactly 256 KiB of flash
+# at 0x00000000 and 64 KiB of SRAM at 0x20000000. An out-of-range initial
+# SP can link successfully but fault as soon as guest code/semihosting
+# touches the stack.
+FLASH_BEGIN = 0x00000000
+FLASH_END = 0x00040000
+RAM_BEGIN = 0x20000000
+RAM_END = 0x20010000
+
+
+def verify_vector_table(elf_path):
+    raw = elf_path.read_bytes()
+    verify(len(raw) >= 52 and raw[:6] == b"\\x7fELF\\x01\\x01",
+           "expected ELF32 little-endian firmware")
+    verify(struct.unpack_from("<H", raw, 16)[0] == 2,
+           "expected ET_EXEC standalone firmware")
+    verify(struct.unpack_from("<H", raw, 18)[0] == 40,
+           "expected EM_ARM firmware")
+    phoff = struct.unpack_from("<I", raw, 28)[0]
+    phentsize, count = struct.unpack_from("<HH", raw, 42)
+    verify(phentsize >= 32 and 0 < count <= 32,
+           "ELF program headers are missing or malformed")
+    verify(phoff <= len(raw) and count <= (len(raw)-phoff)//phentsize,
+           "ELF program headers exceed file bounds")
+    flash_load = False
+    for i in range(count):
+        off = phoff + i * phentsize
+        kind, file_off, vaddr, paddr, filesz, memsz = struct.unpack_from(
+            "<IIIIII", raw, off)
+        if kind != 1:  # PT_LOAD
+            continue
+        verify(file_off <= len(raw) and filesz <= len(raw)-file_off,
+               "truncated firmware load segment")
+        verify(memsz >= filesz, "firmware PT_LOAD memsz smaller than filesz")
+        verify((FLASH_BEGIN <= vaddr and vaddr + memsz <= FLASH_END)
+               or (RAM_BEGIN <= vaddr and vaddr + memsz <= RAM_END),
+               "ELF PT_LOAD outside physical Cortex-M3 board memory")
+        if vaddr == FLASH_BEGIN:
+            verify(filesz >= 8, "vector table is not part of the flash image")
+            sp, reset = struct.unpack_from("<II", raw, file_off)
+            verify(sp == RAM_END and sp % 8 == 0,
+                   "reset stack pointer outside QEMU board RAM")
+            verify(reset & 1 and FLASH_BEGIN < (reset & ~1) < FLASH_END,
+                   "reset vector must be an in-flash Thumb code address")
+            flash_load = True
+    verify(flash_load, "no flash PT_LOAD contains the reset vector")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -138,6 +187,7 @@ def main():
         sections = run([args.readelf, "-SW", str(elf)])
         program = run([args.readelf, "-lW", str(elf)])
         dynamic = run([args.readelf, "-d", str(elf)])
+        verify_vector_table(elf)
         verify("Machine:                           ARM" in header,
                "bare-metal ELF has wrong architecture")
         verify("EXEC (Executable file)" in header,
