@@ -60,6 +60,23 @@ int main() {
     rejectedSealed(embeddedNul);
     // Ensure direct library callers cannot bypass the 8MiB CLI source gate.
     rejectedSealed(std::string(8u * 1024u * 1024u + 1u, ' '));
+    // A comment cannot hide malformed source bytes from the sealed parser.
+    std::string comment = fixture() + "//";
+    comment.push_back(char(0xc0));
+    comment.push_back(char(0xaf)); // overlong UTF-8
+    rejectedSealed(comment);
+    comment = fixture() + "//";
+    comment.push_back(char(0xed));
+    comment.push_back(char(0xa0));
+    comment.push_back(char(0x80)); // encoded UTF-16 surrogate
+    rejectedSealed(comment);
+    comment = fixture() + "//";
+    comment.push_back(char(0xf0));
+    comment.push_back(char(0x9f)); // truncated four-byte character
+    rejectedSealed(comment);
+    const VerifiedPlan allowedUtf8 = oreslang::enum_aot::parseVerified(
+        fixture() + "// " + std::string(1, char(0xc3)) + std::string(1, char(0xa9)));
+    REQUIRE(oreslang::enum_aot::checkedNativeExit(allowedUtf8.readOnly()) == 10);
 
     auto plan = oreslang::enum_aot::parse(fixture());
     oreslang::enum_aot::validatePlan(plan);
