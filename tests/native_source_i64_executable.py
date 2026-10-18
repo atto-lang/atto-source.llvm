@@ -59,6 +59,8 @@ def main():
     compiler=args.compiler.resolve()
     clang=args.clang.resolve()
     observations=[]
+    compiler_sha256=hashlib.sha256(compiler.read_bytes()).hexdigest()
+    clang_sha256=hashlib.sha256(clang.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-source-i64-") as td:
         d=Path(td)
         src=d/"fixture.ores"
@@ -80,14 +82,19 @@ def main():
             observed=run([str(exe)])
             require(observed.returncode==expected and observed.stdout==b"" and observed.stderr==b"",
                     "native exit-code mismatch: "+case["id"]+" "+repr((observed.returncode,observed.stdout,observed.stderr)))
-            observations.append({"case":case["id"],"observed_exit":observed.returncode})
+            observations.append({"case":case["id"],"observed_exit":observed.returncode,
+                                 "source_sha256":hashlib.sha256(src.read_bytes()).hexdigest(),
+                                 "llvm_ir_sha256":hashlib.sha256(compiled.stdout).hexdigest(),
+                                 "native_executable_sha256":hashlib.sha256(exe.read_bytes()).hexdigest()})
         for expr in NEGATIVES:
             src.write_text("pub fnc main():int{return "+expr+";}\n",encoding="utf-8")
             rejected=run([str(compiler),str(src)])
             require(rejected.returncode!=0 and rejected.stdout==b"" and rejected.stderr,
                     "unsupported source generated native IR: "+expr)
     print(json.dumps({"kind":"native-llvm-compiled-os-exit-subset",
-                      "source_corpus_blob":BLOB,"executed_cases":len(observations),
+                      "source_corpus_blob":BLOB,
+                      "compiler_sha256":compiler_sha256,"clang_sha256":clang_sha256,
+                      "executed_cases":len(observations),
                       "total_corpus_cases":7,"unexecuted_due_to_lossy_exit":list(OTHERS),
                       "skipped_tests":0,"observed":observations},
                      sort_keys=True))
