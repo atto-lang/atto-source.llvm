@@ -1,0 +1,16 @@
+define class Box as
+  pub let int value = 7;
+end
+define actor Sink as {
+  pub fnc on_message(int value): int {
+    return value;
+  }
+}
+pub fnc main(): int using suspend {
+  let Box box = new Box();
+  const proxy: Proxy<Box> = rt proxy box;
+  const sink = spawn Sink();
+  sink.send(proxy);
+  stop sink;
+  return 0;
+}
