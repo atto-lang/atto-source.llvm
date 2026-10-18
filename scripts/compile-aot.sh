@@ -14,6 +14,12 @@ output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
 [[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
+# String-path inequality is insufficient: an output hardlink or symlink can
+# refer to the input inode, and atomic publication would destroy guest source.
+[[ ! "$source_file" -ef "$output_file" ]] || {
+  echo 'Source and executable must not refer to the same file.' >&2
+  exit 64
+}
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
 command -v "$clang" >/dev/null || { echo 'Install Clang or set CLANG.' >&2; exit 69; }
 # An explicitly requested LTO mode must never silently degrade to normal -O2.
