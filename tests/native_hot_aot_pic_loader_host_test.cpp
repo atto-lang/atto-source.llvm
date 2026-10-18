@@ -122,21 +122,32 @@ public:
     }
 
     bool publish(Candidate prepared) {
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) throw std::logic_error("router closed");
-        if (prepared.owner_ != authority_ || !prepared.image_
-                || prepared.expected_epoch_ != epoch_) return false;
-        if (!prepared.image_->compatible(*current_)) return false;
-        if (epoch_ == UINT64_MAX) throw std::overflow_error("routing epoch exhausted");
-        current_ = std::move(prepared.image_);
-        ++epoch_;
+        Lease previous;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            if (closed_) throw std::logic_error("router closed");
+            if (prepared.owner_ != authority_ || !prepared.image_
+                    || prepared.expected_epoch_ != epoch_) return false;
+            if (!prepared.image_->compatible(*current_)) return false;
+            if (epoch_ == UINT64_MAX) throw std::overflow_error("routing epoch exhausted");
+            // Atomic/no-throw pointer switch; do not run the old image's
+            // destructor, DSO finalizers or dlclose under the router mutex.
+            current_.swap(prepared.image_);
+            previous.swap(prepared.image_);
+            ++epoch_;
+        }
+        // Release the previous DSO only after dropping the routing mutex.
         return true;
     }
 
     void close() {
-        std::lock_guard<std::mutex> guard(mutex_);
-        closed_ = true;
-        current_.reset();
+        Lease previous;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            closed_ = true;
+            previous.swap(current_);
+        }
+        // dlclose can execute arbitrary native finalizers: outside mutex.
     }
 private:
     mutable std::mutex mutex_;
