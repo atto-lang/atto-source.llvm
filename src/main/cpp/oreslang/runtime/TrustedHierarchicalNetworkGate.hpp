@@ -88,6 +88,13 @@ public:
         bool commit_dispatch() noexcept {
             if (state_.load() != 0 || !gate_) return false;
             std::lock_guard<std::mutex> guard(gate_->lock_);
+            // Scope.close takes gate_->lock_ too. A retired child,
+            // supervisor or tenant must prevent commitment of ALL scopes,
+            // rather than aborting OresVM halfway through commitment.
+            if (state_.load() != 0
+                    || !child_.can_commit_dispatch()
+                    || !supervisor_.can_commit_dispatch()
+                    || !tenant_.can_commit_dispatch()) return false;
             std::uint8_t expected = 0;
             if (!state_.compare_exchange_strong(expected, 1)) return false;
             if (!child_.commit_dispatch() || !supervisor_.commit_dispatch()
