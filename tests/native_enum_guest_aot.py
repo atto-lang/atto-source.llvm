@@ -161,6 +161,18 @@ class NativeEnumGuestAot(unittest.TestCase):
                 self.assertFalse(result.stdout, text)
                 self.assertIn("native enum AOT", result.stderr, result.stderr)
 
+    def test_unverified_environment_comment_is_rejected(self):
+        original = pathlib.Path(self.fixture).read_text(encoding="utf-8")
+        for source in ("// ores: target=wasm32\n" + original,
+                       original + "\n// ores: capability=filesystem",
+                       original.replace("define enum",
+                                        "// ores: target=host\ndefine enum", 1)):
+            with self.subTest(position=source.index("// ores:")):
+                result = self.compile(source)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("target admission unsupported", result.stderr)
+
     def test_cross_target_and_other_experiments_rejected(self):
         text = pathlib.Path(self.fixture).read_text(encoding="utf-8")
         for flags in [("--target=wasm32",),
