@@ -191,7 +191,7 @@ int main() {
     request_rate_and_failed_connect_release();
     concurrent_tcp_open_is_bounded();
     connection_attempt_churn_is_rate_limited();
-    pre_dispatch_abort_refunds_exactly_once();
+    published_cancellation_never_refunds_rate_tokens();
     delayed_cancellation_cannot_inflate_future_burst();
     revoked_quota_rejects_undispatched_http_and_tcp();
     invalid_policy_fails_closed();
