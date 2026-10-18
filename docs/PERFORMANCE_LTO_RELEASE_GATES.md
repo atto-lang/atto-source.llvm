@@ -34,3 +34,10 @@ ORESLANG_LTO=thin scripts/compile-aot.sh tests/fixtures/forward-call-main.ores /
 Document source SHA, IR hashes, bitcode hashes, Clang/LLD versions, flags, host/CPU, link time, peak RSS, binary bytes, observed optimization remarks and correctness statuses. A single LLVM IR module or a dummy second object is **not** proof of cross-module Oreslang support. No performance claims without real measurements.
 
 Tracking: https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/578
+
+## October 18 source-free linkage audit
+
+- Registered `tests/test_lto_driver_smoke.py` in `CMakeLists.txt` as `native_lto_driver_source_free_smoke`. Its stub IR emitter is explicitly isolated from the existing real-guest `native_aot_driver` test. CTest source-free success may never count as Oreslang compiler execution.
+- Ran the exact checked-in shell driver and new Python smoke test locally on Linux with real Clang/LLD: `off`, `full`, and `thin` modes produced a native executable exiting 42. Deliberately invalid IR, invalid mode, and same input/output were rejected; failed recompilation preserved the prior binary and removed temporary workdirs. Verified that the local files' Git blob hashes match the PR files exactly.
+- Host clang/linker availability is not Oreslang source parity. Real `oreslang-llvmc` compiler CTest remains unverified because the source organization Actions fails with `steps:null` (no recorded executed steps). No speedup or cross-unit LTO is claimed.
+- Private cross-org source export is security-blocked by platform-conformance PR #86 and incidents #22/#77. Do not use a private test carrier or a generic connector Git-tree mirror without independently reviewed protected-main export authorization and incident clearance, regardless of apparent Actions capacity.
