@@ -39,3 +39,34 @@ The checked-in CMake targets `freestanding_actor_kernel_bounded_host` and `frees
 ## Required follow-up
 
 Build a freestanding `SourceActorBootstrap` adapter that binds compiler-emitted constructors and message handlers to owned static arenas; preserve the strict `core / alloc / actor / std` layering. Add Cortex-M reset/vector and RAM initialization, link the actual source-compiled program without libc, execute positive/overflow/stale-ref/fault cases under QEMU, and prove the final ELF's undefined-symbol and memory budgets. Keep this PR draft until then.
+
+## Standalone Cortex-M C-kernel firmware integration evidence (2026-10-18)
+
+The repository now includes `tests/freestanding_actor_kernel_firmware.c`.
+It exercises **two C-handled actor instances**, mailbox FIFO and overflow,
+CONTROL stop/drain, read-only state inspection, foreign/stale references,
+a handler failure, and damaged mailbox metadata. A deliberately failing
+`NEGATIVE_GUEST` variant must return **exactly 99**; the positive variant
+must return **exactly zero**. It checks zeroed BSS and explicitly initialized
+`.data`, which become meaningful after a real MCU reset/vector startup.
+
+The private exact-source carrier [run #39146202030](https://github.com/claritas-viz/claritas-sync/actions/runs/39146202030)
+compiled and executed both host variants under ASan+UBSan. It also compiled the
+actor firmware for Cortex-M3 and combined it with the kernel in a relocatable
+ARM object using `-nostdlib -nodefaultlibs --no-undefined` with **no remaining
+named unresolved symbols**. Five mirrored file Git blob hashes matched the
+source commit `db7badfe84bc7fca71b8fa4d7ecd6d06be658a84`.
+[Evidence artifact](https://github.com/claritas-viz/claritas-sync/actions/runs/39146202030/artifacts/12142903139)
+is temporary and private.
+
+Separately, a local Clang/LLD build linked the same C kernel/firmware with a
+Cortex-M3 vector table, startup BSS zeroing and `.data` copying into a
+standalone ARM ELF without unresolved symbols. **That ELF was not executed by
+QEMU in this iteration**, so startup, semihosting and actual MCU actor scheduling
+are still unverified in an emulator. The separate startup/linker fixture is
+not yet committed to GitHub.
+
+The C actor handler is hand-authored, **not compiler-generated Oreslang actor
+code**. No claim of source-actor semantics, Oreslang actor ABI integration,
+hardware memory protection, multi-core synchronization or safe raw-pointer
+capabilities follows from these checks.
