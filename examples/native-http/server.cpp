@@ -180,10 +180,10 @@ public:
         }
         auto turn = ores_actor_i64_heap_enter(a.heap, index + 1, 1);
         auto status = oreslang_actor_HttpWorker_on_message(a.heap, turn.domain, turn.epoch, c.status);
-        ores_actor_i64_heap_leave(a.heap, turn);
         require(status == c.status);
         require(ores_actor_i64_heap_field_read(a.heap, turn.domain, turn.epoch, 0)
                 == static_cast<std::int64_t>(a.requests + 1));
+        ores_actor_i64_heap_leave(a.heap, turn);
         ++a.requests;
         c.output = response(c.status, c.close, true, index);
         c.finished = now();
