@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <poll.h>
 static void require(int condition) { if (!condition) abort(); }
 static int next_completion(OresNativeNio* runtime, OresNativeNioCompletion* out) {
@@ -18,21 +19,35 @@ static int next_completion(OresNativeNio* runtime, OresNativeNioCompletion* out)
 }
 int main(void) {
     OresNativeNio* runtime = ores_native_nio_open(4, 0, 1);
-    require(runtime && ores_native_nio_started_reactors(runtime) == 1);
-    require(ores_native_nio_completion_fd(runtime, 0) >= 0);
+    require(runtime != NULL);
+    /* Throughput mode must remain cold until a VALID watch is admitted. */
+    require(ores_native_nio_started_reactors(runtime) == 0);
+    require(ores_native_nio_completion_fd(runtime, 0) == -1);
     // epoll readiness cannot make a blocking descriptor safe for guest I/O.
     int blocking[2] = {-1, -1};
     require(pipe(blocking) == 0);
     OresNativeNioWatch forbidden = {0};
     require(!ores_native_nio_try_watch(runtime, blocking[0], EPOLLIN, &forbidden));
     require(forbidden.ticket == 0);
+    require(ores_native_nio_started_reactors(runtime) == 0);
+    require(ores_native_nio_completion_fd(runtime, 0) == -1);
     close(blocking[0]); close(blocking[1]);
+    /* A nonblocking but unauthenticated anonymous FD must also fail closed
+     * without provisioning any reactor worker or publishing a token. */
+    int raw_event = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    require(raw_event >= 0);
+    require(!ores_native_nio_try_watch(runtime, raw_event, EPOLLIN, &forbidden));
+    require(forbidden.ticket == 0);
+    require(ores_native_nio_started_reactors(runtime) == 0);
+    require(ores_native_nio_completion_fd(runtime, 0) == -1);
+    close(raw_event);
     int pipefd[2] = {-1, -1};
     require(pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
     OresNativeNioWatch first = {0};
     require(ores_native_nio_try_watch(runtime, pipefd[0], EPOLLIN, &first));
     require(first.ticket != 0 && first.reactor == 0);
     require(ores_native_nio_started_reactors(runtime) == 1);
+    require(ores_native_nio_completion_fd(runtime, 0) >= 0);
     /* Foreign runtime handles must not collide, even when both reactors
      * start at slot 1 / generation 1. Public ABI size remains unchanged. */
     OresNativeNio* foreign_runtime = ores_native_nio_open(1, 1, 1);
