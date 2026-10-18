@@ -3,6 +3,9 @@ This is NOT a frontend/parser/formatter/ownership or guest-execution test.
 """
 import unittest
 
+# Keep omitted optional slots distinct from an explicitly supplied typed None.
+OMITTED = object()
+
 def bind(formals, items):
     """formals: [(name, optional, is_rest)]; items: (kind,label,value,source_index)."""
     if any(rest for _, _, rest in formals[:-1]):
@@ -52,7 +55,7 @@ def bind(formals, items):
         if kind == "omit":
             if not formals[slot][1]:
                 raise ValueError("required slot omitted")
-            assigned[slot] = None
+            assigned[slot] = OMITTED
         else:
             assigned[slot] = value
             evaluation.append(source_index)
@@ -60,7 +63,7 @@ def bind(formals, items):
         if slot not in assigned:
             if not formals[slot][1]:
                 raise ValueError("missing required")
-            assigned[slot] = None
+            assigned[slot] = OMITTED
     if fixed < len(formals):
         assigned[fixed] = assigned.get(fixed, tuple(rest))
     return tuple(assigned[i] for i in range(len(formals))), tuple(evaluation)
@@ -74,7 +77,9 @@ class OptionalCallPlanReferenceTests(unittest.TestCase):
         slots, source = bind(self.formals, [
             ("value", None, 3, 0), ("omit", None, None, 1),
             ("value", None, "effect-once", 2)])
-        self.assertEqual(slots, (3, None, ("effect-once",)))
+        self.assertEqual(slots[0], 3)
+        self.assertIs(slots[1], OMITTED)
+        self.assertEqual(slots[2], ("effect-once",))
         self.assertEqual(source, (0, 2))
 
     def test_nontrailing_optional_with_named_reordering(self):
@@ -82,19 +87,24 @@ class OptionalCallPlanReferenceTests(unittest.TestCase):
                               ("c", False, False)], [
             ("value", "c", "third", 0),
             ("value", "a", "first", 1)])
-        self.assertEqual(slots, ("first", None, "third"))
+        self.assertEqual(slots[0], "first")
+        self.assertIs(slots[1], OMITTED)
+        self.assertEqual(slots[2], "third")
         self.assertEqual(source, (0, 1))
 
     def test_named_rest_pack_preserves_original_item_origin(self):
         slots, source = bind(self.formals, [
             ("value", "tags", ("x", "y"), 0),
             ("value", "a", 5, 1)])
-        self.assertEqual(slots, (5, None, ("x", "y")))
+        self.assertEqual(slots[0], 5)
+        self.assertIs(slots[1], OMITTED)
+        self.assertEqual(slots[2], ("x", "y"))
         self.assertEqual(source, (0, 1))
 
     def test_no_rest_is_empty_tuple(self):
-        self.assertEqual(bind(self.formals, [("value", None, 3, 0)]),
-                         ((3, None, ()), (0,)))
+        slots, source = bind(self.formals, [("value", None, 3, 0)])
+        self.assertEqual((slots[0], slots[2], source), (3, (), (0,)))
+        self.assertIs(slots[1], OMITTED)
 
     def test_malformed_calls_fail_closed(self):
         bad = [
@@ -109,6 +119,14 @@ class OptionalCallPlanReferenceTests(unittest.TestCase):
         for items in bad:
             with self.subTest(items=items), self.assertRaises(ValueError):
                 bind(self.formals, items)
+
+    def test_explicit_none_is_still_an_evaluated_value(self):
+        slots, source = bind(self.formals, [
+            ("value", None, 3, 0),
+            ("value", None, None, 1)])
+        self.assertIsNone(slots[1])
+        self.assertIsNot(slots[1], OMITTED)
+        self.assertEqual(source, (0, 1))
 
     def test_nonfinal_rest_declaration_rejected(self):
         with self.assertRaisesRegex(ValueError, "rest must be final"):
