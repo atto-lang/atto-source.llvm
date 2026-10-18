@@ -42,6 +42,7 @@ static void exercise_rejected_hot_reload_reclamation() {
     check(slot.activate(1, "actor-abi-v1", "actor-policy-v2",
                         [&] { ++accepted_reclaims; }).revision == 2,
           "valid code-only upgrade must publish");
+    auto pinned_v2 = slot.pin(); // Both v1 and v2 must be live to exhaust a cap of two.
     denied = false;
     try {
         (void)slot.activate(2, "actor-abi-v1", "over-cap", rejected_image);
@@ -51,6 +52,7 @@ static void exercise_rejected_hot_reload_reclamation() {
     check(pinned_v1.code() == "actor-policy-v1" && slot.pin().code() == "actor-policy-v2",
           "pinned invocation observed a different generation");
     pinned_v1.close();
+    pinned_v2.close();
 
     // Two simultaneous candidates at the same expected epoch: one winner.
     std::atomic<int> wins{0}, conflicts{0};
