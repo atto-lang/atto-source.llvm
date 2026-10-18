@@ -83,6 +83,32 @@ static void cycles_reclaim_without_gc() {
     std::cout << "PASS deterministic actor-owned cycle retirement\n";
 }
 
+// Every distinct C++ heap template specialization must share a single
+// numeric identity namespace. Re-encoding a handle into a different layout
+// cannot trick its recipient into treating a foreign slot as its own.
+static void heap_identity_unique_across_graph_specializations() {
+    using Small = ActorOwnedGraphHeap<2, 8, 1>;
+    using Large = ActorOwnedGraphHeap<8, 64, 4>;
+    const ActorHeapIdentity owner{90, 29, 4};
+    std::uint64_t last = 0;
+    for (int i = 0; i < 128; ++i) {
+        Small small(owner);
+        Large large(owner);
+        check(small.heap_id() > last && large.heap_id() > small.heap_id(),
+              "graph heap IDs not globally monotonic across layouts");
+        last = large.heap_id();
+        const std::uint64_t bytes = static_cast<std::uint64_t>(i);
+        const auto smallNode = small.allocate(owner, &bytes, sizeof(bytes)).value();
+        const auto largeNode = large.allocate(owner, &bytes, sizeof(bytes)).value();
+        check(smallNode.heap != largeNode.heap,
+              "two graph layouts share the same heap identity");
+        Large::Handle forged{smallNode.heap, smallNode.slot, smallNode.generation};
+        std::uint64_t copied = 0;
+        must_reject([&] { (void)large.copy_out(owner, forged, &copied, sizeof(copied)); },
+                    "cross-layout forged graph handle accepted");
+    }
+}
+
 static void stale_generation_and_foreign_heap_rejected() {
     using Heap = ActorOwnedGraphHeap<4, 16, 3>;
     ActorHeapIdentity alice{1, 11, 3};
@@ -477,6 +503,7 @@ static void concurrent_graph_read_write_links_are_exclusive() {
 }
 
 int main() {
+    heap_identity_unique_across_graph_specializations();
     concurrent_graph_read_write_links_are_exclusive();
     concurrent_retirement_drops_once();
     graph_accounting_model_stress();
