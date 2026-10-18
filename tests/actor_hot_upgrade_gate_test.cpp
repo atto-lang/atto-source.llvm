@@ -156,5 +156,28 @@ int main() {
         }
         orphan.reset();
     }
+    {
+        // The suspended upgrade owner may transfer to another carrier.
+        // No DATA pin may enter during freeze, and the worker's final ticket
+        // destruction must restore admission without touching later epochs.
+        ActorHotUpgradeGate gate(21, image('a'));
+        for (int i = 0; i < 256; ++i) {
+            auto ticket = gate.prepare(image('b'));
+            std::atomic<bool> release{false};
+            std::thread canceller([owned = std::move(ticket), &release]() mutable {
+                while (!release.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                // owned releases its freeze on this worker's exit.
+            });
+            assert(gate.frozen());
+            assert(fails([&] { (void) gate.pin(); }));
+            release.store(true, std::memory_order_release);
+            canceller.join();
+            assert(!gate.frozen());
+            auto turn = gate.pin();
+            assert(gate.permits(turn));
+            turn.close();
+        }
+    }
     return 0;
 }
