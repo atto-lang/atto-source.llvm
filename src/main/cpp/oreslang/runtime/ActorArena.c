@@ -237,8 +237,15 @@ OresArenaScratch ores_actor_arena_scratch_alloc(OresActorArena* a, OresArenaTurn
     if (!bytes || !alignment || alignment > 64 || (alignment & (alignment - 1))) deny();
     if (a->scratch_count >= ORES_MAX_SCRATCH_ALLOCS) deny();
     const size_t mask = alignment - 1;
-    if (a->scratch_top > SIZE_MAX - mask) deny();
-    const size_t at = (a->scratch_top + mask) & ~mask;
+    /* Alignment applies to the actual backing address, not merely the
+     * scratch offset: calloc only promises fundamental alignment. */
+    const uintptr_t base = (uintptr_t) a->scratch;
+    if (a->scratch_top > UINTPTR_MAX - base) deny();
+    const uintptr_t current = base + a->scratch_top;
+    if (mask > UINTPTR_MAX - current) deny();
+    const uintptr_t aligned = (current + mask) & ~(uintptr_t)mask;
+    if (aligned < base || aligned - base > SIZE_MAX) deny();
+    const size_t at = (size_t)(aligned - base);
     if (at > a->scratch_bytes || bytes > a->scratch_bytes - at) deny();
     /* Old scratch is zeroized when each actor turn leaves. */
     a->scratch_top = at + bytes;
