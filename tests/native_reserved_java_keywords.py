@@ -120,9 +120,9 @@ CASES = {
         "pub fnc main(): int { do task { return 7; }; return 0; }",
         "native Task block lowering unsupported",
     ),
-    "reject-redundant-nb-task": (
+    "nb-task-alias-native-not-lowered": (
         "pub fnc main(): int { return nb task { return 7; }; }",
-        "nb task is not a language construct",
+        "native Task block lowering unsupported",
     ),
     "recover-statement": (
         "pub fnc main(): int { recover 42; return 0; }",
