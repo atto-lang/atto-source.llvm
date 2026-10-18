@@ -179,15 +179,41 @@ int main() {
         // Reject aliasing by numeric descriptor, not by false inode equality.
         NativeEpollReactorManager manager(2,
             NativeEpollReactorManager::Profile::preallocated_rt, 2);
-        const int one = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-        const int two = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-        check(one >= 0 && two >= 0);
-        auto a = manager.try_watch(one, EPOLLIN);
-        auto b = manager.try_watch(two, EPOLLIN);
+        const int raw = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        check(raw >= 0);
+        check(!manager.try_watch(raw, EPOLLIN).has_value());
+        ::close(raw); // unmanaged anonymous descriptor denied
+        auto one = manager.open_owned_eventfd();
+        auto two = manager.open_owned_eventfd();
+        check(one.has_value() && two.has_value());
+        auto alias = manager.duplicate_owned_eventfd(*one);
+        check(alias.has_value());
+        auto a = manager.try_watch(*one, EPOLLIN);
+        auto b = manager.try_watch(*two, EPOLLIN);
         check(a.has_value() && b.has_value());
+        check(!manager.try_watch(*alias, EPOLLIN).has_value());
+        check(!manager.close_owned_eventfd(*one));
+        check(manager.signal_owned_eventfd(*one));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool consumed = false;
+        while (!consumed && std::chrono::steady_clock::now() < deadline) {
+            auto completed = manager.try_pop();
+            if (completed && completed->reactor == a->reactor &&
+                completed->event.ticket.value == a->ticket.value)
+                consumed = true;
+            else std::this_thread::yield();
+        }
+        check(consumed);
+        check(manager.try_watch(*alias, EPOLLIN).has_value());
+        check(!manager.try_watch(*one, EPOLLIN).has_value());
+        check(manager.close_owned_eventfd(*one));
+        check(!manager.signal_owned_eventfd(*one)); // stale generation
         manager.stop();
-        ::close(one);
-        ::close(two);
+        while (manager.try_pop().has_value()) { }
+        check(manager.close_owned_eventfd(*alias));
+        check(!manager.close_owned_eventfd(*alias));
+        check(manager.close_owned_eventfd(*two));
+        check(!manager.open_owned_eventfd().has_value()); // retired manager
     }
     {
         NativeEpollReactorManager manager(1);

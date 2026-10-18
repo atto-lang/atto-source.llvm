@@ -37,7 +37,7 @@ OresNativeNio* ores_native_nio_open(
 size_t ores_native_nio_started_reactors(const OresNativeNio* manager);
 
 /* Linux EPOLLIN/EPOLLOUT flags are passed verbatim; other ops fail closed.
- * An FD without O_NONBLOCK fails admission. After successful admission the
+ * Raw anonymous-inode descriptors such as eventfd fail closed because\n * numeric FDs cannot prove dup-alias ownership. A separate host-only C++\n * managed eventfd capability API is not exported to this C/guest boundary.\n * An FD without O_NONBLOCK fails admission. After successful admission the
  * caller MUST keep that FD alive, nonblocking, and under the same ownership
  * until its terminal completion is consumed; readiness does not itself
  * guarantee subsequent read/write syscalls are nonblocking.
