@@ -235,7 +235,8 @@ public:
     void advance_generation(std::uint64_t next) {
         std::lock_guard<std::mutex> lock(mutex_);
         ensure_successor(next);
-        if (!active_.empty()) throw std::logic_error("nonquiescent route generation");
+        if (!active_.empty() || any_claimed_publication())
+            throw std::logic_error("nonquiescent route generation");
         // Retain the trusted graph selector table; reset only the epoch.
         for (auto& cursor : cursors_) cursor.second = 0;
         generation_ = next;
@@ -244,6 +245,11 @@ public:
     std::size_t abort_and_advance(std::uint64_t next) {
         std::lock_guard<std::mutex> lock(mutex_);
         ensure_successor(next);
+        // An epoch abort cannot silently retire the route of a host writer
+        // that has already acquired publication authority. Its native
+        // mailbox enqueue must commit or reject before the fence.
+        if (any_claimed_publication())
+            throw std::logic_error("actor route publication still in flight");
         const auto cancelled = active_.size();
         active_.clear();
         // Retain the trusted graph selector table; reset only the epoch.
@@ -275,6 +281,12 @@ private:
     std::uint64_t next_route_{1};
     bool closed_{false};
 
+    bool any_claimed_publication() const noexcept {
+        for (const auto& entry : active_)
+            if (entry.second->publication_state_.load(std::memory_order_acquire) == 1)
+                return true;
+        return false;
+    }
     void ensure_open() const {
         if (closed_) throw std::logic_error("route ledger closed");
     }
