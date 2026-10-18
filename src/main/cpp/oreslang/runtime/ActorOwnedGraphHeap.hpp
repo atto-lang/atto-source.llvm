@@ -65,6 +65,9 @@ private:
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
     std::atomic<bool> retired_{false};
+    // The gate seals loans; this separate claim prevents concurrent
+    // supervisor retire()/destructor calls from invoking drop glue twice.
+    std::atomic_flag reclamation_busy_ = ATOMIC_FLAG_INIT;
     bool dropping_ = false;
 
     void require_owner(ActorHeapIdentity requester) const {
@@ -148,7 +151,9 @@ public:
     // graph. Deliberately terminate instead of reclaiming dangling storage.
     // Normal production cleanup must use retire() after a joined carrier.
     ~ActorOwnedGraphHeap() noexcept {
-        if (!borrow_gate_.seal_and_quiesced(owner_)) std::terminate();
+        if (!borrow_gate_.seal_and_quiesced(owner_) ||
+                reclamation_busy_.test_and_set(std::memory_order_acq_rel))
+            std::terminate();
         erase_all();
     }
 
@@ -326,7 +331,17 @@ public:
             throw std::logic_error("retirement proof belongs to another actor generation");
         if (!borrow_gate_.seal_and_quiesced(actor))
             throw std::logic_error("actor heap still has live borrow/FFI leases");
+        // One authoritative reclamation turn, even if two supervisors race
+        // with the same joined-carrier proof. The losing caller must never
+        // invoke a destructor or partially scrub live native storage.
+        if (reclamation_busy_.test_and_set(std::memory_order_acq_rel))
+            throw std::logic_error("actor heap reclamation already executing");
+        if (retired_.load(std::memory_order_acquire)) {
+            reclamation_busy_.clear(std::memory_order_release);
+            throw std::logic_error("actor heap already retired");
+        }
         erase_all();
+        reclamation_busy_.clear(std::memory_order_release);
     }
 };
 
