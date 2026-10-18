@@ -94,6 +94,27 @@ int main() {
     rejects([&] { checkFamily({f({a})}, Registry{{"root.Foo", {"other.Foo", {"A"}, true}}}); });
     rejects([&] { checkFamily({f({a})}, Registry{{"root.Foo", {"root.Foo", {"A","A"}, true}}}); });
 
+    const std::string oversizedId(MaxIdBytes + 1, 'x');
+    rejects([&] { checkFamily(
+        {f({Parameter::selectedCase("root.Foo", oversizedId)})}, registry); });
+    rejects([&] { checkFamily(
+        {f({Parameter::whole("root." + oversizedId)})}, registry); });
+    rejects([&] { (void)f({}, Domain::Module, "root." + oversizedId).symbolId(); });
+    // A valid codepoint sequence can exceed 512 UTF-8 bytes even when it
+    // contains at most 512 scalar characters.
+    const std::string excessiveUtf8(300, 'z');
+    const std::string doubledBytes = [&] {
+        std::string bytes;
+        for (char c : excessiveUtf8) {
+            (void)c;
+            bytes += "\\xc3\\xa9";
+        }
+        return bytes;
+    }();
+    rejects([&] { checkFamily({f({
+        Parameter::whole("root." + doubledBytes)})}, registry); });
+    checkFamily({f({Parameter::fixed("int")})}, registry);
+
     const std::vector<Parameter> oversize(MaxArity+1,count);
     rejects([&] { checkFamily({f(oversize)}, registry); });
     const std::vector<Signature> tooMany(MaxCandidates+1, aa);
