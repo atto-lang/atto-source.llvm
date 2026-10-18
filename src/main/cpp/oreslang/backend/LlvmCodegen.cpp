@@ -472,12 +472,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
-            actorInits.emplace(actor.name, llvm::Function::Create(
+            auto* actorInit = llvm::Function::Create(
                 llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "init", module));
-            actorHandlers.emplace(actor.name, llvm::Function::Create(
+                llvm::Function::ExternalLinkage, prefix + "init", module);
+            auto* actorHandler = llvm::Function::Create(
                 llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "on_message", module));
+                llvm::Function::ExternalLinkage, prefix + "on_message", module);
+            if (cortex_m_target) {
+                /* Freestanding Cortex-M has no LLVM exception-unwind runtime.
+                 * Mark generated functions explicitly so ARM codegen emits
+                 * CANTUNWIND exidx entries instead of __aeabi_unwind_cpp_pr0. */
+                actorInit->addFnAttr(llvm::Attribute::NoUnwind);
+                actorHandler->addFnAttr(llvm::Attribute::NoUnwind);
+            }
+            actorInits.emplace(actor.name, actorInit);
+            actorHandlers.emplace(actor.name, actorHandler);
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
@@ -516,6 +525,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module);
+        if (cortex_m_target)
+            declaration->addFnAttr(llvm::Attribute::NoUnwind);
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args())
