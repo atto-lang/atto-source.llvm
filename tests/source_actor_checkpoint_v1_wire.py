@@ -95,15 +95,34 @@ def main():
         require(decode(spec, encode(case)) == case, "int/unicode roundtrip")
         checks += 1
 
-    for index in range(len(golden)):
+    # Inner ORESAS01 is a canonical serializer, not a corruption checksum.
+    # Structural bytes must fail closed when mutated; value bytes may decode to
+    # a different valid state. ActorCheckpointEnvelopeV1 supplies the outer
+    # SHA-256 corruption trailer for the complete state payload.
+    structural = set(range(0, 20))
+    structural.update(range(28, 36))
+    structural.update(range(37, 48))
+    value_bytes = set(range(len(golden))) - structural
+
+    for index in sorted(structural):
         changed = bytearray(golden)
         changed[index] ^= 1
         try:
             decode(spec, bytes(changed))
-            raise AssertionError("accepted one-bit mutation at " + str(index))
+            raise AssertionError("accepted structural mutation at " + str(index))
         except (AssertionError, UnicodeError, ValueError) as failure:
             if isinstance(failure, AssertionError) and str(failure).startswith("accepted"):
                 raise
+        checks += 1
+
+    for index in sorted(value_bytes):
+        changed = bytearray(golden)
+        changed[index] ^= 1
+        try:
+            decoded = decode(spec, bytes(changed))
+            require(decoded != values, "payload mutation did not change decoded state")
+        except UnicodeError:
+            pass
         checks += 1
 
     for cut in range(len(golden)):
