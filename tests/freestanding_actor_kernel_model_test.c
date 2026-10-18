@@ -15,6 +15,7 @@ typedef struct {
 } ModelActor;
 typedef struct {
     uint32_t next;
+    const OresKernel *owner;
     ModelActor actors[ORES_KERNEL_ACTORS];
 } Model;
 
@@ -44,13 +45,15 @@ static OresKernelStatus model_spawn(Model *m, OresKernelRef *ref) {
         a->last = 0;
         ref->slot = s;
         ref->generation = a->generation;
+        ref->owner = m->owner;
         m->next = (s + 1) % ORES_KERNEL_ACTORS;
         return ORES_KERNEL_OK;
     }
     return ORES_KERNEL_FULL;
 }
 static ModelActor *lookup(Model *m, OresKernelRef ref) {
-    if (ref.slot >= ORES_KERNEL_ACTORS || ref.generation == 0) return 0;
+    if (ref.slot >= ORES_KERNEL_ACTORS || ref.generation == 0 ||
+        ref.owner != m->owner) return 0;
     ModelActor *a = &m->actors[ref.slot];
     return a->active && a->generation == ref.generation ? a : 0;
 }
@@ -132,20 +135,22 @@ static void invariants(const OresKernel *vm, const Model *m) {
 int main(void) {
     OresKernel vm = {0};
     Model m = {0};
+    m.owner = &vm;
     OresKernelRef handles[512] = {{0}};
     uint32_t total = 0, writes = 0;
     assert(ores_kernel_init(&vm) == ORES_KERNEL_OK);
     for (uint32_t i=0; i<100000; ++i) {
         const uint32_t random = random32();
         const uint32_t op = random % 100;
-        OresKernelRef h = total ? handles[random32() % total] : (OresKernelRef){0,0};
+        OresKernelRef h = total ? handles[random32() % total] : (OresKernelRef){0};
         if (op < 15) {
             OresKernelRef actual={0}, expected={0};
             OresKernelStatus a=ores_kernel_spawn(&vm,handler,&actual);
             OresKernelStatus b=model_spawn(&m,&expected);
             assert(a==b);
             if (a==ORES_KERNEL_OK) {
-                assert(actual.slot==expected.slot && actual.generation==expected.generation);
+                assert(actual.slot==expected.slot && actual.generation==expected.generation &&
+                       actual.owner==expected.owner);
                 handles[writes++ % 512] = actual;
                 if (total<512) total++;
             }
