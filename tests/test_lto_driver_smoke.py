@@ -49,5 +49,26 @@ print('define i32 @main() { ret i32 42 }')
         env=dict(env,ORESLANG_LTO='off'),capture_output=True,text=True)
     assert invalid.returncode==64
     assert source.read_text()=="good\n"
+    # The source and output may have distinct names but the same inode.
+    # Reject before invoking the compiler or changing either path.
+    aliased_output=root/"alias output binary"
+    aliased_output.symlink_to(source)
+    denied=subprocess.run([driver,str(source),str(aliased_output)],env=env,
+        capture_output=True,text=True)
+    assert denied.returncode==64,(denied.stdout,denied.stderr)
+    assert aliased_output.is_symlink() and source.read_text()=="good\n"
+    hardlinked_output=root/"hardlinked output binary"
+    os.link(source,hardlinked_output)
+    denied=subprocess.run([driver,str(source),str(hardlinked_output)],env=env,
+        capture_output=True,text=True)
+    assert denied.returncode==64,(denied.stdout,denied.stderr)
+    assert source.read_text()=="good\n"
+    input_alias=root/"input alias to executable.ores"
+    input_alias.symlink_to(output)
+    original_binary=output.read_bytes()
+    denied=subprocess.run([driver,str(input_alias),str(output)],env=env,
+        capture_output=True,text=True)
+    assert denied.returncode==64,(denied.stdout,denied.stderr)
+    assert output.read_bytes()==original_binary
     assert not list(root.glob('.ores-aot.*'))
 print('source-free driver/Clang/LLD smoke: PASS; NOT Oreslang language parity')
