@@ -72,3 +72,19 @@ host helper tests is not the same as executing an authenticated guest request.
 - Run the actual protected guest and full original runtime tests; source-org
   Actions currently fail before jobs execute. Keep every associated PR draft
   until both CI and the appropriate protected tests pass.
+
+## October 18 — actor-bound broker prototype and outstanding proof
+
+Java now has an experimental static actor-turn ingress backed by trusted-only
+registration, exact runtime actor identity, at most 16 unconsumed result
+tickets and no guest-facing Java network callbacks. It can currently target
+only a supervisor-selected literal loopback endpoint. A private-carrier
+simulated-identity harness and real localhost HTTP/TCP operations have passed,
+but the authored full `spawnUntrusted` runtime integration test has not run.
+The shared threat contract has **31** proposed vectors, while the network
+conformance registry has **25**, with every protected backend still pending.
+
+The Java prototype does not enable Oreslang guest NETWORK or provide
+production SSRF-safe arbitrary egress. Java/Graal and LLVM protected guest
+execution, host transport quiescence, stable actor lineage, supervisor mailbox
+quota admission and original source CI remain hard blockers before merge.
