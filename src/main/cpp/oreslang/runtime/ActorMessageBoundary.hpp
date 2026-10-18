@@ -161,7 +161,7 @@ public:
     ActorDataLane(std::size_t frames, std::size_t bytes)
         : state_(std::make_shared<State>(frames, bytes)) {}
 
-    bool offer(ActorDataValue value, std::size_t bytes) {
+    bool offer(const ActorDataValue& value, std::size_t bytes) {
         if (!bytes) throw std::invalid_argument("DATA byte charge required");
         if (auto root = std::get_if<PersistentActorMap::MapRef>(&value);
             root && !*root)
@@ -174,7 +174,7 @@ public:
             bytes > state_->max_bytes - state_->used_bytes)
             return false;
         state_->queue.push_back(
-            Frame{state_->next_id++, bytes, std::move(value)});
+            Frame{state_->next_id++, bytes, value});
         ++state_->used_frames;
         state_->used_bytes += bytes;
         return true;
@@ -213,7 +213,7 @@ public:
             throw std::invalid_argument("CONTROL target/capacity required");
     }
 
-    bool publish(SupervisorControlEvent event) {
+    bool publish(SupervisorControlEvent&& event) {
         std::lock_guard<std::mutex> guard(lock_);
         if (!event.valid() || event.actor() != actor_ ||
             event.generation() != generation_)

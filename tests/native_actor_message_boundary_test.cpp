@@ -26,8 +26,11 @@ int main() {
     auto map = std::make_shared<const PersistentActorMap>(
         PersistentActorMap::empty().with("x", 1));
     ActorDataLane data(1, 32);
-    assert(data.offer(ActorDataValue(map), 16));
-    assert(!data.offer(ActorDataValue(std::int64_t{2}), 16));
+    ActorDataValue accepted(map);
+    assert(data.offer(accepted, 16));
+    ActorDataValue rejected(std::string("sender-owned"));
+    assert(!data.offer(rejected, 16));
+    assert(std::get<std::string>(rejected) == "sender-owned");
     bool close_denied = false;
     try { data.close(); }
     catch (const std::logic_error&) { close_denied = true; }
