@@ -127,5 +127,26 @@ int main() {
     rejects("define enum Foo as A, B end\n"
             "fnc int(Foo.A x): int { return 10; }\n"
             "fnc main(): int { return int(Foo.A); }");
+    // Signed i64 minimum is a legal literal; its unsigned magnitude must
+    // parse without an intermediate signed overflow or undefined negation.
+    const std::string minValue = std::to_string(std::numeric_limits<std::int64_t>::min());
+    const std::string maxValue = std::to_string(std::numeric_limits<std::int64_t>::max());
+    const std::string minProgram =
+        std::string("define enum Foo as A, B end\n") +
+        "fnc classify(Foo.A v): int { return " + minValue + "; }\n" +
+        "fnc classify(Foo.B v): int { return " + maxValue + "; }\n" +
+        "fnc classify(Foo v): int { return 1; }\n" +
+        "fnc main(): int { const Foo widened = Foo.A; "
+        "return classify(Foo.A) + classify(Foo.B) + classify(widened); }";
+    const auto minPlan = oreslang::enum_aot::parse(minProgram);
+    REQUIRE(oreslang::enum_aot::checkedNativeExit(minPlan) == 0);
+    rejects(std::string("define enum Foo as A, B end\n") +
+        "fnc classify(Foo.A v): int { return " +
+        std::to_string(static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1u)
+        + "; }\nfnc main(): int { return classify(Foo.A); }");
+    rejects(std::string("define enum Foo as A, B end\n") +
+        "fnc classify(Foo.A v): int { return -" +
+        std::to_string(static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 2u)
+        + "; }\nfnc main(): int { return classify(Foo.A); }");
     std::puts("PASS: compiled original native enum AOT frontend policy header");
 }
