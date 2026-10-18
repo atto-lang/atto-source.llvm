@@ -54,28 +54,39 @@ public:
         Lease& operator=(const Lease&) = delete;
         Lease(Lease&& other) noexcept
             : owner_(other.owner_), kind_(other.kind_),
-              active_(other.active_.exchange(false)) {}
+              state_(other.state_.exchange(2)) {}
         Lease& operator=(Lease&& other) noexcept {
             if (this != &other) {
                 release();
                 owner_ = other.owner_;
                 kind_ = other.kind_;
-                active_.store(other.active_.exchange(false));
+                state_.store(other.state_.exchange(2));
             }
             return *this;
         }
         ~Lease() noexcept { release(); }
-        void release() noexcept {
-            if (active_.exchange(false)) owner_->release(kind_);
+        bool commit_dispatch() noexcept {
+            std::uint8_t expected = 0;
+            return state_.compare_exchange_strong(expected, 1);
         }
-        explicit operator bool() const noexcept { return active_.load(); }
+        bool abort_before_dispatch(std::uint64_t trusted_nanos) noexcept {
+            std::uint8_t expected = 0;
+            if (!state_.compare_exchange_strong(expected, 2)) return false;
+            owner_->refund_unsent(kind_, trusted_nanos);
+            return true;
+        }
+        void release() noexcept {
+            if (state_.exchange(2) != 2) owner_->release(kind_);
+        }
+        explicit operator bool() const noexcept { return state_.load() != 2; }
     private:
         friend class TrustedUntrustedNetworkQuota;
         Lease(TrustedUntrustedNetworkQuota* owner, Kind kind) noexcept
-            : owner_(owner), kind_(kind), active_(true) {}
+            : owner_(owner), kind_(kind), state_(0) {}
         TrustedUntrustedNetworkQuota* owner_ = nullptr;
         Kind kind_ = Kind::http;
-        std::atomic<bool> active_{false};
+        // 0=reserved, 1=dispatched, 2=settled/empty.
+        std::atomic<std::uint8_t> state_{2};
     };
 
     struct Admission {
@@ -139,6 +150,19 @@ public:
     }
 
 private:
+    void refund_unsent(Kind kind, std::uint64_t trusted_nanos) noexcept {
+        std::lock_guard<std::mutex> hold(lock_);
+        auto& count = kind == Kind::http ? http_in_flight_ : tcp_connections_;
+        if (count == 0) std::abort();
+        --count;
+        // Only the unconsumed, one-shot reservation may refund start-rate.
+        if (kind == Kind::http) {
+            if (!http_start_.refund_failed_send(1, trusted_nanos)) std::abort();
+        } else {
+            if (!tcp_start_.refund_failed_send(1, trusted_nanos)) std::abort();
+        }
+    }
+
     void release(Kind kind) noexcept {
         std::lock_guard<std::mutex> hold(lock_);
         auto& count = kind == Kind::http ? http_in_flight_ : tcp_connections_;
