@@ -37,7 +37,7 @@ bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
 bool reserved(std::string_view name) {
     // Keep these reserved even while their grammar is unsupported.
     static constexpr std::string_view words[] = {
-        "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
+        "define", "class", "enum", "pattern", "module", "contract", "signature", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "do", "else", "then", "new",
@@ -210,6 +210,13 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("signature") || accept("contract"))
+                fail("native compile-time signature/contract requires verified conformance lowering");
+            if (accept("static")) {
+                if (accept("signature") || accept("contract"))
+                    fail("native static signature/contract requires verified conformance lowering");
+                fail("native static declaration requires verified class lowering");
+            }
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -230,6 +237,13 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("signature") || accept("contract"))
+                    fail("native compile-time signature/contract requires verified conformance lowering");
+                if (accept("static")) {
+                    if (accept("signature") || accept("contract"))
+                        fail("native static signature/contract requires verified conformance lowering");
+                    fail("native static declaration requires verified class lowering");
+                }
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
