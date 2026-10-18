@@ -254,6 +254,10 @@ void check_bool_value(
             check_bool_value(*expr.right, bool_parameters, functions, shadowed_intrinsics);
             return;
         case Expression::Kind::Call: {
+            if (expr.name.rfind("BooleanOps.", 0) == 0 &&
+                    bool_parameters.count("BooleanOps") != 0)
+                reject(expr,
+                    "native BooleanOps builtin namespace is shadowed by a bool parameter");
             const bool intrinsic =
                 boolean_intrinsic_name(expr.name) &&
                 shadowed_intrinsics.count(expr.name) == 0;
