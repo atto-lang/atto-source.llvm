@@ -287,6 +287,49 @@ int main() {
         check(manager.close_owned_eventfd(*replacement));
     }
     {
+        // A cancelled watch still owns its descriptor (including all dup
+        // aliases) until the terminal record has actually been popped. A
+        // failed try-lock is retryable, never evidence that it was cancelled.
+        NativeEpollReactorManager manager(1);
+        auto first = manager.open_owned_eventfd();
+        check(first.has_value());
+        auto alias = manager.duplicate_owned_eventfd(*first);
+        check(alias.has_value());
+        auto watch = manager.try_watch(*first, EPOLLIN);
+        check(watch.has_value());
+        check(!manager.try_watch(*alias, EPOLLIN).has_value());
+        check(!manager.close_owned_eventfd(*first));
+        bool cancelled = false;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(3);
+        while (!cancelled && std::chrono::steady_clock::now() < deadline) {
+            cancelled = manager.try_cancel(*watch);
+            if (!cancelled) std::this_thread::yield();
+        }
+        check(cancelled);
+        check(!manager.try_watch(*alias, EPOLLIN).has_value());
+        check(!manager.close_owned_eventfd(*first));
+        std::optional<NativeEpollReactorManager::Completion> terminal;
+        while (!terminal && std::chrono::steady_clock::now() < deadline) {
+            terminal = manager.try_pop();
+            if (!terminal) std::this_thread::yield();
+        }
+        check(terminal.has_value() &&
+              terminal->event.outcome == NativeEpollReactor::Outcome::cancelled &&
+              terminal->event.ticket.value == watch->ticket.value);
+        check(!manager.try_cancel(*watch));
+        auto replacement = manager.try_watch(*alias, EPOLLIN);
+        check(replacement.has_value());
+        check(!manager.try_watch(*first, EPOLLIN).has_value());
+        check(manager.close_owned_eventfd(*first));
+        manager.stop();
+        auto stopped = manager.try_pop();
+        check(stopped.has_value() &&
+              stopped->event.ticket.value == replacement->ticket.value &&
+              stopped->event.outcome == NativeEpollReactor::Outcome::stopped);
+        check(manager.close_owned_eventfd(*alias));
+    }
+    {
         // A copied capability must not authenticate against another manager,
         // even if both registries use the same slot and local generation.
         NativeEpollReactorManager source(1);

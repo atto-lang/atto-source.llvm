@@ -191,14 +191,23 @@ private:
         const int access_mode = flags & O_ACCMODE;
         const bool stream_identity = S_ISFIFO(identity.st_mode) || S_ISSOCK(identity.st_mode);
         if (!key && !stream_identity) return std::nullopt;
-        // Reject aliases before lazy host reactor-thread provisioning.
-        for (const auto& claim : claimed_fds_) {
-            if (!claim.occupied) continue;
+        // A tracked manager claim is reserved BEFORE epoll registration.
+        // The old fallback attempted to cancel an already accepted ticket if
+        // claim capacity unexpectedly ran out. Cancellation is nonparking and
+        // may fail under reactor lock contention, stranding an ownerless
+        // readiness operation. A fixed-slot pointer is safe under mu_.
+        FdClaim* available = nullptr;
+        for (auto& claim : claimed_fds_) {
+            if (!claim.occupied) {
+                if (!available) available = &claim;
+                continue;
+            }
             if (claim.fd == fd || (owner && claim.owner == owner) ||
                     (stream_identity && claim.stream_identity &&
                      claim.device == identity.st_dev && claim.inode == identity.st_ino &&
                      claim.access_mode == access_mode)) return std::nullopt;
         }
+        if (!available) return std::nullopt;
         auto count = started_.load(std::memory_order_relaxed);
         // Do not seal a preallocated RT profile merely because validation
         // passed: epoll admission may still fail due to an unsupported FD,
@@ -220,18 +229,16 @@ private:
             auto token = reactors_[index]->try_watch(fd, events);
             if (token) {
                 const Watch result{static_cast<std::uint8_t>(index), *token};
-                for (auto& claim : claimed_fds_) {
-                    if (claim.occupied) continue;
-                    claim = FdClaim{true, fd, stream_identity, identity.st_dev,
-                                    identity.st_ino, access_mode, result, owner};
-                    // The manager lock covers both the ownership table and
-                    // the bootstrap phase; no creator can race this barrier.
-                    if (profile_ == Profile::preallocated_rt)
-                        owned_bootstrap_sealed_ = true;
-                    return result;
-                }
-                (void)reactors_[index]->try_cancel(*token);
-                return std::nullopt;
+                // This slot remains free until the successful reactor
+                // registration and cannot be claimed by another caller while
+                // mu_ is held. No post-admission failure/rollback path exists.
+                *available = FdClaim{true, fd, stream_identity, identity.st_dev,
+                                     identity.st_ino, access_mode, result, owner};
+                // The manager lock covers both the ownership table and the
+                // bootstrap phase; no creator can race this barrier.
+                if (profile_ == Profile::preallocated_rt)
+                    owned_bootstrap_sealed_ = true;
+                return result;
             }
         }
         return std::nullopt;
