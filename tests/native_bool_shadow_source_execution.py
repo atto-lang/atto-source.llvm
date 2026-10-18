@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove that a real source function named And shadows the Boolean intrinsic."""
+"""Prove a real BooleanOps.And source function shadows both intrinsic spellings."""
 import argparse
 import os
 from pathlib import Path
@@ -23,10 +23,17 @@ def main():
     root = Path(a.source_root)
     emitted = invoke(
         a.compiler, root / "tests/fixtures/native-bool-shadow-aot.ores").stdout
-    if "define i1 @BoolShadow.And(i1 " not in emitted:
-        raise AssertionError("missing user-defined And i1 definition")
-    if "call i1 @BoolShadow.And" not in emitted:
-        raise AssertionError("shadowed And call was not preserved as a source call")
+    if "define i1 @BooleanOps.And(i1 " not in emitted:
+        raise AssertionError("missing user-defined BooleanOps.And i1 definition")
+    for symbol in ("BooleanOps.probe_unqualified", "BooleanOps.probe_qualified"):
+        marker = f"define i1 @{symbol}"
+        start = emitted.find(marker)
+        if start < 0:
+            raise AssertionError(f"missing shadow probe {symbol}")
+        end = emitted.find("\n}", start)
+        if end < 0 or "call i1 @BooleanOps.And" not in emitted[start:end + 2]:
+            raise AssertionError(
+                f"{symbol} was not preserved as a source call to BooleanOps.And")
 
     with tempfile.TemporaryDirectory(prefix="oreslang-bool-shadow-") as d:
         ir = Path(d) / "shadow.ll"
