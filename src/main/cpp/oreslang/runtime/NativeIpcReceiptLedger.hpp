@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -46,6 +47,7 @@ public:
     }
 
     IpcReceiptStage admit(const IpcReceiptIdentity& id) {
+        std::lock_guard<std::mutex> lock(mutex_);
         validate(id);
         auto stream = std::make_tuple(id.tenant, id.sender_actor,
             id.sender_incarnation, id.destination_actor, id.destination_incarnation);
@@ -76,6 +78,7 @@ public:
 
     IpcReceiptStage transition(const IpcReceiptIdentity& id,
                                IpcReceiptStage event, bool authenticated) {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (!authenticated) throw std::invalid_argument("unauthenticated IPC receipt");
         auto it = live_.find(id.message_sequence);
         if (it == live_.end() || !(it->second.id == id))
@@ -102,9 +105,16 @@ public:
         return event;
     }
 
-    std::size_t live_count() const noexcept { return live_.size(); }
-    std::size_t transport_credits() const noexcept { return transport_credits_; }
-    bool invariant() const noexcept {
+    std::size_t live_count() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return live_.size();
+    }
+    std::size_t transport_credits() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return transport_credits_;
+    }
+    bool invariant() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (transport_credits_ > live_.size() || live_.size() > capacity_) return false;
         std::size_t admitted = 0;
         for (const auto& [sequence, record] : live_) {
@@ -149,6 +159,7 @@ private:
                 throw std::invalid_argument("IPC payload digest not canonical");
     }
 
+    mutable std::mutex mutex_;
     const std::size_t capacity_;
     std::optional<StreamId> stream_;
     std::uint64_t last_sequence_ = 0;
