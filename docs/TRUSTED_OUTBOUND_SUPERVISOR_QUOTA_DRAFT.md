@@ -40,3 +40,35 @@ Revoking/closing a policy denies *new pre-dispatch commits*, but an already comm
 A pre-dispatch **three-scope** lease now checks child, supervisor and tenant revocation status while holding the same trusted gate lock as supervisor Scope.close, before any scope commits. The previous sequential commit could partially mutate child/supervisor leases and throw (Java) or abort the native process (LLVM) when a later scope had already been revoked. Deterministic all-three-role rejection and Java/native concurrent revoke-vs-commit regressions were added.
 
 The real Java NativeIo outbound HTTP and raw TCP call sites also now explicitly reject a direct UNTRUSTED actor turn through TrustedNetworkIngressGuard. The four guarded entry points are HTTP request submission, TCP connect, TCP read and TCP write; ordinary socket close remains available for cleanup. This is defense in depth and **does not create a protected guest->broker network path**. The real actor-turn JUnit case is added but not executed by the source-only carrier; the carrier verifies exact source hash and performs a host-only simulated identity check. Protected isolate and host-network cancellation semantics remain pending.
+
+## October 18, 2026 cross-backend audit and release gates
+
+The trusted-only host quota prototypes now have source-exact loopback validation of
+asynchronous Java HTTP and TCP operations. The Java TCP adapter reserves capacity
+before opening a channel; completed, cancelled or failed dials must close the OS
+channel before releasing the active socket slot. Host TCP handle tracking is
+retained if an OS close failure leaves the Socket open. The Java HTTP adapter
+isolates caller-future cancellation from host transport cancellation and tracks
+its own outstanding exchanges. All HTTP/TCP test helpers are HOST-ONLY; they do
+**not** grant network access to UNTRUSTED actors or establish protected isolation.
+
+The shared contract now has **28** adversarial cases and the conformance registry
+has **22**. All backend conformance remains **pending**: compiling and executing
+host helper tests is not the same as executing an authenticated guest request.
+
+**Blocking requirements before promotion:**
+
+- The runtime must authenticate actual actor identity and durable child/supervisor/
+  tenant lineage at the trusted bridge. No guest-provided sender, quota scope,
+  timestamp or permission decision can be authoritative.
+- Egress authorization must pin the resolved destination/address before DNS,
+  redirects, proxy dispatch and connect, and reject private/metadata SSRF
+  escalation across all transports and HTTP/2 multiplexing.
+- Supervisor revocation and cancellation must close real host sockets, drain
+  active I/O and prevent credit reuse before underlying transport termination.
+  A terminated Java CompletableFuture alone is not proof of OS socket closure.
+- Native LLVM UNTRUSTED execution must retain default-deny until a real
+  containment boundary exists; in-process private arenas are not a sandbox.
+- Run the actual protected guest and full original runtime tests; source-org
+  Actions currently fail before jobs execute. Keep every associated PR draft
+  until both CI and the appropriate protected tests pass.
