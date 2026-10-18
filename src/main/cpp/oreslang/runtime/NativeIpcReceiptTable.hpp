@@ -9,6 +9,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace oreslang::runtime {
 
@@ -114,16 +115,31 @@ public:
         throw std::invalid_argument("illegal or duplicate IPC receipt transition");
     }
 
-    /** Local transport teardown after EOF/crash. No wire-supplied identity is trusted.
-     *  Every uncompleted message for this session becomes OUTCOME_UNKNOWN;
-     *  known-dispatched messages MUST NOT be automatically replayed.
-     *  Correlations on newer transport sessions remain untouched.
+    // Correlation identities handed to the local transport supervisor on
+    // teardown. This is a notification of ambiguity, NEVER replay authority.
+    struct LostCorrelation {
+        IpcReceiptEnvelope envelope;
+        IpcReceiptStage last_observed;
+    };
+
+    /** Atomically retire correlations bound to a locally known dead session.
+     *  The result identifies every affected message for guest Future/error
+     *  settlement. All copies/allocations complete BEFORE any state removal,
+     *  so bad_alloc cannot strand a subset of unreported correlations.
      */
-    std::size_t mark_transport_lost(const std::string& trusted_session) {
+    std::vector<LostCorrelation> retire_transport_lost(
+            const std::string& trusted_session) {
         if (!token(trusted_session))
             throw std::invalid_argument("invalid local transport session");
         std::lock_guard<std::mutex> guard(mutex_);
-        std::size_t retired = 0;
+        std::vector<LostCorrelation> retired;
+        retired.reserve(pending_.size());
+        for (const auto& [sequence, entry] : pending_) {
+            (void)sequence;
+            if (entry.envelope.session == trusted_session)
+                retired.push_back({entry.envelope, entry.stage});
+        }
+        // No throwing operations after this point while the mutex is held.
         for (auto it = pending_.begin(); it != pending_.end();) {
             if (it->second.envelope.session != trusted_session) {
                 ++it;
@@ -132,9 +148,16 @@ public:
             if (it->second.stage == IpcReceiptStage::local_admitted)
                 --transport_credits_;
             it = pending_.erase(it);
-            ++retired;
         }
         return retired;
+    }
+
+    /** Compatibility count-only API. New adapters should use the identity-
+     *  preserving variant above to settle every indeterminate caller exactly
+     *  once. This method cannot safely be used for future completion.
+     */
+    std::size_t mark_transport_lost(const std::string& trusted_session) {
+        return retire_transport_lost(trusted_session).size();
     }
 
     std::pair<std::size_t, std::size_t> counters() const {
