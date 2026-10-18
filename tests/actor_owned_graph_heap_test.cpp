@@ -97,6 +97,10 @@ static void stale_generation_and_foreign_heap_rejected() {
     const auto reused = first.allocate(alice, &data, sizeof(data)).value();
     check(reused.slot == old.slot && reused.generation > old.generation,
           "reused slot did not advance generation");
+    must_reject([&]{ (void)first.is_linked(alice, reused, old); },
+                "stale generation target accepted by graph edge query");
+    must_reject([&]{ (void)first.is_linked(alice, old, reused); },
+                "stale generation source accepted by graph edge query");
     must_reject([&]{ (void)first.copy_out(bob, reused, &data, sizeof(data)); },
                 "foreign actor entered heap");
     const auto other = second.allocate(bob, &data, sizeof(data)).value();
@@ -238,8 +242,41 @@ static void live_loans_fence_mutations_and_destructor() {
           "live external graph loan did not prevent heap destruction");
 }
 
+static void standalone_borrow_gate_destruction_fail_closed() {
+    const ActorHeapIdentity owner{18, 22, 4};
+    for (bool hold_mutation : {false, true}) {
+        const pid_t child = fork();
+        check(child >= 0, "fork failed for standalone gate lifetime test");
+        if (child == 0) {
+            std::set_terminate([] { std::_Exit(86); });
+            auto* gate = new oreslang::runtime::ActorHeapBorrowGate(owner);
+            auto lease = hold_mutation ? gate->acquire(owner) :
+                                          std::optional<oreslang::runtime::ActorHeapBorrowGate::Lease>{};
+            auto mutation = hold_mutation ? gate->begin_mutation(owner) :
+                              std::optional<oreslang::runtime::ActorHeapBorrowGate::Mutation>{};
+            if (hold_mutation ? !mutation : !lease) std::_Exit(87);
+            delete gate; // MUST terminate while lease/writer still references it
+            std::_Exit(88);
+        }
+        int status = 0;
+        check(waitpid(child, &status, 0) == child, "child wait failed");
+        check(WIFEXITED(status) && WEXITSTATUS(status) == 86,
+              "standalone gate was freed with outstanding lease or writer");
+    }
+}
+
 static void atomic_mutation_vs_loan_races() {
     const ActorHeapIdentity owner{18, 21, 4};
+    {
+        oreslang::runtime::ActorHeapBorrowGate gate(owner);
+        auto writing = gate.begin_mutation(owner);
+        check(writing.has_value(), "failed to begin writer before seal");
+        check(!gate.seal_and_quiesced(owner), "retirement admitted active graph writer");
+        check(!gate.acquire(owner).has_value(),
+              "racing graph reader entered a sealed gate");
+        writing->reset();
+        check(gate.quiesced(), "ended writer did not permit quiescent retirement");
+    }
     for (int n = 0; n < 128; ++n) {
         oreslang::runtime::ActorHeapBorrowGate gate(owner);
         std::atomic<bool> go{false};
