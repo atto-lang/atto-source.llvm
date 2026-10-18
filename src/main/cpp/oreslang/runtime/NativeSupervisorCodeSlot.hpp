@@ -7,6 +7,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,11 @@ namespace oreslang::runtime {
  */
 template <class Policy>
 class NativeSupervisorCodeSlot final {
+    // Native images must not throw while moving their ownership wrappers:
+    // otherwise the callback may unload an image before a failed move
+    // finishes destroying the wrapper still referencing that image.
+    static_assert(std::is_nothrow_move_constructible_v<Policy>,
+                  "native code image must be nothrow-move-constructible");
     // Runs *after* the Policy object has been destroyed. Running dlclose /
     // ORC removal first could unload Policy's destructor or captured vtable.
     struct ReclaimOwner final {
@@ -79,10 +85,11 @@ public:
         // Take ownership even when initial admission or allocation fails.
         // The initial image may already be a loaded native shared object.
         ReclaimOwner rejected(std::move(reclaim));
+        Policy staged(std::move(initial)); // Destroy before rejected cleanup on failure.
         if (initial_abi.empty() || maximum_live < 2 || !rejected.callback)
             throw std::invalid_argument("invalid native supervisor code slot admission");
         current_ = std::make_shared<Generation>(
-                1, std::move(initial_abi), std::move(initial),
+                1, std::move(initial_abi), std::move(staged),
                 rejected.callback);
         rejected.callback = nullptr;
         retained_.push_back(current_);
@@ -134,13 +141,14 @@ public:
         // If moving/copying an image or allocating a generation throws, the
         // guard still schedules image unload exactly once, outside CONTROL.
         ReclaimOwner rejected(std::move(reclaim));
+        Policy staged(std::move(code)); // Teardown precedes callback on failure.
         if (abi.empty() || !rejected.callback)
             throw std::invalid_argument("invalid native supervisor code image");
 
         // On stale revision, incompatible ABI, close, or live-cap failure the
         // candidate is destroyed AFTER unwinding the scoped activation lock.
         auto candidate = std::make_shared<Generation>(
-                0, std::move(abi), std::move(code), rejected.callback);
+                0, std::move(abi), std::move(staged), rejected.callback);
         rejected.callback = nullptr;
         std::shared_ptr<Generation> previous;
         Descriptor activated;
