@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace oreslang::runtime;
 
@@ -58,5 +59,61 @@ int main() {
     auto too_large = id(5); too_large.message_sequence = UINT64_MAX;
     rejected([&] { ledger.admit(too_large); });
     check(ledger.invariant() && ledger.live_count() == 0);
+    // Reproducible interleavings of admissions, receipt delivery, terminal
+    // cancellation and mismatched-session attacks; no transport is involved.
+    for (std::uint64_t scenario = 1; scenario <= 1024; ++scenario) {
+        const std::size_t capacity = 1 + static_cast<std::size_t>(scenario % 5);
+        NativeIpcReceiptLedger book(capacity);
+        std::vector<std::pair<IpcReceiptIdentity, bool>> pending;
+        std::uint64_t sequence = 1;
+        std::uint64_t random = 0x9e3779b97f4a7c15ULL ^ scenario;
+        auto next = [&random]() { random ^= random << 13; random ^= random >> 7;
+            random ^= random << 17; return random; };
+        for (int step = 0; step < 64; ++step) {
+            const auto op = next() % 6;
+            if (pending.empty() || op == 0) {
+                auto message = id(sequence); message.route_epoch = 3;
+                ++sequence;
+                if (pending.size() >= capacity)
+                    rejected([&] { book.admit(message); });
+                else {
+                    check(book.admit(message) == IpcReceiptStage::local_admitted);
+                    pending.emplace_back(std::move(message), false);
+                }
+            } else {
+                const auto index = static_cast<std::size_t>(next() % pending.size());
+                const auto [message, received] = pending[index];
+                if (op == 1 && !received) {
+                    book.transition(message, IpcReceiptStage::remote_accepted, true);
+                    pending[index].second = true;
+                } else if (op == 2) {
+                    auto forged_message = message;
+                    forged_message.transport_session = "forged";
+                    rejected([&] { book.transition(forged_message,
+                        IpcReceiptStage::remote_accepted, true); });
+                } else if (op == 3 && received) {
+                    rejected([&] { book.transition(message,
+                        IpcReceiptStage::rejected_before_remote, true); });
+                } else {
+                    const auto terminal = received
+                        ? ((next() & 1) ? IpcReceiptStage::handler_committed
+                                        : IpcReceiptStage::handler_failed)
+                        : IpcReceiptStage::unknown;
+                    book.transition(message, terminal, true);
+                    pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(index));
+                    rejected([&] { book.transition(message, terminal, true); });
+                }
+            }
+            check(book.invariant());
+            check(book.live_count() == pending.size());
+            std::size_t expected_credits = 0;
+            for (const auto& entry : pending) if (!entry.second) ++expected_credits;
+            check(book.transport_credits() == expected_credits);
+        }
+        for (const auto& entry : pending)
+            book.transition(entry.first, IpcReceiptStage::unknown, true);
+        check(book.live_count() == 0 && book.transport_credits() == 0);
+        check(book.invariant());
+    }
     return 0;
 }
