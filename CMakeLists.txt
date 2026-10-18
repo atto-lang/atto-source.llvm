@@ -29,6 +29,21 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Native host-only IPC receipt ledger (not source compiler parity or
+    # remote-peer authentication). Execute strict transitions and carrier races.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-ipc-receipts-test
+        tests/native_ipc_receipt_table_test.cpp)
+    target_include_directories(oreslang-native-ipc-receipts-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ipc-receipts-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ipc-receipts-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_ipc_receipt_bounded_correlation_and_races
+        COMMAND oreslang-native-ipc-receipts-test)
+    set_tests_properties(native_ipc_receipt_bounded_correlation_and_races
+        PROPERTIES TIMEOUT 25)
+
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
