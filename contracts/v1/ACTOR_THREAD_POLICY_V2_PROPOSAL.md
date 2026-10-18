@@ -233,11 +233,11 @@ Compatibility for the earlier MaxActorThreads proposal is explicit:
 - Mixing `@ActorMaxThreads`, `@ActorThreads` and the native `with threads`
   clause, even when all specify (1,1), is **a compile error**. A single actor
   must never have two policy sources.
-- Old Java AST consumers may use `ClassDecl.maxActorThreads()` as a
-  max-only compatibility view, or construct an AST from the legacy enum;
-  both resolve to the same canonical record. The compatibility getter
-  does not promise to preserve the new `min` capacity floor. New compiler
-  passes must carry the whole `actorThreads` record.
+- Old Java AST consumers may use `ClassDecl.maxActorThreads()` or
+  construct an AST from the legacy enum only for policies with `min=1`.
+  If `min>1`, this compatibility getter now **throws** rather than
+  silently erasing the requested floor during a legacy AST round trip.
+  New compiler passes must carry the whole `actorThreads` record.
 
 Current version scope is bounded to three slots. Future >3 behavior requires a
 new versioned ABI and scheduler/effect-checking qualification; it is not
@@ -269,3 +269,18 @@ the mandatory two-repository numeric-ID/visibility preflight. Source-free
 models and focused external component runs are separately labeled and cannot
 be promoted to full-tree runtime evidence. No alternate-organization transfer
 is authorized by this proposal.
+
+### Adversarial integer and compatibility hardening
+
+Actor `threads(min: ..., max: ...)` and `@ActorThreads(...)` values
+require positive ASCII decimal integers. Underscores, when present, must
+separate two digits; a trailing, doubled or isolated underscore is invalid.
+This rejects otherwise-ambiguous capacity literals such as `1_` or `1__`
+without changing the general-purpose Oreslang numeric lexer. Java and LLVM
+share this rule and have positive/negative source regression cases. The
+legacy `MaxActorThreads` enum backing integers are canonical exact tokens
+without separators.
+
+In all backends, **physical actor execution remains max=1** until the real
+scheduler admission, ownership/effect checking and full-tree tests run.
+Host gates and syntax-only compiler tests cannot authorize parallel actors.
