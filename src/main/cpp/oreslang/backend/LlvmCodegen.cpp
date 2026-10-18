@@ -958,8 +958,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             formal.setName(fn.parameters[label_index++].name);
         if (!declarations.emplace(slot, declaration).second)
             throw std::runtime_error("duplicate native function declaration slot");
-        if (source.module == "BooleanOps" &&
-                (fn.name == "And" || fn.name == "Or" || fn.name == "Xor")) {
+        if (source.module == "BooleanOps") {
             const std::string qualified_slot =
                 native_function_slot("BooleanOps." + fn.name, fn.parameters.size());
             if (!declarations.emplace(qualified_slot, declaration).second)
