@@ -64,10 +64,10 @@ UBSAN_OPTIONS=halt_on_error=1 "$tmp/enum-aot-asan-ubsan"
 build="$tmp/build"
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
     -DBUILD_TESTING=ON
-cmake --build "$build" --target oreslang-llvmc oreslang-enum-source-aot-plan-test \
+cmake --build "$build" --target oreslang-llvmc oreslang-enum-source-aot-plan-test oreslang-enum-tag-boundary-test \
     --parallel 2
 ctest --test-dir "$build" \
-    -R 'native_enum_(source_aot_plan_integrity|guest_aot_executable)' \
+    -R 'native_enum_(source_aot_plan_integrity|tag_boundary|guest_aot_executable)' \
     --output-on-failure --timeout 120
 
 "$PYTHON" tests/native_enum_guest_aot.py \
