@@ -408,7 +408,76 @@ static void concurrent_retirement_drops_once() {
     check(graph.retired(), "successful actor reclamation did not publish retirement");
 }
 
+// Concurrency-configured actors may admit several carrier threads.
+// A read must never race the byte write or graph-edge mutation even when
+// all callers present the correct actor incarnation authority. Conflicts
+// fail closed instead of unsafely peeking into mutable graph slots.
+static void concurrent_graph_read_write_links_are_exclusive() {
+    using Heap = ActorOwnedGraphHeap<4, 16, 2>;
+    const ActorHeapIdentity owner{22, 31, 1};
+    Heap graph(owner);
+    std::uint64_t value = 0;
+    const auto first = graph.allocate(owner, &value, sizeof(value)).value();
+    const auto second = graph.allocate(owner, &value, sizeof(value)).value();
+    std::atomic<bool> start{false};
+    std::atomic<int> successfulWrites{0}, successfulReads{0},
+                     edgesAdded{0}, conflictDenials{0};
+    auto await_start = [&] {
+        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+    };
+    std::thread writer([&] {
+        await_start();
+        for (std::uint64_t i = 1; i <= 3000; ++i) {
+            try {
+                graph.write(owner, first, &i, sizeof(i));
+                successfulWrites.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::logic_error&) {
+                conflictDenials.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    });
+    std::thread reader([&] {
+        await_start();
+        for (int i = 0; i < 3000; ++i) {
+            std::uint64_t observed = 0;
+            try {
+                graph.copy_out(owner, first, &observed, sizeof(observed));
+                check(observed <= 3000, "concurrent graph reader observed torn payload");
+                successfulReads.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::logic_error&) {
+                conflictDenials.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    });
+    std::thread linker([&] {
+        await_start();
+        for (int i = 0; i < 3000; ++i) {
+            try {
+                if (i % 2 == 0) {
+                    if (graph.link(owner, first, second))
+                        edgesAdded.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    (void)graph.is_linked(owner, first, second);
+                }
+            } catch (const std::logic_error&) {
+                conflictDenials.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    });
+    start.store(true, std::memory_order_release);
+    writer.join();
+    reader.join();
+    linker.join();
+    check(successfulReads.load() + successfulWrites.load() +
+              conflictDenials.load() > 0, "concurrent graph stress ran no operations");
+    check(edgesAdded.load() <= 1, "concurrent duplicate graph link admitted");
+    check(graph.live_nodes(owner) == 2, "concurrent graph lost owned nodes");
+    check(graph.live_edges(owner) ==
+          static_cast<std::size_t>(edgesAdded.load()), "concurrent edge ledger corrupted");
+}
+
 int main() {
+    concurrent_graph_read_write_links_are_exclusive();
     concurrent_retirement_drops_once();
     graph_accounting_model_stress();
     standalone_borrow_gate_destruction_fail_closed();
