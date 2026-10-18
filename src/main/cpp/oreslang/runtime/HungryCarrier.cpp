@@ -165,6 +165,8 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
       producer_gate_(std::make_shared<ProducerGate>(this)) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
+    if (options_.cancel_handler != nullptr)
+        throw std::invalid_argument("generated continuation cancellation hook requires V2 handler");
     if ((options_.supervisor_control == nullptr)
             != (options_.supervisor_hooks == nullptr))
         throw std::invalid_argument("supervisor CONTROL lane requires typed hooks");
@@ -322,7 +324,8 @@ CarrierStats HungryCarrier::stats() const noexcept {
             failures_.load(std::memory_order_acquire),
             thread_tag_.load(std::memory_order_acquire),
             abandoned_on_stop_.load(std::memory_order_acquire),
-            cooperations_.load(std::memory_order_acquire)};
+            cooperations_.load(std::memory_order_acquire),
+            cancel_cleanups_.load(std::memory_order_acquire)};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -345,6 +348,19 @@ bool HungryCarrier::pin_cpu() noexcept {
 
 void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
+    if (cause == ResumeCause::initial) {
+        if (turn_active_) {
+            failures_.fetch_add(1, std::memory_order_relaxed);
+            request_stop();
+            return;
+        }
+        turn_active_ = true;
+        current_ = message;
+    } else if (!turn_active_) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+        return;
+    }
     // Only actor handler execution may access this heap. Suspension does not
     // invalidate its handles; broker callbacks have no such capability.
     tls_actor_heap = &actor_heap_;
@@ -352,12 +368,19 @@ void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::in
         ? handler_v2_(actor_state_, message, cause, result)
         : handler_(actor_state_, message, cause == ResumeCause::io, result);
     tls_actor_heap = nullptr;
-    if (stop_.load(std::memory_order_acquire)) return;
+
+    // A concurrently requested stop does not erase a completion that already
+    // happened inside this callback. DONE wins the logical-turn accounting;
+    // nonterminal frames remain active for carrier-thread cancellation cleanup.
     if (step.kind == StepKind::done) {
         cooperating_ = false;
+        pending_ = false;
+        turn_active_ = false;
         completed_.fetch_add(1, std::memory_order_release);
         return;
     }
+    if (stop_.load(std::memory_order_acquire)) return;
+
     if (step.kind == StepKind::cooperate) {
         // CPU handoff is not IO and not logical turn completion. Do not admit
         // subsequent user envelopes while this frame is runnable. A V1
@@ -396,6 +419,21 @@ void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::in
         failures_.fetch_add(1, std::memory_order_relaxed);
         request_stop();
     }
+}
+
+void HungryCarrier::cancel_active_turn() noexcept {
+    if (!turn_active_) return;
+    // Exactly one actor-carrier thread owns this transition. The broker cannot
+    // see actor memory, and terminal_ has already canceled any pending I/O.
+    if (options_.cancel_handler != nullptr) {
+        tls_actor_heap = &actor_heap_;
+        options_.cancel_handler(actor_state_, current_);
+        tls_actor_heap = nullptr;
+        cancel_cleanups_.fetch_add(1, std::memory_order_release);
+    }
+    pending_ = false;
+    cooperating_ = false;
+    turn_active_ = false;
 }
 
 void HungryCarrier::wait_actor() noexcept {
@@ -485,6 +523,7 @@ void HungryCarrier::actor_loop() noexcept {
                                               std::memory_order_acquire))
             canceled_.fetch_add(1, std::memory_order_relaxed);
     }
+    cancel_active_turn();
     stopped_.store(true, std::memory_order_release);
 }
 
