@@ -31,6 +31,7 @@ struct Function {
 struct Call {
     std::string exactSymbol; // Bound *before* LLVM IR emission.
     std::int32_t tag = 0;
+    std::string staticallyProvenCase; // empty means widened enum nominal type
 };
 struct Plan {
     std::string enumId;
@@ -93,7 +94,9 @@ public:
                       plan_.enumId, valueType.second);
             const std::size_t selected =
                 types::case_overloads::selectStatic(family, registry, {arg});
-            plan_.returnCalls.push_back({family.at(selected).symbolId(), call.tag});
+            plan_.returnCalls.push_back({
+                family.at(selected).symbolId(), call.tag, valueType.second
+            });
         }
         return std::move(plan_);
     }
