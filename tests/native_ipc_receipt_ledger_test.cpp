@@ -3,6 +3,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <thread>
+#include <atomic>
 
 using namespace oreslang::runtime;
 
@@ -114,6 +116,32 @@ int main() {
             book.transition(entry.first, IpcReceiptStage::unknown, true);
         check(book.live_count() == 0 && book.transport_credits() == 0);
         check(book.invariant());
+    }
+    // Multiple transport completion lanes race on independent receipts. The
+    // ledger must serialize all correlations without losing any terminal ACK.
+    {
+        constexpr std::size_t messages = 512;
+        NativeIpcReceiptLedger concurrent(messages);
+        for (std::uint64_t seq = 1; seq <= messages; ++seq)
+            concurrent.admit(id(seq));
+        std::atomic<int> errors{0};
+        std::vector<std::thread> workers;
+        for (std::uint64_t lane = 0; lane < 8; ++lane) {
+            workers.emplace_back([&concurrent, &errors, lane]() {
+                for (std::uint64_t seq = lane + 1; seq <= messages; seq += 8) {
+                    try {
+                        auto msg = id(seq);
+                        concurrent.transition(msg, IpcReceiptStage::remote_accepted, true);
+                        concurrent.transition(msg, IpcReceiptStage::handler_committed, true);
+                    } catch (const std::exception&) { ++errors; }
+                }
+            });
+        }
+        for (auto& thread : workers) thread.join();
+        check(errors.load() == 0);
+        check(concurrent.invariant());
+        check(concurrent.live_count() == 0);
+        check(concurrent.transport_credits() == 0);
     }
     return 0;
 }
