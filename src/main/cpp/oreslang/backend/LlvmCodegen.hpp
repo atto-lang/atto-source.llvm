@@ -17,6 +17,6 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop);
 // Compile the deliberately restricted checked enum/case guest source slice
 // into verified LLVM IR with direct eos2 statically selected call symbols.
 // Does not admit the full language, virtual methods, imports or actor enums.
-std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan);
+std::string emit_verified_enum_aot_ir(const enum_aot::VerifiedPlan& sealed);
 
 } // namespace oreslang
