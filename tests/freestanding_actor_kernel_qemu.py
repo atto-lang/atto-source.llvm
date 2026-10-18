@@ -87,6 +87,66 @@ def verify_elf(image, readelf):
     require("NEEDED" not in dynamic, "dynamic runtime dependency")
     print("CORTEXM_ACTOR_ELF_VALID_PASS", image.name)
 
+
+def verify_corrupt_elf_rejected(image, readelf, directory):
+    """Mutate actual linked ARM ELF bytes; every case must fail closed."""
+    raw = image.read_bytes()
+    _, phoff = struct.unpack_from("<II", raw, 24)
+    phsize, count = struct.unpack_from("<HH", raw, 42)
+    entries = []
+    for i in range(count):
+        header = phoff + phsize*i
+        typ, offset, addr, physical, filesz, memsz, flags, _ = struct.unpack_from(
+            "<IIIIIIII", raw, header)
+        if typ == 1:
+            entries.append((header, offset, addr, physical, filesz, memsz, flags))
+    backed = [seg for seg in entries if seg[4]]
+    vector = next((seg for seg in backed if seg[2] == 0 and seg[4] >= 8), None)
+    executable = next((seg for seg in backed if seg[6] & 1), None)
+    require(vector is not None and executable is not None and len(backed) >= 2,
+            "corruption tests need a real vector, executable and two segments")
+    cases = []
+
+    def add(name, changes, reason):
+        broken = bytearray(raw)
+        for offset, value in changes:
+            struct.pack_into("<I", broken, offset, value)
+        file = directory/("corrupted-" + name + ".elf")
+        file.write_bytes(broken)
+        try:
+            verify_elf(file, readelf)
+        except RuntimeError as exc:
+            require(reason in str(exc),
+                    name + " failed for unexpected reason: " + str(exc))
+        else:
+            raise RuntimeError("corrupted ELF incorrectly accepted: " + name)
+        cases.append(name)
+
+    # Explicitly validate both the loader's view and the Thumb reset word.
+    add("bad-entry", [(24, 0)], "invalid SP or Thumb entry")
+    add("bad-stack", [(vector[1], RAM_END-4)], "invalid SP or Thumb entry")
+    add("bad-reset", [(vector[1]+4, 0)], "invalid SP or Thumb entry")
+    add("out-of-flash-physical",
+        [(backed[0][0]+12, FLASH_END-1)],
+        "file-backed physical load outside board FLASH")
+    add("overlapping-physical",
+        [(backed[1][0]+12, backed[0][3])],
+        "overlapping physical FLASH loads")
+    add("writable-executable",
+        [(executable[0]+24, executable[6] | 2)],
+        "writable executable load segment")
+    add("oversize-segment",
+        [(backed[0][0]+16, 0xffffffff)],
+        "out-of-bounds ELF segment")
+    ram = next((seg for seg in entries if RAM_BEGIN <= seg[2] < RAM_END
+                and seg[5] >= 2), None)
+    if ram is not None:
+        add("ram-overflow",
+            [(ram[0]+8, RAM_END-1)],
+            "RAM load outside board memory")
+    print("CORTEXM_ACTOR_ELF_CORRUPTION_PASS", len(cases))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--clang", default=shutil.which("clang"))
@@ -121,6 +181,8 @@ def main():
                  "-Wl,-T,"+str(linker), "-Wl,-Map,"+str(work/(name+".map")),
                  work/"kernel.o", work/"startup.o", obj, "-o", image])
             verify_elf(image, args.readelf)
+            if not negative:
+                verify_corrupt_elf_rejected(image, args.readelf, work)
             if args.link_only:
                 continue
             command = [args.qemu, "-M", "lm3s6965evb", "-cpu", "cortex-m3",
