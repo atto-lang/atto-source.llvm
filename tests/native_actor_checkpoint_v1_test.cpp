@@ -72,6 +72,9 @@ int main() {
     auto zero_epoch = h;
     zero_epoch.incarnation = 0;
     check(rejects([&] { (void) Wire::encode({zero_epoch, {}}, sha); }));
+    auto unsigned_only_epoch = h;
+    unsigned_only_epoch.incarnation = std::uint64_t{1} << 63;
+    check(rejects([&] { (void) Wire::encode({unsigned_only_epoch, {}}, sha); }));
     auto truncated = original;
     truncated.pop_back();
     check(rejects([&] { (void) Wire::decode(truncated, h, sha); }));
