@@ -24,13 +24,16 @@ pub fnc main(): int { return 0; }
 end
 pub fnc main(): int { return 0; }
 """, DIAG),
+    "class-inheritance-slot-substrate": ("""define class Worker extends Framework as
+end
+pub fnc main(): int { return 0; }
+""", "native class inheritance/virtual slots unsupported"),
     "generic-abstract-class": ("""define abstract class Framework<T> as
   private abstract fnc receive(T value): T;
 end
 pub fnc main(): int { return 0; }
 """, DIAG),
     "actor-explicit-self-receive": ("""define actor Worker as
-  let state: int = 0;
   receive(self, ActorMail<int> mail): void { return; }
 end
 pub fnc main(): int { return 0; }
