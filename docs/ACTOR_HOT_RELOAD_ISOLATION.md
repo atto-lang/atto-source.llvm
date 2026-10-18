@@ -167,3 +167,30 @@ covers policy destruction-before-unload, early/invalid admission, throwing
 `std::function` copies, abandoned frozen tickets and held continuation pins.
 Full executable image teardown, source compiler lowering, and runtime-owned
 error quarantine remain explicit release blockers.
+
+
+## Concurrent terminal close during image publication
+
+Terminal `close()` must never wait for `promote()`: a retired image may
+invoke a trusted cleanup callback synchronously from publication and that
+callback may request terminal shutdown. Waiting on the publishing thread
+would deadlock the same publishing thread. The gate now seals further DATA
+and code admission under its mutex, returns without waiting, and leaves the
+in-progress publisher responsible for final code-slot closure after its
+publish/fail path releases the actor mutex. A concurrent terminal close must
+not reopen `frozen` or permit another turn, even if a code revision was
+already atomically installed before shutdown.
+
+The existing native code-slot and actor-turn native tests passed unchanged
+against this gate in the exact-Git-blob private mirror:
+https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39092504396
+(GCC -O2, Clang ASan+UBSan). A **dedicated callback-reentry runtime test**
+and actual dynamically loaded executable-image teardown remain unverified.
+
+`native_actor_code_execution_test.cpp` additionally defines three
+statically compiled native callable bodies and invokes them through pinned
+actor-generation admission, including parallel callback dispatch. This is
+stronger than string-only image labels but still does **not** establish
+Oreslang-source lowering, actor scheduler single-flight, dynamic AOT loading,
+LLVM ORC JIT, or an untrusted hardware/process isolation boundary. It has
+not yet passed an Actions compile/run and is not admissible CI evidence.
