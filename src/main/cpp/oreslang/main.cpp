@@ -63,6 +63,7 @@ static void require_valid_source_utf8(std::string_view source) {
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool experimental_enum_aot = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -81,6 +82,9 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-enum-aot") {
+            if (experimental_enum_aot) { std::cerr << "duplicate enum AOT option\\n"; return 2; }
+            experimental_enum_aot = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -120,7 +124,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-enum-aot] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -136,6 +140,19 @@ int main(int argc, char** argv) {
         // constraints before parsing or emitting LLVM IR.
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
+        }
+        if (experimental_enum_aot) {
+            if (experimental_owned_int || experimental_rt_scalar_loop ||
+                wasm32_target || cortex_m_target || target_seen && !(!wasm32_target && !cortex_m_target)) {
+                throw std::runtime_error("experimental enum AOT accepts host-only and no other experiments");
+            }
+            // This path is opt-in, never falls back to the i64-only parser,
+            // and never promotes rejected enum source into interpreter mode.
+            const oreslang::enum_aot::Plan plan = oreslang::enum_aot::parse(text);
+            std::cout << oreslang::emit_verified_enum_aot_ir(plan);
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
